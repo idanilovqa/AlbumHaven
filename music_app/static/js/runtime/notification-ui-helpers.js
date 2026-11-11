@@ -26,9 +26,10 @@ function notificationSurfaceIsHidden(node) {
 function getNotificationCollisionNodes() {
   const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
   const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
-  const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
-  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
-    .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  for (const modal of surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node))) {
+    fixed.push(...Array.from(modal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+      .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  }
   return fixed;
 }
 

@@ -782,6 +782,10 @@ export class GalleryActions {
     return this.galleryPage.readAlbumSubsectionTitle(artistName, albumName);
   }
 
+  readArtistDiscographySections(artistName) {
+    return this.galleryPage.readArtistDiscographySections(artistName);
+  }
+
   async waitForPositiveRenderedAlbumCardTrackCounts(expected, options = {}) {
     const artist = String(expected.artist || '').trim();
     const album = String(expected.album || '').trim();
@@ -2071,7 +2075,7 @@ export class GalleryActions {
   async expectAlbumAbsentFromSettledGallery(expected) {
     const deadline = Date.now() + 30000;
     await expect.poll(async () => {
-      const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      const snapshot = await this.galleryPage.readAlbumTargetState(expected, { fullProjection: true });
       const settled = !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
         && !snapshot.startupHydrating && snapshot.canonicalApplied
         && snapshot.inputQuery === snapshot.expectedQuery

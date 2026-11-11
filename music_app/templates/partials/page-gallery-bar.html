@@ -1,8 +1,10 @@
 {% from "partials/gallery-bar.html" import gallery_bar %}
 {# Settings/account pages configure the canonical GalleryBar; they do not own header geometry. #}
-{% macro page_gallery_bar(title, subtitle='', back_href='/', back_label='Back to library', settings_navigation=false) -%}
+{% macro page_gallery_bar(title, subtitle='', back_href='/', back_label='Back to library', settings_navigation=false, desktop_back=none) -%}
+{# Returning to the library is a narrow-layout affordance; desktop keeps the persistent app bar instead. #}
+{% set show_desktop_back = desktop_back if desktop_back is not none else back_href != '/' %}
 {% set actions = caller() if caller is defined else '' %}
-{% call gallery_bar(title, subtitle, class_name='page-gallery-bar', back_href=back_href, back_label=back_label, instance='page', mobile_layout='mobile-primary', settings_navigation=settings_navigation, settings_parent=true) %}
+{% call gallery_bar(title, subtitle, class_name='page-gallery-bar', back_href=back_href, back_label=back_label, instance='page', mobile_layout='mobile-primary', settings_navigation=settings_navigation, settings_parent=true, desktop_back=show_desktop_back) %}
   {{ actions }}
 {% endcall %}
 {%- endmacro %}

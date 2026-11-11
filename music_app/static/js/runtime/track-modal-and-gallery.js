@@ -32,10 +32,8 @@ function attachUtilityModalEvents() {
     clearTimeout(searchRenderTimer);
     const owner = state.utility;
     const tab = owner.activeTab;
-    searchRenderTimer = setTimeout(async () => {
+    searchRenderTimer = setTimeout(() => {
       searchRenderTimer = null;
-      if (tab === 'problematic-files' && owner.problematicFilesComplete === false
-          && !(await waitForProblematicFilesComplete())) return;
       if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
     }, 80);
   };
@@ -56,8 +54,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
-    else return;
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      scheduleProblematicServerSearch();
+    } else return;
     scheduleSearchRender();
   });
   els.search?.addEventListener('search', () => {
@@ -77,8 +77,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
-    else return;
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      scheduleProblematicServerSearch();
+    } else return;
     scheduleSearchRender();
   });
   els.overlay.addEventListener('click', (event) => {

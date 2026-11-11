@@ -56,6 +56,7 @@ const expectedRuntimeOrder = [
   'render-markup-helpers.js',
   'alert-components.js',
   'album-artbox.js',
+  'album-additional-artbox.js',
   'gallery-main-components.js',
   'gallery-main-state.js',
   'gallery-card-component.js',
@@ -64,6 +65,7 @@ const expectedRuntimeOrder = [
   'trigger-anchor.js',
   'search-input.js',
   'gallery-main-interactions.js',
+  'running-line.js',
   'compact-player-helpers.js',
   'player-streaming-decoders.js',
   'player-track-cache.js',
@@ -103,6 +105,7 @@ const expectedRuntimeOrder = [
   'tag-editor-reorder.js',
   'utility-loaders-and-cover-lookup.js',
   'cover-lookup-modal-and-drawer.js',
+  'preview-move-attention.js',
   'tag-editor-and-optimistic-updates.js',
   'player-state-persistence-helpers.js',
   'player-listen-session-helpers.js',
@@ -121,6 +124,14 @@ const expectedRuntimeOrder = [
   'bootstrap-event-handlers.js',
   'bootstrap-init.js',
 ];
+
+test('app entry owns the 50 percent startup milestone', () => {
+  const appJs = fs.readFileSync(appJsPath, 'utf8');
+  assert.match(
+    appJs,
+    /pushStartupMark\('app_entry_started',[\s\S]*?AlbumHavenStartupProgress\?\.show\(50\)/,
+  );
+});
 
 test('app loader fetches one generated runtime bundle instead of individual runtime modules', () => {
   const appJs = fs.readFileSync(appJsPath, 'utf8');

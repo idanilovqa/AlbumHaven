@@ -263,6 +263,64 @@ function ensureGalleryMainState() {
   return state.gallery.mainState;
 }
 
+function cacheGallerySourceTotals(categories, payload) {
+  if (typeof state === 'undefined' || !state?.gallery) return false;
+  const artistCount = Number(payload?.artist_count ?? payload?.artistCount);
+  const albumCount = Number(payload?.album_count ?? payload?.albumCount);
+  if (!Number.isFinite(artistCount) || !Number.isFinite(albumCount)) return false;
+  state.gallery.sourceTotalsByScope ||= {};
+  state.gallery.sourceTotalsByScope[gallerySourceScopeKey(categories)] = { artistCount, albumCount };
+  return true;
+}
+
+function cacheCurrentGallerySourceTotals() {
+  if (typeof state === 'undefined' || !state?.view) return false;
+  const categories = state.view.loaded_library_categories || state.view.visible_library_categories;
+  if (!Array.isArray(categories)) return false;
+  return cacheGallerySourceTotals(categories, state.view);
+}
+
+async function prefetchGallerySourceTotals(categories) {
+  if (typeof state === 'undefined' || !state?.gallery || !state?.view
+    || typeof fetch !== 'function' || state.view.query || state.view.selected_artist) return;
+  const normalized = ['main_library', 'new_arrivals', 'hoard'].filter(source => categories.includes(source));
+  const key = gallerySourceScopeKey(normalized);
+  state.gallery.sourceTotalsByScope ||= {};
+  state.gallery.pendingSourceTotalScopes ||= new Set();
+  if (state.gallery.sourceTotalsByScope[key] || state.gallery.pendingSourceTotalScopes.has(key)) return;
+  if (!normalized.length) {
+    state.gallery.sourceTotalsByScope[key] = { artistCount: 0, albumCount: 0 };
+    return;
+  }
+  state.gallery.pendingSourceTotalScopes.add(key);
+  try {
+    const params = new URLSearchParams({ omit_sidebar: '1' });
+    normalized.forEach(source => params.append('category', source));
+    const response = await fetch(`/home-data?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return;
+    if (cacheGallerySourceTotals(normalized, await response.json())
+      && key === gallerySourceScopeKey(activeGallerySourceCategories(ensureGalleryMainState()))) {
+      updateGalleryMainChrome();
+    }
+  } catch {
+    // Keep the last authoritative total when background prefetch is unavailable.
+  } finally {
+    state.gallery.pendingSourceTotalScopes.delete(key);
+  }
+}
+
+function prefetchGallerySourceNeighborTotals(mainState = ensureGalleryMainState()) {
+  if (typeof state === 'undefined' || !state?.gallery || !state?.view) return;
+  cacheCurrentGallerySourceTotals();
+  const current = activeGallerySourceCategories(mainState);
+  ['main_library', 'new_arrivals', 'hoard'].forEach(source => {
+    const next = current.includes(source)
+      ? current.filter(category => category !== source)
+      : [...current, source];
+    void prefetchGallerySourceTotals(next);
+  });
+}
+
 function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
   const mainState = ensureGalleryMainState();
   const selectionChanged = String(previousView.selected_artist || '') !== String(nextView.selected_artist || '');
@@ -344,6 +402,10 @@ const galleryMainSurfaceCloseCallbacks = new WeakMap();
 function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
+  if (!immediate && active.surface.classList?.contains?.('is-mobile-artist-dialog') && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(active.surface, () => {
+        if (galleryMainSurfaceController.current?.() === active) closeGalleryMainSurface(returnFocus, { immediate: true });
+      }, { backdrop: document.querySelector?.('.mobile-artist-info-backdrop') })) return true;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
   if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
   if (active.key === 'search-suggestions' && state.ui) {
@@ -406,7 +468,8 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
-    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
+    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null,
+    openingQuery: String((typeof state === 'undefined' ? '' : state.view?.query) || '').trim() });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
   if (surface.matches?.('.artist-family-panel, .mobile-settings-drawer')) {
@@ -436,7 +499,8 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
-  if (galleryMainSurfaceController?.current?.()?.key === 'album-types'
+  // The compact family count is independent of the deferred track payload.
+  if (hasSelectedArtist || String(state.view.query || '').trim() || galleryMainSurfaceController?.current?.()?.key === 'album-types'
       || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
   }
@@ -452,8 +516,18 @@ function updateGalleryMainControls() {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
   });
-  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
-    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
+  const splitMode = mainState.splitAlbums;
+  // Shown only when the discography in view has a split album, or a non-default position needs undoing.
+  const hasSplitAlbums = splitMode !== 'show' || [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups]
+    .some((groups) => (Array.isArray(groups) ? groups : []).some((group) => (group?.albums || []).some((album) => isGallerySplitAlbum(album))));
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((control) => {
+    const position = GALLERY_SPLIT_ALBUM_MODES.indexOf(splitMode);
+    control.hidden = !hasSplitAlbums;
+    control.dataset.switchPosition = String(position);
+    control.setAttribute('aria-valuenow', String(position));
+    control.setAttribute('aria-valuetext', GALLERY_SPLIT_ALBUM_LABELS[splitMode]);
+    const label = control.querySelector?.('[data-gallery-split-albums-label]');
+    if (label) label.textContent = GALLERY_SPLIT_ALBUM_LABELS[splitMode];
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -470,12 +544,33 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = Boolean(button.dataset.libraryWide === '1' && state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
-      libraryWide: button.dataset.libraryWide === '1',
-    }).length > 0;
+    // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
+    const libraryWide = button.dataset.libraryWide === '1';
+    const selectedArtist = Boolean(String(state.view?.selected_artist || '').trim());
+    const artistFamily = !libraryWide && selectedArtist && !String(state.view?.query || '').trim();
+    const familyCountReady = artistFamily
+      && typeof hasHydratedArtistNonAlbumAvailability === 'function'
+      && hasHydratedArtistNonAlbumAvailability();
+    const scopePending = libraryWide
+      ? !hasHydratedLibraryNonAlbumTracks()
+      : Boolean(state.view?.non_album_tracks_deferred);
+    const enabled = libraryWide || (artistFamily
+      ? familyCountReady && Number(state.view.non_album_track_count) > 0
+      : scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0);
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    const matches = typeof hasNonAlbumSearchMatches === 'function'
+      && hasNonAlbumSearchMatches({ libraryWide: button.dataset.libraryWide === '1' });
+    button.dataset.searchMatch = String(Boolean(matches));
+    button.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
   });
+  // On a phone, Loose Tracks is a tab of the Artists panel; it carries the same search dot.
+  const mobileLooseTracks = document.querySelector('.mobile-artists-mode-button[data-navigation-mode="collections"]');
+  if (mobileLooseTracks) {
+    const matches = typeof hasNonAlbumSearchMatches === 'function' && hasNonAlbumSearchMatches({ libraryWide: true });
+    mobileLooseTracks.dataset.searchMatch = String(Boolean(matches));
+    mobileLooseTracks.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
+  }
   const viewCluster = document.querySelector('[data-gallery-view-cluster]');
   if (viewCluster) {
     viewCluster.querySelectorAll('[data-gallery-view-choice]').forEach(button => {
@@ -499,10 +594,24 @@ function updateGalleryMainControls() {
 }
 
 function hydrateDeferredNonAlbumTracksForAlbumTypes() {
-  if (!state.view?.non_album_tracks_deferred || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
-  void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
-    console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
-  });
+  const searching = Boolean(String(state.view?.query || '').trim());
+  const artistSelected = Boolean(String(state.view.selected_artist || '').trim());
+  const warn = error => console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+  if (artistSelected && !searching) {
+    if (typeof hydrateArtistNonAlbumAvailability === 'function') {
+      void hydrateArtistNonAlbumAvailability().catch(warn);
+    }
+    return;
+  }
+  if ((!state.view?.non_album_tracks_deferred && !searching) || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
+  void hydrateDeferredNonAlbumTracks({ libraryWide: searching || !artistSelected }).catch(warn);
+  // A search probes library-wide loose tracks for its match indicator; the open menu's artist
+  // button still needs that artist's own loose tracks to know whether it has any.
+  const menuOpen = galleryMainSurfaceController?.current?.()?.key === 'album-types'
+    || document.getElementById?.('gallery-album-types-menu')?.hidden === false;
+  if (searching && artistSelected && menuOpen && state.view.non_album_tracks_deferred) {
+    void hydrateDeferredNonAlbumTracks({ libraryWide: false }).catch(warn);
+  }
 }
 
 function buildGalleryFamilyPanelBody() {
@@ -573,16 +682,16 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
 function syncGalleryBarSearchVisibility() {
   const bar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
   if (!bar) return;
-  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) { bar.hidden = false; return; }
-  const draftQuery = String(state.ui?.searchDraftQuery || '').trim();
-  const committedQuery = String(state.view?.query || '').trim();
-  const selectedArtist = String(state.view?.selected_artist || '').trim();
-  bar.hidden = selectedArtist
-    ? Boolean(draftQuery) && draftQuery !== committedQuery
-    : Boolean(draftQuery || committedQuery);
+  bar.hidden = false;
 }
 
 function updateGalleryMainChrome() {
+  // A new search replaces the artist an open info panel describes; the panel stays open within its own search.
+  const activeSurface = galleryMainSurfaceController?.current?.();
+  if (activeSurface?.surface?.matches?.('.artist-info-overlay')
+      && (activeSurface.openingQuery ?? '') !== String(state.view.query || '').trim()) {
+    closeGalleryMainSurface(false);
+  }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -592,7 +701,14 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  cacheCurrentGallerySourceTotals();
+  const summaryTotals = resolveGallerySummaryTotals(
+    state.view,
+    model.totals,
+    state.gallery.mainState,
+    model.groups,
+    state.gallery.sourceTotalsByScope,
+  );
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
     primaryArtist,
@@ -626,17 +742,13 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
-    summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
+    summary.textContent = context.artistCount == null || context.albumCount == null
+      ? ''
+      : `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
-    // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
-    summary.hidden = true;
-    summary.textContent = '';
-    if (inlineTotal) {
-      inlineTotal.hidden = false;
-      inlineTotal.textContent = galleryMainPlural(context.albumCount, 'album');
-    }
+    summary.textContent = galleryMainPlural(context.albumCount, 'album');
     if (metadata) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
@@ -647,6 +759,7 @@ function updateGalleryMainChrome() {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  syncGalleryBarNameFit(bar, name);
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -678,6 +791,7 @@ function updateGalleryMainChrome() {
 }
 
 function transitionGalleryMain(action) {
+  cacheCurrentGallerySourceTotals();
   const previousView = ensureGalleryMainState().view;
   const nextState = applyGalleryClientTransition({ state: state.gallery.mainState, action, location: window.location, history: window.history });
   // Loose-track payloads have no per-track source provenance. Refresh their
@@ -685,6 +799,7 @@ function transitionGalleryMain(action) {
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
   state.gallery.mainState = nextState;
+  if (action.type === 'toggle-source') prefetchGallerySourceNeighborTotals(nextState);
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;
     persistCurrentGalleryDisplayPreferences(state.view);
@@ -706,7 +821,9 @@ function transitionGalleryMain(action) {
       preserveSidebarState: false,
       fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
-      skipPendingViewTransition: true,
+      // Loaded albums may not cover the new sources; load instead of flashing an empty Library.
+      showViewTransition: getFilteredGalleryMainModel().totals.albumCount === 0,
+      transitionDetail: 'Loading the selected sources...',
     });
   }
 }
@@ -741,6 +858,8 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
 }
 
 function openGalleryArtistInfo(anchor) {
+  // Owner (11-08): the header shows the "i" during a search, so it opens there too.
+  if (!anchor) return;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
@@ -765,6 +884,25 @@ function openGalleryArtistInfo(anchor) {
   if (summaryElement && summaryElement.scrollHeight <= summaryElement.clientHeight + 1) summaryElement.removeAttribute('data-artist-info-long');
 }
 
+// A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
+// Owner (11-08): every click, on the knob, the track or the label, moves to the next position in the cycle
+// Show -> Separate -> Hide -> Show, so three clicks visit every position once.
+function resolveSplitAlbumsSwitchMode() {
+  const current = Math.max(0, GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums));
+  return GALLERY_SPLIT_ALBUM_MODES[(current + GALLERY_SPLIT_ALBUM_MODES.length - 1) % GALLERY_SPLIT_ALBUM_MODES.length];
+}
+
+function handleSplitAlbumsSwitchKeydown(event) {
+  if (!event.target?.closest?.('[data-gallery-split-albums]')) return false;
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const next = { ArrowLeft: current - 1, ArrowDown: current - 1, ArrowRight: current + 1, ArrowUp: current + 1, Home: 0, End: 2 }[event.key];
+  if (next === undefined) return false;
+  event.preventDefault();
+  const mode = GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, next))];
+  if (mode !== GALLERY_SPLIT_ALBUM_MODES[current]) transitionGalleryMain({ type: 'set-split-albums', mode });
+  return true;
+}
+
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const source = event.target.closest?.('[data-gallery-source]');
@@ -772,7 +910,11 @@ function handleGalleryMainClick(event) {
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
-  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
+  if (splitAlbums) {
+    event.preventDefault();
+    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode() });
+    return true;
+  }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -798,6 +940,18 @@ function handleGalleryMainClick(event) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
+  const navigationMode = event.target.closest?.('[data-navigation-mode]');
+  if (navigationMode) {
+    event.preventDefault();
+    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
+    if (navigationMode.dataset.navigationMode === 'collections') {
+      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
+      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
+    } else if (pageOpen) {
+      closeNonAlbumModal();
+    }
+    return true;
+  }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
@@ -815,6 +969,7 @@ function handleGalleryMainClick(event) {
 function initGalleryMain() {
   if (typeof installPanelSelectionBoundary === 'function') installPanelSelectionBoundary();
   ensureGalleryMainState();
+  prefetchGallerySourceNeighborTotals();
   galleryMainSurfaceController = createAnchoredSurfaceController();
   const panel = document.querySelector('[data-artist-family-panel]');
   const player = document.querySelector('[data-shell-slot="bottom_player"]');
@@ -899,6 +1054,7 @@ function initGalleryMain() {
     }, true);
   }
   document.addEventListener('keydown', (event) => {
+    if (handleSplitAlbumsSwitchKeydown(event)) return;
     if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
       event.preventDefault();
       closeGalleryMainSurface(true);
@@ -924,4 +1080,17 @@ function createGalleryFamilyPaintController(toggle) {
     visit,
     end() { selected = null; visited.clear(); },
   };
+}
+
+// Owner (11-08): on mobile the gallery buttons share the name's row when the whole name fits beside them; a
+// longer name keeps the row to itself, printed in full, and the buttons move under it. Measured only when the
+// name, its info button or the window width changes, never on every scroll frame.
+function syncGalleryBarNameFit(bar, name) {
+  if (!bar?.classList || !name) return;
+  const key = `${name.textContent}|${window.innerWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}`;
+  if (bar.dataset.galleryNameFitKey === key) return;
+  bar.dataset.galleryNameFitKey = key;
+  bar.classList.remove('is-name-wrapping');
+  if (Number(window.innerWidth) > 900) return;
+  if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-name-wrapping');
 }

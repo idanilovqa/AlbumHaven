@@ -4,6 +4,8 @@ from pathlib import Path
 import threading
 import time
 
+import pytest
+
 
 class _Cursor:
     def __init__(self, rows):
@@ -89,6 +91,114 @@ def test_backfill_uses_a_bounded_background_pool_checkout(tmp_path):
     ]
 
 
+def test_backfill_cleans_previous_relocation_directories_only_for_custom_storage(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    source = tmp_path / "album/cover.jpg"
+    old = source.parent / ".album-haven"
+    (old / "v1/cover_variants/ab").mkdir(parents=True)
+    source.write_bytes(b"original art")
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+        "_GENERATED_PREVIEW_STORAGE_POLICY": preview_storage_policy_from_mapping({}),
+    }
+    connection = _Connection([{"cover_path": str(source)}])
+    worker = CoverPreviewBackfill(
+        config,
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda *_args, **_kwargs: None,
+        throttle_seconds=0,
+    )
+    worker.run_once()
+    assert old.exists()
+    config["_GENERATED_PREVIEW_STORAGE_POLICY"] = preview_storage_policy_from_mapping(
+        {"mode": "custom", "active_root": str(tmp_path / "ssd")}
+    )
+    worker.run_once()
+    assert not old.exists()
+    assert source.read_bytes() == b"original art"
+
+
+def test_backfill_deletes_leftover_album_folder_previews_once_previews_live_elsewhere(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    source = tmp_path / "Art Zoyd/1980 - Génération sans futur/cover.jpg"
+    old = source.parent / ".album-haven"
+    legacy = old / "cover_variants/ab/abcdef.webp"
+    current = old / "v1/cover_variants/cd/cdef01.webp"
+    for preview in (legacy, current):
+        preview.parent.mkdir(parents=True)
+        preview.write_bytes(b"generated preview")
+    source.write_bytes(b"original art")
+    track = source.parent / "01 - Génération sans futur.flac"
+    track.write_bytes(b"audio")
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+        "_GENERATED_PREVIEW_STORAGE_POLICY": preview_storage_policy_from_mapping({}),
+    }
+    connection = _Connection([{"cover_path": str(source)}])
+    generated = []
+    worker = CoverPreviewBackfill(
+        config,
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda path, **kwargs: generated.append(Path(kwargs["cache_root"])),
+        throttle_seconds=0,
+    )
+    worker.run_once()
+    assert legacy.exists() and current.exists(), "album-folder storage keeps its previews"
+
+    custom_root = tmp_path / "ssd/previews"
+    config["_GENERATED_PREVIEW_STORAGE_POLICY"] = preview_storage_policy_from_mapping(
+        {"mode": "custom", "active_root": str(custom_root)}
+    )
+    worker.run_once()
+    assert not old.exists(), "no .album-haven folder remains in the music folder"
+    assert generated[-1] == custom_root / "v1", "new previews are written to the separate location"
+    assert source.read_bytes() == b"original art"
+    assert track.read_bytes() == b"audio"
+
+
+def test_album_folder_preview_removal_keeps_unknown_files(tmp_path):
+    from music_app.services.generated_preview_storage import remove_album_folder_previews
+
+    old = tmp_path / "album/.album-haven"
+    (old / "v1/cover_variants/ab").mkdir(parents=True)
+    (old / "v1/cover_variants/ab/preview.webp").write_bytes(b"generated")
+    (old / "notes.txt").write_text("user file")
+    remove_album_folder_previews(old)
+    assert not (old / "v1").exists()
+    assert (old / "notes.txt").read_text() == "user file"
+
+
+def test_backfill_cleanup_failure_does_not_starve_previews_and_attempts_each_root_once(tmp_path, monkeypatch):
+    from music_app.services import cover_preview_backfill as backfill
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    sources = [tmp_path / "locked/cover.jpg", tmp_path / "locked/front.jpg", tmp_path / "next/cover.jpg"]
+    attempts = []
+    generated = []
+
+    def cleanup(root):
+        attempts.append(root)
+        if root.parent.name == "locked":
+            raise PermissionError("Legacy preview folder is inaccessible")
+
+    monkeypatch.setattr(backfill, "remove_album_folder_previews", cleanup)
+    connection = _Connection([{"cover_path": str(path)} for path in sources])
+    worker = backfill.CoverPreviewBackfill(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+         "_GENERATED_PREVIEW_STORAGE_POLICY": preview_storage_policy_from_mapping(
+             {"mode": "custom", "active_root": str(tmp_path / "ssd")})},
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda path, **_kwargs: generated.append(path), throttle_seconds=0,
+    )
+    assert worker.run_once() == 3
+    assert generated == sources
+    assert attempts == [tmp_path / "locked/.album-haven", tmp_path / "next/.album-haven"]
+
+
 def test_backfill_pauses_for_foreground_activity_then_resumes(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
 
@@ -170,23 +280,25 @@ def test_backfill_uses_configured_data_dir_and_cover_revision(tmp_path):
     assert "metadata ->> 'cover_revision'" in connection.executed[0]
 
 
-def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path):
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_backfill_honors_storage_policy_without_revision(tmp_path, mode):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
 
     source = tmp_path / "Artist" / "Album" / "cover.jpg"
     data_dir = tmp_path / "app-data"
     connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
     generated = []
 
-    class AlbumFolderStoragePolicy:
-        def write_cache_root(self, source_path):
-            return Path(source_path).parent / ".album-haven"
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
 
     worker = CoverPreviewBackfill(
         {
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
             "DATA_DIR": str(data_dir),
-            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
         },
         connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
         generate=lambda source_path, **kwargs: generated.append(
@@ -196,7 +308,58 @@ def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path)
     )
 
     assert worker.run_once() == 1
-    assert generated == [(source, data_dir / "display-cover-cache")]
+    assert generated == [(source, policy.write_cache_root(source))]
+
+
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_repeated_unrevisioned_backfill_records_only_policy_destination(tmp_path, mode):
+    from PIL import Image
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.covers import resolve_cover_display_variant
+    from music_app.services.generated_preview_storage import (
+        preview_storage_policy_from_mapping, record_generated_preview,
+    )
+
+    source = tmp_path / "album" / "cover.jpg"
+    source.parent.mkdir()
+    Image.new("RGB", (600, 600), "red").save(source)
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
+    recorded = []
+
+    class Inventory:
+        def record_inventory(self, **row):
+            recorded.append(row)
+
+    inventory = Inventory()
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "DATA_DIR": str(tmp_path / "app-data"),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": lambda source, preview: record_generated_preview(
+                inventory, source, preview,
+            ),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=resolve_cover_display_variant,
+        throttle_seconds=0,
+    )
+
+    for _ in range(3):
+        assert worker.run_once() == 1
+    assert len(recorded) == 3
+    assert len({row["current_path"] for row in recorded}) == 1
+    for row in recorded:
+        relocation_target = (
+            tmp_path / "ssd" / row["managed_relative_path"]
+            if mode == "custom" else Path(row["album_preview_path"])
+        )
+        assert Path(row["current_path"]) == relocation_target
+        assert relocation_target.is_file()
+    assert not (tmp_path / "app-data" / "display-cover-cache").exists()
 
 
 def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):
@@ -223,6 +386,42 @@ def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):
 
     assert worker.inventory_existing_previews() == 1
     assert recorded == [(source, preview)]
+
+
+def test_inventory_existing_previews_skips_a_folder_removed_during_the_walk(tmp_path):
+    import shutil
+
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    cache_root = source.parent / ".album-haven" / "cover_variants"
+    previews = [cache_root / name / "preview.webp" for name in ("20", "30", "40")]
+    for preview in previews:
+        preview.parent.mkdir(parents=True)
+        preview.write_bytes(b"preview")
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    recorded = []
+    removed = []
+
+    def record(_source_path, preview_path):
+        recorded.append(Path(preview_path))
+        if not removed:
+            # Concurrent cover-variant cleanup removes one folder the walk has
+            # already listed but not entered yet; the other must still be read.
+            removed.append(next(p for p in previews if p != Path(preview_path)))
+            shutil.rmtree(removed[0].parent)
+
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": record,
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        throttle_seconds=0,
+    )
+
+    assert worker.inventory_existing_previews() == 2
+    assert sorted(recorded) == sorted(p for p in previews if p != removed[0])
 
 
 def test_inventory_existing_previews_does_not_wait_for_foreground_idle(tmp_path):

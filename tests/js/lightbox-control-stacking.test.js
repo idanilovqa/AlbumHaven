@@ -22,6 +22,7 @@ const overlayShell = fs.readFileSync(path.join(
   'partials',
   'overlay-shells.html',
 ), 'utf8');
+const buttonStylesheet = fs.readFileSync(path.join(__dirname, '..', '..', 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
 
 function readRule(selector) {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -43,7 +44,9 @@ test('fullscreen artwork controls suppress resting outlines but retain keyboard 
   const closeRule = readRule('.image-lightbox-close');
   const navRule = readRule('.image-lightbox-nav');
 
-  assert.match(closeRule, /outline:\s*none\s*!important\s*;/);
+  assert.match(overlayShell, /action_button\('Close full-screen cover'[^%]*presentation='bare'/);
+  assert.match(buttonStylesheet, /\.action-button\s*\{[^}]*outline:\s*1px solid transparent;/s);
+  assert.doesNotMatch(closeRule, /outline:/, 'Close must inherit the canonical resting outline rather than overriding it locally');
   assert.match(navRule, /outline:\s*none\s*!important\s*;/);
   assert.match(
     stylesheet,

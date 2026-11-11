@@ -47,7 +47,25 @@ for relative, album, title, disc, number, edition in records:
     if edition:
         tags.add(TXXX(encoding=3, desc="Edition", text=[edition]))
     tags.save(destination)
-for folder, size, color in [("Real Album",1600,"red"),("Complete copy",1600,"red"),("Deluxe",1600,"purple"),("Random songs",200,"blue")]:
+soundtrack_records = [
+    ("Soundtrack/01.mp3", "The Prince Of Egypt", "Various Artists", "Deliver Us", 1, "2026"),
+    ("Soundtrack/02.mp3", "The Prince Of Egypt", "Various Artists", "The Reprimand", 2, "2026"),
+    ("Soundtrack/03.mp3", "The Prince Of Egypt", "Various Artists", "Following Tzipporah", 3, "2026"),
+    ("Soundtrack stray/01.mp3", "The Prince Of Égypt", "Ofra Haza & Eden Riegel", "Deliver Ús", 1, "2025"),
+]
+for relative, album, album_artist, title, number, year in soundtrack_records:
+    destination = owner / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    tags = ID3(destination)
+    tags.clear()
+    for frame in [TALB(encoding=3,text=[album]),TPE1(encoding=3,text=[album_artist]),
+                  TPE2(encoding=3,text=[album_artist]),TIT2(encoding=3,text=[title]),
+                  TRCK(encoding=3,text=[str(number)]),TDRC(encoding=3,text=[year])]:
+        tags.add(frame)
+    tags.save(destination)
+for folder, size, color in [("Real Album",1600,"red"),("Complete copy",1600,"red"),("Deluxe",1600,"purple"),("Random songs",200,"blue"),
+                            ("Soundtrack",1600,"gold"),("Soundtrack stray",1600,"gold")]:
     Image.new("RGB",(size,size),color).save(owner/folder/"cover.png")
 for folder in ["Real Album", "Complete copy"]:
     Image.new("RGB",(1600,1600),"green").save(owner/folder/"manual-choice.png")
@@ -56,6 +74,7 @@ Image.new("RGB",(1200,1200),"blue").save(owner/"Wallet Box"/"CD02"/"front.png")
 print(json.dumps({"owner": str(owner), "primaryCover": str(owner/"Real Album"/"cover.png"),
                   "walletOneCover": str(owner/"Wallet Box"/"CD01"/"front.png"),
                   "walletTwoCover": str(owner/"Wallet Box"/"CD02"/"front.png"),
+                  "soundtrackStrayPath": str(owner/"Soundtrack stray"/"01.mp3"),
                   "excludedPaths": [str(owner/r[0]) for r in records if r[0].startswith(("Random songs/","Orphan/"))]}))
 `;
 

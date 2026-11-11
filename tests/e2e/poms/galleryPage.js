@@ -402,6 +402,33 @@ export class GalleryPage extends BasePage {
     });
   }
 
+  async readArtistDiscographySections(artistName) {
+    const section = this.sectionByArtistHeading(artistName);
+    // parity-check: allow-read-only-measurement-evaluate -- read visible production headings and card labels in DOM order
+    return section.evaluate((element, selectors) => {
+      const sections = [{ title: null, albums: [] }];
+      for (const block of element.querySelector('.artist-rows').children) {
+        const heading = block.querySelector('.artist-subsection-title');
+        if (heading) {
+          sections.push({ title: heading.textContent.trim(), albums: [] });
+        } else {
+          for (const card of block.querySelectorAll(selectors.card)) {
+            sections.at(-1).albums.push({
+              name: card.querySelector(selectors.title).textContent.trim(),
+              subtitle: card.querySelector(selectors.subtitle)?.textContent.trim() || '',
+              key: card.getAttribute('data-gallery-card-key'),
+            });
+          }
+        }
+      }
+      return sections;
+    }, {
+      card: this.albumCardWithinSectionSelector,
+      title: this.albumTitleButtonWithinSectionSelector,
+      subtitle: this.albumCard.subtitleWithinCardSelector,
+    });
+  }
+
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
     const section = this.sectionByArtistHeading(artistName);
     const matchingCards = section.locator(
@@ -919,7 +946,7 @@ export class GalleryPage extends BasePage {
     throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }
 
-  async readAlbumTargetState(expected = {}) {
+  async readAlbumTargetState(expected = {}, { fullProjection = false } = {}) {
     let initialObservation = this.productionViewObserver.read();
     if (initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError) {
       throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError}`);
@@ -952,7 +979,7 @@ export class GalleryPage extends BasePage {
     const canReadAppliedProjection = typeof this.page.evaluate === 'function'
       || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
     const readAppliedProjection = () => (
-      expectedQuery && typeof this.page.evaluate === 'function'
+      expectedQuery && !fullProjection && typeof this.page.evaluate === 'function'
         ? this.readAppliedAlbumTargetProjection({
           artist: expectedArtist,
           album: expectedAlbum,

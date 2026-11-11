@@ -80,8 +80,13 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
     }
     if "metadata_schema_version" in entry:
         serialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "compilation_tag" in entry:
+        serialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         serialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if "text_corrections" in entry:
+        # Kept even when null, so a merge into the stored entry clears it.
+        serialized["text_corrections"] = entry.get("text_corrections") or None
     return serialized
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -115,15 +120,19 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         deserialized["release_date"] = entry.get("release_date")
     if "metadata_schema_version" in entry:
         deserialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    if "compilation_tag" in entry:
+        deserialized["compilation_tag"] = entry["compilation_tag"]
     if "local_album_membership_problem" in entry:
         deserialized["local_album_membership_problem"] = entry.get("local_album_membership_problem")
+    if entry.get("text_corrections"):
+        deserialized["text_corrections"] = entry["text_corrections"]
     return deserialized
 
 
 def _sorted_text_values(values) -> list[str]:
     return sorted(
         [str(value or "").strip() for value in (values or []) if str(value or "").strip()],
-        key=lambda value: value.casefold(),
+        key=lambda value: (value.casefold(), value),
     )
 
 
@@ -302,6 +311,7 @@ def save_cache_to_disk_for_config(
     expected_inventory_mutation_revision: int | None = None,
     rebuild_relation_projection: bool = False,
     observed_library_root_ids: set[str] | None = None,
+    unreachable_scope: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -331,6 +341,8 @@ def save_cache_to_disk_for_config(
             for root_id in observed_library_root_ids
             if str(root_id).strip()
         }
+    if unreachable_scope is not None:
+        snapshot_options["unreachable_scope"] = unreachable_scope
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
         cache_path,
@@ -407,6 +419,9 @@ def save_cache_updates_to_disk_for_config(
             "relation_views": relation_views,
             "relations_last_built": relations_last_built,
             "expected_cover_mutation_revision": expected_cover_mutation_revision,
+            # Only the changed files' albums: the rest of this snapshot is as
+            # old as its load and must never overwrite a newer publication.
+            "publish_paths": set(changed_entries),
         }
         if expected_inventory_mutation_revision is not None:
             snapshot_options["expected_inventory_mutation_revision"] = (
@@ -454,6 +469,7 @@ def save_cache_updates_to_disk_for_config(
             "relation_views": latest_relation_views,
             "relations_last_built": latest_relations_last_built,
             "expected_cover_mutation_revision": retry_cover_mutation_revision,
+            "publish_paths": set(changed_entries),
         }
         if retry_inventory_mutation_revision is not None:
             retry_snapshot_options["expected_inventory_mutation_revision"] = (
@@ -601,11 +617,18 @@ def persist_cover_selection_for_tracks_for_config(
         )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
-    return adapter.persist_cover_selection(
+    result = adapter.persist_cover_selection(
         track_paths=track_paths,
         selected_cover_path=selected_cover_path,
         **persistence_options,
     )
+    inventory = config.get("_LOCAL_COVER_INVENTORY")
+    if inventory is not None and not remote_cover_url:
+        try:
+            inventory.invalidate_paths(track_paths)
+        except Exception:
+            _LOGGER.exception("Could not refresh local artwork inventory after the committed cover selection.")
+    return result
 
 
 def persist_structural_tag_edit_for_config(

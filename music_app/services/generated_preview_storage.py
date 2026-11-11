@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import hashlib
+import stat
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, Iterable, Mapping
@@ -14,6 +16,93 @@ _MANAGED_MARKERS = (
 )
 _GENERATED_COVER_PREVIEW_STEM = "album-haven-preview"
 _APP_ARTIFACT_DIRECTORY = ".album-haven"
+
+
+def remove_empty_album_preview_directories(
+    directory: Path, *, emptied_directory: Path | None = None,
+) -> None:
+    """Prune empty generated directories without touching album or user files."""
+    if directory.name != _APP_ARTIFACT_DIRECTORY:
+        return
+    try:
+        if emptied_directory is not None:
+            emptied_directory.relative_to(directory)
+            ancestors = [emptied_directory]
+            while ancestors[-1] != directory:
+                ancestors.append(ancestors[-1].parent)
+            # Check from the cache root before traversing any intermediate junction.
+            for parent in reversed(ancestors):
+                info = parent.lstat()
+                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    return
+            for parent in ancestors:
+                parent.rmdir()
+            return
+        _remove_empty_preview_subtree(directory)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+            raise
+
+
+def remove_album_folder_previews(directory: Path) -> None:
+    """Delete an album folder's unreachable generated preview cache.
+
+    Used once previews live in a separate location: the album-folder cache is a
+    regenerable app artifact, so its managed subtrees are removed and the then
+    empty ``.album-haven`` directory is pruned. Unknown files are kept.
+    """
+    if directory.name != _APP_ARTIFACT_DIRECTORY or _is_link_or_junction(directory):
+        return
+    for managed in (directory / "cover_variants", directory / "v1" / "cover_variants"):
+        if not managed.is_dir() or any(
+            _is_link_or_junction(parent) for parent in (managed, managed.parent)
+        ):
+            continue
+        _remove_regular_preview_tree(managed)
+    remove_empty_album_preview_directories(directory)
+
+
+def _is_link_or_junction(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _remove_regular_preview_tree(directory: Path) -> None:
+    # Never follow a link or junction out of the generated cache.
+    for child in directory.iterdir():
+        if _is_link_or_junction(child):
+            continue
+        if child.is_dir():
+            _remove_regular_preview_tree(child)
+        else:
+            child.unlink(missing_ok=True)
+    try:
+        directory.rmdir()
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST, errno.ENOENT):
+            raise
+
+
+def _remove_empty_preview_subtree(directory: Path) -> None:
+    # Windows junctions must not turn cache cleanup into traversal outside the cache.
+    info = directory.lstat()
+    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        return
+    for child in directory.iterdir():
+        if child.is_dir():
+            _remove_empty_preview_subtree(child)
+    try:
+        directory.rmdir()
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST, errno.ENOENT):
+            raise
 
 
 def is_generated_cover_artifact(path: Path, album_root: Path) -> bool:

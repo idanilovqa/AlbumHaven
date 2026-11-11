@@ -1,6 +1,13 @@
 <link rel="stylesheet" href="/static/css/gallery-main.css">
 <link rel="stylesheet" href="/static/css/runtime/trigger-anchor.css">
+<link rel="stylesheet" href="/static/css/runtime/account-menu.css">
+<link rel="stylesheet" href="/static/css/dialog-component.css?v={{ runtime_asset_version | default(app_version) }}">
 <link rel="stylesheet" href="/static/css/admin-server.css?v={{ runtime_asset_version | default(app_version) }}">
 <script src="/static/js/runtime/trigger-anchor.js" defer></script>
 <script src="/static/js/runtime/account-menu.js" defer></script>
+{# Standalone Settings documents need the shared dialog owner that the library runtime bundle provides. #}
+<script src="/static/js/runtime/browser-dialog-helpers.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
+{# Writes carry the session's current token, and one refused for a stale token is retried (owner, 11-10). #}
+<script src="/static/js/runtime/session-csrf-fetch.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
+<script src="/static/js/path-input.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>
 <script src="/static/js/admin-server.js?v={{ runtime_asset_version | default(app_version) }}" defer></script>

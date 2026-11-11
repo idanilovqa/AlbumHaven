@@ -40,6 +40,16 @@ class PostgresMissingAlbumRemovalService:
         self._connect = connect or _connect
         self._root_health_check = root_health_check
 
+    def keep_missing(self, album_key: object) -> None:
+        """Record "Keep as missing": a kept album is the user's and is never removed automatically."""
+        normalized_key = str(album_key or "").strip()
+        if not normalized_key:
+            raise ValueError("Invalid album key")
+        with self._connect(self._database_url) as connection:
+            row = connection.execute(_KEEP_MISSING_SQL, {"album_key": normalized_key}).fetchone()
+        if row is None:
+            raise MissingAlbumNotFound()
+
     def confirm_removal(self, album_key: object) -> dict[str, object]:
         normalized_key = str(album_key or "").strip()
         if not normalized_key:
@@ -123,6 +133,19 @@ def _connect(database_url: str):
     if psycopg is None:
         raise RuntimeError("psycopg is required for missing album removal")
     return psycopg.connect(database_url, row_factory=dict_row)
+
+
+_KEEP_MISSING_SQL = """
+    update library.local_albums albums
+       set metadata = albums.metadata || jsonb_build_object('missing_kept_at', now()::text)
+      from app.bootstrap_owners owners
+      join library.libraries libraries
+        on libraries.owner_account_id = owners.account_id
+       and libraries.name = 'Local Library' and libraries.library_kind = 'local'
+     where owners.owner_key = 'local-bootstrap-owner'
+       and albums.library_id = libraries.id and albums.album_key = %(album_key)s
+    returning albums.id
+"""
 
 
 def _confirm_missing_album_removal_sql() -> str:

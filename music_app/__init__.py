@@ -60,6 +60,8 @@ class _LibraryWarmupHandle:
             )
 
 
+_CATCH_UP_SCAN_POLL_SECONDS = 5.0
+
 def _start_library_warmup(
     runtime,
     hydrate,
@@ -68,6 +70,8 @@ def _start_library_warmup(
     prewarm_postgres,
     hydrate_metadata=None,
     recover_persistence=None,
+    metadata_repair_required=None,
+    acquire_metadata_repair_lease=None,
 ):
     stop_requested = threading.Event()
     runtime.relation_projection_startup_started_at = datetime.now(timezone.utc)
@@ -102,7 +106,54 @@ def _start_library_warmup(
                         runtime.logger.exception("Postgres scan timestamp hydration failed.")
                 if stop_requested.wait(_POSTGRES_RELATION_WARMUP_DELAY_SECONDS):
                     return
-                ensure_relations(runtime, cancel_requested=stop_requested)
+                try:
+                    ensure_relations(runtime, cancel_requested=stop_requested)
+                except InterruptedError:
+                    raise
+                except Exception:
+                    # A retained journal (e.g. an unprovable legacy publication)
+                    # is cleared only by a full publication, so still repair.
+                    runtime.logger.exception("Postgres relation warm-up failed.")
+                if stop_requested.is_set() or metadata_repair_required is None:
+                    return
+                try:
+                    repair_required = metadata_repair_required(runtime)
+                except Exception:
+                    runtime.logger.exception("Postgres file metadata repair check failed.")
+                    return
+                if not repair_required or runtime.library_state.get("scan_in_progress"):
+                    return
+                # Instances sharing one database repair it one at a time. The
+                # scan itself is idempotent: it re-reads files and upserts them.
+                lease = None
+                if acquire_metadata_repair_lease is not None:
+                    try:
+                        lease = acquire_metadata_repair_lease(runtime)
+                    except Exception:
+                        runtime.logger.exception("File metadata repair lease could not be acquired.")
+                        return
+                    if lease is None:
+                        runtime.logger.info(
+                            "Another instance is repairing stored file metadata; skipping the repair scan."
+                        )
+                        return
+                try:
+                    runtime.logger.info(
+                        "Stored file metadata predates the current reader; starting a background repair scan."
+                    )
+                    started = start_refresh(
+                        runtime.library_state,
+                        runtime.config,
+                        runtime.logger,
+                        force=True,
+                        scan_mode="background",
+                    )
+                    while started is not False and runtime.library_state.get("scan_in_progress"):
+                        if stop_requested.wait(5.0):
+                            return
+                finally:
+                    if lease is not None:
+                        lease.release()
                 return
             hydrated = hydrate(runtime)
             if stop_requested.is_set():
@@ -294,6 +345,9 @@ def _configure_asgi_app(app, runtime) -> None:
     app.state.config = runtime.config
     app.state.media_host_library_id = None
     app.state.library_state = runtime.library_state
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
+    app.state.local_cover_inventory = LocalCoverInventoryWorker(runtime.config, logger=runtime.logger)
+    runtime.config["_LOCAL_COVER_INVENTORY"] = app.state.local_cover_inventory
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
     runtime.library_watch_health_service = LibraryWatchHealthService(
@@ -347,6 +401,11 @@ def _configure_asgi_app(app, runtime) -> None:
             )
             if cover_preview_backfill is not None:
                 cover_preview_backfill.note_foreground_activity()
+            local_cover_inventory = getattr(app.state, "local_cover_inventory", None)
+            if local_cover_inventory is not None and request.url.path not in {
+                "/utilities/cover-lookup/tasks", "/utilities/cover-lookup/tasks/counts",
+            }:
+                local_cover_inventory.note_foreground_activity()
         response = await call_next(request)
         path = request.url.path
         if (
@@ -417,6 +476,7 @@ def create_asgi_app():
         WatchdogLibraryEventSource,
     )
     from music_app.services.library_roots import get_library_roots
+    from music_app.services.library_reachability import folder_is_readable
     from music_app.services.library_event_coordinator import (
         CoordinatorProblem,
         LibraryEventCoordinator,
@@ -430,6 +490,7 @@ def create_asgi_app():
         TargetedLibraryReconciler,
     )
     from music_app.services.targeted_reconciliation_scheduler import (
+        LibraryRootUnavailableError,
         TargetedReconciliationScheduler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
@@ -438,6 +499,8 @@ def create_asgi_app():
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
+        acquire_file_metadata_repair_lease_on_startup,
+        file_metadata_repair_required_on_startup,
         hydrate_runtime_scan_metadata_on_startup,
         recover_runtime_library_persistence_on_startup,
         invalidate_targeted_library_projections,
@@ -547,6 +610,7 @@ def create_asgi_app():
             _app.state.generated_preview_relocation.start()
         else:
             _app.state.cover_preview_backfill.start()
+        _app.state.local_cover_inventory.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -555,9 +619,12 @@ def create_asgi_app():
             prewarm_connection_pool,
             hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
             recover_persistence=recover_runtime_library_persistence_on_startup,
+            metadata_repair_required=file_metadata_repair_required_on_startup,
+            acquire_metadata_repair_lease=acquire_file_metadata_repair_lease_on_startup,
         )
         lastfm_started = False
         welcome_worker = None
+        corrections_writer = None
         targeted_executor = None
         targeted_reconciler = None
         runtime.library_event_coordinator = None
@@ -570,6 +637,7 @@ def create_asgi_app():
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
+                ("local cover inventory", _app.state.local_cover_inventory.stop),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop
@@ -587,6 +655,10 @@ def create_asgi_app():
                 (
                     "welcome mail retry worker",
                     lambda: welcome_worker.stop() if welcome_worker is not None else None,
+                ),
+                (
+                    "library data corrections writer",
+                    lambda: corrections_writer.stop() if corrections_writer is not None else None,
                 ),
                 (
                     "library filesystem watcher",
@@ -653,6 +725,13 @@ def create_asgi_app():
             start_musicbrainz_enrichment_worker(_app)
             start_lastfm_retry_worker(runtime)
             welcome_worker = start_welcome_retry_worker(_app)
+            from music_app.services.library_roots_postgres import is_library_roots_postgres_available
+
+            if runtime.config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True and is_library_roots_postgres_available(runtime.config):
+                from music_app.routes.library_data_corrections_asgi import LibraryDataCorrectionsWriter
+
+                corrections_writer = LibraryDataCorrectionsWriter(_app)
+                corrections_writer.start()
             targeted_executor = _BoundedExecutorAdmission(
                 create_daemon_executor(
                     max_workers=1,
@@ -703,6 +782,18 @@ def create_asgi_app():
             return tuple(sorted(root_id for root_id in root_ids if root_id))
 
         def reconcile_targeted_request(request) -> None:
+            changed_paths = [*request.paths, *request.deleted_paths, *request.deleted_subtrees]
+            changed_subtrees = list(request.deleted_subtrees)
+            for move in request.moves:
+                changed_paths.extend((move.source, move.destination))
+                if move.is_directory:
+                    changed_subtrees.extend((move.source, move.destination))
+            image_extensions = set(runtime.config.get("IMAGE_EXTENSIONS") or ())
+            _app.state.local_cover_inventory.invalidate_paths(
+                changed_paths,
+                subtree_paths=changed_subtrees,
+                context_changed=bool(changed_subtrees) or any(Path(path).suffix.lower() not in image_extensions for path in changed_paths),
+            )
             root_healthy = all(
                 runtime.library_watch_health_service
                 .root_allows_destructive_reconciliation(root_id)
@@ -717,13 +808,18 @@ def create_asgi_app():
                     persist_library_watch_problem(
                         CoordinatorProblem("stable_write_unavailable", root_id)
                     )
+            return result
+
+        # Album Details "Re-scan" publishes through the watcher's own reconciliation.
+        _app.state.reconcile_library_paths = reconcile_targeted_request
 
         def submit_targeted_reconciliation(request) -> None:
             targeted_executor.submit(request)
 
         def persist_library_watch_health(event) -> None:
             try:
-                runtime.library_watch_health_service.record_event(event)
+                if runtime.library_watch_health_service.record_event(event):
+                    targeted_executor.request_catch_up(frozenset({event.root_id}))
             except Exception:
                 runtime.logger.exception(
                     "Unable to persist library watcher health event."
@@ -739,7 +835,20 @@ def create_asgi_app():
 
         automatic_recovery_started_at: dict[frozenset[str], str] = {}
 
+        def scan_in_progress() -> bool:
+            return bool(runtime.library_state.get("scan_in_progress"))
+
+        def wait_for_scan() -> None:
+            while scan_in_progress():
+                if targeted_reconciler.wait_for_stop(_CATCH_UP_SCAN_POLL_SECONDS):
+                    raise RuntimeError("Library watcher catch-up stopped before the scan finished.")
+
         def catch_up_library_roots(root_ids: frozenset[str]) -> None:
+            # A running full scan re-reads every root; a concurrent catch-up
+            # doubled disk reads and contended its publication (sandbox2
+            # 2026-11-05, where a catch-up started just before the startup
+            # repair scan). Start after it, and yield to one that starts midway.
+            wait_for_scan()
             recovery_started_at = datetime.now(timezone.utc).isoformat()
             roots_by_id = {
                 str(root.get("id") or ""): dict(root)
@@ -752,22 +861,33 @@ def create_asgi_app():
                         f"Library watcher catch-up root is no longer configured: {root_id}"
                     )
                 root_path = Path(str(root.get("path") or ""))
-                if not root_path.is_dir():
-                    raise OSError(
-                        f"Library watcher catch-up root is unavailable: {root_id}"
+                if not folder_is_readable(root_path):
+                    # Its albums stay in the library, marked missing as unreachable (the root cannot
+                    # be read), until a catch-up after it returns restores them.
+                    targeted_reconciler.reconcile(
+                        TargetedReconciliationRequest(root_id=root_id, deleted_subtrees=frozenset({root_path})),
+                        root_healthy=True,
+                        publication_guard=None,
                     )
-                result = targeted_reconciler.reconcile(
-                    TargetedReconciliationRequest(
-                        root_id=root_id,
-                        paths=frozenset({root_path}),
-                        deleted_subtrees=frozenset({root_path}),
-                    ),
-                    root_healthy=True,
-                    publication_guard=(
-                        runtime.library_watch_health_service
-                        .recovery_publication_guard(recovery_started_at)
-                    ),
-                )
+                    raise LibraryRootUnavailableError(root_id)
+                while True:
+                    result = targeted_reconciler.reconcile(
+                        TargetedReconciliationRequest(
+                            root_id=root_id,
+                            paths=frozenset({root_path}),
+                            deleted_subtrees=frozenset({root_path}),
+                        ),
+                        root_healthy=True,
+                        publication_guard=(
+                            runtime.library_watch_health_service
+                            .recovery_publication_guard(recovery_started_at)
+                        ),
+                        reuse_unchanged_entries=True,
+                        interrupted=scan_in_progress,
+                    )
+                    if getattr(result, "health", None) != "deferred":
+                        break
+                    wait_for_scan()
                 if getattr(result, "health", None) != "healthy":
                     raise RuntimeError(
                         f"Library watcher catch-up failed for root {root_id}."
@@ -810,6 +930,7 @@ def create_asgi_app():
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
             targeted_reconciler.replace_roots(root_definitions)
+            _app.state.local_cover_inventory.rescan()
             try:
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:
@@ -844,6 +965,17 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
+        try:
+            configured_root_ids = {
+                str(root.get("id") or "") for root in get_library_roots(runtime.config)
+            }
+            targeted_executor.request_catch_up(frozenset(
+                problem.root_id
+                for problem in runtime.library_watch_health_service.load_problems()
+                if problem.root_id in configured_root_ids
+            ))
+        except Exception:
+            runtime.logger.exception("Unable to schedule persisted library watcher recovery.")
         try:
             yield
         finally:

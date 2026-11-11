@@ -351,6 +351,24 @@ test('forward history restoration preserves the original library URL for the log
   assert.equal(app.shell.hidden, false);
 });
 
+test('the app logo from Settings opens library Home instead of the view Settings was opened from', async () => {
+  // Owner (sandbox2): Home from the admin panel landed back on the «ддт» search family view.
+  const app = harness({ library: true, initialPath: '/?q=%D0%B4%D0%B4%D1%82&artist=%D0%94%D0%94%D0%A2' });
+  const homeClicks = [];
+  const libraryHome = { click() { homeClicks.push(app.host.hidden); app.window.history.pushState({}, '', '/'); } };
+  const querySelector = app.document.querySelector;
+  app.document.querySelector = selector => (selector === 'a[data-library-home="1"]' ? libraryHome : querySelector(selector));
+  app.respond('Server', 'http://localhost:5000/admin/server');
+  assert.equal(await app.navigation.navigate('/admin/server'), true);
+
+  assert.equal(await app.navigation.navigate('/', { hierarchy: true, home: true }), true);
+
+  assert.deepEqual(homeClicks, [true], 'Home runs once, after Settings is hidden');
+  assert.equal(app.host.hidden, true);
+  assert.equal(app.shell.hidden, false);
+  assert.equal(app.location.href, 'http://localhost:5000/');
+});
+
 for (const direction of ['back', 'forward']) {
   test(`cancelled ${direction} from unsaved Appearance restores the library history entry`, async () => {
     const app = harness({ library: true, initialPath: '/?artist=Initial' });

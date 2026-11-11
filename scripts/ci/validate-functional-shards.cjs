@@ -11,11 +11,11 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual-1', 32],
-  ['gallery-search-visual-2', 35],
-  ['cover-providers-1', 22],
+  ['gallery-search-visual-1', 34],
+  ['gallery-search-visual-2', 46],
+  ['cover-providers-1', 26],
   ['cover-providers-2', 15],
-  ['metadata-mutations', 16],
+  ['metadata-mutations', 18],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 14],
   ['playback-utilities-3', 14],
@@ -210,7 +210,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 162) errors.push(`functional contract owns ${owned.length} cases; expected 162`);
+  if (owned.length !== 181) errors.push(`functional contract owns ${owned.length} cases; expected 181`);
   return errors;
 }
 
@@ -283,6 +283,10 @@ function executionWavesForShard(shard, matrixRows) {
       }
       const isGlobalMutation = matrixRow.stateMode === 'global-mutation';
       const isOwnedMutation = matrixRow.stateMode === 'owned-mutation';
+      const fixtureScenario = String(matrixRow.fixtureScenario || '').trim();
+      if (fixtureScenario && (!isOwnedMutation || !/^[A-Za-z][A-Za-z0-9]*$/.test(fixtureScenario))) {
+        throw new Error(`functional fixture scenario requires an owned mutation and a manifest key: ${ownedCase.case}`);
+      }
       const setupGroup = String(matrixRow.setupGroup || '').trim();
       const appProcessScope = String(matrixRow.appProcessScope || '').trim();
       if (appProcessScope && appProcessScope !== 'isolated') {
@@ -309,6 +313,7 @@ function executionWavesForShard(shard, matrixRows) {
           config: invocation.config,
           project: invocation.project,
           workers: 1,
+          ...(fixtureScenario ? { fixtureScenario } : {}),
           baselineMode: isGlobalMutation
             ? 'global-mutation'
             : isIsolatedAppProcess
@@ -496,6 +501,18 @@ function runFunctionalShard(contract, shardName, options = {}) {
       delete childEnv.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE;
       if (invocation.config === 'playwright.lastfm-auto-timezone.config.js') {
         childEnv.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE = 'blank';
+      }
+      if (invocation.fixtureScenario) {
+        const scenarioResult = spawnSyncFn(pythonExecutable, [
+          path.join(repoRoot, 'scripts', 'ci', 'load-fixture-profile.py'),
+          `--fixture-root=${sourceFixtureRoot}`, '--profile=functional-core',
+          `--database-url=${databaseUrl}`, `--scenario=${invocation.fixtureScenario}`,
+        ], { cwd: repoRoot, env: childEnv, stdio: 'inherit', windowsHide: true });
+        if (scenarioResult.signal) return { exitCode: 1, signal: scenarioResult.signal };
+        if (scenarioResult.error || scenarioResult.status !== 0) {
+          failed = true;
+          break execution;
+        }
       }
       const result = spawnSyncFn(
         process.execPath,

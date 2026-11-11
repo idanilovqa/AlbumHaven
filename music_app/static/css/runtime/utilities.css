@@ -114,7 +114,7 @@
   border-bottom: 1px solid var(--border);
 }
 #utility-modal .utility-tab:focus-visible { outline: 2px solid var(--utility-tab-accent); outline-offset: -4px; }
-#utility-modal .utility-modal-close { align-self: flex-start; flex: 0 0 34px; width: 34px; height: 34px; min-height: 34px; }
+#utility-modal .utility-modal-close { align-self: flex-start; }
 .utility-modal-body {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -178,7 +178,20 @@
 #utility-modal .search-field { --search-field-background: var(--appearance-control, var(--panel-2)); }
 #utility-modal .search-field-action > .utility-problem-filter-button[hidden] { display: none; }
 .utility-problem-filter-button.is-active {
+  position: relative;
   color: var(--text);
+}
+/* Selected problem types are edited in the menu; the dot only says some are on. */
+.utility-problem-filter-button.is-active::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  pointer-events: none;
 }
 .utility-problem-filter-menu {
   position: absolute;
@@ -224,9 +237,21 @@
 .utility-problem-filter-option:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
 #utility-modal .utility-problem-filter-option:hover { border: 0; outline: none; box-shadow: none; }
 .utility-problem-filter-check {
-  color: var(--muted);
-  font-weight: 800;
-  line-height: 1.2;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  justify-self: center;
+  color: var(--appearance-play, #4ade80);
+}
+.utility-problem-filter-check svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .utility-problem-filter-label {
   min-width: 0;
@@ -236,33 +261,6 @@
   padding: 10px;
   color: var(--muted);
   font-size: 0.82rem;
-}
-.utility-problem-filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.utility-problem-filter-chip {
-  max-width: 100%;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 7px;
-  border-radius: 999px;
-  border: 1px solid rgba(96,165,250,0.35);
-  background: rgba(96,165,250,0.12);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.utility-problem-filter-chip span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .utility-count {
   color: var(--muted);
@@ -294,8 +292,8 @@
 .utility-list-item[draggable="true"] {
   user-select: text;
 }
-/* Wide is an additive NavigationTree presentation, with the same shared identity. */
-#utility-modal .navigation-tree-item--wide {
+/* Wide is an additive NavigationTree presentation, with the same shared identity, in Settings and shared dialogs. */
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -311,12 +309,12 @@
   color: var(--text);
   transition: background-color 150ms ease, border-color 150ms ease;
 }
-#utility-modal .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
-#utility-modal .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
-#utility-modal .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
-#utility-modal .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
-#utility-modal .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
-#utility-modal .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
+:is(#utility-modal, #app-form-modal) .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
 .problematic-virtual-spacer {
   flex: 0 0 auto;
   min-width: 0;
@@ -343,7 +341,7 @@
   background-position: bottom; background-repeat: no-repeat; background-size: 100% 1px;
 }
 @media (prefers-reduced-motion: reduce) {
-  #utility-modal .navigation-tree-item--wide, #utility-modal .utility-tab { transition: none; scroll-behavior: auto; }
+  :is(#utility-modal, #app-form-modal) .navigation-tree-item--wide, #utility-modal .utility-tab { transition: none; scroll-behavior: auto; }
 }
 @media (max-width: 900px) {
   #utility-modal[data-active-tab="appearance"] .utility-modal-body {
@@ -1362,16 +1360,6 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.confirm-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(3, 7, 18, 0.72);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 96;
-}
 #cover-lookup-delete-confirm-modal {
   z-index: 4700;
 }
@@ -1387,32 +1375,7 @@
 #tag-edit-confirm-modal {
   z-index: 125;
 }
-.confirm-modal[hidden] {
-  display: none;
-}
-.confirm-modal-dialog {
-  width: min(440px, calc(100vw - 32px));
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 24px 64px rgba(0,0,0,0.36);
-  padding: 20px;
-}
-.confirm-modal-title {
-  margin: 0 0 10px;
-  font-size: 1.05rem;
-}
-.confirm-modal-text {
-  color: var(--muted);
-  line-height: 1.45;
-}
 #tag-edit-non-album-warning { margin-top: 14px; }
-.confirm-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 18px;
-}
 .confirm-modal-danger {
   border-color: rgba(239,68,68,0.45);
   background: rgba(239,68,68,0.12);
@@ -1524,35 +1487,6 @@
   flex-direction: column;
   gap: 4px;
   padding: 10px;
-}
-.tag-editor-track-footer {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
-}
-.tag-editor-folder-load {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255,255,255,0.03);
-  color: var(--muted);
-  cursor: pointer;
-}
-.tag-editor-folder-load:is(:hover, :focus-visible) { color: var(--text); }
-.tag-editor-folder-load:disabled { cursor: wait; opacity: 0.5; }
-.tag-editor-folder-load svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .tag-editor-track {
   position: relative;
@@ -1671,6 +1605,28 @@
   gap: 10px;
   min-height: 58px;
 }
+.tag-editor-folder-location { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tag-editor-folder-location > .tag-editor-open-folder { flex: none; margin-left: auto; }
+/* "Load all tracks from the folder" sits right after the folder path, wrapping under it only when narrow. */
+.tag-editor-folder-copy { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0; }
+.tag-editor-folder-load {
+  background: transparent;
+  border: 0;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: inherit;
+}
+.tag-editor-folder-load:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.tag-editor-track-name { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.tag-editor-track-folder { color: var(--muted); font-size: 0.7rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-editor-folder-path {
   min-width: 0;
   max-width: 100%;
@@ -1726,18 +1682,6 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-.tag-editor-exception-field::after {
-  content: '';
-  position: absolute;
-  right: 13px;
-  bottom: 14px;
-  width: 7px;
-  height: 7px;
-  border-right: 2px solid var(--appearance-interaction-outline, #93c5fd);
-  border-bottom: 2px solid var(--appearance-interaction-outline, #93c5fd);
-  transform: rotate(45deg);
-  pointer-events: none;
 }
 #tag-editor-modal .tag-editor-exception-field input,
 #tag-editor-modal .tag-editor-exception-field input:focus {
@@ -1975,6 +1919,14 @@
   gap: 8px;
 }
 .utility-album-problem-labels { margin: 12px 0 20px; margin-inline-start: calc(88px + 16px); }
+/* Track-table problem labels align; album-level labels stay content-sized. */
+.utility-track-problem-labels > .utility-problem-exclusion-pill {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  inline-size: min(100%, 16rem);
+  justify-content: flex-start;
+  text-align: left;
+}
 @media (max-width: 760px) {
   .utility-album-problem-labels { margin-inline-start: calc(84px + 16px); }
 }
@@ -2019,6 +1971,9 @@
 .utility-rule-target > .album-artbox { width: 44px; height: 44px; flex: 0 0 44px; }
 .utility-rule-target .utility-rule-album-title,
 .utility-rule-target .utility-rule-album-meta { display: block; }
+/* Owner (11-09): a long album name is cut with an ellipsis inside its column (the full name is its tooltip). */
+.utility-rule-target > span:not(.album-artbox) { min-width: 0; overflow: hidden; }
+.utility-rule-target :is(.utility-rule-album-title, .utility-rule-album-meta) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #repair-confirm-text { white-space: pre-line; }
 
 /* Approved Settings integrations compose existing Input, ActionButton and Modal. */
@@ -2030,9 +1985,6 @@
   background: transparent;
 }
 .library-settings-root-row { grid-template-columns: minmax(0, 1fr); }
-.library-settings-path-control { display: flex; align-items: center; min-width: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding-right: 4px; }
-.library-settings-path-control input, .library-settings-path-control input:focus { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; box-shadow: none; outline: none; }
-.library-settings-path-control .action-button { flex: 0 0 auto; border: 0; }
 .settings-integration-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 12px; }
 .settings-scrobbling-heading { display: flex; align-items: center; gap: 32px; flex-wrap: wrap; }
 .settings-connected-status { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--success, var(--accent)); }
@@ -2043,12 +1995,9 @@
 .settings-playback-statistics dl { display: grid; gap: 12px; }
 .settings-playback-statistics dl > div { display: flex; gap: 24px; justify-content: space-between; }
 .settings-playback-statistics dd { margin: 0; }
-.settings-folder-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .settings-foobar-format-menu { box-sizing: border-box; width: min(280px, calc(100vw - 16px)); overflow-y: auto; }
 .settings-guide-copy { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .settings-reading-guide section + section { margin-top: 24px; }
-#app-form-modal.app-form-reading .confirm-modal-dialog { width: min(1000px, calc(100vw - 32px)); }
-#app-form-modal.app-form-reading [hidden] { display: none !important; }
 
 .settings-guide-copy { white-space: normal; }
 
@@ -2097,6 +2046,8 @@
     inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
     0 0 14px color-mix(in srgb, #22c55e 55%, transparent) !important;
 }
+/* Until the requested section renders, the previous one is never shown (it flashed Problematic Files on mobile). */
+#utility-modal[data-utility-tab-pending] .utility-modal-body { visibility: hidden; }
 
 /* Android app settings render only inside the APK's WebView. */
 #utility-modal[data-active-tab="android"] .utility-sidebar-search { display: none; }

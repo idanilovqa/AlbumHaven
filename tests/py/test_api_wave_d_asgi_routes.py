@@ -56,6 +56,15 @@ def postgres_runtime_fakes(app, monkeypatch):
         def load_notifications(self):
             return list(persisted_notifications)
 
+        def load_reusable_notification(self, track_paths, *, manual_urls, excluded_task_ids):
+            normalize = lambda paths: {str(Path(path).resolve()).casefold() for path in paths}
+            return next((dict(task) for task in persisted_notifications if (
+                task.get("id") not in excluded_task_ids
+                and task.get("status") in {"completed", "failed", "canceled"}
+                and not task.get("internal")
+                and normalize(task.get("track_paths", [])) == normalize(track_paths)
+            )), None)
+
         def load_notification(self, task_id):
             return next(
                 (
@@ -156,9 +165,41 @@ def postgres_runtime_fakes(app, monkeypatch):
     app.config["_TEST_COVER_LOOKUP_NOTIFICATIONS"] = persisted_notifications
 
 
+class _FilesystemCoverInventory:
+    """Route tests have no isolated database for the Postgres-backed local cover
+    inventory, so resolve an album's folder from its track paths instead."""
+
+    def __init__(self):
+        self.repository = self
+
+    @staticmethod
+    def root_for_tracks(paths):
+        # The inventory stores the physical album folder: a disc folder's parent.
+        from music_app.services.album_local_membership import _DISC_FOLDER
+
+        roots = set()
+        for path in paths or ():
+            parent = Path(str(path)).parent
+            roots.add(parent.parent if _DISC_FOLDER.search(parent.name) else parent)
+        return roots.pop() if len(roots) == 1 else None
+
+
+
+@pytest.fixture(autouse=True)
+def _isolated_remote_image_cache(monkeypatch):
+    from collections import OrderedDict
+
+    from music_app.services import cover_lookup_runtime
+
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_IMAGE_CACHE", OrderedDict())
+    monkeypatch.setattr(cover_lookup_runtime, "_REMOTE_IMAGE_CACHE_BYTES", 0)
+
 def _make_wave_d_app(flask_app):
     from music_app.routes.api_wave_d_asgi_routes import router
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
 
+    if isinstance(flask_app.config.get("_LOCAL_COVER_INVENTORY"), LocalCoverInventoryWorker):
+        flask_app.config["_LOCAL_COVER_INVENTORY"] = _FilesystemCoverInventory()
     asgi_app = FastAPI()
     from tests.py.asgi_testing import configure_test_bootstrap_actor
     configure_test_bootstrap_actor(asgi_app)
@@ -168,6 +209,83 @@ def _make_wave_d_app(flask_app):
     asgi_app.state.logger = flask_app.logger
     asgi_app.include_router(router)
     return asgi_app
+
+
+@pytest.mark.parametrize("indexed, valid_identity", [(True, True), (False, True), (False, False)])
+def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_reads(app, monkeypatch, indexed, valid_identity):
+    from music_app.routes import api_wave_d_asgi_routes as routes
+    from music_app.services import cover_state
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    root = Path(app.config["MUSIC_DIR"]) / "Artist" / "Indexed Album"
+    track = root / "song.mp3"
+    events = []
+    candidates = [
+        {"path": str(root / name), "filename": name, "is_squareish": square,
+         "width": 600, "height": 600 if square else 300, "sha256": "a" * 64}
+        for name, square in [("front.jpg", True), ("alternate.jpg", True), ("booklet.jpg", False)]
+    ]
+
+    def validated_context(_self, **kwargs):
+        events.append("validated_context")
+        return {"album_id": 41, "album_key": "artist::indexed album", "track_paths": [str(track)]}
+
+    def validate_tracks(_self, *, track_paths):
+        assert track_paths == {str(track)}
+        events.append("validated_tracks")
+        return 41 if valid_identity else None
+
+    def request_context(paths):
+        assert "validated_tracks" in events
+        assert set(paths) == {str(track)}
+        events.append("queue_context")
+
+    repository = SimpleNamespace(
+        root_for_tracks=lambda paths: root if indexed and paths else None,
+        get=lambda selected_root: {"available": True, "complete": True, "candidates": candidates},
+    )
+    worker = SimpleNamespace(
+        repository=repository, note_foreground_activity=lambda: None,
+        request=lambda selected_root: events.append("queue_root"), request_context=request_context,
+    )
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context", validated_context, raising=False)
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths", validate_tracks)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", lambda *args: {})
+    app.config["_LOCAL_COVER_INVENTORY"] = worker
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.local_cover_inventory = worker
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Indexed gallery request must not touch the filesystem")
+
+    with monkeypatch.context() as patches:
+        for name in ("resolve_album_context", "_resolve_distributed_album_context", "image_dimensions"):
+            patches.setattr(routes, name, forbidden)
+        patches.setattr(cover_state.os, "scandir", forbidden)
+        patches.setattr(cover_state, "_file_sha256", forbidden)
+        patches.setattr(Path, "stat", forbidden)
+        status, _, body = _run_asgi_request(
+            asgi_app, "POST", "/utilities/cover-lookup/gallery",
+            json_body={"album": {"album_id": 41, "name": "Indexed Album", "tracks": []}},
+        )
+    if not valid_identity:
+        assert status == 409
+        assert not any(event.startswith("queue_") for event in events)
+        return
+    assert status == 200
+    payload = _decode_json(body)
+    assert "validated_context" in events
+    assert "validated_tracks" in events
+    if indexed:
+        assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg", "alternate.jpg"]
+        assert [item["filename"] for item in payload["other_art"]] == ["booklet.jpg"]
+        assert payload["local_inventory_complete"] is True
+    else:
+        assert payload["local_inventory_pending"] is True
+        assert payload["local_inventory_complete"] is False
+        assert "local_covers" not in payload
+        assert "other_art" not in payload
+        assert events.count("queue_context") == 1
 
 
 class _FatalFlaskBridge:
@@ -698,7 +816,70 @@ def test_asgi_cover_lookup_notification_routes_use_asgi_config_without_flask_bri
     )
 
 
-def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
+@pytest.mark.parametrize("stale_local", [False, True])
+def test_cover_lookup_start_returns_remote_execution_without_local_worker(app, monkeypatch, stale_local):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    remote = {
+        "id": "shared-notification", "status": "running", "search_generation": "current-run",
+        "artist": "Artist", "album": "Album", "track_paths": [str(track_path)],
+        "progress": 17, "progress_label": "Searching Apple Music", "notification_action_taken": False,
+        "created_at": "2026-11-02T12:00:00+00:00", "started_at": "2026-11-02T12:00:00+00:00",
+    }
+    cover_lookup_tasks.reset_cover_lookup_runtime_state()
+    if stale_local:
+        cover_lookup_tasks._COVER_LOOKUP_TASKS[remote["id"]] = {
+            **remote, "search_generation": "old-run", "status": "failed", "progress": 100,
+            "progress_label": "Failed", "notification_action_taken": True,
+            "started_at": "2026-10-01T12:00:00+00:00",
+        }
+    monkeypatch.setitem(app.config, "ALBUM_HAVEN_APP_DATABASE_URL", "postgresql://unit.invalid/owned")
+    monkeypatch.setattr(cover_lookup_tasks, "load_cover_lookup_notification",
+                        lambda _config, task_id: dict(remote) if task_id == remote["id"] else None)
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", lambda *_args, **_kwargs: remote["id"])
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+    try:
+        status, _headers, body = _run_asgi_request(
+            _make_wave_d_app(app), "POST", "/utilities/cover-lookup/start",
+            json_body={"album": _album_payload(track_path)},
+        )
+        assert status == 200
+        task = _decode_json(body)["task"]
+        for key in ("id", "status", "search_generation", "progress", "progress_label", "started_at", "notification_action_taken"):
+            assert task[key] == remote[key]
+        assert remote["id"] not in cover_lookup_tasks._COVER_LOOKUP_FUTURES
+        if not stale_local:
+            assert cover_lookup_tasks.cover_lookup_result(remote["id"]) == {}
+    finally:
+        cover_lookup_tasks.reset_cover_lookup_runtime_state()
+
+
+def test_cover_lookup_start_reports_finishing_worker_without_creating_a_task(app, monkeypatch):
+    import json
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = Path(app.config["MUSIC_DIR"]) / "Artist" / "Album" / "song.mp3"
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+
+    def finishing(*_args, **_kwargs):
+        raise asgi_routes.CoverLookupFinishingError("Previous cover search is still finishing. Try again shortly.")
+
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", finishing)
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app), "POST", "/utilities/cover-lookup/start",
+        json_body={"album": _album_payload(track_path)},
+    )
+    assert status == 409
+    assert json.loads(body)["error"] == "Previous cover search is still finishing. Try again shortly."
+
+
+@pytest.mark.parametrize("compact_album", [False, True])
+def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch, compact_album):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
         PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
@@ -711,10 +892,27 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
     (track_path.parent / "cover.jpg").write_bytes(b"cover")
+    start_album = _album_payload(track_path)
+    if compact_album:
+        start_album = {**start_album, "album_id": 42, "tracks": []}
+        monkeypatch.setattr(
+            asgi_routes.AlbumCoverCandidateSnapshotRepository,
+            "resolve_album_track_context",
+            lambda _self, **_kwargs: {
+                "album_id": 42, "album_key": "artist::album", "track_paths": [str(track_path)],
+            },
+            raising=False,
+        )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository, "build_album_detail_payload_by_id",
+        lambda *_args, **_kwargs: pytest.fail("search admission must not build full album details"),
+    )
     queued_calls: list[dict[str, object]] = []
     logged_events: list[dict[str, object]] = []
 
     def fake_queue_cover_lookup_task(album, requested_track_paths, manual_urls, **kwargs):
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
         queued_calls.append(
             {
                 "requested_track_paths": requested_track_paths,
@@ -764,7 +962,7 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
         "POST",
         "/utilities/cover-lookup/start",
         json_body={
-            "album": _album_payload(track_path),
+            "album": start_album,
             "manual_urls": [" https://covers.example/one.jpg ", "", None],
         },
     )
@@ -1060,10 +1258,12 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
 
 
 @pytest.mark.parametrize("snapshot_matches_task", [True, False])
+@pytest.mark.parametrize("separate_execution_generation", [True, False])
 def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notification_album(
     app,
     monkeypatch,
     snapshot_matches_task,
+    separate_execution_generation,
 ):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks
@@ -1079,10 +1279,19 @@ def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notific
         album,
         {str(track_path)},
     )
+    from uuid import UUID
+
+    generation = "current-execution" if separate_execution_generation else str(UUID(task_id))
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(app.config, "_LOCAL_COVER_INVENTORY", SimpleNamespace(
+        repository=SimpleNamespace(root_for_tracks=lambda paths: track_path.parent),
+    ))
     cover_lookup_tasks.update_cover_lookup_task(
         task_id,
         status="completed",
         possible_matches=[],
+        search_generation=generation if separate_execution_generation else "",
     )
 
     candidate = {
@@ -1115,7 +1324,7 @@ def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notific
             assert album_id == 41
             return {
                 "album_id": 41,
-                "search_generation": task_id if snapshot_matches_task else "other-generation",
+                "search_generation": generation if snapshot_matches_task else "other-generation",
                 "search_kind": "automatic",
                 "status": "completed",
                 "revision": 1,
@@ -1136,6 +1345,7 @@ def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notific
                 "album": {
                     "album_id": 41,
                     "album_key": "test artist::test album",
+                    "name": "Current Album", "album_artist": "Current Artist", "year": 2026,
                 },
                 "choices": [],
             }
@@ -1161,6 +1371,11 @@ def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notific
 
     assert status == 200
     payload = _decode_json(body)
+    assert payload["album"]["name"] == "Current Album"
+    assert payload["album"]["album_artist"] == "Current Artist"
+    assert payload["album"]["year"] == 2026
+    assert payload["album"]["preview_only"] is True
+    assert payload["task"]["id"] == task_id
     snapshot_candidates = (payload.get("candidate_snapshot") or {}).get("candidates", [])
     if snapshot_matches_task:
         assert snapshot_candidates == [candidate]
@@ -1441,10 +1656,16 @@ def test_asgi_cover_lookup_save_remote_scopes_persisted_unknown_album_notificati
     assert restored_task["possible_matches"][0]["id"] == "yaruga-cover"
 
 
+@pytest.mark.parametrize("include_local", [True, False])
 def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider_search(
     app,
     monkeypatch,
+    include_local,
 ):
+    from music_app.services import cover_state
+    if not include_local:
+        monkeypatch.setattr(cover_state, "iter_local_cover_candidates",
+                            lambda *_args, **_kwargs: pytest.fail("progress polling must not scan local art"))
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
         PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
@@ -1456,6 +1677,8 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
     album = {**_album_payload(track_path), "album_id": 41}
+    from threading import get_ident
+    event_loop_thread = get_ident()
     repository_calls: list[dict[str, object]] = []
     candidate = {
         "id": "candidate-1",
@@ -1473,6 +1696,7 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
             return 41
 
         def get_for_album_context(self, *, album_id):
+            assert get_ident() != event_loop_thread, "saved candidates must not block the ASGI event loop"
             repository_calls.append({"album_id": album_id})
             return {
                 "album_id": album_id,
@@ -1502,11 +1726,13 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
         asgi_app,
         "POST",
         "/utilities/cover-lookup/gallery",
-        json_body={"album": album},
+        json_body={"album": album, "include_local": include_local},
     )
 
     assert status == 200
     payload = _decode_json(body)
+    assert payload["local_inventory_complete"] is include_local
+    assert ("local_covers" in payload) is include_local
     assert payload["task"] is None
     assert payload["candidate_snapshot"] == {
         "candidates": [candidate],
@@ -1672,6 +1898,130 @@ def test_asgi_cover_routes_reject_lookup_task_from_another_album(
         "error": "Lookup task does not belong to this album",
     }
     assert snapshot_calls == []
+
+
+def test_asgi_cover_lookup_gallery_offers_split_choice_before_the_split_is_recorded(
+    app,
+    monkeypatch,
+):
+    """UI-5 (owner, 11-10): opened from its notification right after the split, the old album still read as current
+    with all the task's tracks; the release chooser must still open first."""
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    first_track = (app.config["MUSIC_DIR"] / "Artist" / "Old Album" / "one.mp3").resolve()
+    second_track = (app.config["MUSIC_DIR"] / "Artist" / "Old Album" / "two.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    old_album = {
+        **_album_payload(first_track),
+        "album_id": 40,
+        "name": "Old Album",
+        "tracks": [{"path": str(first_track)}, {"path": str(second_track)}],
+    }
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(
+        old_album,
+        {str(first_track), str(second_track)},
+    )
+    current_releases = [
+        {
+            "key": "artist::first release",
+            "album_artist": "Artist",
+            "name": "First Release",
+            "year": 2001,
+            "edition": "Expanded",
+            "tracks": [{"path": str(first_track)}],
+        },
+        {
+            "key": "artist::second release",
+            "album_artist": "Artist",
+            "name": "Second Release",
+            "year": 2002,
+            "tracks": [{"path": str(second_track)}],
+        },
+    ]
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            if track_paths == {str(first_track), str(second_track)}:
+                return 40
+            if track_paths == {str(first_track)}:
+                return 41
+            if track_paths == {str(second_track)}:
+                return 42
+            raise AssertionError(track_paths)
+
+    class BrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            assert track_paths == {str(first_track), str(second_track)}
+            return current_releases
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert album_id == 40
+            assert track_paths == {str(first_track), str(second_track)}
+            return {"status": "current", "album": {"album_id": 40, "album_key": "artist::old album"}, "choices": []}
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumCoverCandidateSnapshotRepository",
+        SnapshotRepository,
+    )
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", BrowseRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+
+    async def serialize_gallery(*_args, **_kwargs):
+        return {"ok": True, "local_covers": [], "other_art": []}
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", serialize_gallery)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={"album": old_album, "task_id": task_id},
+    )
+
+    assert status == 409
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "This album was split—choose the current release",
+        "resolution_kind": "album_split",
+        "current_releases": [
+            {
+                "album_id": 41,
+                "identity_resolution": "album_split_choice",
+                "key": "artist::first release",
+                "album_artist": "Artist",
+                "name": "First Release",
+                "year": 2001,
+                "edition": "Expanded",
+                "track_count": 1,
+            },
+            {
+                "album_id": 42,
+                "identity_resolution": "album_split_choice",
+                "key": "artist::second release",
+                "album_artist": "Artist",
+                "name": "Second Release",
+                "year": 2002,
+                "edition": "",
+                "track_count": 1,
+            },
+        ],
+    }
+    assert [release["album_id"] for release in _decode_json(body)["current_releases"]] == [41, 42]
 
 
 def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_split_album(
@@ -2888,6 +3238,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
 
 def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selection(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.local_cover_inventory import discover_local_cover_inventory
 
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2905,6 +3256,20 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
     monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", fail_if_selection_changes)
     monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", fail_if_selection_changes)
     asgi_app = _make_wave_d_app(app)
+    candidates = discover_local_cover_inventory(track_path.parent, app.config)
+    removed = []
+
+    def remove_inventory_path(path):
+        removed.append(path)
+        candidates[:] = [item for item in candidates if item["path"] != str(path)]
+
+    asgi_app.state.local_cover_inventory = SimpleNamespace(
+        remove_path=remove_inventory_path,
+        request_context=lambda paths: None,
+        repository=SimpleNamespace(
+            get=lambda root: {"available": True, "complete": True, "candidates": candidates},
+        ),
+    )
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
@@ -2917,6 +3282,8 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
     assert status == 200
     assert payload["ok"] is True
     assert not inactive_cover.exists()
+    assert removed == [inactive_cover]
+    assert str(inactive_cover) not in [item["path"] for item in payload["gallery"]["local_covers"]]
     assert active_cover.exists()
     assert payload["gallery"]["active_cover_path"] == str(active_cover)
     assert [
@@ -3104,6 +3471,10 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
 
     monkeypatch.setattr(asgi_routes, "log_app_event", fake_log_app_event)
     monkeypatch.setattr(asgi_routes, "update_cover_lookup_task", recording_update_cover_lookup_task)
+    monkeypatch.setattr(
+        asgi_routes, "mark_cover_lookup_task_notification_action_taken",
+        lambda *_args, **_kwargs: pytest.fail("Extract must not mark artwork chosen"),
+    )
     reset_cover_lookup_runtime_state()
     task_id, _ = cover_lookup_tasks.create_cover_lookup_task(_album_payload(track_path), {str(track_path)})
     cover_lookup_tasks.update_cover_lookup_task(
@@ -3146,6 +3517,8 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
     assert add_status == 200
     payload = _decode_json(add_body)
     assert payload["ok"] is True
+    assert payload["task"].get("notification_action_taken", False) is False
+    assert payload["gallery"]["task"].get("notification_action_taken", False) is False
     assert [item["id"] for item in payload["task"]["possible_matches"]] == ["candidate-old", "candidate-new"]
     assert payload["task"]["possible_matches"][0]["source"] == "discogs"
     assert payload["task"]["possible_matches"][0]["width"] == 700
@@ -4426,6 +4799,12 @@ def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_id
         lambda _config, task_id: persisted_task if task_id == persisted_task["id"] else None,
         raising=False,
     )
+    # The route reads the task through cover_lookup_tasks.read_cover_lookup_task.
+    monkeypatch.setattr(
+        asgi_routes,
+        "read_cover_lookup_task",
+        lambda task_id, *, config: persisted_task if task_id == persisted_task["id"] else {},
+    )
 
     status, _headers, body = _run_asgi_request(
         _make_wave_d_app(app),
@@ -4894,6 +5273,15 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         "album_id": 14674,
         "tracks": [],
     }
+    monkeypatch.setattr(
+        asgi_routes.AlbumCoverCandidateSnapshotRepository,
+        "resolve_album_track_context",
+        lambda _self, **_kwargs: {
+            "album_id": 14674, "album_key": "ovderhead::telepathic minds",
+            "track_paths": [str(stale_path)],
+        },
+        raising=False,
+    )
     events = []
 
     class Reservation:
@@ -4967,8 +5355,9 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         "queued"
     ]
     queued = events[0]
-    assert queued[1] == album
-    assert queued[2] == (set() if compact_request else {str(stale_path)})
+    assert queued[1] == ({**album, "id": 14674, "tracks": [{"path": str(stale_path)}]}
+                         if compact_request else album)
+    assert queued[2] == {str(stale_path)}
     assert callable(queued[4])
 
     prepared_album, prepared_paths = queued[4](queued[1], queued[2], Event())
@@ -4980,7 +5369,7 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         "",
         {str(stale_path)},
     )))
-    assert (stale_path_key in acquired[1]) is not compact_request
+    assert stale_path_key in acquired[1]
     assert events[2][0] == "reconciled"
     assert events[2][1] == acquired[1]
     assert events[2][2] > 0
@@ -5042,6 +5431,12 @@ def test_cover_lookup_start_recovers_compact_notification_album_from_persisted_t
             if task_id == "new-eden-lookup"
             else {}
         ),
+    )
+    # The route reads the task through cover_lookup_tasks.read_cover_lookup_task.
+    monkeypatch.setattr(
+        asgi_routes,
+        "read_cover_lookup_task",
+        lambda task_id, *, config: persisted_task if task_id == persisted_task["id"] else {},
     )
     monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
     monkeypatch.setattr(
@@ -5181,3 +5576,125 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
 
     assert prepared_album["album_artist"] == "Overhead"
     assert prepared_paths == {str(track_path)}
+
+
+def test_asgi_second_artbox_accepts_only_new_album_art(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import album_additional_artworks_postgres as artworks_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Testimony" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    cover = track_path.parent / "cover.jpg"
+    cover.write_bytes(_jpeg_bytes((10, 10, 10)))
+    back = track_path.parent / "back.jpg"
+    back.write_bytes(_jpeg_bytes((200, 10, 10)))
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    saved: list[dict[str, object]] = []
+
+    monkeypatch.setattr(asgi_routes, "_resolved_snapshot_album_context", lambda *_args: (None, 41, None))
+
+    class FakeBrowse:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id):
+            assert album_id == 41
+            return {"cover_path": str(cover.resolve()), "remote_cover_url": "https://img.example/front.jpg"}
+
+    class FakeSnapshots:
+        def __init__(self, _config):
+            pass
+
+        def get_for_album_context(self, *, album_id):
+            return {"candidates": [
+                {"url": "https://img.example/front.jpg"},
+                {"url": "https://img.example/back.jpg", "thumbnail_url": "https://img.example/back-thumb.jpg"},
+            ]}
+
+    class FakeArtworks:
+        def __init__(self, _config):
+            pass
+
+        def save(self, **kwargs):
+            saved.append(kwargs)
+            return [{"slot": 1, "source_kind": kwargs["source_kind"]}]
+
+    monkeypatch.setattr(browse_module, "PostgresLibraryBrowseRepository", FakeBrowse)
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeSnapshots)
+    monkeypatch.setattr(artworks_module, "AlbumAdditionalArtworkRepository", FakeArtworks)
+
+    def post(body):
+        status, _headers, response = _run_asgi_request(
+            asgi_app, "POST", "/utilities/cover-lookup/additional-artwork",
+            json_body={"album": _album_payload(track_path), **body},
+        )
+        return status, _decode_json(response)
+
+    assert post({"slot": 2, "source_kind": "local", "source_path": str(back)})[0] == 400
+    status, body = post({"slot": 1, "source_kind": "local", "source_path": str(cover)})
+    assert (status, body["error"]) == (409, "This art is already in the first artbox")
+    status, body = post({"slot": 1, "source_kind": "remote", "remote_url": "https://img.example/front.jpg"})
+    assert status == 409
+    status, body = post({"slot": 1, "source_kind": "remote", "remote_url": "https://elsewhere.example/x.jpg"})
+    assert (status, body["error"]) == (400, "Choose one of this album's cover candidates")
+    assert saved == []
+
+    status, body = post({"slot": 1, "source_kind": "local", "source_path": str(back)})
+    assert status == 200 and body["additional_artworks"] == [{"slot": 1, "source_kind": "local"}]
+    status, body = post({"slot": 1, "source_kind": "remote", "remote_url": "https://img.example/back-thumb.jpg"})
+    assert status == 200
+    assert [(item["album_id"], item["slot"], item["source_kind"], item["cover_path"], item["remote_url"]) for item in saved] == [
+        (41, 1, "local", str(back.resolve()), None),
+        (41, 1, "remote", None, "https://img.example/back-thumb.jpg"),
+    ]
+
+
+@pytest.mark.parametrize(("size", "poor"), [(400, True), (1400, False)])
+def test_saved_cover_recomputes_the_album_details_poor_art_alert(tmp_path, size, poor):
+    from PIL import Image
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (size, size), (10, 20, 30)).save(cover, format="JPEG")
+    album = {"key": "artist::album", "poor_art_quality": True, "tracks": [{"path": str(tmp_path / "01.flac")}]}
+    payload = routes._authoritative_local_cover_album_payload(album, cover_path=cover, cover_revision="rev")
+    assert payload["poor_art_quality"] is poor
+
+
+def test_asgi_cover_saves_persist_off_the_event_loop(app, monkeypatch):
+    """Cover saves once promoted, hashed and persisted on the event loop, stalling every request."""
+    import threading
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    source_path = track_path.parent / "front.jpg"
+    source_path.write_bytes(_jpeg_bytes((10, 140, 30)))
+    _seed_album_state(app.library_state, track_path)
+    loop_thread = threading.get_ident()
+    persistence_threads: list[int] = []
+
+    def record_persistence(*_args, **_kwargs):
+        persistence_threads.append(threading.get_ident())
+        raise RuntimeError("stop after recording the persistence thread")
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", record_persistence)
+    asgi_app = _make_wave_d_app(app)
+    for path, body in (
+        ("/utilities/cover-lookup/pasted-image-save",
+         {"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))}),
+        ("/utilities/cover-lookup/local-select",
+         {"album": _album_payload(track_path), "source_path": str(source_path)}),
+    ):
+        try:
+            _run_asgi_request(asgi_app, "POST", path, json_body=body)
+        except RuntimeError:
+            pass
+    assert len(persistence_threads) == 2
+    assert loop_thread not in persistence_threads

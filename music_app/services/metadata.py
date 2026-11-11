@@ -27,7 +27,29 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 6
+FILE_METADATA_SCHEMA_VERSION = 7
+# What each reader version changed in a file entry. A version that only adds
+# or re-derives the listed fields names them, and an unchanged file stored by an
+# older reader takes just those fields from its fresh read; "fields": None means
+# the version changed derivations broadly and the fresh read replaces the
+# entry. A version computable from stored values says requires_file_read False
+# and gives "derive" (entry -> changed fields), so unchanged files upgrade
+# without being opened. Versions 3-6 changed album, edition, disc, artist and
+# compilation derivations and are full re-reads.
+FILE_METADATA_SCHEMA_CHANGES: dict[int, dict[str, object]] = {
+    3: {"fields": None, "requires_file_read": True},
+    4: {"fields": None, "requires_file_read": True},
+    5: {"fields": None, "requires_file_read": True},
+    6: {"fields": None, "requires_file_read": True},
+    # Unreadable "??" credits fall back to the album artist; UTF-8 bytes in
+    # Latin-1 frames are decoded. Both derive from the stored text.
+    7: {
+        "fields": ("album_artist", "artist", "artists", "text_corrections"),
+        "requires_file_read": False,
+        "derive": lambda entry: derive_readable_artist_credits(entry),
+    },
+}
+_OLDEST_UPGRADABLE_SCHEMA_VERSION = 2
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
@@ -68,7 +90,55 @@ def file_metadata_schema_is_current(entry: object) -> bool:
         and not isinstance(value, bool)
         and value == FILE_METADATA_SCHEMA_VERSION
         and "release_date" in entry
+        and "compilation_tag" in entry
     )
+
+
+def _upgradable_schema_changes(entry: object) -> list[dict[str, object]] | None:
+    version = entry.get("metadata_schema_version") if isinstance(entry, dict) else None
+    if not isinstance(version, int) or isinstance(version, bool):
+        return None
+    # A current-version entry that is still not current lacks keys the reader
+    # writes; only a fresh read can supply them.
+    if version < _OLDEST_UPGRADABLE_SCHEMA_VERSION or version >= FILE_METADATA_SCHEMA_VERSION:
+        return None
+    changes = [FILE_METADATA_SCHEMA_CHANGES[step] for step in range(version + 1, FILE_METADATA_SCHEMA_VERSION + 1)]
+    return None if any(change["fields"] is None for change in changes) else changes
+
+
+def schema_upgrade_requires_file_read(entry: object) -> bool:
+    """Whether an unchanged file's stored entry needs its tags read to become current."""
+    if file_metadata_schema_is_current(entry):
+        return False
+    changes = _upgradable_schema_changes(entry)
+    return changes is None or any(change["requires_file_read"] for change in changes)
+
+
+def upgrade_stored_file_entry(entry: dict[str, object], fresh: dict[str, object] | None = None) -> dict[str, object]:
+    """Bring an unchanged file's older entry to the current reader version.
+
+    Only fields a newer version introduced are taken from ``fresh`` (a current
+    read of the same unchanged file); without a usable stored version the
+    fresh read replaces the entry.
+    """
+    if file_metadata_schema_is_current(entry):
+        return dict(entry)
+    changes = _upgradable_schema_changes(entry)
+    if changes is None:
+        if fresh is None:
+            raise ValueError("A stored entry without a known reader version needs a fresh read.")
+        return dict(fresh)
+    upgraded = dict(entry)
+    for change in changes:
+        if not change["requires_file_read"]:
+            upgraded.update(change["derive"](upgraded))
+            continue
+        if fresh is None:
+            raise ValueError("This reader version needs a fresh read of the file.")
+        for field in change["fields"]:
+            upgraded[field] = fresh.get(field)
+    upgraded["metadata_schema_version"] = FILE_METADATA_SCHEMA_VERSION
+    return upgraded
 
 
 def normalize_exception_value(value: object) -> str:
@@ -95,6 +165,13 @@ def read_apev2_tags(path: Path) -> dict[str, object]:
         with path.open("rb") as handle:
             handle.seek(0, 2)
             file_size = handle.tell()
+            # An APEv2 footer ends the file or precedes the 128-byte ID3v1 tag.
+            # Probe those 160 bytes before reading the 64 KB tag window: a
+            # scan does this for every file and most files have no APE tag.
+            probe_size = min(file_size, 160)
+            handle.seek(file_size - probe_size)
+            if b"APETAGEX" not in handle.read(probe_size):
+                return {}
             read_size = min(file_size, 65536)
             handle.seek(file_size - read_size)
             tail = handle.read(read_size)
@@ -168,7 +245,14 @@ def read_tags(path: Path) -> dict[str, object]:
         return read_apev2_tags(path)
     try:
         data: dict[str, object] = {}
-        audio_full = MutagenFile(path)
+        from music_app.services.art_free_tag_reader import open_art_free
+
+        art_free = open_art_free(path)
+        try:
+            audio_full = MutagenFile(art_free if art_free is not None else path)
+        finally:
+            if art_free is not None:
+                art_free.close()
         if audio_full is not None and getattr(audio_full, "tags", None):
             for key, value in audio_full.tags.items():
                 data[str(key).lower()] = value
@@ -185,6 +269,85 @@ def read_tags(path: Path) -> dict[str, object]:
         return data
     except Exception:
         return read_apev2_tags(path)
+
+_LOST_CHARACTER_ARTIST = re.compile(r"^[\s?/&,;.\-]*\?[\s?/&,;.\-]*$")
+
+
+def repair_artist_text(value: object) -> str | None:
+    """An artist credit as the user meant it, or None when it is unreadable.
+
+    Two tagging accidents are common. A tool that wrote non-Latin text into a
+    Latin-1 ID3 frame replaced every character with "?" ("天門" became "??");
+    nothing of the name survives, so the credit is unreadable and callers fall
+    back to the album artist. A tool that wrote UTF-8 bytes into a frame
+    declared Latin-1 left them intact ("Ã©" for "é"); re-reading those bytes as
+    UTF-8 recovers the name. Genuine Latin-1 text ("Björk") is not valid UTF-8
+    once encoded, so it is left as it is.
+    """
+    text = str(value or "").strip()
+    if not text or _LOST_CHARACTER_ARTIST.match(text):
+        return None
+    if all(ord(character) < 0x100 for character in text) and any(ord(character) >= 0x80 for character in text):
+        try:
+            return text.encode("latin-1").decode("utf-8").strip() or None
+        except UnicodeDecodeError:
+            return text
+    return text
+
+
+TEXT_CORRECTION_LOST_CHARACTERS = "lost_characters"
+TEXT_CORRECTION_DECODED = "decoded"
+TRACK_ARTIST_UNREADABLE_REASON = "Track artist unreadable — using album artist"
+
+
+def text_correction_reason(field: str, kind: object) -> str:
+    """The Problematic Files reason for one display correction."""
+    if kind != TEXT_CORRECTION_LOST_CHARACTERS:
+        return "Encoding problem"
+    return TRACK_ARTIST_UNREADABLE_REASON if field == "artist" else "Undecoded characters"
+
+
+def derive_readable_artist_credits(entry: dict[str, object]) -> dict[str, object]:
+    raw_album_artist = str(entry.get("album_artist") or "").strip()
+    stored = entry.get("artists")
+    raw_credits = [str(artist or "").strip() for artist in (stored if isinstance(stored, list) else [entry.get("artist")])]
+    raw_credits = [artist for artist in raw_credits if artist]
+    repaired_credits = [repair_artist_text(artist) for artist in raw_credits]
+    credits = [artist for artist in repaired_credits if artist]
+    track_artist = " & ".join(credits) if credits else None
+    album_artist = repair_artist_text(raw_album_artist) or track_artist or "Unknown Artist"
+    track_artist = track_artist or album_artist
+    derived = {"album_artist": album_artist, "artist": track_artist, "artists": credits or [track_artist]}
+    # What the tags say versus what the app shows, kept so the correction can
+    # be listed in Problematic Files and, when the library asks, written back.
+    # A placeholder is absence, never a correction to write into tags.
+    corrections = {}
+    raw_track_artist = " & ".join(raw_credits)
+    if raw_track_artist and raw_track_artist != track_artist != "Unknown Artist":
+        corrections["artist"] = {
+            "original": raw_track_artist, "corrected": track_artist,
+            "kind": TEXT_CORRECTION_LOST_CHARACTERS if None in repaired_credits else TEXT_CORRECTION_DECODED,
+        }
+    if raw_album_artist and raw_album_artist != album_artist != "Unknown Artist":
+        corrections["album_artist"] = {
+            "original": raw_album_artist, "corrected": album_artist,
+            "kind": TEXT_CORRECTION_LOST_CHARACTERS if repair_artist_text(raw_album_artist) is None else TEXT_CORRECTION_DECODED,
+        }
+    # Always present: stored entries merge, so only an explicit null clears it.
+    derived["text_corrections"] = corrections or None
+    return derived
+
+
+def entry_with_original_tag_text(entry: dict[str, object]) -> dict[str, object]:
+    """The entry as its tags read before any display correction."""
+    corrections = entry.get("text_corrections")
+    if not isinstance(corrections, dict):
+        return entry
+    return {**entry, **{
+        field: correction["original"] for field, correction in corrections.items()
+        if isinstance(correction, dict) and correction.get("original")
+    }}
+
 
 def first_tag(tags: dict[str, object], keys: list[str]) -> str | None:
     for key in keys:
@@ -630,15 +793,44 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
             raise RuntimeError(f"Could not read {field} tag for {path}: {exc}") from exc
     return values
 
+def without_nul_characters(value: object) -> object:
+    """Remove NUL from tag text: Postgres rejects it in text and jsonb.
+
+    One malformed tag must not stop a scan or watcher catch-up from publishing
+    the rest of its library root.
+    """
+    if isinstance(value, str):
+        if "\x00" not in value:
+            return value
+        # NUL separates multiple tag values (as in _decode_tag_bytes).
+        return "; ".join(part for part in value.split("\x00") if part.strip())
+    if isinstance(value, list):
+        return [without_nul_characters(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(without_nul_characters(item) for item in value)
+    if isinstance(value, dict):
+        return {without_nul_characters(key): without_nul_characters(item) for key, item in value.items()}
+    return value
+
+
 def read_metadata_for_file(path: Path) -> dict[str, object]:
+    return without_nul_characters(_read_metadata_for_file(path))
+
+
+def _read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
-    track_artists = artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
-    track_artist = " & ".join(track_artists) if track_artists else None
-    album_artist = first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]) or track_artist or "Unknown Artist"
-    track_artist = track_artist or album_artist
-    track_artists = track_artists or [track_artist]
+    credits = derive_readable_artist_credits({
+        "album_artist": first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]),
+        "artists": artist_tag_values(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"]),
+    })
+    album_artist, track_artist, track_artists = credits["album_artist"], credits["artist"], credits["artists"]
+    corrections = dict(credits.get("text_corrections") or {})
+    if not first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2"]):
+        # The album artist came from the track artist; a write would add a tag.
+        corrections.pop("album_artist", None)
+    text_corrections = corrections or None
     track_title = first_tag(tags, ["title", "tit2"]) or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
@@ -653,6 +845,11 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
     album_type = first_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"]) or first_custom_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"])
     album_rating = extract_album_rating(tags)
+    compilation_flag = first_tag(tags, ["compilation", "tcmp", "cpil"])
+    is_compilation = {
+        "1": True, "true": True, "yes": True,
+        "0": False, "false": False, "no": False,
+    }.get(str(compilation_flag or "").strip().casefold())
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {
         "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
@@ -663,5 +860,8 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
         "artists": track_artists,
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,
+        "is_compilation": is_compilation,
+        "compilation_tag": is_compilation,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        "text_corrections": text_corrections,
     }

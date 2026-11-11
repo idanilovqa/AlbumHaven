@@ -25,7 +25,7 @@
 .album-artbox > .cover-placeholder,
 .album-artbox > .album-artbox__placeholder,
 .album-artbox > .track-modal-cover-button { width: 100%; height: 100%; }
-.album-artbox img { width: 100%; height: 100%; display: block; object-fit: var(--album-art-fit); }
+.album-artbox img { width: 100%; height: 100%; min-width: 0; min-height: 0; display: block; object-fit: var(--album-art-fit); }
 .album-artbox__placeholder { display: grid; place-items: center; color: var(--muted); }
 .album-artbox--empty,
 .album-artbox--missing { color: color-mix(in srgb, var(--muted) 80%, transparent); }
@@ -36,6 +36,11 @@
 .album-artbox__missing-label { stroke-width: 1.5; opacity: 0.62; }
 .album-artbox__missing-hub { fill: currentColor; stroke: none; }
 .album-artbox__missing-slash { stroke-width: 3.8; }
+.album-artbox--add { border: 1px dashed color-mix(in srgb, var(--muted) 60%, transparent); }
+.album-artbox__add { display: grid; place-content: center; justify-items: center; gap: 6px; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; }
+.album-artbox__add-plus { font-size: 2.75rem; font-weight: 300; line-height: 1; }
+.album-artbox__add:is(:hover, :focus-visible) { color: var(--appearance-ink, var(--text)); }
+.album-artbox--add:has(.album-artbox__add:is(:hover, :focus-visible)) { border-color: var(--appearance-player-accent, #55c7ff); }
 .album-artbox__action {
   position: absolute;
   right: 10px;
@@ -46,7 +51,7 @@
   width: calc(100% - 20px);
   pointer-events: none;
 }
-.album-artbox__action .small-alert { max-width: 100%; pointer-events: auto; }
+.album-artbox__action .small-alert { pointer-events: auto; }
 
 .album-artbox__overlay {
  position: absolute;

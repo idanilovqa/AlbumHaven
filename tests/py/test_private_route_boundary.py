@@ -642,6 +642,50 @@ def test_invitation_admin_action_uses_session_header_csrf_and_same_origin():
     assert valid_body == b'{"account_id":41}'
 
 
+def test_write_refused_for_a_stale_token_carries_the_current_token_for_one_retry():
+    """Owner (11-09): writes failed now and then; the refusal hands the page the session's current token."""
+    from music_app.services.auth_session_csrf import issue_session_csrf
+
+    actor = CurrentActor(
+        state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Rendref",
+        is_bootstrap_owner=True,
+    )
+    app, _ = _app(actor)
+    session = "s" * 43
+    stale = issue_session_csrf(
+        session,
+        {"hmac": {"secret": "old-secret-0123456789abcdef0123456789", "key_version": 6}},
+    )
+    expected = issue_session_csrf(session, app.state.auth_policy_config)
+
+    status, body, headers = _request(
+        app,
+        "/mutation",
+        method="POST",
+        cookie=f"__Host-album_haven_session={session}; __Host-album_haven_csrf={stale}",
+        headers={"origin": "https://music.test", "x-album-haven-csrf": stale},
+        include_headers=True,
+    )
+    cookies = [value.decode("latin-1") for key, value in headers if key.lower() == b"set-cookie"]
+    assert status == 403
+    assert b"CSRF validation failed." in body
+    assert any(cookie.startswith(f"__Host-album_haven_csrf={expected}") for cookie in cookies)
+
+    cross_status, _, cross_headers = _request(
+        app,
+        "/mutation",
+        method="POST",
+        cookie=f"__Host-album_haven_session={session}; __Host-album_haven_csrf={stale}",
+        headers={"origin": "https://evil.test", "x-album-haven-csrf": stale},
+        include_headers=True,
+    )
+    assert cross_status == 403
+    assert not any(key.lower() == b"set-cookie" for key, _ in cross_headers), "a cross-site refusal sets nothing"
+
+
 def test_authenticated_get_refreshes_stale_session_csrf_cookie_after_key_rotation():
     from music_app.services.auth_session_csrf import issue_session_csrf
 

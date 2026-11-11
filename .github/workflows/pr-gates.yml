@@ -1046,7 +1046,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: idanilovqa/album-haven-test-data
-          ref: b7ffc6b586fd5b25a049617c5e95fbdcccfddc11
+          ref: 38aa02ef034c6235362950946fdf15a4a9a65dc4
           path: album-haven-test-data
           token: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
           persist-credentials: false
@@ -1157,14 +1157,14 @@ jobs:
               throw "Unable to verify the pinned artwork-diversity generator checkout: $($generatorHeadOutput -join [Environment]::NewLine)"
             }
             $generatorHead = ([string]($generatorHeadOutput -join '')).Trim().ToLowerInvariant()
-            if ($generatorHead -ne "b7ffc6b586fd5b25a049617c5e95fbdcccfddc11") {
+            if ($generatorHead -ne "38aa02ef034c6235362950946fdf15a4a9a65dc4") {
               throw "Artwork-diversity generator checkout HEAD mismatch: $generatorHead"
             }
             $runnerArguments += @{
               GeneratorCheckout = $generatorCheckout
               ExpectedFixtureRelease = "fixtures-v1.0.30"
               BaseManifestSha256 = "0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752"
-              GeneratorCommit = "b7ffc6b586fd5b25a049617c5e95fbdcccfddc11"
+              GeneratorCommit = "38aa02ef034c6235362950946fdf15a4a9a65dc4"
               VariantCount = 512
               SourceMaxEdge = 960
             }

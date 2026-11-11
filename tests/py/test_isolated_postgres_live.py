@@ -282,6 +282,24 @@ def test_live_album_identity_lineage_rejects_cycles_and_cross_library_moves(
     )["status"] == "invalid"
 
 
+def _finish_live_startup(config):
+    """Startup publishes the relation and gallery baselines that watcher and edit writes need."""
+    from music_app.services.gallery_projection_postgres import initialize_gallery_membership
+    from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+    assert ensure_relation_projection_ready(config).get("ready")
+    initialize_gallery_membership(config)
+
+
+def _finish_live_reconciliation(config):
+    """Finish the publication that production queues after a low-level mutation."""
+    from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+    from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+
+    ensure_pending_relation_projection_ready(config)
+    ensure_gallery_projection_ready(config)
+
+
 @pytest.fixture
 def watcher_repair_inventory(monkeypatch, tmp_path):
     """Real migrated inventory used only by the bounded watcher repair cases."""
@@ -314,6 +332,9 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         def seed(*entries):
             adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
+            # A full scan publishes its relation views; watcher publication
+            # requires that ready baseline, as after startup.
+            _finish_live_startup(config)
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
     finally:
@@ -579,6 +600,179 @@ def test_live_duplicate_sources_only_projection_matches_complete_candidate_rows(
             assert _duplicate_sources_from_rows(slim) == _duplicate_sources_from_rows(full)
 
 
+def test_live_stray_soundtrack_copy_is_duplicate_not_gallery_album(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        _duplicate_candidate_album_ids_for_keys_sql,
+        _duplicate_source_rows_for_album_ids_sql,
+        _duplicate_sources_from_rows,
+        _root_gallery_membership_sql,
+    )
+
+    fixture = watcher_repair_inventory
+
+    def track(path, *, album, album_artist, title, number, duration, year=2026):
+        entry = fixture.entry(path, album=album, artist=album_artist)
+        entry.update(
+            album_artist=album_artist,
+            title=title,
+            track_number=number,
+            duration_seconds=duration,
+            year=year,
+        )
+        return entry
+
+    fixture.seed(
+        track(
+            "Various Artists/The Prince Of Egypt/01.flac",
+            album="The Prince Of Egypt",
+            album_artist="Various Artists",
+            title="Deliver Us",
+            number=1,
+            duration=240,
+        ),
+        track(
+            "Various Artists/The Prince Of Egypt/02.flac",
+            album="The Prince Of Egypt",
+            album_artist="Various Artists",
+            title="The Reprimand",
+            number=2,
+            duration=125,
+        ),
+        track(
+            "Various Artists/The Prince Of Egypt/03.flac",
+            album="The Prince Of Egypt",
+            album_artist="Various Artists",
+            title="Following Tzipporah",
+            number=3,
+            duration=110,
+        ),
+        track(
+            "Guest Copies/Ofra Haza & Eden Riegel - Deliver Us.flac",
+            album="The Prince Of Égypt",
+            album_artist="Ofra Haza & Eden Riegel",
+            title="Deliver Ús",
+            number=1,
+            duration=242,
+            year=2025,
+        ),
+        track(
+            "Singles/Genuine Artist/Only Song.flac",
+            album="Only Song",
+            album_artist="Genuine Artist",
+            title="Only Song",
+            number=1,
+            duration=180,
+        ),
+        track(
+            "Other/Different Song.flac",
+            album="The Prince Of Egypt",
+            album_artist="Different Artist",
+            title="Not Deliver Us",
+            number=1,
+            duration=242,
+        ),
+    )
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        albums = {
+            row["album_key"]: row
+            for row in connection.execute(
+                """
+                select id, album_key,
+                  metadata -> 'stray_duplicate_of' as stray_duplicate_of
+                from library.local_albums
+                """
+            ).fetchall()
+        }
+        stray_key = next(
+            key for key in albums if key.startswith("ofra haza & eden riegel::")
+        )
+        source_key = next(key for key in albums if key.startswith("various artists::"))
+        assert albums[stray_key]["stray_duplicate_of"]["album_key"] == source_key
+        assert all(
+            row["stray_duplicate_of"] is None
+            for key, row in albums.items()
+            if key != stray_key
+        )
+        gallery_keys = {
+            row["album_key"]
+            for row in connection.execute(
+                _root_gallery_membership_sql(),
+                {"category_count": 0, "visible_categories": []},
+            ).fetchall()
+        }
+        candidate_ids = {
+            row["album_id"]
+            for row in connection.execute(
+                _duplicate_candidate_album_ids_for_keys_sql(),
+                {"album_keys": [source_key]},
+            ).fetchall()
+        }
+        duplicate_rows = connection.execute(
+            _duplicate_source_rows_for_album_ids_sql(),
+            {"album_ids": sorted(candidate_ids)},
+        ).fetchall()
+        duplicate_projection = _duplicate_sources_from_rows(duplicate_rows)
+        assert {albums[source_key]["id"], albums[stray_key]["id"]} <= candidate_ids
+        assert duplicate_projection[source_key]["has_duplicate_files"], {
+            "candidate_ids": candidate_ids,
+            "projection_keys": sorted(duplicate_projection),
+        }
+    assert stray_key not in gallery_keys
+    assert source_key in gallery_keys
+    assert any(key.startswith("genuine artist::") for key in gallery_keys)
+    assert any(key.startswith("different artist::") for key in gallery_keys)
+
+    repository = PostgresLibraryBrowseRepository(fixture.config)
+    source = repository.build_problematic_file_detail_payload(source_key)
+    stray = repository.build_problematic_file_detail_payload(stray_key)
+    assert "Duplicate files" in source["problem_reasons"], source.get("duplicate_sources")
+    assert "Duplicate files" in stray["problem_reasons"], stray.get("duplicate_sources")
+    assert any(
+        "Ofra Haza & Eden Riegel - Deliver Us.flac" in track["path"]
+        for duplicate_source in source["duplicate_sources"]
+        for track in duplicate_source["tracks"]
+    )
+
+    from music_app.services.scoped_relation_projection import (
+        _refresh_stray_duplicate_ownership,
+    )
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        connection.execute(
+            """
+            update library.local_track_files files
+            set metadata=jsonb_set(files.metadata, '{scan_cache,stale}', 'true'::jsonb)
+            from library.local_tracks tracks
+            where tracks.id=files.track_id and tracks.album_id=%s
+            """,
+            (albums[source_key]["id"],),
+        )
+        _refresh_stray_duplicate_ownership(
+            connection,
+            connection.execute(
+                "select library_id from library.local_albums where id=%s",
+                (albums[stray_key]["id"],),
+            ).fetchone()["library_id"],
+            {albums[source_key]["id"]},
+        )
+        connection.commit()
+        assert connection.execute(
+            "select metadata -> 'stray_duplicate_of' as ownership from library.local_albums where id=%s",
+            (albums[stray_key]["id"],),
+        ).fetchone()["ownership"] is None
+        gallery_keys = {
+            row["album_key"]
+            for row in connection.execute(
+                _root_gallery_membership_sql(),
+                {"category_count": 0, "visible_categories": []},
+            ).fetchall()
+        }
+    assert stray_key in gallery_keys
+
+
 @pytest.mark.parametrize("exception_source", ["stored", "path_override", "track_override", "clear_override"])
 def test_live_missing_album_projection_respects_effective_rarity(watcher_repair_inventory, exception_source):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -660,6 +854,8 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
     changed = fixture.entry("Owner/Copy One/one.flac", artist="Owner feat. Old Guest")
     untouched = fixture.entry("Owner/Copy Two/two.flac", root=int(other_root), artist="Owner feat. Retained Guest")
     fixture.seed(changed, untouched)
+    # Rated, so deleting both copies keeps the album as Missing instead of removing it as untouched.
+    _rate_live_album(fixture, "owner::repair album")
     changed = {**changed, "artist": "Owner feat. New Guest"}
     if operation == "delete":
         Path(changed["path"]).unlink()
@@ -690,6 +886,575 @@ def test_live_targeted_featured_sync_keeps_other_album_directories(watcher_repai
             """).fetchall()
             assert connection.execute("select bool_and(scan_cache_stale) as all_stale from library.local_track_files").fetchone()["all_stale"]
         assert {row["name"] for row in retained} == {"Retained Guest"}
+
+
+def _rate_live_album(fixture, album_key, rating=5):
+    """A user rating: the album is the user's, so deleting its files keeps it as Missing."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """insert into app.album_ratings (account_id, library_id, album_key, rating, provenance)
+               select owners.account_id, albums.library_id, albums.album_key, %s, 'user'
+               from library.local_albums albums
+               join library.libraries libraries on libraries.id = albums.library_id
+               join app.bootstrap_owners owners on owners.account_id = libraries.owner_account_id
+               where albums.album_key = %s""",
+            (rating, album_key),
+        )
+
+
+def _live_album_rows(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        albums = {
+            row["album_key"]: row for row in connection.execute(
+                "select album_key, title, release_year, metadata ->> 'source' as source from library.local_albums"
+            ).fetchall()
+        }
+        members = {
+            row["private_path"]: row["album_key"] for row in connection.execute(
+                """
+                select files.private_path, albums.album_key
+                from library.local_track_files files
+                join library.local_tracks tracks on tracks.id = files.track_id
+                left join library.local_albums albums on albums.id = tracks.album_id
+                where files.scan_cache_stale is false
+                """
+            ).fetchall()
+        }
+    return albums, members
+
+
+def _live_reconcile(fixture, entries, *folders):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    return TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(entries[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=tuple(Path(folder) for folder in folders),
+        deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+
+def test_live_watcher_album_of_a_new_year_never_rewrites_another_years_album(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    old_year = {**fixture.entry("Owner/Demo 2020/01.flac", album="Demo Album"), "year": 2020}
+    fixture.seed(old_year)
+    new_year = {**fixture.entry("Owner/Demo 2021/01.flac", album="Demo Album"), "year": 2021}
+
+    result = _live_reconcile(fixture, {new_year["path"]: new_year}, Path(new_year["path"]).parent)
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    # Both years are year-split exactly as a full scan would; neither album is rewritten.
+    years = {albums[key]["release_year"] for key in members.values()}
+    assert years == {2020, 2021}
+    assert albums[members[old_year["path"]]]["release_year"] == 2020
+    assert albums[members[new_year["path"]]]["release_year"] == 2021
+    assert members[old_year["path"]] != members[new_year["path"]]
+
+
+def test_live_watcher_follows_the_year_split_key_a_full_scan_created(watcher_repair_inventory):
+    # Mirrors sandbox2 2026-11-04: incoming 'unknown artist::' (2021) collided
+    # with the full scan's 'unknown artist::::year::2021'.
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Owner/Seed/01.flac", album="Seed Album"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        owner = connection.execute(
+            "select id, library_id from library.local_artists where artist_key = 'owner'"
+        ).fetchone()
+        connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
+            values (%(library)s, %(artist)s, 'owner::demo album', 'Demo Album', 2020, '{"source": "legacy"}'::jsonb),
+                   (%(library)s, %(artist)s, 'owner::demo album::year::2021', 'Demo Album', 2021, '{"source": "legacy"}'::jsonb)
+            """,
+            {"library": owner["library_id"], "artist": owner["id"]},
+        )
+    arrival = {**fixture.entry("Owner/Demo 2021/01.flac", album="Demo Album"), "year": 2021}
+
+    result = _live_reconcile(fixture, {arrival["path"]: arrival}, Path(arrival["path"]).parent)
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    assert members[arrival["path"]] == "owner::demo album::year::2021"
+    assert albums["owner::demo album"]["release_year"] == 2020, "the other year's album is not rewritten"
+
+
+def test_live_watcher_keeps_two_editions_in_separate_folders_as_two_albums(watcher_repair_inventory):
+    # SMALL-11: Dragonland «Holy War», 2002 (13 tracks, no disc tag) in the library and a
+    # 2014 reissue (12 tracks tagged disc 1) in a download folder. A watcher batch that
+    # saw both folders collapsed the 2014 files into the 2002 album.
+    fixture = watcher_repair_inventory
+    first = [
+        {**fixture.entry(f"Owner/2002 - Holy War/{number:02d}.flac", album="Holy War"),
+         "year": 2002, "track_number": number, "disc_number": None}
+        for number in range(1, 14)
+    ]
+    reissue = [
+        {**fixture.entry(f"Downloads/Owner - Holy War (2014)/{number:02d}.flac", album="Holy War"),
+         "year": 2014, "track_number": number, "disc_number": 1}
+        for number in range(1, 13)
+    ]
+    fixture.seed(*first, *reissue)
+    entries = {entry["path"]: entry for entry in (*first, *reissue)}
+
+    result = _live_reconcile(
+        fixture, entries, Path(first[0]["path"]).parent, Path(reissue[0]["path"]).parent,
+    )
+
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    first_keys = {members[entry["path"]] for entry in first}
+    reissue_keys = {members[entry["path"]] for entry in reissue}
+    assert len(first_keys) == 1 and len(reissue_keys) == 1
+    assert first_keys != reissue_keys, "the two editions stay two albums"
+    assert albums[first_keys.pop()]["release_year"] == 2002
+    assert albums[reissue_keys.pop()]["release_year"] == 2014
+
+
+def test_live_guest_artist_track_stays_in_its_soundtrack_album(watcher_repair_inventory):
+    # Owner (MusicBrainz review, sandbox6): «The Hobbit: The Desolation of Smaug»
+    # showed Ed Sheeran's «I See Fire» as its own one-track album. The soundtrack
+    # folder tags most tracks Howard Shore / VA and that one Ed Sheeran.
+    fixture = watcher_repair_inventory
+    album = "The Hobbit: The Desolation of Smaug"
+    folder = "OST/2013 - The Hobbit - The Desolation of Smaug - (Special Edition)"
+    score = [
+        {**fixture.entry(f"{folder}/disc {disc}/{number:02d}.flac", artist="Howard Shore", album=album),
+         "album_artist": "VA" if disc == 1 and number == 1 else "Howard Shore",
+         "edition": "Special Edition", "disc_number": disc, "track_number": number, "year": 2013}
+        for disc in (1, 2) for number in range(1, 15) if (disc, number) != (2, 14)
+    ]
+    guest = {**fixture.entry(f"{folder}/disc 2/14. I See Fire (Ed Sheeran).flac", artist="Ed Sheeran", album=album),
+             "album_artist": "Ed Sheeran", "edition": "Special Edition", "disc_number": 2,
+             "track_number": 14, "year": 2013}
+    fixture.seed(*score, guest)
+
+    albums, members = _live_album_rows(fixture)
+    assert {members[entry["path"]] for entry in (*score, guest)} == {members[guest["path"]]}, "one soundtrack album after a scan"
+
+    # A watcher batch that sees only the guest's file keeps it in the soundtrack.
+    entries = {entry["path"]: entry for entry in (*score, guest)}
+    result = _live_reconcile(fixture, entries, Path(guest["path"]).parent)
+    assert result.revision > 0
+    albums, members = _live_album_rows(fixture)
+    soundtrack = members[score[0]["path"]]
+    assert members[guest["path"]] == soundtrack
+    assert sum(key == soundtrack for key in members.values()) == 28
+
+
+def test_live_untagged_files_are_flagged_loose_tracks_and_retire_placeholder_albums(watcher_repair_inventory):
+    # Owner 2026-11-04: absent artist/album tags never make "Unknown Artist" or
+    # "Unknown Album"; those files are loose tracks flagged in Problematic Files.
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    fixture = watcher_repair_inventory
+    tagged = fixture.entry("Owner/Real/01.flac", album="Real Album")
+    untagged = {**fixture.entry("Untagged/01.flac", album=""), "artist": "", "album_artist": "Unknown Artist"}
+    no_album = fixture.entry("Owner/No Album/01.flac", album="")
+    fixture.seed(tagged, untagged, no_album)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        library_id = connection.execute("select library_id from library.local_artists limit 1").fetchone()["library_id"]
+        # A placeholder album an older scan published, plus a real album that
+        # must survive the retirement untouched.
+        artist = connection.execute("""insert into library.local_artists (library_id, artist_key, name)
+            values (%s, 'unknown artist', 'Unknown Artist')
+            on conflict (library_id, artist_key) do update set name = excluded.name returning id""",
+            (library_id,)).fetchone()["id"]
+        placeholder = connection.execute("""insert into library.local_albums (library_id, artist_id, album_key, title)
+            values (%s, %s, 'unknown artist::', '') returning id""", (library_id, artist)).fetchone()["id"]
+        connection.execute("""update library.local_tracks set album_id = %s where id = (
+            select track_id from library.local_track_files where private_path = %s)""", (placeholder, untagged["path"]))
+
+    fixture.seed(tagged, untagged, no_album)
+
+    albums, members = _live_album_rows(fixture)
+    assert members[tagged["path"]] == "owner::real album"
+    assert members[untagged["path"]] is None and members[no_album["path"]] is None
+    assert set(albums) == {"owner::real album"}
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        problems = {row["private_path"]: row["problem"] for row in connection.execute("""select private_path,
+            metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
+            from library.local_track_files""").fetchall()}
+    assert problems[untagged["path"]] == "Missing artist and album"
+    assert problems[no_album["path"]] == "Missing album"
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    sidebar = [item["artist"] for item in repository.build_root_sidebar_payload()["artists_sidebar"]]
+    assert "Owner" in sidebar and "Unknown Artist" not in sidebar
+    # Earlier cases share this database URL; start from a cold utility projection.
+    invalidate_postgres_utility_projection_cache(database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    reasons = {reason for item in repository.build_problematic_files_payload()["items"] for reason in item["problem_reasons"]}
+    assert {"Missing artist and album", "Missing album"} <= reasons
+
+
+def test_live_slash_band_name_is_one_artist(watcher_repair_inventory):
+    # ID-001: 'To/Die/For' is one band, tagged as a single value.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    entries = []
+    for year, album in ((1999, "All Eternity"), (2001, "Epilogue"), (2003, "Jaded"), (2005, "IV")):
+        entry = fixture.entry(f"To Die For/{year} - {album}/01 - Track.flac", artist="To/Die/For", album=album)
+        entries.append({**entry, "album_artist": "To/Die/For", "artists": ["To/Die/For"], "year": year})
+    fixture.seed(*entries)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        artists = {row["name"] for row in connection.execute("select name from library.local_artists").fetchall()}
+    assert "To" not in artists and "To/Die/For" in artists
+    sidebar = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect).build_root_sidebar_payload()
+    counts = {item["artist"]: item.get("count") for item in sidebar["artists_sidebar"]}
+    assert "To" not in counts and "To/Die/For" in counts
+
+
+def test_live_root_catch_up_rereads_only_changed_files(watcher_repair_inventory):
+    # sandbox2 2026-11-04: an N: catch-up re-read all 54k files and never finished.
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    unchanged, edited = (
+        {**fixture.entry(f"Owner/Catch Up/0{index}.flac", album="Catch Up"), "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+         "release_date": None, "compilation_tag": None}
+        for index in (1, 2)
+    )
+    fixture.seed(unchanged, edited)
+    Path(edited["path"]).write_bytes(b"retagged media fixture")
+    read = []
+
+    def reader(path):
+        read.append(str(path))
+        stat = Path(path).stat()
+        return {**edited, "title": "Retagged", "mtime": stat.st_mtime, "size": stat.st_size}
+
+    root = Path(fixture.roots[0]["path"])
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=reader, wait=lambda _seconds: None,
+    ).reconcile(
+        SimpleNamespace(root_id="repair-main", paths=(root,), deleted_paths=(), deleted_subtrees=(root,), moves=()),
+        reuse_unchanged_entries=True,
+    )
+
+    assert result.health == "healthy"
+    assert read == [edited["path"]]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        titles = {row["private_path"]: row["title"] for row in connection.execute("""
+            select files.private_path, tracks.title from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id where files.scan_cache_stale is false""").fetchall()}
+    assert titles == {unchanged["path"]: "01", edited["path"]: "Retagged"}
+
+
+def test_live_inventory_published_since_lists_only_newer_watcher_files(watcher_repair_inventory):
+    # A superseded full scan adopts exactly these files instead of discarding itself.
+    import time
+
+    fixture = watcher_repair_inventory
+    untouched = fixture.entry("Owner/Untouched/01.flac", album="Untouched")
+    edited = fixture.entry("Owner/Edited/01.flac", album="Edited")
+    deleted = fixture.entry("Owner/Deleted/01.flac", album="Deleted")
+    fixture.seed(untouched, edited, deleted)
+    # Rated, so its deleted file stays as a missing row instead of being removed as untouched.
+    _rate_live_album(fixture, "owner::deleted")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        scan_started = connection.execute("select extract(epoch from clock_timestamp()) as now").fetchone()["now"]
+    time.sleep(0.05)
+    retagged = {**edited, "title": "Watcher Title"}
+    _live_reconcile(fixture, {edited["path"]: retagged}, Path(edited["path"]).parent)
+    Path(deleted["path"]).unlink()
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(Path(deleted["path"]),), deleted_subtrees=(), moves=(),
+    ))
+
+    published, removed = fixture.adapter.load_inventory_published_since(float(scan_started))
+
+    assert set(published) == {edited["path"]}
+    assert published[edited["path"]]["title"] == "Watcher Title"
+    assert removed == {deleted["path"]}
+
+
+def test_live_library_loose_tracks_come_without_the_gallery(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    # Owner PERF-1: library-wide Loose Tracks took minutes because it shipped the whole gallery.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    album_track = fixture.entry("Owner/Album/01.flac", album="Album")
+    family_loose = {
+        **fixture.entry("Owner/Loose/01.flac", album=""),
+        "title": "Family Loose",
+    }
+    other_loose = {
+        **fixture.entry("Other/Loose/01.flac", album="", artist="Other"),
+        "album_artist": "Other",
+        "title": "Other Loose",
+    }
+    fixture.seed(album_track, family_loose, other_loose)
+
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    )
+    payload = repository.build_library_loose_tracks_payload()
+
+    assert "artist_groups" not in payload
+    assert {track.get("path") for track in payload["library_non_album_tracks"]} == {
+        family_loose["path"],
+        other_loose["path"],
+    }
+    assert payload["non_album_tracks_deferred"] is False
+
+    cached_repository = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    )
+    monkeypatch.setattr(
+        cached_repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("the persisted snapshot must avoid a global rebuild"),
+    )
+    assert cached_repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Owner", "availability": "1"}
+    ) == {"non_album_track_count": 1}
+    family_payload = cached_repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Owner"}
+    )
+    assert [track["path"] for track in family_payload["non_album_tracks"]] == [
+        family_loose["path"]
+    ]
+
+    added_loose = {
+        **fixture.entry("Owner/Loose/02.flac", album=""),
+        "title": "Added Loose",
+    }
+    fixture.seed(album_track, family_loose, other_loose, added_loose)
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert cached_repository._load_non_album_track_snapshot(connection) is None
+
+    stale = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload(
+        query_params={"artist": "Owner", "availability": "1"}
+    )
+    assert stale == {
+        "non_album_track_count": 0,
+        "non_album_tracks_deferred": True,
+    }
+
+    PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload()
+    refreshed = PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    ).build_library_loose_tracks_payload(
+        query_params={"artist": "Owner", "availability": "1"}
+    )
+    assert refreshed == {"non_album_track_count": 2}
+
+
+def test_live_superseded_scan_never_republishes_an_album_removed_after_its_walk(watcher_repair_inventory):
+    # An untouched album whose files were deleted is removed outright (no missing row is
+    # left), so a full scan that read it before the deletion must still drop it.
+    fixture = watcher_repair_inventory
+    kept = fixture.entry("Owner/Kept/01.flac", album="Kept")
+    removed_album = fixture.entry("Owner/Removed/01.flac", album="Removed")
+    fixture.seed(kept, removed_album)
+    new_file = fixture.entry("Owner/New/01.flac", album="New")
+    Path(removed_album["path"]).unlink()
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(Path(removed_album["path"]),), deleted_subtrees=(), moves=(),
+    ))
+    assert "owner::removed" not in _live_album_rows(fixture)[0], "the untouched album was removed"
+
+    scanned = [kept["path"], removed_album["path"], new_file["path"]]
+    assert fixture.adapter.load_removed_unpublished_paths(scanned) == {removed_album["path"]}
+
+
+def test_live_published_file_counts_are_per_configured_root_and_skip_stale(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    main_a = fixture.entry("Owner/Counted/01.flac", album="Counted")
+    main_b = fixture.entry("Owner/Counted/02.flac", album="Counted")
+    hoard = fixture.entry("Owner/Hoarded/01.flac", root=1, album="Hoarded")
+    fixture.seed(main_a, main_b, hoard)
+    assert fixture.adapter.count_published_files_by_root() == {"repair-main": 2, "repair-hoard": 1}
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true') where private_path = %s",
+            (main_b["path"],),
+        )
+    assert fixture.adapter.count_published_files_by_root() == {"repair-main": 1, "repair-hoard": 1}
+
+
+def test_live_one_album_identity_collision_does_not_roll_back_its_root(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    retagged = {**fixture.entry("Owner/Untagged/01.flac", album="Demo Album"), "year": 2020}
+    fixture.seed(retagged)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        owner = connection.execute(
+            "select id, library_id from library.local_artists where artist_key = 'owner'"
+        ).fetchone()
+        # A row keyed from another owner spelling already holds Owner / Demo Album / 2021.
+        connection.execute(
+            """
+            insert into library.local_albums (library_id, artist_id, album_key, title, release_year, metadata)
+            values (%s, %s, 'owner (legacy)::demo album', 'Demo Album', 2021, '{"source": "legacy"}'::jsonb)
+            """,
+            (owner["library_id"], owner["id"]),
+        )
+    retagged = {**retagged, "year": 2021}
+    clean = {**fixture.entry("Owner/Clean Album/01.flac", album="Clean Album"), "year": 2021}
+
+    result = _live_reconcile(
+        fixture, {retagged["path"]: retagged, clean["path"]: clean},
+        Path(retagged["path"]).parent, Path(clean["path"]).parent,
+    )
+
+    assert result.revision > 0, "the rest of the root still publishes"
+    albums, members = _live_album_rows(fixture)
+    assert members[clean["path"]] == "owner::clean album"
+    assert albums["owner (legacy)::demo album"]["source"] == "legacy", "existing rows are untouched"
+    assert albums["owner::demo album"]["release_year"] == 2020, "the colliding album is withheld, not merged"
+    assert members[retagged["path"]] == "owner::demo album"
+
+
+def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    clean = fixture.entry("Owner/Root Catch-up/01.flac")
+    broken = fixture.entry("Owner/Root Catch-up/02.flac")
+    fixture.seed()
+    tags = {
+        clean["path"]: dict(clean),
+        broken["path"]: {**broken, "title": "Bad\x00Title", "album": "Repair Album\x00", "genre": "Rock\x00"},
+    }
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: dict(tags[str(path)]), wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(Path(clean["path"]).parent,), deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+
+    assert result.revision > 0
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            "select private_path, scan_file_album, metadata #>> '{scan_cache,file_entry,title}' as title "
+            "from library.local_track_files where scan_cache_stale is false order by private_path"
+        ).fetchall()
+    assert [row["private_path"] for row in rows] == [clean["path"], broken["path"]]
+    assert all("\x00" not in str(row["title"]) + str(row["scan_file_album"]) for row in rows)
+    assert rows[1]["title"] == "Bad; Title" and rows[1]["scan_file_album"] == "Repair Album"
+
+
+def test_live_metadata_repair_lease_admits_one_instance_at_a_time(watcher_repair_inventory):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    fixture = watcher_repair_inventory
+    first = fixture.adapter.try_acquire_metadata_repair_lease()
+    second_instance = PostgresScanCacheAdapter(fixture.config, connect=isolatedPostgres._connect)
+    try:
+        assert first is not None
+        assert second_instance.try_acquire_metadata_repair_lease() is None
+    finally:
+        first.release()
+    again = second_instance.try_acquire_metadata_repair_lease()
+    assert again is not None
+    again.release()
+
+
+def test_live_outdated_file_metadata_is_detected_for_a_startup_repair_scan(watcher_repair_inventory):
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
+
+    fixture = watcher_repair_inventory
+    current = {"metadata_schema_version": FILE_METADATA_SCHEMA_VERSION, "release_date": None}
+    tracks = [
+        {**fixture.entry(f"Art Zoyd/Génération sans futur/0{index}.flac", artist="Art Zoyd", album="Génération sans futur"), **current}
+        for index in (1, 2)
+    ]
+    fixture.seed(*tracks)
+    assert fixture.adapter.has_outdated_file_metadata() is False
+
+    # An entry read before the subtitle/edition fix still carries a per-track edition.
+    stale_reader = {**tracks[1], "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION - 1, "edition": "Speedy Gonzalez"}
+    fixture.seed(tracks[0], stale_reader)
+    assert fixture.adapter.has_outdated_file_metadata() is True
+
+
+@pytest.mark.parametrize("stale_track_editions", [False, True])
+def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watcher_repair_inventory, stale_track_editions):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    fixture = watcher_repair_inventory
+    # The owner's two real copies: a Bandcamp copy in the main library and a
+    # Soulseek copy whose older reader stored each track subtitle as an edition.
+    main_titles = ["La Ville", "Speedy Gonzales", "Divertissement", "Trois Miniatures", "Génération Sans Futur", "Les fourmis"]
+    arrival_titles = ["La Ville", "Speedy Gonzalez", "Génération sans futur", "Divertissement", "Trois miniatures"]
+
+    def copy(root, folder, album, titles, disc_number):
+        return [
+            {**fixture.entry(f"{folder}/0{index}.flac", root=root, artist="Art Zoyd", album=album),
+             "title": title, "track_number": index, "disc_number": disc_number, "year": 1980,
+             "edition": title if stale_track_editions and root == 1 else ""}
+            for index, title in enumerate(titles, start=1)
+        ]
+
+    fixture.seed(*copy(0, "Prog 80s leftovers/1980 - Art Zoyd - Génération Sans Futur", "Génération Sans Futur", main_titles, None),
+                 *copy(1, "Art Zoyd (1980) - Génération sans futur", "Génération sans futur", arrival_titles, 1))
+    # Earlier cases share this database URL; start from a cold utility projection.
+    invalidate_postgres_utility_projection_cache(database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    payload = PostgresLibraryBrowseRepository(fixture.config).build_problematic_files_payload()
+    duplicate_items = [
+        item for item in payload["items"]
+        if "duplicate" in " ".join(map(str, item.get("problem_reasons") or [])).casefold()
+    ]
+    assert duplicate_items, payload["items"]
+
+
+def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_inventory):
+    import shutil
+
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    fixture = watcher_repair_inventory
+    loose = [
+        fixture.entry(f"Формы времени/{index:02d} - Трек.flac", artist="Начало Века", album=album, exception=exception)
+        for index, (album, exception) in enumerate((("Формы времени", "Random songs"), (None, "Custom Collection")), start=1)
+    ]
+    kept = fixture.entry("Начало Века/2009 - Тебя ждала (single)/01.flac", artist="Начало Века", album=None)
+    fixture.seed(*loose, kept)
+    folder = Path(loose[0]["path"]).parent
+    shutil.rmtree(folder)
+
+    result = TargetedLibraryReconciler(
+        fixture.config, repository=fixture.adapter, root_definitions=fixture.roots,
+        metadata_reader=lambda path: {"path": str(path)}, wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id="repair-main", paths=(), deleted_paths=(), deleted_subtrees=(folder,), moves=(),
+    ))
+
+    assert result.revision > 0, "deleting album-less loose tracks is an inventory change"
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute(
+            "select private_path, scan_cache_stale from library.local_track_files order by private_path"
+        ).fetchall()
+    stale = {row["private_path"]: row["scan_cache_stale"] for row in rows}
+    # Owner 2026-11-08: untouched files that were truly deleted leave no trace, so these
+    # untouched loose tracks are removed outright (migration 0120), not kept as missing.
+    assert not any(entry["path"] in stale for entry in loose)
+    assert stale[kept["path"]] is False
 
 
 @pytest.mark.parametrize("blocked_root", ["repair-main", "repair-hoard"])
@@ -856,6 +1621,21 @@ def test_live_artist_search_projection_requires_matching_stale_authority(
             where id = %s
             """,
             (status, builder_version, fingerprint, built_from_fingerprint, library_id),
+        )
+        # Since 7a7dd593 authority also needs the normalized publication both semantics agree on.
+        connection.execute(
+            """insert into library.local_relation_projection_state
+                 (library_id, builder_version, source_fingerprint, last_publication_xid)
+               values (%s, %s, %s, pg_current_xact_id())""",
+            (library_id, builder_version, fingerprint),
+        )
+        connection.execute(
+            """insert into library.local_relation_compatibility_state
+                 (library_id, legacy_semantics, current_semantics, source_fingerprint,
+                  relations_last_built, last_publication_xid)
+               values (%s, 'legacy-v11-broad-aliases', 'current-v11-explicit-collaboration', %s,
+                       extract(epoch from now()), pg_current_xact_id())""",
+            (library_id, fingerprint),
         )
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -2168,6 +2948,33 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 },
             )
         before_by_path = {str(row["private_path"]): dict(row) for row in before_rows}
+        from music_app.services import relation_projection_postgres as relations
+        from music_app.services import gallery_projection_postgres as gallery
+        from music_app.services import scan_cache_persistence as persistence
+
+        relations.ensure_relation_projection_ready(config, connect=isolatedPostgres._connect)
+        gallery.ensure_gallery_projection_ready(config, connect=isolatedPostgres._connect)
+        with isolatedPostgres._connect(setup_url) as connection:
+            unrelated_relation_entries = connection.execute(
+                """select section,entry_key,payload,artist_names,connection_keys,low_value_keys
+                   from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   order by section,entry_key""",
+                (old_album["library_id"], "Other Artist"),
+            ).fetchall()
+        assert unrelated_relation_entries
+
+        source_query = relations.load_relation_source_rows_sql
+
+        def scoped_source_query(*, scoped=False):
+            assert scoped, "a targeted rename must not reload the full relation inventory"
+            return source_query(scoped=True)
+
+        monkeypatch.setattr(relations, "load_relation_source_rows_sql", scoped_source_query)
+        monkeypatch.setattr(
+            persistence, "load_relation_source_rows_sql",
+            lambda: pytest.fail("a targeted rename must not rebuild the full relation inventory"),
+        )
         prepared_inventory_revision = adapter.load_inventory_mutation_revision()
         updated = {
             path: {**entry, "album": "New Album"}
@@ -2180,11 +2987,51 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             previous_file_entries=previous,
             updated_file_entries={**previous, **updated},
             changed_field_names={"album"},
+            rebuild_relation_projection=True,
         )
 
         assert result["track_rows_updated"] == 2
         assert result["track_file_rows_updated"] == 2
         assert result["inventory_mutation_revision"] == prepared_inventory_revision + 1
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted_unrelated_entries = connection.execute(
+                """select section,entry_key,payload,artist_names,connection_keys,low_value_keys
+                   from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   order by section,entry_key""",
+                (old_album["library_id"], "Other Artist"),
+            ).fetchall()
+            aliases = connection.execute(
+                """select entry_key,payload from library.local_relation_projection_entries
+                   where library_id=%s and section='alias_to_canonical'
+                     and entry_key=any(%s) order by entry_key""",
+                (old_album["library_id"], ["Other Artist", "Structural Artist"]),
+            ).fetchall()
+            compatibility = connection.execute(
+                """select current.source_fingerprint, current.last_publication_xid::text xid,
+                          legacy.source_fingerprint legacy_fingerprint,
+                          legacy.last_publication_xid::text legacy_xid,
+                          legacy.legacy_semantics,legacy.current_semantics
+                   from library.local_relation_projection_state current
+                   join library.local_relation_compatibility_state legacy using(library_id)
+                   where current.library_id=%s""",
+                (old_album["library_id"],),
+            ).fetchone()
+            pending_relations = connection.execute(
+                "select album_id from library.local_relation_dirty_albums where library_id=%s",
+                (old_album["library_id"],),
+            ).fetchall()
+        assert persisted_unrelated_entries == unrelated_relation_entries
+        assert {row["entry_key"]: row["payload"] for row in aliases} == {
+            "Other Artist": "Other Artist", "Structural Artist": "Structural Artist",
+        }
+        assert compatibility["source_fingerprint"]
+        assert compatibility["xid"] is not None
+        assert compatibility["source_fingerprint"] == compatibility["legacy_fingerprint"]
+        assert compatibility["xid"] == compatibility["legacy_xid"]
+        assert compatibility["legacy_semantics"] == "legacy-v11-broad-aliases"
+        assert compatibility["current_semantics"] == "current-v11-explicit-collaboration"
+        assert pending_relations == []
         with isolatedPostgres._connect(setup_url) as connection:
             after_rows = connection.execute(
                 """
@@ -2276,6 +3123,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             previous_file_entries={**previous, **updated},
             updated_file_entries={**previous, **merge_update},
             changed_field_names={"album"},
+            rebuild_relation_projection=True,
         )
         assert merge_result["track_rows_updated"] == 2
         assert merge_result["track_file_rows_updated"] == 2
@@ -2319,6 +3167,53 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 expected_inventory_mutation_revision=prepared_inventory_revision,
             observed_library_root_ids={"structural-root"},
             )
+
+        current_entries = {**previous, **merge_update}
+        artist_paths = set(merge_update) | {str(conflict_path)}
+        renamed_entries = {
+            path: {**current_entries[path], "artist": "Corrected Structural Artist",
+                   "album_artist": "Corrected Structural Artist"}
+            for path in artist_paths
+        }
+        renamed = adapter.persist_structural_tag_edit(
+            changed_paths=artist_paths,
+            previous_file_entries=current_entries,
+            updated_file_entries={**current_entries, **renamed_entries},
+            changed_field_names={"artist", "album_artist"},
+            rebuild_relation_projection=True,
+        )
+        assert renamed["track_rows_updated"] == 3
+        assert "Structural Artist" in renamed["orphaned_source_artists"]
+        with isolatedPostgres._connect(setup_url) as connection:
+            old_artist_entries = connection.execute(
+                """select section,entry_key from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   union all
+                   select section,entry_key from library.local_relation_compatibility_entries
+                   where library_id=%s and %s=any(artist_names)""",
+                (old_album["library_id"], "Structural Artist",
+                 old_album["library_id"], "Structural Artist"),
+            ).fetchall()
+            corrected_alias = connection.execute(
+                """select payload from library.local_relation_projection_entries
+                   where library_id=%s and section='alias_to_canonical' and entry_key=%s""",
+                (old_album["library_id"], "Corrected Structural Artist"),
+            ).fetchone()
+            final_unrelated_entries = connection.execute(
+                """select section,entry_key,payload,artist_names,connection_keys,low_value_keys
+                   from library.local_relation_projection_entries
+                   where library_id=%s and %s=any(artist_names)
+                   order by section,entry_key""",
+                (old_album["library_id"], "Other Artist"),
+            ).fetchall()
+            final_journal = connection.execute(
+                "select album_id from library.local_relation_dirty_albums where library_id=%s",
+                (old_album["library_id"],),
+            ).fetchall()
+        assert old_artist_entries == []
+        assert corrected_alias["payload"] == "Corrected Structural Artist"
+        assert final_unrelated_entries == unrelated_relation_entries
+        assert final_journal == []
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True
@@ -2430,6 +3325,7 @@ def test_live_partial_year_split_preserves_source_album_and_selected_file_year(
                 """,
                 {"release_date": "2004-07-16"},
             )
+        _finish_live_startup(config)
         updated = {
             **previous,
             str(selected_path): {
@@ -3077,6 +3973,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             str(row["private_path"]): dict(row)
             for row in before_tracks
         }
+        _finish_live_startup(config)
         updated_selected = {
             **previous[str(selected_path)],
             "album": "Destination Album",
@@ -3091,6 +3988,7 @@ def test_live_partial_album_split_clones_album_state_and_moves_only_selected_tra
             },
             changed_field_names={"album"},
         )
+        _finish_live_reconciliation(config)
 
         assert result["track_rows_updated"] == 1
         assert result["track_file_rows_updated"] == 1
@@ -3456,6 +4354,7 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
             "mixed-year-restore-root-identity",
             1.0,
         )
+        _finish_live_startup(config)
 
         derived_destination_key = album_separate_release_key(
             "ДДТ",
@@ -3499,6 +4398,7 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
                 updated_file_entries=current_entries,
                 changed_field_names={"album"},
             )
+            _finish_live_reconciliation(config)
             assert split_result["track_rows_updated"] == 1
             assert split_result["track_file_rows_updated"] == 1
             watcher_result = adapter.persist_targeted_inventory_mutation(
@@ -3587,6 +4487,7 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
                 updated_file_entries=current_entries,
                 changed_field_names={"album"},
             )
+            _finish_live_reconciliation(config)
             assert restore_result["track_rows_updated"] == 1
             assert restore_result["track_file_rows_updated"] == 1
 
@@ -4427,8 +5328,20 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                     params,
                 ).fetchone()["QUERY PLAN"]
                 evidence = _phase6_plan_evidence(plan)
+                if (
+                    evidence["actual_rows"] != expected_rows
+                    or evidence["execution_ms"] >= execution_ceiling_ms
+                    or evidence["external_sorts"] != 0
+                ):
+                    print("PHASE6_FAILED_QUERY_PLAN=" + json.dumps({
+                        "surface": surface,
+                        "expected_rows": expected_rows,
+                        "execution_ceiling_ms": execution_ceiling_ms,
+                        "evidence": evidence,
+                        "plan": plan,
+                    }, sort_keys=True))
                 assert evidence["actual_rows"] == expected_rows
-                assert evidence["execution_ms"] < execution_ceiling_ms
+                assert evidence["execution_ms"] < execution_ceiling_ms, (surface, evidence)
                 assert evidence["external_sorts"] == 0
                 plan_evidence[surface] = evidence
 
@@ -5391,6 +6304,7 @@ def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projecti
             1.0,
             observed_library_root_ids={"deletion-only-root"},
         )
+        _finish_live_startup(config)
 
         mutation = adapter.persist_targeted_inventory_mutation(
             root_id="deletion-only-root",
@@ -5634,6 +6548,7 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             1.0,
             observed_library_root_ids={"multi-disc-root"},
         )
+        _finish_live_startup(config)
 
         changed.write_bytes(b"disc-one-updated")
         result = TargetedLibraryReconciler(
@@ -5689,6 +6604,113 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             for group in search_payload["artist_groups"]
             for item in group["albums"]
         )
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_cd_name_search_branch_can_use_its_partial_index(monkeypatch):
+    """The CD-name match must not read every file's metadata: its WHERE clause, as
+    _search_preview_sql renders it, has to be servable by 0118's partial index."""
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    sql = _search_preview_sql(use_utf8_prefilter=True)
+    branch = sql.split("-- A CD name match uses its own partial index", 1)[1].split("\n        ),", 1)[0]
+    where = branch.split("from library.local_track_files", 1)[1]
+    with isolatedPostgres._connect(runtime_url) as connection:
+        connection.execute("set enable_seqscan = off")
+        plan = "\n".join(
+            row["QUERY PLAN"] for row in connection.execute(
+                f"explain select library.local_track_files.track_id from library.local_track_files {where}",
+                {"query_like": "%rox%", "query_utf8_prefilter": "rox"},
+            ).fetchall()
+        )
+    assert "local_track_files_disc_subtitle_search_trgm_idx" in plan, plan
+
+
+def test_live_search_finds_an_album_by_its_disc_subtitle(monkeypatch, tmp_path):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    music_dir = (tmp_path / "Music").resolve()
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+        "MUSIC_DIR": str(music_dir),
+        "APP_NAME": "Album Haven",
+    }
+
+    def file_entry(path: Path, *, title: str, disc_number: int, disc_subtitle: str | None) -> dict[str, object]:
+        return {
+            "path": str(path),
+            "mtime": 1.0,
+            "size": 100,
+            "album": "Live Bootlegs",
+            "album_artist": "Disc Subtitle Owner",
+            "artist": "Disc Subtitle Owner",
+            "title": title,
+            "track_number": 1,
+            "disc_number": disc_number,
+            "total_discs": 2,
+            "disc_subtitle": disc_subtitle,
+            "duration_seconds": 60,
+            "year": 2015,
+            "edition": "",
+            "album_rating": 0,
+            "library_root_id": "disc-subtitle-root",
+            "library_root_category": "main_library",
+            "exception_type": None,
+        }
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+        from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+        from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+        PostgresLibraryRootSettingsStore(config).save_settings(
+            {
+                "main_library_roots": [
+                    {"id": "disc-subtitle-root", "path": str(music_dir), "layout_mode": "artist"}
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+            }
+        )
+        album_dir = music_dir / "Disc Subtitle Owner" / "Live Bootlegs"
+        first_disc = album_dir / "CD1" / "01 - Opening.flac"
+        second_disc = album_dir / "CD2" / "01 - Encore.flac"
+        PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect).save_snapshot(
+            Path("unused-disc-subtitle.json"),
+            {
+                str(first_disc): file_entry(first_disc, title="Opening", disc_number=1, disc_subtitle="Moscow 2014"),
+                str(second_disc): file_entry(
+                    second_disc, title="Encore", disc_number=2, disc_subtitle="V-ROX Festival 2015"
+                ),
+            },
+            "disc-subtitle-root-identity",
+            1.0,
+            observed_library_root_ids={"disc-subtitle-root"},
+        )
+        # A full scan publishes its relation views before search is served.
+        from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+        assert ensure_relation_projection_ready(config, connect=isolatedPostgres._connect).get("ready")
+        browse_repository = PostgresLibraryBrowseRepository(config, connect=isolatedPostgres._connect)
+
+        def album_names(query: str) -> list[str]:
+            payload = browse_repository.build_search_payload(query_params={"q": query, "surface": "albums"})
+            return [item["name"] for group in payload["artist_groups"] for item in group["albums"]]
+
+        assert album_names("V-ROX Festival 2015") == ["Live Bootlegs"]
+        assert album_names("v-rox festival") == ["Live Bootlegs"]
+        assert album_names("Tallinn 2016") == []
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True
@@ -6380,6 +7402,78 @@ def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair
         lease.release()
 
 
+def test_live_accent_folding_migration_recomputes_stored_album_identity(monkeypatch):
+    """0118 replaces duplicate_identity_text; rows stored before it must not keep
+    0112's old album identity, or Problematic Files would compare stale values."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    migration = (
+        Path(__file__).resolve().parents[2]
+        / "migrations" / "postgres" / "0118_fold_accents_in_duplicate_identity.sql"
+    ).read_text(encoding="utf-8")
+    with isolatedPostgres._connect(setup_url) as connection:
+        library_id = connection.execute(
+            """select library.libraries.id from app.bootstrap_owners
+               join library.libraries on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1"""
+        ).fetchone()["id"]
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name) values (%s, 'a', 'A') returning id",
+            (library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title) values (%s, %s, 'a::b', 'B') returning id",
+            (library_id, artist_id),
+        ).fetchone()["id"]
+        track_id = connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title) values (%s, %s, %s, 't', 'T') returning id",
+            (library_id, album_id, artist_id),
+        ).fetchone()["id"]
+        # The pre-0118 identity kept accents; store a row under it.
+        connection.execute("""
+            create or replace function library.duplicate_identity_text(value text)
+            returns text language sql immutable parallel safe strict
+            set search_path = pg_catalog, pg_temp
+            as $$ select btrim(regexp_replace(normalize(casefold(value collate "und-x-icu"), NFC), '[[:space:]]+', ' ', 'g')) $$
+        """)
+        connection.execute(
+            """insert into library.local_track_files (track_id, private_path, metadata)
+               values (%s, 'C:/Music/A/B/01.flac', %s::jsonb)""",
+            (track_id, '{"scan_cache": {"file_entry": {"album": "Nè Al Cielo"}}}'),
+        )
+        stored = connection.execute("select scan_file_album_identity from library.local_track_files").fetchone()
+        assert stored["scan_file_album_identity"] == "nè al cielo"
+
+        connection.execute(migration)
+
+        stored = connection.execute("select scan_file_album_identity from library.local_track_files").fetchone()
+        assert stored["scan_file_album_identity"] == "ne al cielo"
+
+
+def test_live_duplicate_identity_folds_latin_accents_like_python(monkeypatch):
+    from music_app.services.library import _duplicate_album_identity_values
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _drop_application_schemas(setup_url)
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    pairs = [
+        ("Non Al Denaro Non all'amore Nè Al Cielo", "Non al denaro non all'amore né al cielo", True),
+        ("Fabrizio  De André", "fabrizio de andre", True),
+        ("Ёлка", "Елка", False),
+    ]
+    with isolatedPostgres._connect(runtime_url) as connection:
+        for left, right, same in pairs:
+            row = connection.execute(
+                "select library.duplicate_identity_text(%s) as left_identity, library.duplicate_identity_text(%s) as right_identity",
+                (left, right),
+            ).fetchone()
+            assert (row["left_identity"] == row["right_identity"]) is same
+            assert row["left_identity"] == _duplicate_album_identity_values("Artist", left, 2000)[1]
+        valid = connection.execute(
+            "select indisvalid from pg_index where indexrelid = 'library.local_track_files_active_duplicate_identity_idx'::regclass"
+        ).fetchone()
+        assert valid["indisvalid"] is True
 def _seed_disc_rating_albums(fixture, albums=None):
     # One snapshot holds every album: each seed replaces the whole library.
     albums = albums or {"All the Wars": (8, 8)}

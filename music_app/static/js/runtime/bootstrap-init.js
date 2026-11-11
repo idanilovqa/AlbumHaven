@@ -2,9 +2,14 @@ const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 0;
 
 restorePlayerAppearance();
 attachModalEvents();
-document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
+document.querySelectorAll('[data-account-menu-component]').forEach((component) => attachAccountMenu(component, {
+  onOpen: (menu) => {
+    if (menu.querySelector('[data-open-utilities="1"]')) prefetchProblematicFilesForSettingsIntent();
+  },
+}));
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof startPreviewMoveAttention === 'function') startPreviewMoveAttention();
 if (typeof loadCoverLookupNotificationCounts === 'function') {
   void loadCoverLookupNotificationCounts({ toast: false });
 }
@@ -344,6 +349,11 @@ document.addEventListener('contextmenu', (event) => {
     );
     return;
   }
+  const artboxShell = event.target.closest('#track-modal-cover .track-modal-cover-shell');
+  if (artboxShell && showAlbumArtboxContextMenu(event.clientX, event.clientY, Number(artboxShell.dataset.artboxSlot || 0))) {
+    event.preventDefault();
+    return;
+  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();
@@ -510,4 +520,10 @@ if (tagEditorFooter) {
     secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
     primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
   });
+}
+
+// Standalone admin pages link back to the library-owned Settings surface.
+if (new URL(window.location.href).searchParams.get("settings") === "appearance") {
+  setUtilityActiveTab("appearance");
+  openUtilityModal();
 }

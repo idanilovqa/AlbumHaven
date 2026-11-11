@@ -618,8 +618,12 @@ function createContext() {
     },
     startupMetrics: {
       completed: 0,
+      progress: [],
       visibleCompleted: 0,
       visibleCompletions: [],
+      advanceInitialRefresh(value) {
+        this.progress.push(value);
+      },
       markOnce(name, detail) {
         calls.startupMarks.push({ name, detail });
       },
@@ -1214,6 +1218,7 @@ test('initial startup readiness waits for its successful full render', async () 
   pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
   assert.equal(await startup, true);
   assert.equal(context.startupMetrics.completed, 1);
+  assert.deepEqual(context.startupMetrics.progress, [75, 85, 90, 95]);
 });
 
 test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {
@@ -3964,22 +3969,42 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.deepEqual(calls.showToast, []);
 });
 
-test('a library view without the artist tree does not count as applying an inventory revision', async () => {
-  const { context, pendingRequests } = createContext();
-  context.state.ui.appliedViewInventoryMutationRevision = 12;
+for (const [label, scanPhase, lastRefreshAgoMs, refreshes] of [
+  ['shows albums a reading scan has published', 'indexing', 60_000, true],
+  ['waits a few seconds between live scan refreshes', 'indexing', 1_000, false],
+  ['leaves a finalizing scan to its completion refresh', 'finalizing', 60_000, false],
+]) {
+  test(`pollStatus ${label}`, async () => {
+    const { context, pendingRequests } = createContext();
+    context.scheduleBrowserTimeout = () => {};
+    context.buildApiUrl = () => '/view-data?surface=albums';
+    context.state.ui.lastLiveScanRefreshAt = Date.now() - lastRefreshAgoMs;
+    // Already finalizing: entering that phase has its own completion refresh.
+    context.state.wasScanFinalizing = scanPhase === 'finalizing';
+    const scanning = {
+      scan_in_progress: true,
+      scan_phase: scanPhase,
+      relations_in_progress: false,
+      covers_in_progress: false,
+    };
+    context.state.status = { ...scanning, inventory_mutation_revision: 12 };
 
-  const refresh = context.fetchAndRender('/view-data?surface=albums&omit_sidebar=1', false, {
-    preserveScroll: true,
-  });
-  pendingRequests[0].resolveWith({
-    artist_groups: [{ artist: 'Ben', albums: [{ key: 'ben::album', name: 'Album' }] }],
-    payload_tier: 'full',
-    inventory_mutation_revision: 13,
-  });
-  await refresh;
+    const statusPromise = context.pollStatus();
+    pendingRequests[0].resolveWith({ ...scanning, inventory_mutation_revision: 13 });
+    for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+      await flushMicrotasks();
+    }
 
-  assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 12);
-});
+    assert.equal(pendingRequests.length, refreshes ? 2 : 1, pendingRequests.map((request) => request.url).join(' '));
+    if (refreshes) {
+      assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+      pendingRequests[1].resolveWith({ artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'new' }] }], album_count: 1 });
+    }
+    await statusPromise;
+    await flushMicrotasks();
+    assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, !refreshes);
+  });
+}
 
 test('pollStatus does not reload a foreground view already read at the advanced inventory revision', async () => {
   const { context, calls, pendingRequests } = createContext();
@@ -4011,6 +4036,75 @@ test('pollStatus does not reload a foreground view already read at the advanced 
     '/status',
   ]);
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+function artistTreeStatus(revision) {
+  return {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: revision,
+  };
+}
+
+test('a library change refreshes only the artist tree on an artist page', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = (view, options = {}) => (
+    `/view-data?artist=${view.selected_artist || ''}&payload_tier=${options.payloadTier || ''}`
+  );
+  const artistGroups = [{ artist: 'Ben', albums: [{ key: 'ben::album' }] }];
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ben',
+    artist_groups: artistGroups,
+    artists_sidebar: [{ artist: 'Ben' }],
+  };
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.ui.appliedArtistTreeInventoryMutationRevision = 12;
+  context.state.status = artistTreeStatus(12);
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith(artistTreeStatus(13));
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Ben' }, { artist: 'Beny' }],
+    inventory_mutation_revision: 13,
+  });
+  await statusRequest;
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
+    '/status',
+    '/view-data?artist=&payload_tier=sidebar',
+  ]);
+  assert.deepEqual(context.state.view.artists_sidebar.map((item) => item.artist), ['Ben', 'Beny']);
+  assert.equal(context.state.view.selected_artist, 'Ben');
+  assert.equal(context.state.view.artist_groups, artistGroups);
+  assert.equal(context.state.ui.appliedArtistTreeInventoryMutationRevision, 13);
+  assert.equal(calls.renderSidebar, 1);
+  assert.equal(calls.renderView.length, 0);
+});
+
+test('a library change leaves a search tree to the next search response', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    query: 'Ben',
+    artists_sidebar: [{ artist: 'Ben' }],
+  };
+  context.state.ui.appliedViewInventoryMutationRevision = 13;
+  context.state.ui.appliedArtistTreeInventoryMutationRevision = 12;
+  context.state.status = artistTreeStatus(12);
+
+  const statusRequest = context.pollStatus();
+  pendingRequests[0].resolveWith(artistTreeStatus(13));
+  await statusRequest;
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.equal(Boolean(context.state.ui.pendingArtistTreeRefresh), false);
 });
 
 test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {

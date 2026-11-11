@@ -578,8 +578,7 @@ def _build_startup_hydration_contract(
             visible_library_categories,
             active_surface=normalized_surface,
             root_sidebar=bool(
-                initial_view_partial
-                and normalized_surface == "albums"
+                normalized_surface == "albums"
                 and selected_artist
                 and not query_raw
             ),
@@ -674,13 +673,12 @@ def _build_postgres_selected_artist_startup_view(
     payload_started_at = time.perf_counter()
     repository = PostgresLibraryBrowseRepository(config)
     selected_query_args = QueryParams(query_args)
-    if not selected_query_args.get("q"):
-        selected_query_items = list(selected_query_args.multi_items())
-        if not selected_query_args.get("payload_tier"):
-            selected_query_items.append(("payload_tier", "gallery_summary"))
-        if not selected_query_args.get("root_sidebar"):
-            selected_query_items.append(("root_sidebar", "1"))
-        selected_query_args = QueryParams(selected_query_items)
+    selected_query_items = list(selected_query_args.multi_items())
+    if not selected_query_args.get("payload_tier"):
+        selected_query_items.append(("payload_tier", "gallery_summary"))
+    if not selected_query_args.get("q") and not selected_query_args.get("root_sidebar"):
+        selected_query_items.append(("root_sidebar", "1"))
+    selected_query_args = QueryParams(selected_query_items)
     payload = repository.build_selected_artist_payload(
         query_params=selected_query_args,
         library_state=library_state,
@@ -739,6 +737,7 @@ def _build_bootstrap_payload(
     selected_artist: str,
     refreshed: bool,
     request_started_epoch_ms: int,
+    defer_selected_artist_startup: bool = False,
 ) -> tuple[dict[str, object], float, dict[str, object]]:
     payload_elapsed_ms = 0.0
     # Read before the view so a mutation committed while it builds is still seen as newer.
@@ -770,7 +769,7 @@ def _build_bootstrap_payload(
             else:
                 preview_mode = "fresh_preview" if bool(initial_view.get("initial_view_partial")) else "full_view"
         else:
-            if selected_artist:
+            if selected_artist and not defer_selected_artist_startup:
                 initial_view, payload_elapsed_ms = _build_postgres_selected_artist_startup_view(
                     config=config,
                     query_args=query_args,
@@ -1032,6 +1031,7 @@ async def index(request: Request) -> Response:
         selected_artist=selected_artist,
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
+        defer_selected_artist_startup=True,
     )
     bootstrap_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
     initial_view = bootstrap_payload.get("initial_view") or {}
@@ -1121,6 +1121,11 @@ async def index(request: Request) -> Response:
         else "shell_only",
     )
     return response
+
+
+@router.get("/loose-tracks", response_class=HTMLResponse)
+async def loose_tracks_page(request: Request) -> Response:
+    return await index(request)
 
 
 @router.get("/news", response_class=HTMLResponse)
@@ -1249,9 +1254,12 @@ async def refresh_api(request: Request) -> JSONResponse:
     config = _app_config(request)
     library_state = _library_state(request)
     full_rescan = bool(payload.get("full_rescan"))
-    accepted_state_updates: dict[str, object] = {}
+    # A user-requested scan retries cover searches for coverless and poor-art
+    # albums now, instead of waiting for the negative search cache to expire.
+    accepted_state_updates: dict[str, object] = {"user_requested_cover_retry": True}
     if full_rescan:
         accepted_state_updates = {
+            "user_requested_cover_retry": True,
             "rescan_ignore_existing_cache": True,
             "scan_processed": 0,
             "scan_total": 0,
@@ -1433,15 +1441,16 @@ def _cover_response(
         return _not_found()
     if requested_size > 0:
         if not cache_roots:
-            # Unrevisioned lookup candidates stay app-local; configured storage is a read fallback.
-            app_cache_roots = display_cover_variant_cache_roots(
+            cache_roots = display_cover_variant_cache_roots(
                 resolved,
                 data_dir=config.get("DATA_DIR"),
+                storage_policy=storage_policy,
             )
-            cache_roots = tuple(dict.fromkeys((
-                *app_cache_roots,
-                *display_cover_variant_cache_roots(resolved, storage_policy=storage_policy),
-            )))
+            if storage_policy is None:
+                cache_roots = tuple(dict.fromkeys((
+                    *cache_roots,
+                    *display_cover_variant_cache_roots(resolved),
+                )))
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )

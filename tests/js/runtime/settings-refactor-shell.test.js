@@ -212,6 +212,30 @@ test('S03 filter menu uses the shared trigger anchor and clears it when closed',
   assert.equal(els.problemFilterMenu.hidden, true);
 });
 
+test('S03 a selected problem filter shows a check instead of the word on', () => {
+  const { context, els } = harness();
+  context.getProblemReasonTypes = () => ['Missing year', 'Encoding'];
+  context.state.utility.problemDropdownOpen = true;
+  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.renderProblemFilterControls(els);
+  const [selected, unselected] = els.problemFilterMenu.innerHTML.split('</button>');
+  assert.match(selected, /utility-problem-filter-check" aria-hidden="true"><svg viewBox="0 0 16 16"><path /);
+  assert.doesNotMatch(selected, />on</);
+  assert.match(unselected, /utility-problem-filter-check" aria-hidden="true"><\/span>/);
+});
+
+test('S03 the filter menu says more problem types are coming until the full list loads', () => {
+  const { context, els } = harness();
+  context.getProblemReasonTypes = () => ['Missing year'];
+  context.state.utility.problemDropdownOpen = true;
+  context.state.utility.problematicFilesComplete = false;
+  context.renderProblemFilterControls(els);
+  assert.match(els.problemFilterMenu.innerHTML, /Loading more problem types/);
+  context.state.utility.problematicFilesComplete = true;
+  context.renderProblemFilterControls(els);
+  assert.doesNotMatch(els.problemFilterMenu.innerHTML, /Loading more problem types/);
+});
+
 test('S03 the integrated search control labels Filters without replacing its shared icon', () => {
   const { context, els } = harness();
   context.getProblemReasonTypes = () => ['Missing year'];

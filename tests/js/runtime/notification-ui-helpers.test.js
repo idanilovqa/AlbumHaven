@@ -162,7 +162,39 @@ test('floating notifications defer when the viewport has no unobstructed rectang
   assert.equal(context.findClearNotificationPosition({ width: 301, height: 100 }, { left: 0, top: 0 }, viewport, []), null);
 });
 
-test('notification lanes inspect and observe only the header, player, and active modal', () => {
+test('notification placement protects foreground Edit Tags controls when Album Details is later in DOM order', () => {
+  const { context } = createContext();
+  const apply = { closest: () => null, matches: () => false };
+  const close = { closest: () => null, matches: () => false };
+  const hidden = { hidden: true };
+  const inert = { closest: () => ({ inert: true }) };
+  const disabled = { matches: () => true };
+  const modal = controls => ({
+    getAttribute: name => name === 'role' ? 'dialog' : null,
+    querySelectorAll: () => controls,
+  });
+  context.document.querySelectorAll = () => [
+    modal([apply, hidden, inert, disabled]), modal([close]),
+    { ...modal([{ hiddenModalControl: true }]), hidden: true },
+  ];
+  const nodes = context.getNotificationCollisionNodes();
+  assert.deepEqual(Array.from(nodes), [apply, close]);
+  const rectangles = new Map([
+    [apply, { left: 800, top: 680, right: 960, bottom: 750 }],
+    [close, { left: 900, top: 20, right: 960, bottom: 60 }],
+  ]);
+  const position = context.findClearNotificationPosition(
+    { width: 200, height: 100 }, { left: 784, top: 688 },
+    { left: 0, top: 0, right: 1000, bottom: 800 }, nodes.map(node => rectangles.get(node)),
+  );
+  assert.ok(position);
+  for (const rect of rectangles.values()) {
+    assert.ok(position.left + 200 <= rect.left - 8 || position.left >= rect.right + 8
+      || position.top + 100 <= rect.top - 8 || position.top >= rect.bottom + 8);
+  }
+});
+
+test('notification lanes inspect and observe only the header, player, and visible modals', () => {
   const { context } = createContext();
   const callbacks = [], styles = new Map(), attributes = new Map(), listeners = new Set(), observed = [];
   let mutations, resizes, disconnected = 0, shown = 0;

@@ -84,6 +84,7 @@ def test_live_partial_move_keeps_source_album(watcher_repair_inventory):
 def test_live_missing_album_with_stale_tracks_is_not_retired(watcher_repair_inventory):
     fixture = watcher_repair_inventory
     source = _seed_edition_album(fixture)
+    _rate(fixture, source["album_key"], 8, "explicit_import")
 
     fixture.seed()
 
@@ -92,6 +93,9 @@ def test_live_missing_album_with_stale_tracks_is_not_retired(watcher_repair_inve
 
 
 _USER_STATE = {
+    "additional_artwork": """insert into library.local_album_additional_artworks (
+        album_id, slot, source_kind, remote_url)
+        values (%(album_id)s, 1, 'remote', 'https://example.test/owner-art.jpg')""",
     "cover_origin": """update library.local_albums set metadata = metadata
         || '{"cover_selection_origin": "user"}' where id = %(album_id)s""",
     "explicit_cover": """update library.local_albums set metadata = metadata

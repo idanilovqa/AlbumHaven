@@ -187,7 +187,8 @@ function removeFamilyAlbumDuplicatesFromPrimaryGroups(primaryGroups, familyGroup
     const primaryArtist = normalizeArtistPreferenceKey(group?.artist || group?.artist_display);
     const albums = Array.isArray(group?.albums) ? group.albums : [];
     const uniqueAlbums = albums.filter((album) => {
-      if (String(album?.artist_relationship || '').trim().toLowerCase() === 'featured') return true;
+      if (String(album?.artist_relationship || '').trim().toLowerCase() === 'featured'
+        || isGallerySplitAlbum(album)) return true;
       const albumArtist = normalizeArtistPreferenceKey(album?.album_artist || primaryArtist);
       if (!albumArtist || albumArtist === primaryArtist) return true;
       return !familyAlbumKeysByArtist.get(albumArtist)?.has(getDisplayAlbumDeduplicationKey(album));
@@ -312,6 +313,20 @@ function splitArtistGroupForDisplay(group) {
     ),
     display_artist_key: canonicalArtist || String(group?.artist_display || ''),
   };
+  const selectedArtist = normalizeArtistPreferenceKey(state.view?.selected_artist);
+  if (
+    canonicalArtist && canonicalArtist === selectedArtist
+    && !looksLikeCombinedArtistName(selectedArtist) && !/\s+\/\s+/.test(selectedArtist)
+  ) {
+    // A guest release's owner credit must not create another artist section.
+    return [{
+      ...defaultGroup,
+      albums: [
+        ...albums.filter((album) => album.artist_relationship !== 'featured'),
+        ...albums.filter((album) => album.artist_relationship === 'featured').sort(compareDisplayGroupAlbums),
+      ],
+    }];
+  }
   // Root membership belongs to the canonical sidebar/page inventory. Raw album
   // credits must not split its headings when a later page adds another credit.
   const canonicalRoot = typeof resolveViewSurface === 'function'

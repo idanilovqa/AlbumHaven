@@ -575,19 +575,6 @@ test('compact metadata summary omits missing separators', () => {
   assert.equal(h.buildCompactPlayerMetadataSummary(null), '');
 });
 
-test('compact metadata row motion ignores rounding and scales with real overflow', () => {
-  const h = loadHelper();
-  assert.deepEqual(plain(h.resolveCompactPlayerMetadataRowMotion()), {
-    overflowing: false, distance: 0, durationMs: 0,
-  });
-  assert.deepEqual(plain(h.resolveCompactPlayerMetadataRowMotion({
-    scrollWidth: 101, clientWidth: 100,
-  })), { overflowing: false, distance: 0, durationMs: 0 });
-  assert.deepEqual(plain(h.resolveCompactPlayerMetadataRowMotion({
-    scrollWidth: 200, clientWidth: 100,
-  })), { overflowing: true, distance: 100, durationMs: 4200 });
-});
-
 for (const enabled of [true, false]) {
   test(`compact mode reload uses the same ${enabled ? 'device' : 'browser'} preference owner as writes`, t => {
     const browserValues = new Map(), deviceValues = new Map();

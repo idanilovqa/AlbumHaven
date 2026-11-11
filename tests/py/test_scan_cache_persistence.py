@@ -67,7 +67,10 @@ def test_load_separate_release_keys_accepts_dict_rows():
 
 
 class FakeConnection:
-    def __init__(self, *, snapshot_rows=None, file_rows=None, bootstrap_ready=True):
+    def __init__(self, *, snapshot_rows=None, file_rows=None, bootstrap_ready=True, relation_ready=False):
+        from music_app.services import relation_projection_postgres as relations
+        from music_app.services import scoped_relation_projection as scoped
+
         self.executed = []
         self._snapshot_rows = list(snapshot_rows or [])
         self._file_rows = list(file_rows or [])
@@ -79,6 +82,53 @@ class FakeConnection:
         self.pipeline_active = False
         self.pipeline_execute_counts = []
         self.execute_pipeline_states = []
+        metadata = relations.build_ready_relation_projection_metadata(
+            "a" * 64, reason="scan", duration_ms=1.0,
+        )
+        if self._snapshot_rows:
+            stored_metadata = self._snapshot_rows[0].get("scan_cache", {}).get("relation_projection")
+            if isinstance(stored_metadata, dict):
+                metadata = dict(stored_metadata)
+        self.relation_context = {
+            "library_id": 1,
+            "metadata": metadata,
+            "relations_last_built": 10.0,
+            "inventory_mutation_revision": 0,
+            "normalized_builder_version": relations.RELATION_PROJECTION_BUILDER_VERSION if relation_ready else None,
+            "normalized_source_fingerprint": metadata.get("source_fingerprint") if relation_ready else None,
+            "normalized_publication_xid": "1" if relation_ready else None,
+            "gallery_generation": 1,
+            "gallery_owned": False,
+        }
+        self.compatibility_state = {
+            "legacy_semantics": scoped.LEGACY_ALIAS_POLICY,
+            "current_semantics": scoped.CURRENT_ALIAS_POLICY,
+            "source_fingerprint": metadata.get("source_fingerprint"),
+            "publication_xid": "1",
+        } if relation_ready else {}
+        self.gallery_headers = [{"source_generation": 1}]
+        self.relation_dirty_rows = []
+        from tests.py.test_relation_projection_postgres import _ProjectionDatabase
+
+        snapshot = self._snapshot_rows[0].get("scan_cache", {}) if self._snapshot_rows else {}
+        self.projection_database = _ProjectionDatabase(scan_cache=snapshot)
+        self.projection_connection = self.projection_database.connect("unused-test-connection")
+
+    def normalized_projection_state(self):
+        context = self.relation_context
+        metadata = context["metadata"]
+        return {
+            "normalized_relation_initialized": context["normalized_builder_version"] is not None,
+            "normalized_relation_dirty": bool(self.relation_dirty_rows),
+            "normalized_relation_ready": (
+                context["normalized_builder_version"] is not None
+                and not self.relation_dirty_rows
+                and context["normalized_builder_version"] == metadata.get("builder_version")
+                and context["normalized_source_fingerprint"] == metadata.get("source_fingerprint")
+                and self.compatibility_state.get("source_fingerprint") == context["normalized_source_fingerprint"]
+                and self.compatibility_state.get("publication_xid") == context["normalized_publication_xid"]
+            ),
+        }
 
     def __enter__(self):
         return self
@@ -88,16 +138,75 @@ class FakeConnection:
         return False
 
     def execute(self, sql, params=None):
+        from music_app.services import relation_projection_postgres as relations
+        from music_app.services import scoped_relation_projection as scoped
+
         self.executed.append((sql, params))
         self.execute_pipeline_states.append(self.pipeline_active)
         if self.pipeline_active:
             self.pipeline_execute_counts[-1] += 1
+        if sql == scoped._CONTEXT:
+            return FakeCursor([self.relation_context] if self._bootstrap_ready else [])
+        if "select context.normalized_builder_version=" in sql:
+            context = self.relation_context
+            metadata = context["metadata"]
+            compatibility = self.compatibility_state
+            ready = (
+                self._bootstrap_ready
+                and metadata.get("status") == "ready"
+                and metadata.get("builder_version") == params["relation_version"]
+                and context["normalized_builder_version"] == params["relation_version"]
+                and context["normalized_source_fingerprint"] == metadata.get("source_fingerprint")
+                and compatibility.get("source_fingerprint") == context["normalized_source_fingerprint"]
+                and compatibility.get("publication_xid") == context["normalized_publication_xid"]
+                and compatibility.get("legacy_semantics") == scoped.LEGACY_ALIAS_POLICY
+                and compatibility.get("current_semantics") == scoped.CURRENT_ALIAS_POLICY
+                and not self.relation_dirty_rows
+                and bool(self.gallery_headers)
+                and all(row["source_generation"] == context["gallery_generation"] for row in self.gallery_headers)
+            )
+            return FakeCursor([{"ready": ready}])
+        if "from library.local_relation_compatibility_state" in sql:
+            return FakeCursor([self.compatibility_state] if self.compatibility_state else [])
+        normalized = _normalized_sql(sql)
+        if normalized.startswith("select library.local_relation_compatibility_views(") or normalized.startswith("select metadata #> '{scan_cache,relation_views}' as views"):
+            snapshot = self._snapshot_rows[0].get("scan_cache", {}) if self._snapshot_rows else {}
+            return FakeCursor([{"views": snapshot.get("relation_views")}])
+        if normalized.startswith("select generation, last_invalidation_xid="):
+            return FakeCursor([{"generation": self.relation_context["gallery_generation"], "owned": True}])
+        if normalized.startswith("select * from library.local_relation_dirty_albums"):
+            return FakeCursor(self.relation_dirty_rows)
+        if any(operation in normalized for operation in (
+            "insert into library.local_tracks", "update library.local_tracks",
+            "update library.local_track_files", "insert into library.local_track_files",
+        )):
+            self.relation_dirty_rows = [{
+                "album_id": 0, "album_keys": [], "first_inventory_revision": 0,
+                "first_gallery_generation": self.relation_context["gallery_generation"],
+                "first_change_xid": "1",
+            }]
+        if (
+            normalized.startswith("select to_regclass('library.gallery_projection_state')")
+            or normalized.startswith("select id,album_key from library.local_albums")
+            or normalized.startswith("delete from library.local_relation_")
+            or normalized.startswith("insert into library.local_relation_")
+        ):
+            return self.projection_connection.execute(sql, params)
         if "bootstrap_context_ready" in sql:
             return FakeCursor([{"bootstrap_context_ready": 1}] if self._bootstrap_ready else [])
         if "watch_health_load" in sql:
             return FakeCursor([{"library_watch_health": {}}])
         if "metadata -> 'scan_cache'" in sql:
             return FakeCursor(self._snapshot_rows)
+        if "owner_artist_id" in sql and "track_file_id" in sql:
+            return FakeCursor(self.projection_database.source_rows)
+        if sql == relations._load_relation_projection_sql():
+            snapshot = self._snapshot_rows[0].get("scan_cache", {}) if self._snapshot_rows else {}
+            return FakeCursor([{
+                **snapshot,
+                "artist_search_projection": self.projection_connection.search_projection,
+                **self.normalized_projection_state(),
+            }])
         if "replace_local_artist_search_projection" in sql:
             rows = getattr(params["rows"], "obj", params["rows"])
             return FakeCursor([{"replacement_row_count": len(rows)}])
@@ -148,12 +257,10 @@ def test_structural_album_tag_edit_promotes_renamed_file_path_to_private_path():
     )
 
 
-def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
+def test_missing_file_marking_preserves_nested_scan_cache_file_entry():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(
-        scan_cache_persistence._mark_targeted_track_files_stale_sql()
-    )
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_missing_track_files_sql())
 
     assert "jsonb_set(" in normalized_sql
     assert "'{scan_cache}'" in normalized_sql
@@ -161,7 +268,15 @@ def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "jsonb_build_object(" in normalized_sql
     assert "'stale', true" in normalized_sql
     assert "'{scan_cache,stale_marked_at}'" in normalized_sql
+    assert "'missing_reason', reasons.missing_reason" in normalized_sql
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
+
+
+def test_targeted_missing_candidates_select_only_the_reported_files():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._targeted_missing_candidates_sql())
+
     assert (
         "coalesce( nullif(library.library_roots.metadata ->> 'root_id', ''), "
         "library.local_track_files.metadata ->> 'library_root_id' ) = %(root_id)s"
@@ -174,21 +289,143 @@ def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
     assert " like " not in normalized_sql
 
 
-def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
+def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._scan_missing_candidates_sql())
+
+    # `<> all(array)` compared every candidate file with every current path.
+    assert "<> all(" not in normalized_sql
+    assert (
+        "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
+        "where current_file.private_path = library.local_track_files.private_path )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_identity", [False, True])
+def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_artist_sql(
+        preserve_existing_identity=preserve_existing_identity,
+    ))
+
+    if preserve_existing_identity:
+        assert (
+            "where ( library.local_artists.metadata) is distinct from "
+            "( library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+        assert "sort_name = excluded.sort_name" not in normalized_sql
+    else:
+        assert (
+            "where (library.local_artists.name, library.local_artists.sort_name, library.local_artists.metadata) "
+            "is distinct from (excluded.name, excluded.sort_name, library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+
+
+def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
     from music_app.services import scan_cache_persistence
 
     normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
 
-    assert "jsonb_set(" in normalized_sql
-    assert "coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)" in normalized_sql
-    assert "'stale', true" in normalized_sql
-    assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
+    # `<> all(array)` compared every candidate file with every current path.
+    assert "<> all(" not in normalized_sql
+    assert (
+        "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
+        "where current_file.private_path = library.local_track_files.private_path )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_identity", [False, True])
+def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_artist_sql(
+        preserve_existing_identity=preserve_existing_identity,
+    ))
+
+    if preserve_existing_identity:
+        assert (
+            "where ( library.local_artists.metadata) is distinct from "
+            "( library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+        assert "sort_name = excluded.sort_name" not in normalized_sql
+    else:
+        assert (
+            "where (library.local_artists.name, library.local_artists.sort_name, library.local_artists.metadata) "
+            "is distinct from (excluded.name, excluded.sort_name, library.local_artists.metadata || excluded.metadata)"
+        ) in normalized_sql
+
+
+@pytest.mark.parametrize("preserve_existing_cover_authority", [True, False])
+def test_album_upsert_skips_albums_whose_update_would_write_the_same_values(preserve_existing_cover_authority):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_album_sql(
+        preserve_existing_cover_authority=preserve_existing_cover_authority,
+    ))
+    written = re.search(
+        r"release_year = (.*), cover_path = (.*), last_seen_at = now\(\), metadata = (.*) -- ", normalized_sql,
+    )
+    # The guard compares against exactly the values the update would write.
+    assert normalized_sql.endswith(
+        "where ( library.local_albums.artist_id, library.local_albums.title, library.local_albums.release_year, "
+        "library.local_albums.cover_path, library.local_albums.metadata ) is distinct from ( "
+        f"excluded.artist_id, excluded.title, {written[1]}, {written[2]}, {written[3]} );"
+    )
+
+
+def test_featured_artist_upsert_skips_unchanged_credits():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._upsert_local_album_featured_artist_sql())
+
+    assert (
+        "where library.local_album_featured_artists.metadata is distinct from ( "
+        "library.local_album_featured_artists.metadata || (excluded.metadata - 'source') )"
+    ) in normalized_sql
+
+
+@pytest.mark.parametrize("reported", [[0, 2], []])
+def test_unchanged_row_prefilter_sends_every_row_it_cannot_prove_unchanged(reported):
+    from music_app.services import scan_cache_persistence
+
+    rows = [{"track_key": f"t{index}", "title": f"Track {index}"} for index in range(3)]
+    executed = []
+
+    class Connection:
+        def execute(self, sql, params):
+            executed.append([row["row_index"] for row in params["rows"].obj])
+            return SimpleNamespace(fetchall=lambda: [{"row_index": index} for index in reported])
+
+    unchanged = scan_cache_persistence._unchanged_row_fingerprints(
+        Connection(), scan_cache_persistence._unchanged_local_track_rows_sql(), rows,
+    )
+
+    assert executed == [[0, 1, 2]]
+    assert [row["track_key"] for row in rows if scan_cache_persistence._row_fingerprint(row) not in unchanged] == (
+        ["t1"] if reported else ["t0", "t1", "t2"]
+    )
+
+
+@pytest.mark.parametrize("builder", ["_unchanged_local_track_rows_sql", "_unchanged_local_track_file_rows_sql"])
+def test_unchanged_row_prefilters_mirror_their_upsert_guards(builder):
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(getattr(scan_cache_persistence, builder)())
+
+    assert normalized_sql.startswith("with bootstrap_context as (")
+    assert "is not distinct from" in normalized_sql
+    assert "insert into" not in normalized_sql and "update " not in normalized_sql
+    if builder == "_unchanged_local_track_file_rows_sql":
+        assert "root_resolution.resolution_status = 'resolved'" in normalized_sql
+        assert "#- '{scan_cache,stale_marked_at}'" in normalized_sql
 
 
 def test_full_scan_stale_sql_reconciles_legacy_rows_without_a_source_marker():
     from music_app.services import scan_cache_persistence
 
-    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+    normalized_sql = _normalized_sql(scan_cache_persistence._scan_missing_candidates_sql())
 
     assert (
         "coalesce( nullif(btrim(library.local_track_files.metadata #>> "
@@ -221,17 +458,19 @@ def test_featured_artist_sync_reconciles_only_current_and_legacy_generated_rows(
 
 
 def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
-    from music_app.services import scan_cache_persistence
+    from music_app.services import missing_album_auto_removal, scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     class TargetedConnection(FakeConnection):
         def __init__(self, *, existing_memberships=None):
-            super().__init__()
+            super().__init__(relation_ready=True)
             self.existing_memberships = existing_memberships
 
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
+            if sql == missing_album_auto_removal._UNTOUCHED_DELETED_ALBUMS_SQL:
+                return FakeCursor([])
             if "from library.separate_releases" in normalized:
                 return FakeCursor([{"release_key": "artist::new album"}])
             if "as album_owner_key" in normalized and self.existing_memberships is not None:
@@ -244,6 +483,8 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
                                    "album": "New Album", "album_artist": "Artist", "artist": "Artist",
                                    "title": "Track", "track_number": 1, "disc_number": 1},
                 }])
+            if sql == scan_cache_persistence._targeted_missing_candidates_sql():
+                return FakeCursor([{"id": 1, "private_path": "deleted.flac", "root_id": "main", "root_path": ""}])
             if "as affected_album_key" in normalized:
                 return FakeCursor([{"affected_album_key": "artist::old album"}])
             if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
@@ -400,6 +641,72 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     assert moved_directory_result["new_track_paths"] == []
 
 
+def test_one_file_reconciliation_never_rebuilds_full_library_relations(monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import relation_projection_postgres as relations
+    from music_app.services import scoped_relation_projection as scoped
+
+    monkeypatch.setattr(persistence, "Jsonb", None)
+    path = "C:/Music/Artist/Album/01.flac"
+    entry = {
+        "path": path, "album": "Album", "album_artist": "Artist",
+        "artist": "Artist", "title": "First", "track_number": 1,
+        "disc_number": 1, "mtime": 1.0, "size": 123,
+        "library_root_id": "main", "duration_seconds": 120,
+    }
+
+    class Connection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if sql == scoped._CONTEXT:
+                return FakeCursor([{
+                    **self.relation_context,
+                    "library_id": 1, "relations_last_built": 10.0,
+                    "inventory_mutation_revision": 7,
+                    "normalized_builder_version": relations.RELATION_PROJECTION_BUILDER_VERSION,
+                    "metadata": {**self.relation_context["metadata"],
+                                 "builder_version": relations.RELATION_PROJECTION_BUILDER_VERSION,
+                                 "source_fingerprint": "a" * 64},
+                }])
+            if sql.startswith("select * from library.local_relation_dirty_albums"):
+                return FakeCursor([{"album_id": 41, "album_keys": ["artist::album"],
+                                    "first_gallery_generation": 1}])
+            if sql.startswith("select id,album_key from library.local_albums"):
+                return FakeCursor([{"id": 41, "album_key": "artist::album"}])
+            if sql == scoped_source_sql:
+                assert params == {"album_ids": [41]}
+                return FakeCursor([{"album_id": 41, "owner_artist_name": "Artist",
+                                    "album_artist": "Artist", "member_artist_name": "Artist"}])
+            if "as inventory_mutation_revision" in _normalized_sql(sql):
+                return FakeCursor([{"inventory_mutation_revision": 7}])
+            return cursor
+
+    def unexpected_global_work(*_args, **_kwargs):
+        pytest.fail("one-file reconciliation must not rebuild full-library relations")
+
+    monkeypatch.setattr(persistence, "_commit_structural_relation_projection", unexpected_global_work)
+    monkeypatch.setattr(persistence, "load_relation_source_rows_sql", unexpected_global_work)
+    monkeypatch.setattr(persistence, "replace_artist_family_projection_in_transaction", unexpected_global_work)
+    monkeypatch.setattr(persistence, "replace_artist_search_projection_in_transaction", unexpected_global_work)
+    scoped_source_sql = relations.load_relation_source_rows_sql(scoped=True)
+    monkeypatch.setattr(relations, "load_relation_source_rows_sql",
+                        lambda *, scoped=False: scoped_source_sql if scoped else unexpected_global_work())
+    connection = Connection(relation_ready=True)
+    adapter = persistence.PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://targeted-reconciliation-test"},
+        connect=lambda _url: connection,
+    )
+
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id="main", active_file_entries={path: entry},
+    )
+
+    assert result["inventory_mutation_revision"] == 7
+    assert result["affected_album_keys"] == ["artist::album"]
+    assert connection.commit_calls == 1
+    assert connection.exit_exc_type is None
+
+
 def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artists(
     monkeypatch,
 ):
@@ -410,6 +717,8 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
+            if sql == scan_cache_persistence._targeted_missing_candidates_sql():
+                return FakeCursor([{"id": 1, "private_path": "deleted.flac", "root_id": "main", "root_path": ""}])
             if "as affected_album_key" in normalized:
                 return FakeCursor([{"affected_album_key": "artist::surviving album"}])
             if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
@@ -417,7 +726,7 @@ def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artis
             return cursor
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
-    connection = DeletionOnlyConnection()
+    connection = DeletionOnlyConnection(relation_ready=True)
     adapter = PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
         connect=lambda _url: connection,
@@ -473,14 +782,17 @@ def test_noop_targeted_subtree_deletion_does_not_advance_inventory_revision(
     )
 
 
-def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():
+def test_targeted_inventory_revision_leaves_relation_status_to_its_publication():
+    # The targeted transaction publishes relations before committing; marking
+    # them stale made a loose-track-only change journal a full replay row.
     from music_app.services import scan_cache_persistence
 
     sql = scan_cache_persistence._increment_inventory_mutation_revision_sql()
     normalized = _normalized_sql(sql)
 
-    assert "'{scan_cache,relation_projection,status}'" in normalized
-    assert "to_jsonb('stale'::text)" in normalized
+    assert "'inventory_mutation_revision'" in normalized
+    assert "relation_projection,status" not in normalized
+    assert "'stale'" not in normalized
 
 
 def test_targeted_album_upsert_preserves_existing_user_cover_authority():
@@ -612,7 +924,7 @@ def test_incremental_album_aggregate_keeps_the_guarded_inherited_cover_repair(mo
         return albums
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
-    connection = RepairConnection()
+    connection = RepairConnection(relation_ready=True)
     adapter = scan_cache_persistence.PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
         connect=lambda _url: connection, build_albums=rebuilt_albums,
@@ -811,6 +1123,47 @@ def test_targeted_album_rows_collapse_unseparated_automatic_year_members_to_comp
     assert {row["release_year"] for row in album_rows} == {2000}
     assert {row["album_key"] for row in featured_rows} == {keys[0]}
     assert {row["album_key"] for row in track_rows} == {keys[0]}
+
+
+def test_targeted_album_rows_keep_editions_in_separate_folders_as_separate_releases():
+    """SMALL-11: Dragonland's 2002 «Holy War» and a 2014 reissue in a download folder
+    were collapsed into the 2002 album, so Album Details showed CD 1 plus an unnumbered
+    disc instead of two versions."""
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    keys = ["dragonland::holy war::year::2002", "dragonland::holy war::year::2014"]
+    folders = ["N:/Music/Dragonland/2002 - Holy War", "C:/Downloads/Dragonland - Holy War (2014)"]
+    album_rows = [
+        {"artist_key": "dragonland", "album_key": key, "title": "Holy War", "release_year": year}
+        for key, year in zip(keys, (2002, 2014), strict=True)
+    ]
+    featured_rows = [{"album_key": key, "artist_key": "dragonland", "featured_kind": "owner"} for key in keys]
+    track_rows = [
+        {"album_key": key, "track_key": f"{folder}/{number:02d}.flac"}
+        for key, folder, count in zip(keys, folders, (13, 12), strict=True)
+        for number in range(1, count + 1)
+    ]
+    # The bad collapse already put every file under the 2002 album.
+    existing = [
+        {"private_path": row["track_key"], "album_key": keys[0], "album_title": "Holy War",
+         "artist_key": "dragonland", "release_year": 2002}
+        for row in track_rows
+    ]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=existing,
+        separate_release_keys=set(),
+    )
+
+    assert {row["album_key"] for row in album_rows} == set(keys)
+    assert {row["album_key"]: row["release_year"] for row in album_rows} == {keys[0]: 2002, keys[1]: 2014}
+    assert sum(row["album_key"] == keys[1] for row in track_rows) == 12
+    assert sum(row["album_key"] == keys[0] for row in track_rows) == 13
 
 
 def test_targeted_album_rows_keep_intentional_year_retag_as_a_split():
@@ -1267,7 +1620,10 @@ def test_postgres_cover_selection_updates_only_targeted_inventory_rows_transacti
         "local_cover_width": 2000, "local_cover_height": 2000,
     }
     assert connection.exit_exc_type is None
-    assert all("insert into library." not in _normalized_sql(sql) for sql, _params in connection.executed)
+    inserts = [_normalized_sql(sql) for sql, _params in connection.executed if "insert into library." in _normalized_sql(sql)]
+    assert len(inserts) == 1 and "insert into library.cover_mutation_revisions" in inserts[0], (
+        "only the cover counter may be inserted; inventory rows are only updated"
+    )
 
 
 @pytest.mark.parametrize("cover_selection_origin", ["user", "automatic"])
@@ -1454,7 +1810,7 @@ def test_automatic_cover_persistence_reports_concurrent_user_selection_without_w
     }
     normalized_calls = [_normalized_sql(sql) for sql, _params in connection.executed]
     assert not any(
-        "cover_mutation_revision" in sql and "update library.libraries" in sql
+        "insert into library.cover_mutation_revisions" in sql
         for sql in normalized_calls
     )
     assert [
@@ -1560,7 +1916,7 @@ def test_explicit_expected_cover_state_guards_partial_and_null_baselines(monkeyp
     assert "blocked_by_expected_cover_state" in sql
     assert "%(expected_cover_selection_origin)s" in sql
     assert "%(expected_cover_revision)s" in sql
-    revision_writes = [sql for sql, _ in connection.executed if "cover_mutation_revision" in sql and "update library.libraries" in _normalized_sql(sql)]
+    revision_writes = [sql for sql, _ in connection.executed if "insert into library.cover_mutation_revisions" in _normalized_sql(sql)]
     assert len(revision_writes) == (0 if blocked else 1)
     assert guards == ([] if blocked else [True])
     assert result == ({"album_rows_updated": 0, "track_file_rows_updated": 0, "blocked_by_expected_cover_state": True} if blocked else {"album_rows_updated": 1, "track_file_rows_updated": 1})
@@ -1673,8 +2029,7 @@ def test_postgres_cover_selection_rejects_stale_inventory_revision_after_lock_be
                 events.append("inventory-revision-read")
                 return FakeCursor([{"inventory_mutation_revision": 12}])
             elif (
-                "cover_mutation_revision" in normalized_sql
-                and "update library.libraries" in normalized_sql
+                "insert into library.cover_mutation_revisions" in normalized_sql
             ):
                 events.append("cover-revision-increment")
             elif "updated_albums" in normalized_sql:
@@ -1739,7 +2094,7 @@ def test_postgres_cover_selection_invokes_commit_guard_after_mutation_before_exi
             normalized_sql = _normalized_sql(sql)
             if "local-inventory-publication" in normalized_sql:
                 events.append("publication-lock")
-            if "cover_mutation_revision" in normalized_sql and "update library.libraries" in normalized_sql:
+            if "insert into library.cover_mutation_revisions" in normalized_sql:
                 events.append("revision-increment")
             cursor = super().execute(sql, params)
             if "updated_albums" in normalized_sql:
@@ -2487,9 +2842,10 @@ def test_structural_album_artist_rename_resolves_each_track_artist():
     assert "returning library.local_artists.id, library.local_artists.artist_key" in sql
     assert "resolved_track_artists as materialized (" in sql
     assert (
-        "artist_id = ( select resolved_track_artists.id "
+        "artist_id = case when selected_track_files.file_entry ? 'artist' "
+        "or selected_track_files.file_entry ? 'album_artist' then ( select resolved_track_artists.id "
         "from resolved_track_artists where resolved_track_artists.artist_key = "
-        "selected_track_files.track_artist_key )"
+        "selected_track_files.track_artist_key ) else library.local_tracks.artist_id end"
     ) in sql
 
 
@@ -2719,10 +3075,11 @@ def test_postgres_scan_cache_adapter_batches_large_track_publication_setwise(mon
     assert sum(track_file_batch_sizes) == row_counts["track_file"]
     assert len(pipelined_execute_indexes) + len(track_execute_indexes) + len(track_file_execute_indexes) == 1_219
     assert max(track_execute_indexes) < min(track_file_execute_indexes)
+    # Missing files are found after every file row is written (marked only when any exist).
     stale_mark_index = next(
         index
         for index, (sql, _params) in enumerate(connection.executed)
-        if "update library.local_track_files" in sql
+        if sql == scan_cache_persistence._scan_missing_candidates_sql()
     )
     assert max(track_file_execute_indexes) < stale_mark_index
     relation_source_index = next(
@@ -2732,6 +3089,45 @@ def test_postgres_scan_cache_adapter_batches_large_track_publication_setwise(mon
     )
     assert stale_mark_index < relation_source_index
     assert connection.execute_pipeline_states[relation_source_index] is False
+
+
+def test_cache_update_publishes_only_the_changed_files_albums(monkeypatch):
+    """A whole-library cache save stamped stale rows over a running scan's (sandbox2, 14:06)."""
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = FakeConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+
+    def entry(path, album):
+        return {"path": path, "mtime": 1.0, "size": 1, "album": album, "album_artist": "Can",
+                "artist": "Can", "title": Path(path).stem, "track_number": 1, "disc_number": 1,
+                "disc_number_raw": "1", "duration_seconds": 1, "year": 1971, "edition": "", "album_rating": 0,
+                "library_root_id": "main", "library_root_category": "main_library", "exception_type": None}
+
+    changed = "C:/Music/Can/Tago Mago/01 Paperhouse.flac"
+    file_cache = {
+        changed: entry(changed, "Tago Mago"),
+        "C:/Music/Can/Tago Mago/02 Mushroom.flac": entry("C:/Music/Can/Tago Mago/02 Mushroom.flac", "Tago Mago"),
+        "C:/Music/Can/Ege Bamyasi/01 Pinch.flac": entry("C:/Music/Can/Ege Bamyasi/01 Pinch.flac", "Ege Bamyasi"),
+    }
+
+    adapter.save_snapshot(Path("unused"), file_cache, "root-identity", 1.0, publish_paths={changed})
+
+    published_paths = sorted(
+        row["private_path"]
+        for sql, params in connection.executed if "insert into library.local_track_files" in sql
+        for row in params["rows"]
+    )
+    assert published_paths == sorted(path for path in file_cache if "Tago Mago" in path)
+    executed_sql = [sql for sql, _params in connection.executed]
+    assert scan_cache_persistence._synchronize_local_album_featured_artists_sql() not in executed_sql
+    assert scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql() in executed_sql
+    assert scan_cache_persistence._scan_missing_candidates_sql() not in executed_sql
 
 
 def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
@@ -2820,7 +3216,10 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     assert any("delete from library.local_album_featured_artists" in sql for sql in executed_sql)
     assert any("insert into library.local_tracks" in sql for sql in executed_sql)
     assert any("insert into library.local_track_files" in sql for sql in executed_sql)
-    assert any("update library.local_track_files" in sql for sql in executed_sql)
+    assert scan_cache_persistence._scan_missing_candidates_sql() in executed_sql
+    # The full publication advances the inventory revision as its last write,
+    # so a whole-library save prepared before it is superseded, not applied.
+    assert executed_sql[-1] == scan_cache_persistence._increment_inventory_mutation_revision_sql()
 
     snapshot_params = [
         params for sql, params in connection.executed if "update library.libraries" in sql
@@ -2849,7 +3248,8 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
     assert cache_only_params["metadata"]["scan_cache"]["cache_only"] is True
     assert cache_only_params["metadata"]["scan_cache"]["file_entry"]["exception_type"] == "missing_tags"
     stale_params = [
-        params for sql, params in connection.executed if "update library.local_track_files" in sql
+        params for sql, params in connection.executed
+        if sql == scan_cache_persistence._scan_missing_candidates_sql()
     ][0]
     assert stale_params["current_paths"] == [
         "C:/Music/Broadcast/Tender Buttons/01 I Found The F.mp3",
@@ -3021,17 +3421,11 @@ def test_structural_relation_publication_replaces_search_projection_before_ready
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     connection = FakeConnection(snapshot_rows=[{"scan_cache": {"last_scan": 9.0}}])
     events = []
-    relation_views = {
-        "artists": ["Neal Morse", "The Neal Morse Band"],
-        "artists_sidebar": ["Neal Morse"],
-        "family_to_artists": {
-            "Neal Morse": ["Neal Morse", "The Neal Morse Band"],
-        },
-        "folder_related": {},
-        "sidebar_families": ["Neal Morse"],
-        "alias_to_canonical": {"The Neal Morse Band": "Neal Morse"},
-        "canonical_to_aliases": {"Neal Morse": ["The Neal Morse Band"]},
-    }
+    from tests.py.test_relation_projection_postgres import _morse_rows
+    from music_app.services.relation_projection_builder import build_postgres_relation_views
+
+    connection.projection_database.source_rows = _morse_rows()
+    relation_views = build_postgres_relation_views(connection.projection_database.source_rows)
     published_timestamp = []
     published_search_metadata = []
 
@@ -3114,207 +3508,86 @@ def test_structural_relation_publication_replaces_search_projection_before_ready
 
 def test_targeted_structural_relation_patch_avoids_full_source_load(monkeypatch):
     from music_app.services import scan_cache_persistence as persistence
-    from music_app.services.cache import serialize_relation_views
+    from music_app.services import scoped_relation_projection as scoped
 
-    monkeypatch.setattr(persistence, "Jsonb", None)
-    relation_views = {
-        "artists": ["Ovderhead", "Overhead", "Unrelated Artist"],
-        "artists_sidebar": [
-            {"artist": "Ovderhead", "count": 1},
-            {"artist": "Overhead", "count": 3},
-            {"artist": "Unrelated Artist", "count": 7},
-        ],
-        "family_to_artists": {},
-        "folder_related": {},
-        "sidebar_families": [],
-        "alias_to_canonical": {},
-        "canonical_to_aliases": {},
-    }
-    snapshot = {
-        "relation_views": serialize_relation_views(relation_views),
-        "relations_last_built": 100.0,
-        persistence.RELATION_PROJECTION_METADATA_KEY: (
-            persistence.build_ready_relation_projection_metadata(
-                "a" * 64,
-                reason="scan",
-                duration_ms=1.0,
-            )
-        ),
-    }
-    saved_snapshots: list[dict[str, object]] = []
+    connection = object()
+    published = {"projection_mode": "targeted", "orphaned_source_artists": ["Ovderhead"],
+                 "relation_view_patch": {"remove": {"artists": ["Ovderhead"]},
+                                         "upsert": {"artists": ["Overhead"]}}}
+    calls = []
 
-    class Cursor:
-        def __init__(self, rows=None):
-            self.rows = list(rows or [])
+    def publish(conn, **scope):
+        assert conn is connection
+        calls.append(scope)
+        return published
 
-        def fetchone(self):
-            return self.rows[0] if self.rows else None
+    def forbidden(*args, **kwargs):
+        pytest.fail("the edit wrapper must not load or rebuild full-library relations")
 
-        def fetchall(self):
-            return self.rows
-
-    class Connection:
-        def execute(self, sql, params=None):
-            if sql == persistence._load_scan_snapshot_sql():
-                return Cursor([{"scan_cache": snapshot}])
-            if sql == persistence._save_scan_snapshot_sql():
-                saved_snapshots.append(params["scan_cache"])
-                return Cursor()
-            raise AssertionError(f"Unexpected SQL in targeted patch: {sql}")
-
-    search_patches: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        persistence,
-        "patch_artist_search_projection_in_transaction",
-        lambda _connection, _views, **kwargs: search_patches.append(kwargs) or 1,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        persistence,
-        "load_relation_source_rows_sql",
-        lambda: (_ for _ in ()).throw(AssertionError("full relation source load is forbidden")),
-    )
-
+    monkeypatch.setattr(scoped, "publish_affected_relation_projection", publish)
+    monkeypatch.setattr(persistence, "load_relation_source_rows_sql", forbidden)
+    monkeypatch.setattr(persistence, "_commit_structural_relation_projection", forbidden)
     result = persistence._patch_structural_relation_projection(
-        Connection(),
-        previous_entries={
-            "track.flac": {
-                "artist": "Ovderhead",
-                "album_artist": "Ovderhead",
-            },
-        },
-        updated_entries={
-            "track.flac": {
-                "artist": "Overhead",
-                "album_artist": "Overhead",
-            },
-        },
+        connection,
+        previous_entries={"old.flac": {"album_id": 41, "artist": "Ovderhead"}},
+        updated_entries={"new.flac": {"album_id": 42, "artist": "Overhead"}},
         source_album_vacated=True,
+        affected_album_ids=[43],
+        expected_gallery_generation=7,
     )
-
-    assert result["projection_mode"] == "targeted"
-    assert result["orphaned_source_artists"] == ["Ovderhead"]
-    assert result["relation_views"]["artists"] == ["Overhead", "Unrelated Artist"]
-    assert len(saved_snapshots) == 1
-    assert len(search_patches) == 1
-    assert search_patches[0]["affected_artist_names"] == {"Ovderhead", "Overhead"}
-    assert search_patches[0]["relations_last_built"] == 100.0
-    metadata = saved_snapshots[0][persistence.RELATION_PROJECTION_METADATA_KEY]
-    assert metadata["source_fingerprint"] == "a" * 64
-    assert metadata["built_from_fingerprint"] == "a" * 64
-    assert metadata["targeted_patch_reason"] == "structural_tag_edit"
-    assert "targeted_patch_timestamp" in metadata
+    assert result is published
+    assert calls == [{"album_ids": {41, 42, 43}, "track_paths": {"old.flac", "new.flac"},
+                      "reason": "structural_tag_edit", "config": None,
+                      "expected_gallery_generation": 7}]
 
 
 def test_stale_structural_relation_patch_reports_authoritative_orphan(monkeypatch):
     from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import scoped_relation_projection as scoped
 
-    class Cursor:
-        def fetchone(self):
-            return {"scan_cache": {}}
+    # The indexed publisher owns orphan detection, not a retained legacy snapshot.
+    authoritative = {"projection_mode": "targeted", "orphaned_source_artists": ["Ovderhead"]}
+    calls = []
 
-    class Connection:
-        def execute(self, sql, _params=None):
-            assert sql == persistence._load_scan_snapshot_sql()
-            return Cursor()
+    def publish(connection, **scope):
+        calls.append(scope)
+        return authoritative
 
-    monkeypatch.setattr(
-        persistence,
-        "_orphaned_structural_source_artists",
-        lambda _connection, artist_names: (
-            ["Ovderhead"] if artist_names == {"Ovderhead"} else []
-        ),
-    )
-
+    monkeypatch.setattr(scoped, "publish_affected_relation_projection", publish)
     result = persistence._patch_structural_relation_projection(
-        Connection(),
-        previous_entries={
-            "track.flac": {"artist": "Ovderhead", "album_artist": "Ovderhead"},
-        },
-        updated_entries={
-            "track.flac": {"artist": "Overhead", "album_artist": "Overhead"},
-        },
-        source_album_vacated=True,
+        object(), previous_entries={"track.flac": {"album_id": 41}},
+        updated_entries={}, source_album_vacated=True,
     )
-
-    assert result["projection_mode"] == "stale"
+    assert result is authoritative
     assert result["orphaned_source_artists"] == ["Ovderhead"]
+    assert calls[0]["album_ids"] == {41}
+    assert calls[0]["track_paths"] == {"track.flac"}
 
 
 def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch):
     from music_app.services import scan_cache_persistence as persistence
-    from music_app.services.cache import serialize_relation_views
+    from music_app.services import scoped_relation_projection as scoped
 
-    monkeypatch.setattr(persistence, "Jsonb", None)
-    relation_views = {
-        "artists": ["Ovderhead", "Overhead"],
-        "artists_sidebar": [
-            {"artist": "Ovderhead", "count": 1},
-            {"artist": "Overhead", "count": 1},
-        ],
-        "family_to_artists": {"Overhead Family": ["Ovderhead"]},
-        "folder_related": {},
-        "sidebar_families": [],
-        "alias_to_canonical": {},
-        "canonical_to_aliases": {},
-    }
-    snapshot = {
-        "relation_views": serialize_relation_views(relation_views),
-        "relations_last_built": 100.0,
-        persistence.RELATION_PROJECTION_METADATA_KEY: (
-            persistence.build_ready_relation_projection_metadata(
-                "b" * 64,
-                reason="scan",
-                duration_ms=1.0,
-            )
-        ),
-    }
-    saved_snapshots: list[dict[str, object]] = []
+    # Incompatible indexed evidence now fails closed; the wrapper cannot replace
+    # that failure with a successful stale snapshot or a global rebuild.
+    calls = []
 
-    class Cursor:
-        def __init__(self, rows=None):
-            self.rows = list(rows or [])
+    def reject(connection, **scope):
+        calls.append(scope)
+        raise RuntimeError("Relation compatibility evidence changed")
 
-        def fetchone(self):
-            return self.rows[0] if self.rows else None
+    def forbidden(*args, **kwargs):
+        pytest.fail("incompatible evidence must not trigger a full rebuild")
 
-        def fetchall(self):
-            return self.rows
-
-    class Connection:
-        def execute(self, sql, params=None):
-            if sql == persistence._load_scan_snapshot_sql():
-                return Cursor([{"scan_cache": snapshot}])
-            if sql == persistence._save_scan_snapshot_sql():
-                saved_snapshots.append(params["scan_cache"])
-                return Cursor()
-            if "with source_artist_names as" in sql:
-                assert params == {"artist_names": ["Ovderhead"]}
-                return Cursor([{"artist_name": "Ovderhead"}])
-            raise AssertionError(f"Unexpected SQL in stale fallback: {sql}")
-
-    monkeypatch.setattr(
-        persistence,
-        "patch_artist_search_projection_in_transaction",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("unsafe relation shape must not patch search rows")
-        ),
-        raising=False,
-    )
-
-    result = persistence._patch_structural_relation_projection(
-        Connection(),
-        previous_entries={"track.flac": {"artist": "Ovderhead"}},
-        updated_entries={"track.flac": {"artist": "Overhead"}},
-        source_album_vacated=True,
-    )
-
-    assert result == {
-        "projection_mode": "stale",
-        "rebuild_reason": "structural_tag_edit_requires_full_projection",
-        "orphaned_source_artists": ["Ovderhead"],
-    }
-    assert saved_snapshots[0][persistence.RELATION_PROJECTION_METADATA_KEY]["status"] == "stale"
+    monkeypatch.setattr(scoped, "publish_affected_relation_projection", reject)
+    monkeypatch.setattr(persistence, "_commit_structural_relation_projection", forbidden)
+    with pytest.raises(RuntimeError, match="Relation compatibility evidence changed"):
+        persistence._patch_structural_relation_projection(
+            object(), previous_entries={"track.flac": {"album_id": 41}},
+            updated_entries={}, source_album_vacated=True,
+        )
+    assert len(calls) == 1
+    assert calls[0]["album_ids"] == {41}
 
 
 def test_unrebuilt_projection_with_changed_fingerprint_stays_stale_and_preserves_provenance(
@@ -3610,6 +3883,12 @@ def test_explicit_postgres_rebuild_certifies_only_canonical_source_projection(mo
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     connection = FakeConnection()
     canonical = _complete_projection_for_certification("Canonical Source")
+    connection.projection_database.source_rows = [{
+        "album_id": 1, "owner_artist_id": 1, "owner_artist_name": "Canonical Source",
+        "album_artist": "Canonical Source", "member_artist_id": 1,
+        "member_artist_name": "Canonical Source", "featured_kind": "owner",
+        "track_file_id": 1, "track_path": "C:/Music/Canonical Source/Album/01.flac",
+    }]
     monkeypatch.setattr(
         scan_cache_persistence,
         "build_relation_views_from_postgres_rows",
@@ -3655,7 +3934,7 @@ def test_unrelated_write_preserves_healthy_current_projection_without_invoking_b
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     canonical = _complete_projection_for_certification("Persisted Canonical")
-    connection = FakeConnection(snapshot_rows=[{"scan_cache": {
+    connection = FakeConnection(relation_ready=True, snapshot_rows=[{"scan_cache": {
         "library_root_identity": "root-identity",
         "relation_views": canonical,
         "relations_last_built": 8.0,
@@ -3667,6 +3946,12 @@ def test_unrelated_write_preserves_healthy_current_projection_without_invoking_b
         },
     }}])
     monkeypatch.setattr(scan_cache_persistence, "relation_source_fingerprint", lambda _rows: "same")
+    connection.projection_database.source_rows = [{
+        "album_id": 1, "owner_artist_id": 1, "owner_artist_name": "Persisted Canonical",
+        "album_artist": "Persisted Canonical", "member_artist_id": 1,
+        "member_artist_name": "Persisted Canonical", "featured_kind": "owner",
+        "track_file_id": 1, "track_path": "C:/Music/Persisted Canonical/Album/01.flac",
+    }]
     monkeypatch.setattr(
         scan_cache_persistence,
         "build_relation_views_from_postgres_rows",
@@ -3899,8 +4184,9 @@ def test_postgres_scan_cache_adapter_loads_snapshot_without_file_cache_json(monk
     assert len(connection.executed) == 3
 
 
+@pytest.mark.parametrize("physical_compilation", ["absent", None, True, False])
 def test_postgres_scan_cache_hydration_overlays_authoritative_album_compilation_state(
-    monkeypatch,
+    monkeypatch, physical_compilation,
 ):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
@@ -3929,6 +4215,11 @@ def test_postgres_scan_cache_hydration_overlays_authoritative_album_compilation_
         "library_root_category": "main_library",
         "exception_type": None,
     }
+    from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION, file_metadata_schema_is_current
+    file_entry.update(metadata_schema_version=FILE_METADATA_SCHEMA_VERSION, release_date=None)
+    if physical_compilation != "absent":
+        file_entry["compilation_tag"] = physical_compilation
+    file_entry = scan_cache_persistence.serialize_file_entry(file_entry)
     connection = FakeConnection(
         snapshot_rows=[
             {
@@ -3962,6 +4253,10 @@ def test_postgres_scan_cache_hydration_overlays_authoritative_album_compilation_
 
     assert error is None
     assert file_cache[track_path]["is_compilation"] is False
+    assert ("compilation_tag" in file_cache[track_path]) is (physical_compilation != "absent")
+    if physical_compilation != "absent":
+        assert file_cache[track_path]["compilation_tag"] is physical_compilation
+    assert file_metadata_schema_is_current(file_cache[track_path]) is (physical_compilation != "absent")
     load_sql = next(
         sql
         for sql, _params in connection.executed
@@ -3993,6 +4288,8 @@ def test_postgres_scan_cache_metadata_schema_version_survives_inventory_hydratio
         "duration_seconds": 178,
         "cover_path": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        "release_date": None,
+        "compilation_tag": None,
     }
     album = SimpleNamespace(
         key="artist::album",
@@ -4876,11 +5173,14 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services.cache import serialize_relation_views
 
-    views = {
-        'artists': ['Owner'], 'artists_sidebar': [{'artist': 'Owner', 'count': 1}],
-        'family_to_artists': {}, 'folder_related': {}, 'sidebar_families': [],
-        'alias_to_canonical': {'Owner': 'Owner'}, 'canonical_to_aliases': {'Owner': ['Owner']},
-    }
+    from music_app.services.relation_projection_builder import build_postgres_relation_views
+    source_rows = [{
+        "album_id": 1, "owner_artist_id": 1, "owner_artist_name": "Owner",
+        "album_artist": "Owner", "member_artist_id": 1, "member_artist_name": "Owner",
+        "featured_kind": "owner", "track_file_id": 1,
+        "track_path": "C:/Music/Owner/Album/01.flac",
+    }]
+    views = build_postgres_relation_views(source_rows)
     snapshot = {
         'relation_views': serialize_relation_views(views), 'relations_last_built': 123.0,
         'relation_projection': persistence.build_ready_relation_projection_metadata(
@@ -4888,7 +5188,8 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
     }
     snapshot['relation_projection']['status'] = projection_state
     monkeypatch.setattr(persistence, '_jsonb', lambda value: value)
-    connection = FakeConnection(snapshot_rows=[{'scan_cache': snapshot}])
+    connection = FakeConnection(relation_ready=True, snapshot_rows=[{'scan_cache': snapshot}])
+    connection.projection_database.source_rows = source_rows
     from music_app.services.relation_projection_postgres import _artist_search_projection_rows
     search_rows = [dict(row, builder_version=snapshot['relation_projection']['builder_version'],
                         source_fingerprint='same-source', relations_last_built=123.0)
@@ -4901,7 +5202,11 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
     def execute(sql, params=None):
         if sql == persistence._load_relation_projection_sql():
             connection.executed.append((sql, params))
-            return FakeCursor([dict(snapshot, artist_search_projection=search_rows)])
+            return FakeCursor([dict(
+                snapshot,
+                artist_search_projection=search_rows,
+                **connection.normalized_projection_state(),
+            )])
         return original_execute(sql, params)
     monkeypatch.setattr(connection, 'execute', execute)
     monkeypatch.setattr(persistence, 'relation_source_fingerprint', lambda rows: 'same-source')
@@ -4922,7 +5227,8 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
     assert result['relations_last_built'] == 123.0
     assert serialize_relation_views(result['relation_views']) == snapshot['relation_views']
     assert repairs == ([] if search_state == 'ready' else ['search'])
-    writes = [(sql, params) for sql, params in connection.executed if params is not None]
+    writes = [(sql, params) for sql, params in connection.executed
+              if sql == persistence._save_scan_snapshot_sql()]
     if projection_state == 'ready':
         assert writes == []
     else:
@@ -5035,3 +5341,40 @@ def test_targeted_reconciliation_does_not_reuse_invalid_relation_projection(monk
         connection, {}, reason='targeted_reconciliation')
     assert events == ['build', 'family', 'search']
     assert result['relations_last_built'] > 123.0
+
+
+@pytest.mark.parametrize('change', ['reattach', 'delete'])
+def test_targeted_watcher_preserves_detached_prewrite_scope(monkeypatch, change):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import scoped_relation_projection as scoped
+    path = 'C:/Music/Detached/track.flac'
+    selected = []
+
+    class Connection(FakeConnection):
+        def execute(self, sql, params=None):
+            result = super().execute(sql, params)
+            if sql == persistence._load_targeted_album_memberships_sql():
+                assert 'left join library.local_albums' in sql
+                assert 'library.local_tracks.album_id' in sql
+                assert 'library.local_tracks.library_id = bootstrap_context.library_id' in sql
+                return FakeCursor([{'private_path': path, 'album_id': None, 'album_key': None}]
+                                  if path in params['active_paths'] else [])
+            if sql == persistence._targeted_missing_candidates_sql():
+                return FakeCursor([{'id': 1, 'private_path': path, 'root_id': 'main', 'root_path': ''}])
+            if sql == persistence._mark_missing_track_files_sql():
+                return FakeCursor([{'affected_album_key': None}])
+            if 'as inventory_mutation_revision' in _normalized_sql(sql):
+                return FakeCursor([{'inventory_mutation_revision': 1}])
+            return result
+
+    monkeypatch.setattr(persistence, 'Jsonb', None)
+    monkeypatch.setattr(scoped, 'publish_affected_relation_projection', lambda _connection, **kwargs: selected.append(kwargs) or {})
+    adapter = persistence.PostgresScanCacheAdapter(
+        {'ALBUM_HAVEN_APP_DATABASE_URL': 'postgresql://detached-watcher-test'}, connect=lambda _: Connection())
+    entry = {'path': path, 'album': 'Attached Album', 'album_artist': 'Artist', 'artist': 'Artist',
+             'title': 'Track', 'mtime': 1.0, 'size': 123, 'library_root_id': 'main',
+             'track_number': 1, 'disc_number': 1, 'duration_seconds': 120}
+    kwargs = {'active_file_entries': {path: entry}} if change == 'reattach' else {'active_file_entries': {}, 'deleted_paths': (path,)}
+    adapter.persist_targeted_inventory_mutation(root_id='main', **kwargs)
+    assert len(selected) == 1
+    assert selected[0]['album_ids'] == {0}

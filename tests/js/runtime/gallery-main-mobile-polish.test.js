@@ -178,3 +178,35 @@ for (const mobile of [false, true]) test(`Gallery View ${mobile ? 'mobile popup 
   configured.onOpen();
   assert.equal(nextFamilyCloses, mobileLayout ? 1 : 0);
 });
+
+test('the browser tab names the open page and returns to the library title once it closes (Testimony)', () => {
+  const element = () => ({
+    hidden: false, inert: false, dataset: {}, textContent: '',
+    classList: { toggle() {}, contains: () => false },
+    querySelectorAll: () => [], querySelector: () => null, appendChild() {}, remove() {},
+    setAttribute() {}, removeAttribute() {}, getAttribute: () => null,
+  });
+  const nodes = new Map();
+  const document = {
+    title: 'Album Haven v1.0',
+    getElementById: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
+    createElement: () => element(),
+    querySelectorAll: () => [],
+    body: { classList: { add() {}, remove() {} } },
+  };
+  const window = { innerWidth: 390 };
+  const context = load('mobile-navigation.js', ['syncMobilePageShell', 'mobilePageState'], {
+    window, document, state: { ui: {}, utility: {} }, syncMobileAlbumHeader() {}, syncMobileLoopHeader() {},
+  });
+  context.mobilePageState.pages.push({ kind: 'album', title: 'Testimony', subtitle: '' });
+  context.syncMobilePageShell();
+  assert.equal(document.title, 'Testimony — Album Haven');
+  context.mobilePageState.pages.pop();
+  context.syncMobilePageShell();
+  assert.equal(document.title, 'Album Haven v1.0', 'a closed page never leaves its name on the tab');
+  context.mobilePageState.pages.push({ kind: 'album', title: 'Testimony', subtitle: '' });
+  context.syncMobilePageShell();
+  window.innerWidth = 1280;
+  context.syncMobilePageShell();
+  assert.equal(document.title, 'Album Haven v1.0', 'a wide window has no page header, so the tab is the library again');
+});

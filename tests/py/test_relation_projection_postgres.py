@@ -89,6 +89,7 @@ class _ProjectionDatabase:
         scan_cache=None,
         source_rows=None,
         family_links=None,
+        current_family_links=None,
         search_projection=None,
         valid_artist_keys=None,
         before_failure_merge=None,
@@ -99,7 +100,15 @@ class _ProjectionDatabase:
         self.scan_cache = deepcopy(scan_cache or {})
         self.source_rows = list(source_rows or [])
         self.family_links = deepcopy(family_links or [])
+        self.current_family_links = deepcopy(current_family_links or [])
         self.search_projection = deepcopy(search_projection or [])
+        self.legacy_search_projection = []
+        self.relation_facts = {}
+        self.relation_entries = {}
+        self.compatibility_entries = {}
+        self.compatibility_state = {}
+        self.relation_state = deepcopy(self.scan_cache.get(projection.RELATION_PROJECTION_METADATA_KEY) or {})
+        self.transaction_number = 0
         self.valid_artist_keys = set(
             valid_artist_keys
             or {
@@ -112,6 +121,8 @@ class _ProjectionDatabase:
         self.before_failure_merge = before_failure_merge
         self.before_advisory_lock = before_advisory_lock
         self.advisory_lock_count = 0
+        self.inventory_mutation_revision = 0
+        self.source_gallery_generation = 0
         self.fail_on_replace = fail_on_replace
         self.fail_on_scan_cache_save = fail_on_scan_cache_save
 
@@ -122,9 +133,18 @@ class _ProjectionDatabase:
 class _ProjectionConnection:
     def __init__(self, database):
         self.database = database
+        database.transaction_number += 1
+        self.transaction_xid = str(database.transaction_number)
         self.scan_cache = deepcopy(database.scan_cache)
         self.family_links = deepcopy(database.family_links)
+        self.current_family_links = deepcopy(database.current_family_links)
         self.search_projection = deepcopy(database.search_projection)
+        self.legacy_search_projection = deepcopy(database.legacy_search_projection)
+        self.relation_facts = deepcopy(database.relation_facts)
+        self.relation_entries = deepcopy(database.relation_entries)
+        self.compatibility_entries = deepcopy(database.compatibility_entries)
+        self.compatibility_state = deepcopy(database.compatibility_state)
+        self.relation_state = deepcopy(database.relation_state)
 
     def __enter__(self):
         return self
@@ -133,7 +153,14 @@ class _ProjectionConnection:
         if exc_type is None:
             self.database.scan_cache = self.scan_cache
             self.database.family_links = self.family_links
+            self.database.current_family_links = self.current_family_links
             self.database.search_projection = self.search_projection
+            self.database.legacy_search_projection = self.legacy_search_projection
+            self.database.relation_facts = self.relation_facts
+            self.database.relation_entries = self.relation_entries
+            self.database.compatibility_entries = self.compatibility_entries
+            self.database.compatibility_state = self.compatibility_state
+            self.database.relation_state = self.relation_state
             self.database.events.append("commit")
         else:
             self.database.events.append("rollback")
@@ -141,6 +168,51 @@ class _ProjectionConnection:
 
     def execute(self, sql, params=None):
         self.database.executed.append((sql, params))
+        from music_app.services import scoped_relation_projection as scoped
+        if sql == "select to_regclass('library.gallery_projection_state') is not null as installed":
+            return _Cursor([{'installed': False}])
+        if sql == scoped._CONTEXT:
+            return _Cursor([{
+                'library_id': 1, 'metadata': deepcopy(self.scan_cache.get(projection.RELATION_PROJECTION_METADATA_KEY) or {}),
+                'relations_last_built': self.scan_cache.get('relations_last_built'),
+                'normalized_builder_version': self.relation_state.get('builder_version'),
+                'normalized_source_fingerprint': self.relation_state.get('source_fingerprint'),
+                'normalized_publication_xid': self.relation_state.get('publication_xid'),
+            }])
+        if sql.startswith('select id,album_key from library.local_albums'):
+            return _Cursor([{'id': album_id, 'album_key': str(album_id)}
+                            for album_id in sorted({row['album_id'] for row in self.database.source_rows})])
+        if sql.startswith('delete from library.local_relation_album_facts'):
+            self.relation_facts = {}
+            return _Cursor()
+        if sql.startswith('delete from library.local_relation_projection_entries'):
+            self.relation_entries = {}
+            return _Cursor()
+        if sql.startswith('delete from library.local_relation_compatibility_entries'):
+            self.compatibility_entries = {}
+            return _Cursor()
+        if sql.startswith('insert into library.local_relation_compatibility_entries'):
+            self.compatibility_entries.update({(row['section'], row['entry_key']): row for row in _unwrap_json(params['rows'])})
+            return _Cursor()
+        if sql.startswith('insert into library.local_relation_compatibility_state'):
+            self.compatibility_state = {
+                'legacy_semantics': params[1], 'current_semantics': params[2],
+                'source_fingerprint': params[3], 'relations_last_built': params[4],
+                'publication_xid': self.relation_state.get('publication_xid'),
+            }
+            return _Cursor()
+        if sql.startswith('insert into library.local_relation_album_facts'):
+            self.relation_facts.update({row['album_id']: row for row in _unwrap_json(params['rows'])})
+            return _Cursor()
+        if sql.startswith('insert into library.local_relation_projection_entries'):
+            self.relation_entries.update({(row['section'], row['entry_key']): row for row in _unwrap_json(params['rows'])})
+            return _Cursor()
+        if sql.startswith('insert into library.local_relation_projection_state'):
+            self.relation_state = {'builder_version': params[1], 'source_fingerprint': params[2],
+                                   'publication_xid': self.transaction_xid}
+            return _Cursor()
+        if sql.startswith('delete from library.local_relation_dirty_albums'):
+            return _Cursor()
         if sql == projection.inventory_publication_advisory_lock_sql():
             self.database.events.append("inventory_advisory_lock")
             return _Cursor([])
@@ -154,9 +226,11 @@ class _ProjectionConnection:
                 self.scan_cache = deepcopy(self.database.scan_cache)
             self.database.events.append("advisory_lock")
             return _Cursor([{}])
-        if "metadata -> 'scan_cache' as scan_cache" in sql:
+        if sql == projection._load_scan_cache_sql():
             return _Cursor([{
                 "scan_cache": deepcopy(self.scan_cache),
+                "inventory_mutation_revision": self.database.inventory_mutation_revision,
+                "source_gallery_generation": self.database.source_gallery_generation,
                 "artist_search_projection": deepcopy(self.search_projection),
             }])
         if "relation_views" in sql and projection.RELATION_PROJECTION_METADATA_KEY in sql:
@@ -172,7 +246,7 @@ class _ProjectionConnection:
             self.database.events.append("source_load")
             return _Cursor(self.database.source_rows)
         if "replace_local_artist_search_projection" in sql:
-            self.search_projection = [
+            rows = [
                 {
                     **deepcopy(row),
                     "builder_version": params["builder_version"],
@@ -181,8 +255,12 @@ class _ProjectionConnection:
                 }
                 for row in _unwrap_json(params["rows"])
             ]
+            if "replace_local_artist_search_projection_current" in sql:
+                self.search_projection = rows
+            else:
+                self.legacy_search_projection = rows
             self.database.events.append("search_projection_replace")
-            return _Cursor([{"replacement_row_count": len(self.search_projection)}])
+            return _Cursor([{"replacement_row_count": len(rows)}])
         if "replacement_row_count" in sql:
             rows = _unwrap_json(params["rows"])
             resolved_count = sum(
@@ -217,10 +295,9 @@ class _ProjectionConnection:
                 raise RuntimeError("family replacement failed")
             relationship_source = params["relationship_source"]
             rows = _unwrap_json(params["rows"])
-            self.family_links = [
-                row for row in self.family_links if row["source_family"] != relationship_source
-            ]
-            self.family_links.extend(
+            table = "current_family_links" if "local_artist_family_links_current" in sql else "family_links"
+            links = [row for row in getattr(self, table) if row["source_family"] != relationship_source]
+            links.extend(
                 {
                     "source_family": relationship_source,
                     "artist_key": row["artist_key"],
@@ -229,6 +306,7 @@ class _ProjectionConnection:
                 }
                 for row in rows
             )
+            setattr(self, table, links)
             self.database.events.append("family_replace")
             return _Cursor()
         if "jsonb_build_object('scan_cache'" in sql:
@@ -905,10 +983,12 @@ def test_v2_rebuild_atomically_replaces_projection_links_before_ready_and_preser
 
     assert [row["source_family"] for row in database.family_links] == [
         "manual",
-        "folder_derived_runtime",
     ]
-    assert database.family_links[-1]["artist_key"] == "morse portnoy george"
-    assert database.family_links[-1]["family_artist_key"] == "morse, portnoy & george"
+    assert [row["source_family"] for row in database.current_family_links] == [
+        "folder_derived_current_v11",
+    ]
+    assert database.current_family_links[-1]["artist_key"] == "morse portnoy george"
+    assert database.current_family_links[-1]["family_artist_key"] == "morse, portnoy & george"
     assert database.events.index("family_replace") < database.events.index("scan_cache_save")
     assert database.events.index("search_projection_replace") < database.events.index(
         "scan_cache_save"
@@ -943,7 +1023,7 @@ def test_startup_projection_reuses_inventory_whitespace_identity_for_both_direct
     assert result["ready"] is True
     assert {
         (row["artist_key"], row["family_artist_key"])
-        for row in database.family_links
+        for row in database.current_family_links
     } == {
         ("morse portnoy george", "paul gilbert"),
         ("paul gilbert", "morse portnoy george"),
@@ -1022,6 +1102,10 @@ def test_v2_rebuild_clears_only_projection_owned_links_when_projection_is_empty(
     )
     database = _ProjectionDatabase(
         source_rows=_morse_rows(),
+        current_family_links=[{
+            "source_family": "folder_derived_current_v11",
+            "artist_key": "old-current", "family_artist_key": "old-related", "metadata": {},
+        }],
         family_links=[
             {
                 "source_family": "folder_derived_runtime",
@@ -1040,6 +1124,7 @@ def test_v2_rebuild_clears_only_projection_owned_links_when_projection_is_empty(
 
     projection.ensure_relation_projection_ready(_config(), connect=database.connect)
 
+    assert database.current_family_links == []
     assert database.family_links == [
         {
             "source_family": "manual",
@@ -1074,6 +1159,7 @@ def test_invalid_projection_pair_rolls_back_without_publishing_ready(monkeypatch
     assert "'display': 'Missing Artist'" in message
     assert "'key': 'missing artist'" in message
     assert database.family_links == original_links
+    assert database.current_family_links == []
     assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["status"] == "failed"
     assert "scan_cache_save" not in database.events
 
@@ -1109,6 +1195,7 @@ def test_scan_cache_write_failure_rolls_back_replaced_links_and_never_commits_re
         projection.ensure_relation_projection_ready(_config(), connect=database.connect)
 
     assert database.family_links == original_links
+    assert database.current_family_links == []
     assert database.search_projection == [
         {
             "normalized_artist_key": "old alias",
@@ -1537,6 +1624,47 @@ def test_projection_revalidates_changed_sources_under_lock_then_rebuilds_outside
     assert first_lock < next_source_load < next_fingerprint < next_build
 
 
+@pytest.mark.parametrize("initial_status", ["ready", "stale"])
+@pytest.mark.parametrize("changed_marker", ["inventory_mutation_revision", "source_gallery_generation"])
+def test_projection_retries_inventory_revision_change_with_unchanged_metadata(monkeypatch, initial_status, changed_marker):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    initial_rows = _morse_rows()
+    changed_rows = deepcopy(initial_rows)
+    changed_rows[1].update(owner_artist_name="Paul Gilbert", album_artist="Paul Gilbert",
+                           member_artist_name="Paul Gilbert")
+    metadata = {
+        "status": initial_status,
+        "builder_version": "local-relation-builder-v9",
+        "source_fingerprint": "a" * 64,
+        "built_from_fingerprint": "a" * 64,
+    }
+
+    def change_sources_at_first_lock(database, lock_count):
+        if lock_count == 1:
+            database.source_rows = changed_rows
+            database.valid_artist_keys.add("paul gilbert")
+            setattr(database, changed_marker, getattr(database, changed_marker) + 1)
+            assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY] == metadata
+
+    database = _ProjectionDatabase(
+        scan_cache={"relation_views": _complete_relation_views(),
+                    projection.RELATION_PROJECTION_METADATA_KEY: metadata},
+        source_rows=initial_rows, before_advisory_lock=change_sources_at_first_lock,
+    )
+
+    result = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+
+    assert database.events.count("source_load") == 2
+    assert "Paul Gilbert" in result["relation_views"]["artists"]
+    assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"] == (
+        projection.relation_source_fingerprint(changed_rows)
+    )
+    assert "inventory_mutation_revision" not in database.scan_cache
+    assert "as inventory_mutation_revision" in projection._load_scan_cache_sql()
+    assert "source_gallery_generation" not in database.scan_cache
+    assert "as source_gallery_generation" in projection._load_scan_cache_sql()
+
+
 def test_exhausted_retries_do_not_overwrite_concurrently_published_ready_metadata(monkeypatch):
     monkeypatch.setattr(projection, "Jsonb", None)
     rows = _morse_rows()
@@ -1614,12 +1742,13 @@ def test_relation_projection_shapes_sources_before_short_locked_publication(monk
             "commit",
         }
     ]
-    assert rebuild_events[-8:] == [
+    assert rebuild_events[-9:] == [
         "source_load",
         "fingerprint",
         "pure_build",
         "inventory_advisory_lock",
         "advisory_lock",
+        "family_replace",
         "family_replace",
         "scan_cache_save",
         "commit",
@@ -1676,3 +1805,24 @@ def test_concurrent_relation_readiness_callers_share_one_source_build(monkeypatc
         if not cancel_follower:
             assert follower.result(timeout=5) == {"status": "ready"}
     assert config["ALBUM_HAVEN_APP_DATABASE_URL"] not in relations._RELATION_REPAIRS
+
+
+@pytest.mark.parametrize(
+    ('relation_views', 'expected_reason'),
+    [(None, 'missing_projection'), ({'alias_to_canonical': {}}, 'incomplete_projection')],
+)
+def test_missing_normalized_index_preserves_legacy_readiness_reason(relation_views, expected_reason):
+    scan_cache = {'normalized_relation_ready': False, 'relation_views': relation_views}
+    assert projection.relation_projection_readiness_stale_reason(scan_cache) == expected_reason
+
+
+def test_valid_legacy_projection_requires_normalized_index():
+    scan_cache = {
+        'relation_views': _complete_relation_views(),
+        'normalized_relation_ready': False,
+        projection.RELATION_PROJECTION_METADATA_KEY: projection.build_ready_relation_projection_metadata(
+            'current-source', reason='existing_ready_projection', duration_ms=1,
+        ),
+    }
+    assert projection.relation_projection_stale_reason(scan_cache) == ''
+    assert projection.relation_projection_readiness_stale_reason(scan_cache) == 'normalized_relation_index_not_initialized'

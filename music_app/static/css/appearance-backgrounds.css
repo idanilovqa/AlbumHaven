@@ -73,8 +73,7 @@ html .recent-search-popover { background: var(--appearance-panel-background, var
 html .gallery-options-menu,
 html .status-context-menu,
 html .album-card-context-menu { background: rgba(var(--appearance-panel-background-rgb, 28, 31, 38), 0.98); }
-html .utility-problem-filter-menu,
-html .track-modal-version-context-menu { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98); }
+html .utility-problem-filter-menu { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98); }
 html .repair-progress-card { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.96); }
 html .utility-loop-speed-menu { background: rgba(var(--appearance-panel-background-rgb, 8, 28, 24), 0.98); }
 html .non-album-modal-dialog {
@@ -316,23 +315,24 @@ html .cover-lookup-drawer {
 :root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); }
 .shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
 .shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.gallery-switch):not(.gallery-type-choice):not(.gallery-menu-action):not(.album-card *):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.gallery-info-button):not(.navigation-tree-item):not(.search-field-button):not(.cover-lookup-task-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.gallery-switch):not(.gallery-type-choice):not(.gallery-menu-action):not(.album-card *):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.gallery-info-button):not(.ui-text-link):not(.navigation-tree-item):not(.search-field-button):not(.cover-lookup-task-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-item-action-hover-border, var(--appearance-line));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):where(:not(.gallery-switch):not(.gallery-bar__actions .gallery-action-button):not(.gallery-bar__actions .gallery-view-choice)):not(.artist-family-panel__artist):not(.navigation-tree-item):not(.track-modal-cover-button):not(.tag-editor-track):not(.tag-editor-track *):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):where(:not(.gallery-switch):not(.gallery-bar__actions .gallery-action-button):not(.gallery-bar__actions .gallery-view-choice)):not(.artist-family-panel__artist):not(.navigation-tree-item):not(.track-modal-cover-button):not(.tag-editor-track):not(.tag-editor-track *):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.ui-text-link):not(.in-page-tabs > [role='tab']):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.utility-list-item):not(.account-menu-item):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.artist-family-panel__artist):not(.utility-list-item):not(.account-menu-item):not(.navigation-tree-item):not(.tag-editor-track):not(.tag-editor-track *):not(.track-modal-cover-button):not(.ui-button--quiet):not(.ui-text-link):not(.in-page-tabs > [role='tab']):not(.loop-edit-action):not(.loop-range-handle):not(.album-card *):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
 :root {
   --appearance-control-selected: color-mix(in srgb, var(--appearance-ink, var(--text, #eeeeee)) 45%, var(--appearance-control, var(--panel, #171717)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-control-selected); }
-:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-control-selected); outline-offset: 1px; }
+/* Radios take no hover outline; their option label shows the hand cursor (.ui-radio-option). */
+:root input[type='checkbox']:not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-control-selected); outline-offset: 1px; }
 :root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
 :root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.ui-input-action *):not(.gallery-info-button):focus-visible {
   outline: 1px solid var(--appearance-interaction-outline, var(--appearance-focus-outline, var(--appearance-play, var(--appearance-accent))));
@@ -415,7 +415,7 @@ html .cover-lookup-drawer {
 }
 :root[data-appearance-palette] :is(.utility-modal-header, .track-modal-header, .utility-tabs, .utility-tab) { background: var(--appearance-panel-background); border-color: var(--appearance-line); }
 :root[data-appearance-palette] :is(.utility-list-item-meta, .utility-list-item-issues, .utility-rule-description, .utility-section-subtitle) { color: var(--appearance-muted); }
-:root[data-appearance-palette] :is(.cover, .cover-placeholder, .track-modal-cover-shell .cover-placeholder, .utility-detail-cover, .utility-detail-cover-placeholder, .version-picker-option-cover, .version-picker-option-cover-placeholder) {
+:root[data-appearance-palette] :is(.cover, .cover-placeholder, .track-modal-cover-shell .cover-placeholder, .utility-detail-cover, .utility-detail-cover-placeholder) {
   color: var(--appearance-muted);
   border-color: var(--appearance-line);
   background: linear-gradient(145deg, color-mix(in srgb, var(--appearance-card) 82%, var(--appearance-main-surface)), var(--appearance-control));
@@ -886,7 +886,8 @@ html .cover-lookup-drawer {
   border-radius: 16px;
   background: color-mix(in srgb, var(--appearance-card) 90%, transparent);
 }
-.appearance-album-layout-grid { display: grid; gap: 9px; margin-top: 13px; }
+/* Every layout choice is the same size, whatever the length of its description. */
+.appearance-album-layout-grid { display: grid; grid-auto-rows: 1fr; gap: 9px; margin-top: 13px; }
 .appearance-album-layout-card {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr) 20px;
@@ -1133,7 +1134,7 @@ html .cover-lookup-drawer {
   .cover-lookup-drawer, .account-menu, .member-actions-menu,
   .gallery-options-menu, .status-context-menu, .album-card-context-menu,
   .recent-search-popover, .utility-problem-filter-menu,
-  .track-modal-version-context-menu, .repair-progress-card, .utility-loop-speed-menu
+  .repair-progress-card, .utility-loop-speed-menu
 ):not(:where([data-trigger-anchor-context='content'])) {
   --appearance-focus-outline: var(--appearance-focus);
   --appearance-interaction-outline: var(--appearance-panel-interaction-outline);

@@ -825,6 +825,71 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
     { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
 });
 
+test('desktop Loose Tracks owns a reloadable URL with Back and Forward history', () => {
+  const location = { href: 'https://example.test/?surface=albums' };
+  let pushedUrl = '';
+  const history = {
+    state: {},
+    pushState(snapshot, _title, url) {
+      this.state = snapshot;
+      pushedUrl = String(url);
+      location.href = new URL(url, location.href).href;
+    },
+  };
+  const nonAlbum = {};
+  const restored = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: { innerWidth: 1180, location, history },
+    document: { getElementById: id => id === 'non-album-modal' ? nonAlbum : null },
+    state: { view: { surface: { active: 'albums' } }, ui: {}, status: {} },
+    buildUrl: () => '/?surface=albums',
+    mobileGalleryParentIsSettled: () => false,
+    captureMobileParentGalleryAnchorArtist: () => '',
+    closeArtistsDrawer() {},
+    closeGalleryMainSurface() {},
+  });
+  context.syncMobilePageShell = () => {};
+  context.cleanupMobilePage = descriptor => restored.push(`closed:${descriptor.kind}`);
+  context.restoreMobileGalleryParent = () => {};
+  context.openNonAlbumModal = options => {
+    restored.push(`non-album:${options.libraryWide}`);
+    context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: options.libraryWide });
+  };
+
+  assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: true }), true);
+  assert.equal(new URL(pushedUrl).searchParams.get('mobile_page'), 'non-album');
+  assert.equal(new URL(pushedUrl).searchParams.get('loose_tracks'), 'library');
+  assert.equal(new URL(pushedUrl).pathname, '/loose-tracks');
+  const forwardState = history.state;
+
+  history.state = {};
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(restored, ['closed:non-album']);
+
+  history.state = forwardState;
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(restored, ['closed:non-album', 'non-album:true']);
+});
+
+test('desktop copied Loose Tracks URL restores through the existing page route', () => {
+  const restored = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: {
+      innerWidth: 1180,
+      location: { href: 'https://example.test/?surface=albums&mobile_page=non-album&loose_tracks=library' },
+    },
+    openNonAlbumModal: options => restored.push(`non-album:${options.libraryWide}`),
+    getMobileLoopPage: () => null,
+  });
+  context.writeMobilePageHistory = mode => restored.push(mode);
+
+  context.restoreMobilePageFromUrl();
+
+  assert.deepEqual(restored, ['non-album:true', 'replace']);
+});
+
 test('mobile parent restoration retains the transient root gallery anchor outside the canonical URL', () => {
   const descriptor = { kind: 'album', albumKey: 'doombound' };
   const context = load('mobile-navigation.js');
@@ -1173,13 +1238,13 @@ test('mobile gallery cards do not move when touch hover or focus changes during 
   );
 });
 
-test('mobile album Cover Lookup keeps Manual Search visible without desktop composer controls', () => {
+test('mobile album Cover Lookup keeps the full image extractor visible', () => {
   const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
   assert.doesNotMatch(
     css,
     /\.is-mobile-page\s+\.cover-lookup-manual-add[^}]*display:\s*none/,
   );
-  assert.match(
+  assert.doesNotMatch(
     css,
     /\.is-mobile-page\s+:is\(\.cover-lookup-manual-row,\s*\.cover-lookup-manual-actions\)\s*\{[^}]*display:\s*none/,
   );
@@ -1198,4 +1263,41 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /white-space:\s*nowrap/);
   assert.match(rule, /overflow:\s*hidden/);
   assert.match(rule, /text-overflow:\s*ellipsis/);
+});
+
+test('Home names the account and drops the previous artist info button', () => {
+  // Owner (11-09): going back to Home kept the "i" beside the account name, and it opened the last searched band.
+  const removed = [];
+  const info = { remove: () => removed.push('info') };
+  const name = { textContent: 'Folkstone' };
+  const summary = { textContent: '2 albums' };
+  const bar = {
+    parentElement: null,
+    before() {},
+    hidden: true,
+    querySelector: (selector) => ({
+      '[data-gallery-context-name]': name,
+      '[data-gallery-context-summary]': summary,
+      '[data-artist-info-trigger]': info,
+      '.gallery-bar__home-tabs': { hidden: false },
+      '.gallery-bar__actions': { hidden: false },
+    })[selector] || null,
+  };
+  const host = { dataset: { accountName: 'Rendref', homeMounted: 'true' }, hidden: true, prepend(node) { node.parentElement = host; } };
+  const context = load('mobile-home.js', {
+    window: { innerWidth: 390, location: { href: 'https://example.test/' } },
+    URL,
+    state: { view: { query: '', selected_artist: '' }, ui: {} },
+    usesMobilePageLayout: () => true,
+    showMobileGalleryPinchHint() {},
+    document: {
+      getElementById: (id) => (id === 'mobile-home' ? host : null),
+      querySelector: (selector) => (selector === '[data-gallery-bar-instance="gallery"]' ? bar : null),
+      createComment: () => ({ after() {}, parentNode: null }),
+    },
+  });
+  context.syncMobileHome();
+  assert.equal(name.textContent, 'Rendref');
+  assert.equal(summary.textContent, '');
+  assert.deepEqual(removed, ['info']);
 });

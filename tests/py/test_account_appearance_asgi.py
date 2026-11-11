@@ -29,6 +29,7 @@ EXTENDED_DEFAULTS = {
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "library_source_indicators": {"card_colors": False, "hover_outline_colors": False, "icons": True},
+    "album_art_quality_alert": "enabled",
     "alert_family": "ember",
 }
 CUSTOM = {"main_surface_color": "#12ABCD", "panel_background_color": "#FE019A"}

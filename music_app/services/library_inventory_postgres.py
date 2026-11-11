@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from music_app.services.album_local_membership import local_album_membership_ctes_sql
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -258,9 +257,12 @@ def _non_album_candidates_sql(
                 library.local_tracks.metadata ->> 'album',
                 library.local_artists.name,
                 library.local_albums.title,
-                library.local_track_files.relative_path,
-                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}',
-                active_track_files.private_path
+                regexp_replace(
+                    coalesce(library.local_track_files.relative_path, active_track_files.private_path, ''),
+                    '^.*[\\\\/]',
+                    ''
+                ),
+                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}'
             )) not like query_pattern.pattern
         )
     """ if filter_query else ""
@@ -268,10 +270,17 @@ def _non_album_candidates_sql(
         with bootstrap_context as (
           {_bootstrap_context_sql()}
         ),
-        {local_album_membership_ctes_sql()},
         eligible_track_file_ids as (
-          select file_id as track_file_id from local_album_membership
-          where problem is not null
+          -- Scan-published membership problems, scoped like the branches below:
+          -- a materialized whole-library CTE read every file's metadata (1.05 s
+          -- at 162k files) even when a search passed the cached track ids.
+          select files.id as track_file_id
+          from library.local_track_files files
+          join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
+          join bootstrap_context on bootstrap_context.library_id = roots.library_id
+          where files.scan_cache_stale is false
+            and (%(track_id_count)s = 0 or files.track_id = any(%(track_ids)s::bigint[]))
+            and nullif(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
           union
           select library.local_track_files.id as track_file_id
           from library.local_tracks
@@ -412,7 +421,7 @@ def _non_album_candidates_sql(
           library.local_track_files.content_signature,
           library.local_track_files.metadata as track_file_metadata,
           (library.local_track_files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'local_album_membership_problem', (select problem from local_album_membership where file_id = library.local_track_files.id)
+            'local_album_membership_problem', nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '')
           ) as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,
@@ -483,7 +492,7 @@ def _non_album_candidates_sql(
         {query_scope}
         and (
             {effective_non_album_predicate}
-            or exists (select 1 from local_album_membership where file_id = library.local_track_files.id and problem is not null)
+            or nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
             or exception_override.exception_type is not null
             or (
               not coalesce(exception_override.override_payload ? 'exception_type', false)

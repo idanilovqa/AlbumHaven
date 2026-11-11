@@ -75,6 +75,22 @@ def test_split_album_artist_members_requires_explicitly_spaced_slash():
     ]
 
 
+def test_unspaced_slash_band_name_never_collapses_into_its_prefix_artist():
+    # ID-001: 'To/Die/For' is one band; it must not become the artist 'To'.
+    from music_app.services.library import _canonicalize_artist_names, build_albums_from_file_cache
+
+    assert _canonicalize_artist_names(["To/Die/For", "To"])[0] == ["To/Die/For", "To"]
+    assert _canonicalize_artist_names(["Owner / Guest", "Owner"])[0] == ["Owner"]
+    entries = {}
+    for index, artist in enumerate(("To/Die/For", "To/Die/For", "To")):
+        path = f"C:/Music/To Die For/1999 - All Eternity/0{index + 1}.mp3"
+        entries[path] = _entry(path=path, title=f"Track {index}", artist=artist,
+                               album_artist="To/Die/For", album="All Eternity", track_number=index + 1)
+    (album,) = build_albums_from_file_cache(entries)
+    assert album.album_artist == "To/Die/For"
+    assert album.artists == ["To/Die/For"]
+
+
 def _entry(*, path: str, title: str, artist: str, album_artist: str, album: str, track_number: int) -> dict[str, object]:
     return {
         "path": path,
@@ -375,7 +391,7 @@ def test_build_albums_from_file_cache_preserves_persisted_non_compilation_family
     assert inferred_relation_views["folder_related"] == {}
 
 
-def test_build_albums_from_file_cache_names_few_artists_behind_various_artists_tag():
+def test_build_albums_from_file_cache_infers_split_from_two_track_artists():
     album_name = "Watcher Joint Credit Release"
     member_artists = ("Jordsjø", "Breidablik")
     file_cache = {
@@ -396,6 +412,25 @@ def test_build_albums_from_file_cache_names_few_artists_behind_various_artists_t
     assert albums[0].is_compilation is True
     assert albums[0].album_artist == "Jordsjø / Breidablik"
     assert albums[0].artists == list(member_artists)
+
+
+@pytest.mark.parametrize("album_artist", ["Various Artists", "First Artist / Absent Artist"])
+def test_explicit_split_keeps_both_main_artists_with_unequal_track_counts(album_artist):
+    file_cache = {
+        f"track-{index}": {
+            **_entry(
+                path=f"C:/Music/Split/{index:02}.mp3", title=f"Track {index}",
+                artist=artist, album_artist=album_artist, album="Explicit Split",
+                track_number=index,
+            ),
+            "album_type": "Split",
+        }
+        for index, artist in enumerate(["First Artist"] * 5 + ["Second Artist"], 1)
+    }
+    album = build_albums_from_file_cache(file_cache)[0]
+    assert album.artists == ["First Artist", "Second Artist"]
+    assert album.album_artist == "First Artist / Second Artist"
+    assert [track.artist for track in album.tracks] == ["First Artist"] * 5 + ["Second Artist"]
 
 
 def test_build_albums_from_file_cache_deduplicates_repeated_composite_album_artist_names():
@@ -1794,6 +1829,30 @@ def test_track_album_container_preserves_path_normalization_contract(raw, as_pat
     assert str(value) == (str(Path(raw)) if as_path else raw)
 
 
+def test_disjoint_bonus_tracks_are_not_duplicate_album_sources(tmp_path):
+    from music_app.services import library
+
+    def track(folder, title):
+        return Track(path=tmp_path / folder / f'{title}.mp3', title=title,
+                     album_artist='Beardfish', album='+4626-COMFORTZONE', year=2015,
+                     track_number=1, duration_seconds=180)
+
+    main = track('Album', 'Hold On')
+    bonus = track('Album/The Early Years - Outtakes and Demos', 'Poison Ivy')
+    album = Album(key='album', name='+4626-COMFORTZONE', album_artist='Beardfish', tracks=[main, bonus])
+    library._link_duplicate_album_sources([album])
+    assert get_album_duplicate_sources(album) == []
+    contexts = library._link_duplicate_album_sources([album], defer_source_payloads=True)
+    assert contexts[0]['has_duplicate_files'] is False
+
+    copy = Album(key='copy', name=album.name, album_artist='Beardfish', tracks=[track('Copy', 'Hold On')])
+    bonus_album = Album(key='bonus', name=album.name, album_artist='Beardfish', tracks=[bonus])
+    main_album = Album(key='main', name=album.name, album_artist='Beardfish', tracks=[main])
+    contexts = library._link_duplicate_album_sources([main_album, copy, bonus_album], defer_source_payloads=True)
+    assert [context['has_duplicate_files'] for context in contexts] == [True, True, False]
+    assert len(contexts[0]['materialize_sources']()) == 2
+
+
 def test_link_duplicate_album_sources_resolves_each_sibling_container_once(monkeypatch, tmp_path):
     from music_app.services import library
 
@@ -1832,7 +1891,7 @@ def test_link_duplicate_album_sources_keeps_separatorless_path_kinds_distinct(mo
         album_artist="Artist",
         tracks=[
             Track(path=Path("01.flac"), title="One", album_artist="Artist", album="Album", year=2001),
-            Track(path=Path("C:02.flac"), title="Two", album_artist="Artist", album="Album", year=2001),
+            Track(path=Path("C:02.flac"), title="One", album_artist="Artist", album="Album", year=2001),
         ],
     )
     resolved = []
@@ -1857,7 +1916,7 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
                 library_root_id="old-root")
     replacement = Track(path=shared_path, title="Replacement", album_artist="Artist", album="Album", year=2001,
                         library_root_id="replacement-root")
-    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Companion",
+    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Replacement",
                       album_artist="Artist", album="Album", year=2001, library_root_id="companion-root")
     mixed = [
         Track(path=tmp_path / "Mixed" / f"{index}.mp3", title=str(index),
@@ -1875,7 +1934,7 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
     sources = albums[0]._cached_duplicate_sources
     assert [source["folder_name"] for source in sources] == ["Copy A", "Copy B"]
     assert [source["label"] for source in sources] == ["1", "2"]
-    assert [[track["title"] for track in source["tracks"]] for source in sources] == [["Companion"], ["Replacement"]]
+    assert [[track["title"] for track in source["tracks"]] for source in sources] == [["Replacement"], ["Replacement"]]
     assert albums[1]._cached_duplicate_sources == sources
     assert albums[2]._cached_duplicate_sources == []
     assert albums[0].tracks == [old, companion]
@@ -1883,7 +1942,7 @@ def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_id
     assert albums[1].root_provenance["root_ids"] == ["replacement-root", "companion-root"]
 
 
-def test_get_album_duplicate_sources_accepts_mismatched_tracks_for_same_album_identity(monkeypatch):
+def test_get_album_duplicate_sources_rejects_disjoint_tracks_for_same_album_identity(monkeypatch):
     serialized_titles: list[str] = []
 
     def fake_track_to_dict(track):
@@ -1929,9 +1988,9 @@ def test_get_album_duplicate_sources_accepts_mismatched_tracks_for_same_album_id
 
     payload = get_album_duplicate_sources(album)
 
-    assert len(payload) == 2
+    assert payload == []
     assert getattr(album, "_cached_duplicate_sources") == payload
-    assert serialized_titles == ["Alpha", "Gamma"]
+    assert serialized_titles == []
 
 
 def test_build_album_base_payload_keeps_shared_album_fields():

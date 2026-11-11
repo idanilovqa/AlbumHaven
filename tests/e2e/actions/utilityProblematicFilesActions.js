@@ -203,7 +203,7 @@ export class UtilityProblematicFilesActions {
   async revealListItemByIdentity({ key, title, meta }, options = {}) {
     const reveal = async () => {
       for await (const items of this.walkListWindows(options)) {
-        const matches = items.filter(item => key ? item.key === key : item.title === title && item.meta === meta);
+        const matches = items.filter(item => key ? item.key === key : item.title === title && (meta === undefined || item.meta === meta));
         assert.ok(matches.length <= 1, `Ambiguous Problematic Files identity: ${key || `${title} / ${meta}`}`);
         if (matches.length) return matches[0];
       }
@@ -281,7 +281,7 @@ export class UtilityProblematicFilesActions {
 
   async applySingleProblemFilter(problemType) {
     const searchSection = this.utilityProblematicFilesTab.searchSection;
-    if (await searchSection.filterChipByValue(problemType).count()) {
+    if (await searchSection.selectedFilterOptionByValue(problemType).count()) {
       return;
     }
     await searchSection.problemFilterButton.click();
@@ -291,12 +291,12 @@ export class UtilityProblematicFilesActions {
       if (typeof state === 'undefined') return false;
       const selected = state.utility?.selectedProblemFilters || [];
       if (selected.length !== 1 || selected[0] !== expected.problemType) return false;
-      return document.querySelector(expected.filterChipSelector) !== null;
+      return document.querySelector(expected.selectedOptionSelector) !== null;
     }, {
       timeout: 60000,
     }, {
       problemType,
-      filterChipSelector: searchSection.filterChipSelector(problemType),
+      selectedOptionSelector: searchSection.selectedFilterOptionSelector(problemType),
     });
     if (await searchSection.problemFilterMenu.isVisible()) {
       await searchSection.problemFilterButton.click();
@@ -305,8 +305,8 @@ export class UtilityProblematicFilesActions {
   }
 
   async clearProblemFilter(problemType) {
-    const chip = this.utilityProblematicFilesTab.searchSection.filterChipByValue(problemType);
-    if (!await chip.count()) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (!await searchSection.selectedFilterOptionByValue(problemType).count()) {
       return;
     }
     const waitForFilterRemoved = async (timeout = 60000) => {
@@ -318,7 +318,11 @@ export class UtilityProblematicFilesActions {
         timeout,
       }, problemType);
     };
-    await chip.click();
+    if (!await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+      await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu);
+    }
+    await searchSection.filterOptionByValue(problemType).click();
     await waitForFilterRemoved();
     if (await this.utilityProblematicFilesTab.searchSection.problemFilterMenu.isVisible()) {
       await this.utilityProblematicFilesTab.searchSection.problemFilterButton.click();
@@ -498,6 +502,10 @@ export class UtilityProblematicFilesActions {
   }
 
   async selectAlbumByTitle(albumTitle, options = {}) {
+    await this.revealListItemByIdentity({ title: albumTitle }, {
+      ...options,
+      timeout: options.timeout || 60000,
+    });
     const item = this.utilityProblematicFilesTab.listItemByTitle(albumTitle);
     await item.waitFor({ state: 'visible', timeout: options.timeout || 60000 });
     const key = String(await item.getAttribute('data-problematic-album-key') || '');
@@ -533,13 +541,19 @@ export class UtilityProblematicFilesActions {
     return detail.evaluate((element, selectors) => {
       const text = (node) => String(node?.textContent || '').trim();
       const table = element.querySelector(selectors.table);
+      const albumLabels = Array.from(element.querySelectorAll(selectors.albumProblems));
       const reasonHeader = Array.from(table?.querySelectorAll(selectors.headers) || [])
         .find((header) => text(header) === 'Problems');
       const reasonCells = Array.from(table?.querySelectorAll(selectors.reasonCells) || []);
       return {
         albumLabelsBeforeTable: Boolean(element.querySelector(selectors.albumSection)?.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING),
         detectedHeadingCount: Array.from(element.querySelectorAll(selectors.sectionHeadings)).filter(heading => text(heading) === 'Detected problems').length,
-        albumReasons: Array.from(element.querySelectorAll(selectors.albumProblems), text),
+        albumReasons: albumLabels.map(text),
+        albumLabelExtraWidths: albumLabels.map((label) => {
+          const range = document.createRange();
+          range.selectNodeContents(label);
+          return Math.round((label.getBoundingClientRect().width - range.getBoundingClientRect().width) * 100) / 100;
+        }),
         headers: Array.from(table?.querySelectorAll(selectors.headers) || [], text),
         rows: Array.from(table?.querySelectorAll(selectors.rows) || []).map((row) => ({
           cells: Array.from(row.querySelectorAll(selectors.directCells), (cell) => ({

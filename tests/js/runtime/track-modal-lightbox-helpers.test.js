@@ -1039,7 +1039,7 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
-test('inventory mutation refresh hides stale rows while canonical details load', async () => {
+test('inventory mutation refresh keeps rows until fresh details replace them', async () => {
   const stale = {
     key: 'watcher-album',
     request_key: 'watcher-album',
@@ -1064,18 +1064,20 @@ test('inventory mutation refresh hides stale rows while canonical details load',
   const elements = context.getTrackModalElements();
   elements.overlay.hidden = false;
   elements.list.innerHTML = '<li>Old title</li>';
-  context.refreshOpenTrackModalVersionState = () => {};
+  let rendered = null;
+  context.refreshOpenTrackModalVersionState = (_key, album) => { rendered = album; };
 
   const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
 
-  assert.match(elements.list.innerHTML, /track-modal-loading-row/);
-  assert.doesNotMatch(elements.list.innerHTML, /Old title/);
+  assert.doesNotMatch(elements.list.innerHTML, /track-modal-loading-row/);
+  assert.match(elements.list.innerHTML, /Old title/);
   resolveResponse({
     ok: true,
     status: 200,
     json: async () => ({ ok: true, album: fresh }),
   });
   assert.equal(await refresh, true);
+  assert.equal(rendered.tracks[0].title, 'Fresh title');
 });
 
 test('inventory mutation refresh keeps rows and title of an album this session edited', async () => {
@@ -3306,3 +3308,15 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+
+test('release candidate cache follows changes to the manual version family', () => {
+  const album = { key: 'artist::album', name: 'Album', album_artist: 'Artist', preview_only: false,
+    tracks: [{ path: 'one.flac' }], release_candidate_family_keys: ['artist::album'] };
+  const { context } = loadHelper({ initialAlbums: [album] });
+  context.getManualVersionFamilyKeys = () => new Set([album.key]);
+  context.cacheHydratedTrackModalAlbum(album.key, album);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), album);
+  context.getManualVersionFamilyKeys = () => new Set([album.key, 'artist::bonus']);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), null);
+});

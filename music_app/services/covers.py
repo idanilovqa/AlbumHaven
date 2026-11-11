@@ -5,9 +5,11 @@ import hashlib
 import io
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import re
 from threading import Lock, RLock
 
+from music_app.services.generated_preview_storage import is_managed_preview_path
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 try:
@@ -189,6 +191,53 @@ def measure_image_sharpness(image) -> float:
         return 0.0
 
 
+_EMBEDDED_ART_AUDIO_EXTENSIONS = frozenset({".mp3", ".flac", ".m4a", ".mp4", ".aac", ".ogg", ".opus"})
+_EMBEDDED_ART_PROBE_LIMIT = 3
+
+
+def embedded_front_cover_bytes(folder: Path) -> bytes | None:
+    """Return the front-cover picture embedded in the album's first tracks."""
+    try:
+        from mutagen import File as MutagenFile
+    except Exception:
+        return None
+    try:
+        tracks = sorted(
+            (path for path in Path(folder).iterdir()
+             if path.is_file() and path.suffix.casefold() in _EMBEDDED_ART_AUDIO_EXTENSIONS),
+            key=lambda path: path.name.casefold(),
+        )[:_EMBEDDED_ART_PROBE_LIMIT]
+    except OSError:
+        return None
+    for track in tracks:
+        try:
+            audio = MutagenFile(track)
+        except Exception:
+            audio = None
+        if audio is None and track.suffix.casefold() == ".mp3":
+            # Tag-only reads still work when the MPEG stream itself is unreadable.
+            try:
+                from mutagen.id3 import ID3
+
+                audio = SimpleNamespace(tags=ID3(track))
+            except Exception:
+                audio = None
+        if audio is None:
+            continue
+        pictures = list(getattr(audio, "pictures", None) or [])
+        tags = getattr(audio, "tags", None)
+        if tags is not None and hasattr(tags, "getall"):
+            pictures.extend(tags.getall("APIC"))
+        front = next((picture for picture in pictures if getattr(picture, "type", None) == 3), None)
+        picture = front or (pictures[0] if pictures else None)
+        if picture is not None and getattr(picture, "data", None):
+            return bytes(picture.data)
+        covers = tags.get("covr") if tags is not None and hasattr(tags, "get") else None
+        if covers:
+            return bytes(covers[0])
+    return None
+
+
 def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
     if not existing_path.is_file():
         return False
@@ -196,6 +245,10 @@ def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
         existing_bytes = existing_path.read_bytes()
     except Exception:
         return False
+    return image_bytes_are_visually_similar(existing_bytes, raw_bytes)
+
+
+def image_bytes_are_visually_similar(existing_bytes: bytes, raw_bytes: bytes) -> bool:
     existing_img = _decode_image_bytes(existing_bytes)
     incoming_img = _decode_image_bytes(raw_bytes)
     if existing_img is None or incoming_img is None:
@@ -236,13 +289,29 @@ def images_are_visually_similar(existing_path: Path, raw_bytes: bytes) -> bool:
             pass
 
 
+def _album_image_has_bytes(folder: Path, excluded: Path, data: bytes) -> bool:
+    for root, directories, files in os.walk(folder):
+        directories[:] = [name for name in directories if not is_managed_preview_path(Path(root) / name)]
+        for name in files:
+            path = Path(root) / name
+            if path == excluded or path.suffix.lower() not in _COVER_IMAGE_EXTENSIONS:
+                continue
+            try:
+                if path.stat().st_size == len(data) and path.read_bytes() == data:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():
         return None
-    if images_are_visually_similar(current_cover, raw_bytes):
-        return None
     current_bytes = current_cover.read_bytes()
+    # Keep the replaced cover only when no other album image already holds its bytes.
+    if current_bytes == raw_bytes or _album_image_has_bytes(folder, current_cover, current_bytes):
+        return None
     index = 1
     while True:
         candidate = folder / f"cover-existing-{index}.jpg"

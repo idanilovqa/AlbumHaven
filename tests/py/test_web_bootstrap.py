@@ -325,7 +325,8 @@ def test_favicon_route_returns_cacheable_empty_response(asgi_app):
     assert body == b""
 
 
-def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch):
+@pytest.mark.parametrize("path", ["/", "/loose-tracks"])
+def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch, path):
     from music_app.routes import web_asgi
 
     def fake_build_postgres_root_startup_view(*, config, query_args, library_state):
@@ -392,7 +393,7 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
 
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
     monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", fake_build_postgres_root_startup_view)
-    status, headers, body = run_asgi_request(asgi_app, "GET", "/")
+    status, headers, body = run_asgi_request(asgi_app, "GET", path)
 
     assert status == 200
     assert headers["cache-control"] == "no-store, max-age=0"
@@ -688,7 +689,7 @@ def test_bootstrap_data_preserves_startup_hydration_query_contract(asgi_app, mon
     )
 
 
-def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypatch):
+def test_index_selected_artist_defers_gallery_until_runtime_hydration(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 
     class FakePostgresLibraryBrowseRepository:
@@ -766,13 +767,17 @@ def test_index_selected_artist_uses_postgres_startup_preview(asgi_app, monkeypat
     status, _headers, body = run_asgi_request(asgi_app, "GET", "/", query={"artist": "Broadcast"})
 
     assert status == 200
+    assert b'data-startup-progress="50"' in body
+    assert b"data-startup-preview-card" not in body
     payload = _extract_bootstrap_payload_from_shell(body)
-    assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "empty_shell"
     assert payload["initial_view"]["selected_artist"] == "Broadcast"
-    assert [group["artist"] for group in payload["initial_view"]["family_artist_groups"]] == ["Stereolab"]
+    assert payload["initial_view"]["family_artist_groups"] == []
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == (
         "/view-data?surface=albums&root_sidebar=1&artist=Broadcast"
     )
+
+
 def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 
@@ -1520,6 +1525,69 @@ def test_asgi_unrevisioned_cover_preview_stays_in_app_data(app, asgi_app):
     assert not (cover_path.parent / ".album-haven").exists()
 
 
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_asgi_unrevisioned_cover_preview_honors_policy_and_reuses_cache(app, asgi_app, tmp_path, mode):
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), "red").save(cover_path)
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
+    asgi_app.state.generated_preview_storage_policy = policy
+    recorded = []
+    asgi_app.state.generated_preview_inventory_recorder = lambda source, preview: recorded.append(
+        (source, preview)
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+    )
+    assert status == 200
+    assert body != cover_path.read_bytes()
+    assert len(recorded) == 1
+    assert recorded[0][0] == cover_path
+    preview_path = recorded[0][1]
+    assert preview_path.is_relative_to(policy.write_cache_root(cover_path))
+    assert preview_path.read_bytes() == body
+    assert not (app.config["DATA_DIR"] / "display-cover-cache").exists()
+
+    status, _headers, cached_body = run_asgi_request(
+        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+    )
+    assert status == 200
+    assert cached_body == body
+    assert len(recorded) == 1
+
+
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_asgi_unrevisioned_cover_preview_keeps_legacy_app_cache_readable(app, asgi_app, tmp_path, mode):
+    from music_app.services.covers import resolve_cover_display_variant
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
+
+    cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
+    cover_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1200, 1200), "blue").save(cover_path)
+    legacy_preview = resolve_cover_display_variant(
+        cover_path, cache_root=app.config["DATA_DIR"] / "display-cover-cache", max_size=480,
+    )
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
+    asgi_app.state.generated_preview_storage_policy = policy
+    asgi_app.state.generated_preview_inventory_recorder = lambda *_args: pytest.fail(
+        "a legacy cache hit must not regenerate or register another preview"
+    )
+
+    status, _headers, body = run_asgi_request(
+        asgi_app, "GET", "/cover", query={"path": str(cover_path), "size": "480"},
+    )
+    assert status == 200
+    assert body == legacy_preview.read_bytes()
+    assert not policy.write_cache_root(cover_path).exists()
+
+
 def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_app, monkeypatch):
     cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1830,6 +1898,7 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "runtime-bundle.js",
         "login.js",
         "password-recovery.js",
+        "path-input.js",
         "account.js",
         "admin-members.js",
         "admin-server.js",

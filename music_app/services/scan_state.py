@@ -16,8 +16,11 @@ from music_app.services.library_indexing import (
     start_scan_stage,
 )
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.library_watch_health import FORCED_FULL_SCAN_MODE
+from music_app.services.progressive_scan_publication import ProgressiveScanPublisher, contiguous_revision
 from music_app.services.musicbrainz_enrichment_triggers import schedule_after_scan
 from music_app.services.scan_cache_persistence import (
+    ScanCacheInventorySuperseded,
     ScanCachePublicationSuperseded,
     select_scan_cache_adapter,
 )
@@ -173,6 +176,71 @@ def finalize_post_scan_actions(
         reason="automatic_candidate_refresh",
     )
     start_background_cover_refresh()
+
+
+# A full scan of a slow library can take hours; any watcher or tag-edit
+# publication meanwhile used to discard the whole scan (sandbox2 2026-11-05).
+_SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS = 5
+_SUPERSEDED_SCAN_CLOCK_MARGIN_SECONDS = 60.0
+
+
+def _published_entry_is_newer(published: object, scanned: object) -> bool:
+    if not isinstance(scanned, dict):
+        return True
+    if not isinstance(published, dict):
+        return False
+
+    def version(entry: dict) -> int:
+        value = entry.get("metadata_schema_version")
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    if version(published) < version(scanned):
+        return False
+    try:
+        return float(published.get("mtime") or 0) > float(scanned.get("mtime") or 0)
+    except (TypeError, ValueError):
+        return False
+
+
+def _merge_newer_published_inventory(
+    adapter,
+    publication_state: dict[str, object],
+    *,
+    since: float,
+    separate_release_keys,
+) -> int | None:
+    """Adopt files other publications genuinely changed after the scan read them.
+
+    A publication's row counts as newer only for a file the scan did not see
+    or one whose mtime is later than the scan's read (a watcher or tag edit
+    rewrote it). A save that rewrote stored rows also refreshes last_seen, so
+    publication time alone proves nothing: adopting by it put stale v2 rows
+    over a repair scan's fresh reads (sandbox2 2026-11-05).
+    """
+    load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
+    load_published = getattr(adapter, "load_inventory_published_since", None)
+    if not callable(load_revision) or not callable(load_published):
+        return None
+    # Read the revision first: a change after it supersedes the retry again.
+    revision = int(load_revision())
+    published, removed = load_published(since)
+    load_removed = getattr(adapter, "load_removed_unpublished_paths", None)
+    if callable(load_removed):
+        removed = set(removed) | load_removed(publication_state.get("file_cache") or {})
+    file_cache = {
+        path: entry
+        for path, entry in dict(publication_state.get("file_cache") or {}).items()
+        if path not in removed
+    }
+    file_cache.update({
+        path: entry for path, entry in published.items()
+        if _published_entry_is_newer(entry, file_cache.get(path))
+    })
+    publication_state["file_cache"] = file_cache
+    publication_state["albums"] = build_albums_from_file_cache(
+        file_cache, set(separate_release_keys or set()),
+    )
+    return revision
 
 
 def refresh_library_state(
@@ -412,14 +480,43 @@ def refresh_library_state(
                 publication_state
             )
 
+    # Albums publish as their folders finish reading; the final publication
+    # below then writes only what the batches did not, plus stale-marking.
+    publish_folders = getattr(scan_cache_adapter, "persist_targeted_inventory_mutation", None)
+    progressive_publisher = (
+        ProgressiveScanPublisher(
+            lambda root_id, entries: publish_folders(root_id=root_id, active_file_entries=entries),
+            logger=logger,
+        ).start()
+        if callable(publish_folders) else None
+    )
     scan_completed_successfully = False
     try:
-        new_file_cache, new_last_scan = scan_music_incremental(
-            use_existing_cache=not ignore_existing_cache,
-            expected_scan_generation=scan_generation,
-            publication_state=publication_state,
-            publish_partial_snapshot=publish_current_browse_snapshot,
-        )
+        try:
+            new_file_cache, new_last_scan = scan_music_incremental(
+                use_existing_cache=not ignore_existing_cache,
+                expected_scan_generation=scan_generation,
+                publication_state=publication_state,
+                publish_partial_snapshot=publish_current_browse_snapshot,
+                **({"on_entries_ready": progressive_publisher.submit} if progressive_publisher else {}),
+            )
+        except BaseException:
+            if progressive_publisher is not None:
+                progressive_publisher.close(cancel=True)
+            raise
+        if progressive_publisher is not None:
+            progressive_publisher.close()
+            # The scan's own batches advanced the revision; another writer's
+            # interleaved commit still supersedes the final publication.
+            expected_inventory_mutation_revision, _ = contiguous_revision(
+                expected_inventory_mutation_revision, progressive_publisher.revisions,
+            )
+            library_state["scan_progressive_publication"] = {
+                "batches": len(progressive_publisher.batches),
+                "failed_batches": progressive_publisher.failed_batches,
+                "first_published_at": progressive_publisher.first_published_at,
+                "max_batch_seconds": max((batch["seconds"] for batch in progressive_publisher.batches), default=0.0),
+            }
         new_separate_release_keys = load_separate_release_keys(cfg)
         rebuilt_albums = build_albums_from_file_cache(new_file_cache, set(new_separate_release_keys or set()))
         with cache_lock:
@@ -434,7 +531,8 @@ def refresh_library_state(
             "separate_release_keys": new_separate_release_keys,
             "albums": rebuilt_albums,
             "last_error": None,
-            "scan_metadata_repair_required": False,
+            # A root left unchanged as incomplete still needs its repair.
+            "scan_metadata_repair_required": bool(publication_state.get("scan_incomplete_root_ids")),
         })
         publish_current_browse_snapshot()
         with cache_lock:
@@ -454,7 +552,32 @@ def refresh_library_state(
             relation_refresh_options["expected_inventory_mutation_revision"] = (
                 expected_inventory_mutation_revision
             )
-        refresh_relation_views(**relation_refresh_options)
+        for republish_attempt in range(_SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS + 1):
+            try:
+                refresh_relation_views(**relation_refresh_options)
+                break
+            except ScanCacheInventorySuperseded:
+                if republish_attempt == _SUPERSEDED_SCAN_REPUBLISH_ATTEMPTS:
+                    raise
+                revision = _merge_newer_published_inventory(
+                    scan_cache_adapter,
+                    publication_state,
+                    since=scan_started_at - _SUPERSEDED_SCAN_CLOCK_MARGIN_SECONDS,
+                    separate_release_keys=new_separate_release_keys,
+                )
+                if revision is None:
+                    raise
+                relation_refresh_options["expected_inventory_mutation_revision"] = revision
+                rebuilt_albums = publication_state["albums"]
+                new_file_cache = publication_state["file_cache"]
+                log_app_event(
+                    cfg, logger,
+                    "Library scan republishing over newer watcher or tag-edit changes",
+                    level="info", attempt=republish_attempt + 1,
+                )
+        local_cover_inventory = cfg.get("_LOCAL_COVER_INVENTORY")
+        if local_cover_inventory is not None:
+            local_cover_inventory.rescan()
         finish_scan_stage(library_state, "relations")
         library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:
@@ -490,11 +613,12 @@ def refresh_library_state(
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_outcome"] = "completed"
-    except (ScanCancelled, ScanCachePublicationSuperseded):
+    except (ScanCancelled, ScanCachePublicationSuperseded) as exc:
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_outcome"] = "cancelled"
-        log_app_event(cfg, logger, "Library indexing cancelled", level="info")
+        log_app_event(cfg, logger, "Library indexing cancelled", level="info",
+                      reason=type(exc).__name__, detail=str(exc))
     except Exception as exc:
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
@@ -537,16 +661,27 @@ def refresh_library_state(
 
     try:
         if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
+            # A forced scan (the startup metadata repair) walks every root
+            # like a manual full rescan; both clear the roots they observed.
             if (
-                requested_scan_mode == "manual_full_rescan"
+                (requested_scan_mode == "manual_full_rescan" or force)
                 and recover_library_watch_health is not None
             ):
                 observed_root_ids = publication_state.get(
                     "observed_library_root_ids"
                 )
+                if isinstance(observed_root_ids, set):
+                    # A root the walk could not fully read is not proven healthy.
+                    observed_root_ids = observed_root_ids - set(
+                        publication_state.get("scan_incomplete_root_ids") or ()
+                    )
                 try:
                     recover_library_watch_health(
-                        scan_mode=requested_scan_mode,
+                        scan_mode=(
+                            requested_scan_mode
+                            if requested_scan_mode == "manual_full_rescan"
+                            else FORCED_FULL_SCAN_MODE
+                        ),
                         scan_started_at=scan_started_at,
                         observed_root_ids=(
                             observed_root_ids

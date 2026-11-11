@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
@@ -7,6 +8,8 @@ from pathlib import Path, PureWindowsPath
 from threading import Event, Lock
 
 import pytest
+
+from music_app.services.utils import artist_collation_key
 
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
 
@@ -237,6 +240,9 @@ class _EmptyMissingAlbumConnection:
         return False
 
     def execute(self, sql, params=None):
+        from music_app.services.album_release_candidates import _release_candidates_sql
+        if sql == _release_candidates_sql():
+            return _InventoryCursor()
         if any(marker in str(sql) for marker in (
             "transaction_timestamp() as observed_at", "select distinct albums.id as album_id",
             "requested_identities as materialized",
@@ -401,10 +407,12 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
-def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting():
+@pytest.mark.parametrize("apostrophe", ["'", "\u2019", "\u2018"])
+def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting(apostrophe):
     from music_app.services import library_browse_postgres as browse
 
-    names = ["IZZ", "'Til Tuesday", "I'm with Her", "!Air"]
+    apostrophe_artist = f"I{apostrophe}m with Her"
+    names = ["IZZ", "'Til Tuesday", apostrophe_artist, "!Air"]
     rows = [
         _browse_album_row(
             artist=artist,
@@ -414,7 +422,7 @@ def test_root_and_search_artist_groups_ignore_leading_punctuation_for_sorting():
         )
         for index, artist in enumerate(names, start=1)
     ]
-    expected = ["!Air", "I'm with Her", "IZZ", "'Til Tuesday"]
+    expected = ["!Air", apostrophe_artist, "IZZ", "'Til Tuesday"]
 
     groups = browse._root_album_browse_artist_groups(rows)
     search_names = ["'Bravo", "Alpha"]
@@ -437,6 +445,7 @@ def test_root_startup_sql_ignores_leading_punctuation_before_artist_limits():
         normalized = " ".join(sql.casefold().split())
         assert "regexp_replace(" in normalized
         assert "'^[[:punct:][:space:]]+'" in normalized
+        assert normalized.count("u&'\\2018\\2019', u&'\\0027\\0027'") == 2
 
 
 @pytest.mark.parametrize("guest_name", ["Guest", "Guest Alias"])
@@ -574,7 +583,7 @@ def test_postgres_split_release_suppresses_composite_owner_artist_group():
     groups = browse._root_album_browse_artist_groups(rows)
 
     assert [group["artist"] for group in groups] == ["Aarni", "Persistence In Mourning"]
-    assert all(group["albums"][0]["artist_relationship"] == "featured" for group in groups)
+    assert all(group["albums"][0]["artist_relationship"] == "owned" for group in groups)
     assert all(
         group["albums"][0]["album_artist"] == "Aarni / Persistence In Mourning"
         for group in groups
@@ -659,6 +668,45 @@ def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     )[0]["artist_relationship"] == "owned"
 
 
+@pytest.mark.parametrize("preview", [False, True])
+@pytest.mark.parametrize("guest_owner", ["Various Artists", "Other Composer / Guest Composer"])
+def test_spirit_explicit_joint_owner_is_not_featured_and_distinct_score_remains(preview, guest_owner):
+    from music_app.services import library_browse_postgres as browse
+
+    joint = _browse_album_row(
+        artist="Hans Zimmer", album_id=556,
+        album_key="bryan adams / hans zimmer::spirit: stallion of the cimarron",
+        title="Spirit: Stallion Of The Cimarron",
+    )
+    joint["album_metadata"] = {
+        "album_artist": "Bryan Adams / Hans Zimmer",
+        "artists": ["Bryan Adams", "Hans Zimmer"],
+    }
+    joint["featured_kind"] = "featured_member"
+    joint_track = dict(joint, featured_kind="featured_track_artist")
+    score = _browse_album_row(
+        artist="Hans Zimmer", album_id=1544,
+        album_key="hans zimmer::spirit: stallion of the cimarron",
+        title="Spirit: Stallion Of The Cimarron",
+    )
+    score["featured_kind"] = "owner"
+    guest = _browse_album_row(
+        artist="Hans Zimmer", album_id=4673,
+        album_key="various artists::rain man", title="Rain Man",
+    )
+    guest["album_metadata"] = {"album_artist": guest_owner}
+    guest["featured_kind"] = "featured_member"
+    build = browse._root_album_browse_album_payloads if preview else browse._selected_artist_album_payloads
+
+    albums = build([joint, joint_track, score, guest], "Hans Zimmer")
+
+    assert {album["key"]: album["artist_relationship"] for album in albums} == {
+        joint["album_key"]: "owned", score["album_key"]: "owned",
+        guest["album_key"]: "featured",
+    }
+    assert next(album for album in albums if album["key"] == joint["album_key"])["album_artist"] == "Bryan Adams / Hans Zimmer"
+
+
 def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
     from music_app.services import library_browse_postgres as browse
 
@@ -681,6 +729,26 @@ def test_selected_artist_album_payload_preserves_disc_total_and_subtitle():
     assert track["disc_number_raw"] == "2/2"
     assert track["total_discs"] == 2
     assert track["disc_subtitle"] == "Bonus"
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        # Jordsjø / Breidablik rows persisted before split detection (no is_split_album key).
+        ({"album_artist": "Breidablik / Jordsjø", "artists": ["Breidablik", "Jordsjø"], "is_compilation": True, "edition": "Split"}, True),
+        ({"album_artist": "Jordsjø / Breidablik", "artists": ["Jordsjø", "Breidablik"], "is_compilation": True, "edition": None}, True),
+        # A collaboration credits every track to both artists, so it is not a compilation.
+        ({"album_artist": "Brian Eno / David Byrne", "artists": ["Brian Eno", "David Byrne"], "is_compilation": False}, False),
+        # A various-artists compilation is not credited to exactly its members.
+        ({"album_artist": "Various Artists", "artists": ["A", "B", "C"], "is_compilation": True}, False),
+        # The persisted scan decision always wins.
+        ({"album_artist": "Breidablik / Jordsjø", "artists": ["Breidablik", "Jordsjø"], "is_compilation": True, "is_split_album": False}, False),
+    ],
+)
+def test_split_release_facet_covers_rows_persisted_before_split_detection(metadata, expected):
+    from music_app.services.library_browse_postgres import _album_is_split
+
+    assert _album_is_split(metadata) is expected
 
 
 def test_album_payloads_publish_the_split_release_facet():
@@ -940,8 +1008,8 @@ def test_relation_alias_query_distinguishes_missing_snapshot_from_malformed_proj
     sql = " ".join(_relation_alias_maps_sql().lower().split())
 
     assert "as projection_snapshot_missing" in sql
-    assert "jsonb_path_exists( library.libraries.metadata, '$.scan_cache.relation_views' )" in sql
-    assert "jsonb_path_exists( library.libraries.metadata, '$.scan_cache.relation_projection' )" in sql
+    assert "jsonb_path_exists( relation_snapshot.metadata, '$.scan_cache.relation_views' )" in sql
+    assert "jsonb_path_exists( relation_snapshot.metadata, '$.scan_cache.relation_projection' )" in sql
 
 
 def test_family_preview_reuses_membership_snapshots_without_changing_results(monkeypatch):
@@ -1500,6 +1568,35 @@ def test_non_album_candidate_uses_private_path_when_relative_path_is_missing():
     assert [entry["path"] for entry in entries] == [path]
 
 
+def test_non_album_search_does_not_match_folder_names_without_tags():
+    from music_app.services import library_browse_postgres as browse
+
+    path = r"D:\Music\Classic\Richard Wagner\Der Ring des Nibelungen\01-Das Rheingold\01.flac"
+    row = _inventory_non_album_candidate(
+        track_id=1,
+        title="",
+        private_path=path,
+        track_number=1,
+        raw_artist="",
+        raw_album_artist="",
+        exception_type="",
+    )
+    row.update(
+        relative_path=r"Richard Wagner\Der Ring des Nibelungen\01-Das Rheingold\01.flac",
+        raw_file_album="",
+    )
+
+    entries = browse._non_album_entries_from_inventory_candidates(
+        [row],
+        visible_library_categories=[],
+        alias_to_canonical={},
+        canonical_to_aliases={},
+        query="Der Ring des Nibelungen",
+    )
+
+    assert entries == []
+
+
 def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,
@@ -1536,16 +1633,45 @@ def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
     assert payload["artist_count"] == 0
     assert payload["ignored_version_keys"] == ["ignored-release"]
     assert payload["manual_version_links"] == {"child-release": "parent-release"}
-    assert [track["title"] for track in payload["non_album_tracks"]] == [
-        "Persisted Rarity"
-    ]
+    # Owner REC-007: the tree after a cleared search no longer waits for Loose Tracks;
+    # the client loads them on demand, as on the paged root gallery.
+    assert payload["non_album_tracks"] == []
+    assert payload["non_album_tracks_deferred"] is True
     assert payload["non_album_exception_values"] == [
         "Custom Collection", "Interview", "Non-album rarity",
     ]
-    assert [kind for kind, _sql, _params in inventory["queries"]] == [
-        "support",
-        "candidates",
-    ]
+    assert [kind for kind, _sql, _params in inventory["queries"]] == ["support"]
+
+
+def test_root_sidebar_takes_the_tree_from_a_ready_gallery_projection(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    # Owner REC-007: clearing a search recounted every file (4-6 s on 160k files).
+    from music_app.services import gallery_projection_postgres
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    inventory = committed_inventory_queries_for_legacy_browse_fakes
+    _stub_windows_media_root(monkeypatch)
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(inventory),
+    )
+    projected = [{"artist": "Beta", "artist_display": "Beta", "count": 2},
+                 {"artist": "Gamma", "artist_display": "Gamma", "count": 1}]
+    monkeypatch.setattr(gallery_projection_postgres, "load_gallery_projection_sidebar",
+                        lambda _connection, _view_state: (projected, 3))
+    monkeypatch.setattr(repository, "_load_root_startup_rows",
+                        lambda *_args, **_kwargs: pytest.fail("a ready projection must not recount every file"))
+    previewed = []
+    monkeypatch.setattr(repository, "_load_root_startup_preview_rows",
+                        lambda _state, *, candidate_artists, connection: previewed.append(candidate_artists) or [])
+
+    payload = repository.build_root_sidebar_payload()
+
+    assert payload["artists_sidebar"] == projected
+    assert (payload["album_count"], payload["artist_count"]) == (3, 2)
+    assert previewed == [["Beta", "Gamma"]]
 
 
 def test_selected_artist_non_album_candidates_keep_raw_metadata_and_path_matching_when_scoped(
@@ -1582,7 +1708,7 @@ def test_selected_artist_non_album_candidates_keep_raw_metadata_and_path_matchin
     assert kind == "candidates"
     assert "artist_keys" not in params
     assert params["artist_names"] == ["Neal Morse", "Morse, Portnoy & George"]
-    assert params["query_terms"] == ["morse", "neal"]
+    assert "query_terms" not in params
     assert sql == "caller-owned snapshot"
     assert [entry["title"] for entry in entries] == ["Alias Path Rarity"]
 
@@ -1620,17 +1746,216 @@ def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_ove
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: _NoopSearchSnapshotConnection(inventory),
     )
+    # Loose Tracks come from their own request since REC-007 deferred them from the tree.
+    [track] = repository.build_library_loose_tracks_payload()["library_non_album_tracks"]
+
+    assert track["exception_type"] == ""
+    assert track.get("custom_collection_name", "") == ""
+    assert track["reason_label"] == "Unmarked"
+
+
+def test_artist_loose_tracks_use_snapshot_for_count_and_family_fetch(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    tracks = [
+        {"title": "Family loose", "artist": "Broadcast", "album_artist": "Broadcast",
+         "display_path": "Broadcast/Loose/family.flac", "library_root_category": "main_library"},
+        {"title": "Other loose", "artist": "Other", "album_artist": "Other",
+         "display_path": "Other/Loose/other.flac", "library_root_category": "main_library"},
+        {"title": "Alias loose", "artist": "Morse, Portnoy & George",
+         "album_artist": "Morse, Portnoy & George",
+         "display_path": "Morse, Portnoy & George/Loose/alias.flac",
+         "library_root_category": "main_library"},
+    ]
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: tracks)
     monkeypatch.setattr(
         repository,
-        "_load_root_startup_rows",
-        lambda _state, _aliases, **_kwargs: ([], []),
+        "_load_relation_alias_maps",
+        lambda **_kwargs: {
+            "alias_to_canonical": {"Morse, Portnoy & George": "Neal Morse"},
+            "canonical_to_aliases": {"Neal Morse": ["Morse, Portnoy & George"]},
+        },
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("a valid snapshot must avoid global candidate loading"),
+    )
+    monkeypatch.setattr(
+        browse,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {
+            "family_artists": [],
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
     )
 
-    payload = repository.build_root_sidebar_payload()
+    count = repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Broadcast", "availability": "1"}
+    )
+    payload = repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Broadcast"}
+    )
+    search_payload = repository.build_library_loose_tracks_payload(
+        query_params={"q": " Neal Morse "}
+    )
 
-    assert payload["non_album_tracks"][0]["exception_type"] == ""
-    assert payload["non_album_tracks"][0].get("custom_collection_name", "") == ""
-    assert payload["non_album_tracks"][0]["reason_label"] == "Unmarked"
+    assert count == {"non_album_track_count": 1}
+    assert [track["title"] for track in payload["non_album_tracks"]] == ["Family loose"]
+    assert [track["title"] for track in search_payload["library_non_album_tracks"]] == [
+        "Alias loose"
+    ]
+
+
+def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    stored = []
+    loaded_queries = []
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **kwargs: loaded_queries.append(kwargs.get("query", "")) or [],
+    )
+    monkeypatch.setattr(
+        browse,
+        "_problematic_inventory_fingerprint",
+        lambda _connection: "fingerprint-before-build",
+    )
+    monkeypatch.setattr(
+        repository,
+        "_store_non_album_track_snapshot",
+        lambda _connection, tracks, fingerprint: stored.append((tracks, fingerprint)),
+    )
+
+    repository.build_library_loose_tracks_payload(query_params={"q": "Family"})
+
+    assert loaded_queries == [""]
+    assert stored == [([], "fingerprint-before-build")]
+
+
+def test_stale_artist_snapshot_queues_writer_refresh_without_global_rebuild(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    queued = []
+    invalidated = []
+    cache_key = repository._utility_projection_cache_key("loose-tracks")
+
+    def invalidate(**options):
+        invalidated.append(options)
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("an artist request must not rebuild the global snapshot"),
+    )
+    monkeypatch.setattr(
+        repository,
+        "queue_utility_projection_prewarm",
+        lambda kind: queued.append(kind),
+    )
+    monkeypatch.setattr(
+        browse,
+        "invalidate_postgres_utility_projection_cache",
+        invalidate,
+    )
+
+    try:
+        browse._UTILITY_PROJECTION_CACHE[cache_key] = {"ready": True}
+        count = repository.build_library_loose_tracks_payload(
+            query_params={"artist": "Broadcast", "availability": "1"}
+        )
+        payload = repository.build_library_loose_tracks_payload(
+            query_params={"artist": "Broadcast"}
+        )
+    finally:
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+    assert count == {
+        "non_album_track_count": 0,
+        "non_album_tracks_deferred": True,
+    }
+    assert payload["non_album_tracks"] == []
+    assert payload["non_album_tracks_deferred"] is True
+    assert queued == ["loose-tracks", "loose-tracks"]
+    assert invalidated == [{
+        "database_url": repository._database_url,
+        "kinds": ("loose-tracks",),
+    }]
+
+
+def test_browse_only_repository_does_not_refresh_or_store_stale_non_album_snapshot(
+    monkeypatch,
+    committed_inventory_queries_for_legacy_browse_fakes,
+):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+            "SHARED_LIBRARY_BROWSE_ONLY": True,
+        },
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(
+            committed_inventory_queries_for_legacy_browse_fakes
+        ),
+    )
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+    monkeypatch.setattr(
+        repository,
+        "_load_non_album_entries",
+        lambda **_kwargs: pytest.fail("browse-only mode must not rebuild the global snapshot"),
+    )
+    monkeypatch.setattr(
+        repository,
+        "queue_utility_projection_prewarm",
+        lambda _kind: pytest.fail("browse-only mode must not queue a writer refresh"),
+    )
+
+    class RejectingConnection:
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("browse-only mode must not write the shared database")
+
+    assert repository.build_library_loose_tracks_payload(
+        query_params={"artist": "Broadcast", "availability": "1"}
+    ) == {
+        "non_album_track_count": 0,
+        "non_album_tracks_deferred": True,
+    }
+    global_payload = repository.build_library_loose_tracks_payload()
+    assert global_payload["library_non_album_tracks"] == []
+    assert global_payload["non_album_tracks_deferred"] is True
+    repository._store_non_album_track_snapshot(RejectingConnection(), [], "fingerprint")
 
 
 def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_exact_pseudo_key(
@@ -2493,7 +2818,8 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert len(missing_reads) == 1
     assert missing_reads[0][1] == {"album_key": None}
     fingerprint_reads = [(command, params) for command, params in connection.commands if "transaction_timestamp() as observed_at" in command]
-    assert len(fingerprint_reads) == 3
+    # Loose Tracks are deferred (REC-007), so their candidate read is gone.
+    assert len(fingerprint_reads) == 2
     assert all(params == {} for _command, params in fingerprint_reads)
     identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
     assert identity_reads == []
@@ -2596,7 +2922,8 @@ def test_postgres_library_browse_omits_category_filter_for_all_visible_categorie
     payload = repository.build_root_sidebar_payload()
 
     assert payload["visible_library_categories"] == ["main_library", "hoard", "new_arrivals"]
-    assert captured_params == [
+    # The gallery-projection lookup (REC-007) runs first with no parameters.
+    assert [params for params in captured_params if "category_count" in params] == [
         {"category_count": 0, "visible_categories": [], "alias_to_canonical": "{}"},
     ]
 
@@ -3968,15 +4295,18 @@ def test_relation_alias_loader_reports_persisted_projection_authority(
     }
     assert len(sql_calls) == 2
     normalized_sql = " ".join(sql_calls[1][0].split()).lower()
-    assert "'{scan_cache,relation_views}'" not in normalized_sql
-    assert normalized_sql.count("'{scan_cache,relation_views,alias_to_canonical}'") == 2
-    assert normalized_sql.count("'{scan_cache,relation_views,canonical_to_aliases}'") == 2
+    # Relation views come from the normalized projection, built once per query.
+    assert "'{scan_cache,relation_views" not in normalized_sql
+    assert normalized_sql.count("library.local_relation_views(") == 1
+    assert "relation_snapshot as materialized" in normalized_sql
+    assert normalized_sql.count("relation_snapshot.relation_views -> 'alias_to_canonical'") == 2
+    assert normalized_sql.count("relation_snapshot.relation_views -> 'canonical_to_aliases'") == 2
     assert normalized_sql.count("'{scan_cache,relation_projection}'") == 2
     assert "projection_structure_complete" in normalized_sql
     assert "as alias_to_canonical" in normalized_sql
     assert "as canonical_to_aliases" in normalized_sql
     assert "metadata -> 'scan_cache'" not in normalized_sql
-    assert "as relation_views" not in normalized_sql
+    assert normalized_sql.count("as relation_views") == 1
     assert "as relation_projection" in normalized_sql
 
 
@@ -4134,23 +4464,18 @@ def test_exact_artist_fallback_sql_constrains_identity_before_album_expansion():
     assert sql.index(identity_filter) < sql.index(track_expansion)
 
 
-def test_exact_artist_sidebar_excludes_artists_found_only_through_a_shared_release():
-    from music_app.services.library_browse_postgres import _without_release_coartists
+def test_exact_artist_sidebar_merge_excludes_unmatched_release_coartists():
+    from music_app.services.library_browse_postgres import _merge_artist_groups_for_sidebar
 
     groups = [
         {"artist": "Bella Ramsey", "albums": [{"key": "hilda"}]},
         {"artist": "Ryan Carlson", "albums": [{"key": "hilda"}]},
-        {"artist": "Orville Peck", "albums": [{"key": "hilda"}, {"key": "own-album"}]},
-        {"artist": "Bella Ramsey & Friends", "albums": [{"key": "hilda"}]},
+        {"artist": "Orville Peck", "albums": [{"key": "hilda"}]},
     ]
 
-    kept = _without_release_coartists(
-        groups, "Bella Ramsey", query="Bella Ramsey", canonical_to_aliases={},
-    )
+    merged = _merge_artist_groups_for_sidebar(groups, [], artists=["Bella Ramsey"])
 
-    assert [group["artist"] for group in kept] == [
-        "Bella Ramsey", "Orville Peck", "Bella Ramsey & Friends",
-    ]
+    assert [group["artist"] for group in merged] == ["Bella Ramsey"]
 
 
 @pytest.mark.parametrize("outside_match", [False, True])
@@ -4231,10 +4556,8 @@ def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monke
     assert [group["artist"] for group in payload["artist_groups"]] == [
         "Signal Artist", *expected_family,
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "Signal Artist", "Signal Family", *(["Outside Match"] if outside_match else []),
-    ]
-    assert payload["show_all_artists_sidebar_link"] is outside_match
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Signal Artist", "Signal Family"]
+    assert payload["show_all_artists_sidebar_link"] is False
 
 
 @pytest.mark.parametrize("with_alias", [False, True])
@@ -5477,7 +5800,8 @@ def test_postgres_selected_artist_payload_applies_category_filter_params():
     }
 
 
-def test_postgres_library_browse_builds_direct_album_search_payload():
+@pytest.mark.parametrize("include_library_wide", [False, True])
+def test_postgres_library_browse_builds_direct_album_search_payload(monkeypatch, include_library_wide):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     executed: list[object] = []
@@ -5548,10 +5872,20 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
 
+    if include_library_wide:
+        def load_entries(**kwargs):
+            assert kwargs["include_library_wide"] is True
+            assert kwargs["query"] == "tender"
+            assert kwargs["visible_artist_names"] == ["Tender Forever"]
+            return [], [{"title": "Tender loose track", "artist": "Broadcast"}]
+        monkeypatch.setattr(repository, "_load_non_album_entries", load_entries)
+        monkeypatch.setattr("music_app.services.library_browse_postgres.build_non_album_track_list", lambda entries, **kwargs: entries)
+
     payload = repository.build_search_payload(
         query_params={
             "surface": "albums",
             "q": "tender",
+            **({"include_non_album": "1", "include_library_wide_non_album": "1"} if include_library_wide else {}),
             "gallery_display": "list",
             "category": ["main_library"],
         },
@@ -5579,14 +5913,17 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     assert payload["listen_through_scope_candidates"]["artist"]["artist_ref"] == "Tender Forever"
     assert payload["listen_through_scope_candidates"]["artist_family"]["selected_artist_ref"] == "Tender Forever"
     assert payload["non_album_tracks"] == []
+    if include_library_wide:
+        assert payload["library_non_album_tracks"] == [{"title": "Tender loose track", "artist": "Broadcast"}]
     assert payload["album_count"] == 1
     assert payload["artist_count"] == 2
     assert [group["artist"] for group in payload["artist_groups"]] == ["Tender Forever"]
     assert payload["primary_artist_groups"] == payload["artist_groups"]
     assert [album["name"] for album in payload["artist_groups"][0]["albums"]] == ["No Snare"]
+    # The best match drives the gallery and selection; the tree stays alphabetical.
     assert payload["artists_sidebar"] == [
-        {"artist": "Tender Forever", "artist_display": "Tender Forever", "count": 1},
         {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
+        {"artist": "Tender Forever", "artist_display": "Tender Forever", "count": 1},
     ]
     assert payload["search_context"] == {
         "transport": "view_data",
@@ -5629,16 +5966,16 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     assert "visible_album_ids as materialized" in sql.lower()
     assert "matched_album_ids as materialized" in sql.lower()
     assert "lower(btrim(coalesce(library.local_albums.title, ''))) like lower(%(query_like)s)" in sql
-    assert "lower(btrim(coalesce(library.local_artists.name, ''))) like lower(%(query_like)s)" in sql
+    assert "library.fold_search_accents(library.local_artists.name) like library.fold_search_accents(%(query_like)s)" in sql
     assert (
-        "lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', ''))) "
-        "like lower(%(query_like)s)"
+        "library.fold_search_accents(library.local_albums.metadata ->> 'album_artist') "
+        "like library.fold_search_accents(%(query_like)s)"
     ) in sql
     assert "credited_album_artist_matches as materialized" in sql.lower()
     assert "credited_raw_artist_matches as materialized" in sql.lower()
     assert (
-        "lower(btrim(coalesce(library.local_albums.metadata ->> 'artists', ''))) "
-        "like lower(%(query_like)s)"
+        "library.fold_search_accents(library.local_albums.metadata ->> 'artists') "
+        "like library.fold_search_accents(%(query_like)s)"
     ) in sql
     assert "lower(btrim(coalesce(library.local_tracks.title, ''))) like lower(%(query_like)s)" in sql
     assert "like lower(%(query_like)s)" in sql
@@ -5661,6 +5998,39 @@ def test_search_preview_sql_scopes_missing_candidates_to_bootstrap_library():
         "bootstrap_context.library_id = search_candidate_album_ids.library_id"
         in missing_candidates
     )
+
+
+def test_search_preview_sql_matches_disc_subtitles_through_their_own_index():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    for use_utf8_prefilter in (False, True):
+        sql = " ".join(_search_preview_sql(use_utf8_prefilter=use_utf8_prefilter).split()).lower()
+        file_matches = sql.split("file_name_matches as materialized (", 1)[1].split(
+            "matched_track_album_ids as materialized (", 1
+        )[0]
+        # A disc subtitle (CD name) finds every track on that disc. It is its own
+        # branch so the file-path prefilter never hides it and it never reads every
+        # file's metadata: the partial index from migration 0118 serves it.
+        path_clause, subtitle_clause = file_matches.split(" union ", 1)
+        assert "disc_subtitle" not in path_clause
+        assert (
+            "where btrim(library.local_track_files.metadata #>> "
+            "'{scan_cache,file_entry,disc_subtitle}') <> ''"
+        ) in subtitle_clause
+        assert "like lower(%(query_like)s)" in subtitle_clause
+        assert ("search_utf8_hex" in subtitle_clause) is use_utf8_prefilter
+
+
+def test_search_preview_sql_does_not_match_folder_paths():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    sql = " ".join(_search_preview_sql().split()).lower()
+    file_matches = sql.split("file_name_matches as materialized (", 1)[1].split(
+        "matched_track_album_ids as materialized (", 1
+    )[0]
+
+    assert "library.local_track_files.relative_path" not in file_matches
+    assert "regexp_replace(coalesce(library.local_track_files.private_path" in file_matches
 
 
 def test_search_preview_sql_separates_active_and_stale_filename_matches():
@@ -7287,7 +7657,7 @@ def test_artist_search_projection_authority_uses_current_database_metadata():
         connection=Connection()
     ) is True
     sql, params = executed[0]
-    assert "to_regclass('library.local_artist_search_projection')" in sql
+    assert "to_regclass('library.local_artist_search_projection_current')" in sql
     assert "relation_projection" in sql
     assert "source_fingerprint" in sql
     assert "built_from_fingerprint" in sql
@@ -7675,11 +8045,10 @@ def test_postgres_selected_artist_query_context_preserves_explicit_collaboration
         "resonance-no-hill-for-a-climber"
     ]
     assert "One" not in {album["name"] for album in primary_albums}
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        collaboration_artist,
-        "The Neal Morse Band",
-        "Neal Morse",
-    ]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == sorted(
+        [collaboration_artist, "The Neal Morse Band", "Neal Morse"],
+        key=artist_collation_key,
+    )
 
 
 def test_postgres_selected_artist_query_primary_filter_hydrates_primary_album_tracks():
@@ -8194,10 +8563,9 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
     assert payload["selected_artist"] == "Neal Morse"
     assert payload["query"] == "Neal Morse"
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse", "Cosmic Cathedral"]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "Neal Morse", "Cosmic Cathedral", "Transatlantic",
-    ]
-    assert payload["artist_count"] == 3
+    # Exact-family search keeps the tree aligned with the rendered gallery.
+    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse", "Cosmic Cathedral"]
+    assert payload["artist_count"] == 2
     assert queued_covers == [
         ("covers/neal.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
         ("covers/transatlantic.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
@@ -8325,11 +8693,10 @@ def test_postgres_non_exact_best_match_sidebar_includes_projected_family(monkeyp
         "The Flower Kings",
         *family_artists,
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == [
-        "The Flower Kings",
-        *family_artists,
-        "Swedish Family",
-    ]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == sorted(
+        ["The Flower Kings", *family_artists, "Swedish Family"],
+        key=artist_collation_key,
+    )
     assert payload["artist_count"] == 4
     assert payload["show_all_artists_sidebar_link"] is True
 
@@ -10018,6 +10385,9 @@ def test_postgres_selected_artist_payload_excludes_persisted_non_album_override_
     albums = payload["primary_artist_groups"][0]["albums"]
     assert [track["path"] for track in albums[0]["tracks"]] == [sibling_path]
     assert albums[0]["tracks"][0]["is_problematic"] is True
+    # Album Details shows these on hover without a Problematic Files request.
+    reasons = albums[0]["tracks"][0]["problem_reasons"]
+    assert reasons and all(isinstance(reason, str) and reason for reason in reasons)
     assert payload["album_count"] == 1
     sql = " ".join(_selected_artist_sql().split())
     assert "library.exception_overrides" in sql
@@ -10599,7 +10969,9 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
 
     sql = " ".join(_search_preview_sql().split())
 
-    assert sql.count("like lower(%(query_like)s)") == 8
+    # Album title, track title, file basename, file stem, disc subtitle.
+    assert sql.count("like lower(%(query_like)s)") == 5
+    assert sql.count("like library.fold_search_accents(%(query_like)s)") == 4
     assert "album_title_matches as materialized (" in sql
     assert "display_artist_matches as materialized (" in sql
     assert "credited_album_artist_matches as materialized (" in sql
@@ -10609,16 +10981,17 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
     assert "file_basename_matches as materialized (" not in sql
     assert "file_stem_matches as materialized (" not in sql
     assert "from library.local_albums where lower(btrim(coalesce(library.local_albums.title, '')))" in sql
-    assert "from library.local_artists where lower(btrim(coalesce(library.local_artists.name, '')))" in sql
+    assert "from library.local_artists where library.fold_search_accents(library.local_artists.name)" in sql
     assert (
-        "lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', ''))) "
-        "like lower(%(query_like)s)"
+        "library.fold_search_accents(library.local_albums.metadata ->> 'album_artist') "
+        "like library.fold_search_accents(%(query_like)s)"
     ) in sql
     assert (
         "lower(btrim(coalesce(library.local_tracks.title, ''))) "
         "like lower(%(query_like)s)"
     ) in sql
-    assert sql.count("from library.local_track_files where") == 1
+    # File names, then CD names through their own partial index.
+    assert sql.count("from library.local_track_files where") == 2
     assert "matched_track_album_ids as materialized (" in sql
     assert "search_candidate_album_ids as materialized (" in sql
     assert "eligible_matched_track_album_ids as materialized (" in sql
@@ -10892,6 +11265,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
             "year": "1999",
             "release_date": None,
             "edition": None,
+            "is_split_album": False,
             "root_provenance": {},
             "library_root_id": 7,
             "library_root_category": "library",
@@ -10910,6 +11284,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
                         "genre": "",
                         "year": "1999",
                         "is_problematic": True,
+                        "problem_reasons": ["Missing track number"],
                         "cover_path": "covers/split.jpg",
                         "cover_revision": None,
                         "disc_number": 1,
@@ -11043,6 +11418,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
             "album_ref": "exception-artist-exception-album",
             "_persisted_album_key": "exception-artist-exception-album",
             "name": "Exception Album",
+            "is_split_album": False,
             "album_artist": "Exception Artist",
             "artists": ["Exception Artist"],
             "cover_path": "covers/exception.jpg",
@@ -11078,6 +11454,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
                     "genre": "",
                     "year": "2026",
                     "is_problematic": True,
+                    "problem_reasons": ["Incomplete track order: Disc 1 missing 1"],
                     "cover_path": "covers/exception.jpg",
                     "cover_revision": None,
                     "disc_number": 1,
@@ -11223,6 +11600,64 @@ def test_problematic_file_entry_preserves_disc_total_and_subtitle():
     assert entry["disc_number_raw"] == "2/2"
     assert entry["total_discs"] == 2
     assert entry["disc_subtitle"] == "Bonus"
+
+
+def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypatch):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        _PROBLEMATIC_LOOSE_TRACKS_KEY,
+    )
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: None,
+    )
+    rows = [
+        {
+            "album_id": None,
+            "root_id": root_id,
+            "private_path": path,
+            "title": title,
+            "file_entry": {
+                "artist": artist,
+                "title": title,
+                "local_album_membership_problem": "Mixed album metadata in one folder",
+            },
+        }
+        for root_id, path, artist, title in (
+            ("main", "Main/Loose/one.flac", "First Artist", "One"),
+            ("downloads", "Downloads/Loose/two.flac", "Second Artist", "Two"),
+        )
+    ]
+    requested_paths = []
+
+    def load_candidates(**options):
+        requested_paths.append(set(options.get("private_paths") or []))
+        return rows
+
+    monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", load_candidates)
+    monkeypatch.setattr(
+        repository,
+        "_get_cached_utility_projection",
+        lambda kind, **_options: {
+            "items": [{
+                "key": _PROBLEMATIC_LOOSE_TRACKS_KEY,
+                "track_paths": [row["private_path"] for row in rows],
+            }],
+        } if kind == "problematic-files" else None,
+    )
+
+    result = repository._load_problematic_file_rows(
+        album_key=_PROBLEMATIC_LOOSE_TRACKS_KEY,
+        connection=object(),
+    )
+
+    assert {row["album_key"] for row in result} == {_PROBLEMATIC_LOOSE_TRACKS_KEY}
+    assert {row["file_private_path"] for row in result} == {
+        "Main/Loose/one.flac",
+        "Downloads/Loose/two.flac",
+    }
+    assert requested_paths == [{"Main/Loose/one.flac", "Downloads/Loose/two.flac"}]
 
 
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():
@@ -11690,6 +12125,16 @@ def test_problematic_files_summary_sql_prefilters_a_safe_superset_without_changi
     assert "cross join lateral" not in detail_sql
 
 
+def test_problematic_detail_membership_read_is_bounded_to_selected_physical_files():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    for options in ({}, {"duplicate_candidates": True}, {"candidate_summary": True, "selected_album_ids": True}):
+        sql = " ".join(_problematic_files_sql(**options).split())
+        membership = sql.split("local_album_membership as materialized (", 1)[1].split("active_problem_rows as materialized", 1)[0]
+        assert "join physical_scope_file_ids on physical_scope_file_ids.id = files.id" in membership
+        assert sql.index("physical_scope_file_ids as materialized") < sql.index("local_album_membership as materialized")
+
+
 def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes_missing_numbers():
     from music_app.services.library_browse_postgres import _problematic_files_sql
 
@@ -11892,8 +12337,22 @@ def test_duplicate_identity_values_match_postgres_slash_year_normalization():
 
     assert _duplicate_album_identity_values("Straße", "Café", "2001/2002") == (
         "strasse",
-        "café",
+        "cafe",
         2001,
+    )
+
+
+def test_duplicate_identity_ignores_case_and_latin_accents_but_not_cyrillic_letters():
+    from music_app.services.library import _duplicate_album_identity_values
+
+    assert _duplicate_album_identity_values(
+        "Fabrizio De André", "Non Al Denaro Non all'amore Nè Al Cielo", 1971,
+    ) == _duplicate_album_identity_values(
+        "Fabrizio De André", "Non al denaro non all'amore né al cielo", "1971",
+    )
+    # Cyrillic letters are not accent variants: Ё and Е stay distinct.
+    assert _duplicate_album_identity_values("Ария", "Ёлка", 1987) != _duplicate_album_identity_values(
+        "Ария", "Елка", 1987,
     )
 
 
@@ -11917,7 +12376,7 @@ def test_duplicate_compact_candidate_index_does_not_construct_track_models(monke
             "album": "Café",
             "year": "2001",
         }
-    ]) == [(1, "one", ("strasse", "café", 2001))]
+    ]) == [(1, "one", ("strasse", "cafe", 2001))]
 
 
 def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_validation():
@@ -12087,6 +12546,24 @@ def test_requested_duplicate_identity_sql_uses_exact_indexed_domain_identity():
     ) in sql
     assert "files.scan_cache_stale is false" in sql
     assert "files.scan_file_entry_is_object is true" in sql
+
+
+def test_stray_duplicate_ownership_reaches_duplicate_and_visibility_queries():
+    from music_app.services.library_browse_postgres import (
+        _duplicate_candidate_album_ids_for_keys_sql,
+        _duplicate_source_rows_for_album_ids_sql,
+        _visible_album_clause,
+    )
+
+    candidates = " ".join(
+        _duplicate_candidate_album_ids_for_keys_sql().split()
+    ).lower()
+    sources = " ".join(_duplicate_source_rows_for_album_ids_sql().split()).lower()
+    visibility = " ".join(_visible_album_clause("album").split()).lower()
+
+    assert "stray_duplicate_of" in candidates
+    assert "stray_duplicate_of" in sources
+    assert "stray_duplicate_of" in visibility
 
 
 def test_requested_duplicate_identity_sql_returns_only_cross_container_identities():
@@ -12576,6 +13053,37 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.parametrize(("query", "matches"), [
+    ("Canonical Artist", True), ("raw artist", True), ("Morning", True), ("audio", True),
+    # Gallery search has no typo tolerance and never matches years, exception
+    # types or word fragments, so neither do loose tracks.
+    ("Mornng", False), ("2001", False), ("Non-album rarity", False), ("Rawland", False),
+])
+@pytest.mark.parametrize("library_wide", [False, True])
+def test_non_album_search_uses_the_gallery_search_rule(monkeypatch, query, matches, library_wide):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "non-album-fuzzy-contract"})
+    calls = []
+    row = {"private_path": "/owned/audio.flac", "library_root_category": "main_library",
+           "file_entry": {"artist": "Raw Artist", "album_artist": "Raw Artist", "album": "",
+                          "title": "Morning", "year": 2001, "exception_type": "non album rarity"}}
+    monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates",
+                        lambda **kwargs: calls.append(kwargs) or [row])
+    entries = repository._load_non_album_entries(
+        view_state={}, alias_to_canonical={"Raw Artist": "Canonical Artist"},
+        canonical_to_aliases={"Canonical Artist": ["Raw Artist"]},
+        visible_artist_names=["Raw Artist"], query=query, include_library_wide=library_wide,
+    )
+    if library_wide:
+        entries = entries[1]
+    assert [entry["path"] for entry in entries] == (["/owned/audio.flac"] if matches else [])
+    assert "query_terms" not in calls[0], "Exact SQL LIKE cannot prefilter canonical-alias matches"
+    assert calls[0]["limit"] == browse.MAX_NON_ALBUM_CANDIDATE_LIMIT
+    assert calls[0].get("artist_names") == (None if library_wide else ["Raw Artist"])
+
+
 def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_loaded(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12616,19 +13124,26 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
         query="Tender Buttons",
         connection=object(),
     )
+    repository._load_non_album_entries(
+        view_state={}, alias_to_canonical={}, canonical_to_aliases={},
+        visible_artist_names=["Bright Eyes"], query="Bright Eyes",
+        include_library_wide=True, connection=object(),
+    )
 
     assert calls == [
         {
             "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
             "connection": calls[0]["connection"],
             "artist_names": ["Radiohead", "Thom Yorke"],
-            "query_terms": ["a", "kid"],
         },
         {
             "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
             "connection": calls[1]["connection"],
             "artist_names": ["Broadcast"],
-            "query_terms": ["button", "tender"],
+        },
+        {
+            "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            "connection": calls[2]["connection"],
         },
     ]
     browse.invalidate_postgres_utility_projection_cache()
@@ -12777,27 +13292,21 @@ def test_problematic_files_cold_path_separates_candidate_discovery_from_indexed_
 def test_problematic_candidate_page_sql_orders_and_limits_ids_before_row_hydration():
     from music_app.services.library_browse_postgres import (
         _missing_albums_sql,
-        _problematic_files_sql,
+        _problematic_page_album_ids_sql,
     )
 
-    page_sql = " ".join(
-        _problematic_files_sql(
-            candidate_summary=True,
-            candidate_ids_page=True,
-        ).split()
-    ).lower()
+    page_sql = " ".join(_problematic_page_album_ids_sql().split()).lower()
 
-    assert "count(*) over () as total_candidate_count" not in page_sql
-    assert "active_problem_rows as materialized" in page_sql
-    assert "spotify_quota_albums as materialized" in page_sql
+    # Orders only the already-computed candidates; no whole-library CTEs.
+    assert "active_problem_rows" not in page_sql
+    assert "albums.id = any(%(candidate_ids)s::bigint[])" in page_sql
     assert page_sql.count('collate "c"') == 4
-    assert "join library.local_albums" in page_sql
     assert "left join library.local_artists" in page_sql
-    assert "order by lower(coalesce(library.local_albums.title, ''))" in page_sql
-    assert "lower(coalesce(nullif(library.local_albums.metadata ->> 'album_artist', '')" in page_sql
-    assert "coalesce(library.local_albums.release_year::text, '')" in page_sql
-    assert "lower(coalesce(library.local_albums.album_key, ''))" in page_sql
-    assert page_sql.endswith("limit %(limit)s::integer;")
+    assert "order by lower(coalesce(albums.title, ''))" in page_sql
+    assert "lower(coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name, ''))" in page_sql
+    assert "coalesce(albums.release_year::text, '')" in page_sql
+    assert "lower(coalesce(albums.album_key, ''))" in page_sql
+    assert page_sql.endswith("limit %(limit)s::integer")
 
     missing_page_sql = " ".join(_missing_albums_sql(bounded=True).split()).lower()
     assert missing_page_sql.count('collate "c"') == 4
@@ -13586,8 +14095,10 @@ def test_load_selected_artist_family_projection_sql_selects_target_artist_name()
     assert "select library.local_artists.id, library.local_artists.name, library.local_artists.artist_key from library.local_artists" in sql
     assert "target_artist.name as selected_artist_name" in sql
     assert "and library.local_artist_family_links.source_family = %(relationship_source)s" not in sql
-    assert "local_artist_family_links.library_id = (select library_id from bootstrap_context)" in sql
-    assert "case when library.local_artist_family_links.source_family = %(relationship_source)s then 0 else 1 end" in sql
+    assert "select * from library.local_artist_family_links_current" in sql
+    assert "select * from library.local_artist_family_links where source_family <> 'folder_derived_runtime'" in sql
+    assert "family_links.library_id = (select library_id from bootstrap_context)" in sql
+    assert "case when family_links.source_family = %(relationship_source)s then 0 else 1 end" in sql
 
 
 def _normal_problematic_product_row(*, album_key="product-album", album_title="Product Album"):
@@ -14796,20 +15307,22 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
     )
     browse_connections = []
 
+    requested_limits = []
+    requested_album_ids = []
+    requested_missing_limits = []
+
     class BrowseConnection(_ProblematicSnapshotConnectionStub):
         def __enter__(self):
             browse_connections.append(self)
             return self
 
     repository._browse_connection_context = lambda: BrowseConnection()
-    requested_limits = []
-    requested_album_ids = []
-    requested_missing_limits = []
+    repository._get_stale_utility_projection = lambda _kind: None
 
     def load_candidate_ids(*, connection, limit):
         assert connection is not None
         requested_limits.append(limit)
-        return [1, 2, 3]
+        return [1, 2]
 
     def load_rows(album_key=None, *, candidate_summary=True, connection=None, album_ids=None):
         assert album_key is None
@@ -14843,6 +15356,469 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
     assert payload["total_candidate_count"] is None
     assert payload["complete"] is False
     assert payload["initial_detail"]["key"] == "album-1"
+
+
+def _problematic_search_repository(rows, matching_album_ids, candidate_album_ids=None):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    searches = []
+    evaluated = []
+
+    class SearchConnection(_ProblematicSnapshotConnectionStub):
+        def execute(self, sql, params=None):
+            if "strpos(lower(albums.title), %(needle)s)" in str(sql):
+                searches.append(dict(params))
+                candidates = set(params["candidate_ids"])
+                return _InventoryCursor(rows=[{"id": album_id} for album_id in matching_album_ids if album_id in candidates])
+            return super().execute(sql, params)
+
+    repository._browse_connection_context = lambda: SearchConnection()
+    candidates = frozenset(
+        {row["album_id"] for row in rows} if candidate_album_ids is None else candidate_album_ids
+    )
+    repository._problematic_candidate_album_ids = lambda connection: candidates
+    repository._get_stale_utility_projection = lambda _kind: None
+
+    def load_rows(album_key=None, *, candidate_summary=True, connection=None, album_ids=None):
+        assert album_key is None and candidate_summary is True and connection is not None
+        evaluated.append(list(album_ids))
+        return [row for row in rows if row["album_id"] in set(album_ids)]
+
+    repository._load_problematic_file_rows = load_rows
+    repository._get_cached_utility_projection = lambda _kind: None
+    repository._build_problematic_files_payload_uncached = lambda: (_ for _ in ()).throw(
+        AssertionError("a search must not build the complete projection")
+    )
+    return repository, searches, evaluated
+
+
+def _numbered_problematic_rows(count):
+    rows = []
+    for index in range(1, count + 1):
+        row = _normal_problematic_product_row(album_key=f"album-{index:03d}", album_title=f"Album {index:03d}")
+        row.update({"album_id": index, "track_id": 500 + index, "track_key": f"track-{index}"})
+        rows.append(row)
+    return rows
+
+
+def test_problematic_files_search_reaches_albums_beyond_the_first_page_without_the_full_list():
+    rows = _numbered_problematic_rows(120)
+    rows[96]["album_title"] = "Needle In The Haystack"
+    repository, searches, evaluated = _problematic_search_repository(rows, [97])
+
+    payload = repository.build_problematic_files_search("  NEEDLE in ")
+
+    assert searches == [{"needle": "needle in", "candidate_ids": list(range(1, 121)), "limit": 2001}]
+    # Only the SQL-narrowed albums are evaluated, never the whole library.
+    assert evaluated == [[97]]
+    assert [item["key"] for item in payload["items"]] == ["album-097"]
+    assert payload["count"] == 1
+    assert payload["complete"] is False
+    assert payload["search_truncated"] is False
+    assert payload["projection_cache_status"] == "search"
+
+
+def test_problematic_files_search_drops_narrowed_albums_the_list_filter_would_not_show():
+    rows = _numbered_problematic_rows(3)
+    # The album artist matched in SQL, but its summary shows a different artist.
+    repository, _searches, evaluated = _problematic_search_repository(rows, [1, 2, 3])
+
+    payload = repository.build_problematic_files_search("Album 002")
+
+    assert evaluated == [[1, 2, 3]]
+    assert [item["key"] for item in payload["items"]] == ["album-002"]
+
+
+def test_problematic_files_search_never_evaluates_albums_the_complete_list_would_not():
+    """The real library returned 23 Art Zoyd albums before the list loaded and 4
+    after: track-less edition albums matched by title were evaluated in
+    isolation and flagged Poor art quality, though no list ever shows them."""
+    rows = _numbered_problematic_rows(3)
+    repository, _searches, evaluated = _problematic_search_repository(rows, [1, 2, 3], candidate_album_ids={2})
+
+    payload = repository.build_problematic_files_search("album")
+
+    assert evaluated == [[2]]
+    assert [item["key"] for item in payload["items"]] == ["album-002"]
+
+
+def test_problematic_files_search_answers_from_the_last_list_while_a_fresh_one_rebuilds():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: (_ for _ in ()).throw(AssertionError("a stale search must not query Postgres")),
+    )
+    repository._get_cached_utility_projection = lambda _kind: None
+    repository._get_stale_utility_projection = lambda kind: {
+        "items": [{"key": "a", "name": "Alpha"}, {"key": "b", "name": "Beta"}],
+    } if kind == "problematic-files" else None
+
+    payload = repository.build_problematic_files_search("beta")
+
+    assert [item["key"] for item in payload["items"]] == ["b"]
+    assert payload["complete"] is False
+    assert payload["projection_cache_status"] == "stale"
+
+
+def test_problematic_files_search_waits_for_the_inflight_complete_list():
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/search-singleflight"
+    cache_key = (database_url, "problematic-files")
+    waiting = Event()
+    release = Event()
+
+    class RecordingFlight:
+        def wait(self):
+            waiting.set()
+            assert release.wait(1)
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("the completed list must answer without a narrower query")
+        ),
+    )
+    repository._get_stale_utility_projection = lambda _kind: None
+    try:
+        browse._UTILITY_PROJECTION_SINGLEFLIGHT[cache_key] = RecordingFlight()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(repository.build_problematic_files_search, "prince")
+            assert waiting.wait(1)
+            browse._UTILITY_PROJECTION_CACHE[cache_key] = {
+                "items": [
+                    {"key": "various::prince", "name": "The Prince Of Egypt"},
+                    {"key": "other", "name": "Other"},
+                ],
+            }
+            browse._UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
+            release.set()
+            payload = result.result(timeout=1)
+        assert [item["key"] for item in payload["items"]] == ["various::prince"]
+        assert payload["complete"] is True
+        assert payload["projection_cache_status"] == "hit"
+    finally:
+        release.set()
+        browse._UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+
+def test_problematic_files_search_rereads_a_list_published_after_its_first_cache_miss():
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/search-published"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("the newly published list must answer without a narrower query")
+        ),
+    )
+    reads = iter((None, {"items": [{"key": "prince", "name": "The Prince Of Egypt"}]}))
+    repository._get_cached_utility_projection = lambda _kind: next(reads)
+    repository._get_stale_utility_projection = lambda _kind: None
+
+    payload = repository.build_problematic_files_search("prince")
+
+    assert [item["key"] for item in payload["items"]] == ["prince"]
+    assert payload["complete"] is True
+    assert payload["projection_cache_status"] == "hit"
+
+
+def test_problematic_files_search_marks_a_truncated_narrowing():
+    from music_app.services import library_browse_postgres as browse
+
+    rows = _numbered_problematic_rows(3)
+    repository, _searches, evaluated = _problematic_search_repository(rows, [1, 2, 3])
+    original = browse.PROBLEMATIC_SEARCH_ALBUM_LIMIT
+    browse.PROBLEMATIC_SEARCH_ALBUM_LIMIT = 2
+    try:
+        payload = repository.build_problematic_files_search("album")
+    finally:
+        browse.PROBLEMATIC_SEARCH_ALBUM_LIMIT = original
+
+    assert evaluated == [[1, 2]]
+    assert payload["search_truncated"] is True
+
+
+def test_problematic_files_search_filters_the_cached_complete_list_exactly():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("a cached search must not query Postgres")
+        ),
+    )
+    repository._get_cached_utility_projection = lambda kind: {
+        "count": 4,
+        "items": [
+            {"key": "a", "name": "Alpha", "problem_reasons": ["Year mismatch"]},
+            {"key": "b", "name": "Beta", "search_text": "Hidden Track"},
+            {"key": "d", "name": "Delta", "problem_reasons": ["Album artist mismatch"]},
+            {"key": "c", "name": "Gamma", "raw_name": "Р“Р°РјРјР°"},
+        ],
+        "initial_detail": {"key": "a"},
+    } if kind == "problematic-files" else None
+
+    assert [item["key"] for item in repository.build_problematic_files_search("YEAR MISMATCH")["items"]] == ["a"]
+    assert [item["key"] for item in repository.build_problematic_files_search("hidden")["items"]] == ["b"]
+    assert repository.build_problematic_files_search("art")["items"] == []
+    assert [item["key"] for item in repository.build_problematic_files_search("album artist mismatch")["items"]] == ["d"]
+    cached = repository.build_problematic_files_search("Р“Р°Рј")
+    assert [item["key"] for item in cached["items"]] == ["c"]
+    assert cached["complete"] is True
+    assert cached["initial_detail"] is None
+
+
+def test_problematic_files_invalidation_drops_the_last_list_and_rewarms(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/stale-first-page"
+    cache_key = (database_url, "problematic-files")
+    timers = []
+
+    class RecordingTimer:
+        def __init__(self, delay, function, args):
+            timers.append((delay, function, args))
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(browse, "Timer", RecordingTimer)
+    rewarmed = []
+    try:
+        browse._UTILITY_PROJECTION_CACHE[cache_key] = {"items": [{"key": f"album-{i}"} for i in range(5)]}
+        browse._UTILITY_PROJECTION_REWARM[cache_key] = lambda: rewarmed.append(cache_key)
+
+        browse.invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=["problematic-files"])
+        browse.invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=["problematic-files"])
+
+        # A burst of invalidations schedules one delayed rebuild.
+        assert len(timers) == 1 and timers[0][0] == browse._UTILITY_PROJECTION_REWARM_DELAY_SECONDS
+        timers[0][1](*timers[0][2])
+        assert rewarmed == [cache_key]
+
+        # A changed library may have merged or removed listed albums: the
+        # previous list is never served (FTC-UTIL-PROBLEMS-013/007 clicked a
+        # merged-away identity from it).
+        assert cache_key not in browse._UTILITY_PROJECTION_CACHE
+        assert cache_key not in browse._UTILITY_PROJECTION_STALE
+    finally:
+        for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE,
+                         browse._UTILITY_PROJECTION_REWARM, browse._UTILITY_PROJECTION_GENERATIONS):
+            registry.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+
+
+def test_opened_rules_are_rebuilt_after_a_library_change_instead_of_on_the_next_click(monkeypatch):
+    """Settings > Rules took ~2 s on the shared library: every watcher change left it cold."""
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/rules-rewarm"
+    cache_key = (database_url, "rules")
+    timers, prewarmed = [], []
+
+    class RecordingTimer:
+        def __init__(self, delay, function, args):
+            timers.append((function, args))
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(browse, "Timer", RecordingTimer)
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: prewarmed.append(kind))
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    repository._allow_background_prewarm = True
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", lambda: [])
+    try:
+        repository.build_utility_rules_payload()
+        browse.invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=["rules"])
+        assert cache_key not in browse._UTILITY_PROJECTION_CACHE
+        assert len(timers) == 1
+        timers[0][0](*timers[0][1])
+        assert prewarmed == ["rules"]
+    finally:
+        for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_REWARM,
+                         browse._UTILITY_PROJECTION_GENERATIONS):
+            registry.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+
+
+def test_problematic_files_cold_first_page_answers_from_the_stored_last_list(monkeypatch):
+    """A restarted server has no list in memory; the cold candidate pass took
+    ~5 s on the owner's library. Migration 0117's snapshot answers at once."""
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/cold-snapshot"
+    cache_key = (database_url, "problematic-files")
+    loads = []
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+
+    def load_snapshot():
+        loads.append(1)
+        return {"items": [{"key": f"album-{i}"} for i in range(3)], "initial_detail": {"key": "album-0"}}
+
+    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", load_snapshot)
+    try:
+        page = repository.build_problematic_files_page(limit=2)
+        assert [item["key"] for item in page["items"]] == ["album-0", "album-1"]
+        assert page["projection_cache_status"] == "stale"
+        assert page["complete"] is False
+        repository.build_problematic_files_page(limit=2)
+        assert len(loads) == 1, "the stored list is read once per process"
+    finally:
+        browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)
+        browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard(cache_key)
+
+
+def test_problematic_files_snapshot_is_stored_only_by_writer_instances(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    submitted = []
+
+    class RecordingExecutor:
+        def submit(self, function, *args):
+            submitted.append((function, args))
+
+    monkeypatch.setattr(browse, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    payload = {"items": [{"key": "a"}], "projection_cache_status": "rebuilt"}
+    browse_only = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/browse-only",
+        "SHARED_LIBRARY_BROWSE_ONLY": True,
+    })
+    browse_only._queue_problematic_files_snapshot_store(payload, "fingerprint")
+    assert submitted == []
+
+    writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/writer"})
+    writer._queue_problematic_files_snapshot_store(payload, "fingerprint")
+    assert len(submitted) == 1
+    stored = json.loads(submitted[0][1][0])
+    assert stored == {
+        "items": [{"key": "a"}],
+        browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint",
+        browse._PROBLEMATIC_SNAPSHOT_VERSION_KEY: browse._PROBLEMATIC_SNAPSHOT_VERSION,
+    }
+
+
+def test_problematic_files_snapshot_version_is_required_for_normal_serving(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from music_app.services import library_browse_postgres as browse
+
+    snapshot = {
+        "items": [{"key": "loose-source::old-root-hash"}],
+        browse._SNAPSHOT_FINGERPRINT_KEY: "current",
+    }
+
+    class Connection:
+        def execute(self, _sql):
+            return SimpleNamespace(fetchone=lambda: {"payload": json.dumps(snapshot)})
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/old-snapshot",
+    })
+    monkeypatch.setattr(repository, "_connect_to_database", connection_context)
+    monkeypatch.setattr(browse, "_problematic_inventory_fingerprint", lambda _connection: "current")
+
+    assert repository._load_problematic_files_snapshot() is None
+    assert repository._load_problematic_files_snapshot(allow_outdated=True) == {
+        "items": [{"key": "loose-source::old-root-hash"}],
+    }
+
+
+def test_problematic_first_page_after_a_library_change_re_evaluates_the_stored_lists_albums(monkeypatch):
+    # Owner PERF-4: the whole-library candidate query took seconds on every change; the outdated
+    # stored list now only chooses the page's albums, which are evaluated against current data.
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/db"})
+    loaded = {}
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if "album_key = any" in sql:
+                assert params == {"keys": ["artist::first", "artist::second"]}
+                return SimpleNamespace(fetchall=lambda: [{"id": 7}, {"id": 9}])
+            return SimpleNamespace(fetchall=lambda: [])
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    monkeypatch.setattr(repository, "_get_cached_utility_projection", lambda _kind, **_options: None)
+    monkeypatch.setattr(repository, "_get_stale_utility_projection", lambda _kind: None)
+    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", lambda allow_outdated=False: {
+        "items": [{"key": "artist::first"}, {"key": "artist::second"}, {"key": "artist::third"}],
+    } if allow_outdated else None)
+    monkeypatch.setattr(repository, "_browse_connection_context", connection_context)
+    monkeypatch.setattr(repository, "_problematic_candidate_album_ids",
+                        lambda _connection: pytest.fail("the whole-library candidate query must not run"))
+    monkeypatch.setattr(repository, "_load_problematic_file_rows",
+                        lambda *, connection, album_ids: loaded.setdefault("album_ids", album_ids) and [])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "_build_problematic_files_payload_from_rows",
+                        lambda **_kwargs: {"items": [{"key": "artist::first"}], "count": 1})
+
+    payload = repository.build_problematic_files_page(limit=2)
+
+    assert loaded["album_ids"] == [7, 9]
+    assert payload["projection_cache_status"] == "revalidated"
+    assert payload["complete"] is False
+
+
+def test_problematic_candidate_ids_are_computed_once_per_library_change():
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/candidate-ids"
+    cache_key = (database_url, "problematic-files")
+    queries = []
+
+    class CandidateConnection(_ProblematicSnapshotConnectionStub):
+        def execute(self, sql, params=None):
+            if "select candidate_album_ids.album_id" in str(sql):
+                queries.append(sql)
+                return _InventoryCursor(rows=[{"album_id": 7}, {"album_id": None}, {"album_id": 3}])
+            return super().execute(sql, params)
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+        connect=lambda _url: CandidateConnection(),
+    )
+    try:
+        connection = CandidateConnection()
+        assert repository._problematic_candidate_album_ids(connection) == frozenset({3, 7})
+        assert repository._problematic_candidate_album_ids(connection) == frozenset({3, 7})
+        assert len(queries) == 1
+        browse.invalidate_postgres_utility_projection_cache(database_url=database_url, kinds=["problematic-files"])
+        repository._problematic_candidate_album_ids(connection)
+        assert len(queries) == 2
+    finally:
+        browse._PROBLEMATIC_CANDIDATE_IDS.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+
+
+def test_problematic_files_search_requires_a_query():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"})
+    with pytest.raises(ValueError):
+        repository.build_problematic_files_search("   ")
 
 
 def test_problematic_files_page_reuses_complete_projection_cache_before_querying():
@@ -15840,6 +16816,7 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
     repository.queue_settings_projection_prewarm()
 
     assert [submission[1] for submission in submissions] == [
+        "loose-tracks",
         "problematic-files",
         "rules",
     ]
@@ -15872,7 +16849,53 @@ def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index
 
     assert calls == [(connection, [], repository)]
 
-def test_postgres_library_browse_can_disable_background_utility_projection_prewarm(monkeypatch):
+def test_non_album_snapshot_prewarm_builds_and_registers_invalidation_refresh(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+    cache_key = repository._utility_projection_cache_key("loose-tracks")
+    builds = []
+    timers = []
+    monkeypatch.setattr(
+        repository,
+        "build_library_loose_tracks_payload",
+        lambda: builds.append("built") or {"library_non_album_tracks": []},
+    )
+    monkeypatch.setattr(
+        module,
+        "Timer",
+        lambda delay, callback, args: type(
+            "RecordedTimer",
+            (),
+            {
+                "daemon": False,
+                "start": lambda self: timers.append((delay, callback, args)),
+            },
+        )(),
+    )
+
+    try:
+        module._UTILITY_PROJECTION_GENERATIONS[cache_key] = 0
+        repository._run_utility_projection_prewarm("loose-tracks", cache_key, 0)
+        module.invalidate_postgres_utility_projection_cache(
+            database_url=repository._database_url,
+            kinds=("loose-tracks",),
+        )
+
+        assert builds == ["built"]
+        assert len(timers) == 1
+        assert timers[0][0] == module._UTILITY_PROJECTION_REWARM_DELAY_SECONDS
+    finally:
+        with module._UTILITY_PROJECTION_CACHE_LOCK:
+            module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+            module._UTILITY_PROJECTION_REWARM.pop(cache_key, None)
+            module._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+
+
+def test_postgres_library_browse_keeps_required_loose_track_refresh_when_optional_prewarm_is_disabled(monkeypatch):
     from music_app.services import library_browse_postgres as module
 
     submissions = []
@@ -15890,7 +16913,31 @@ def test_postgres_library_browse_can_disable_background_utility_projection_prewa
     repository.queue_settings_projection_prewarm()
     repository.queue_utility_projection_prewarm("problematic-files")
 
-    assert submissions == []
+    assert [submission[1] for submission in submissions] == ["loose-tracks"]
+
+
+def test_browse_only_settings_prewarm_never_queues_loose_track_writer(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    submissions = []
+
+    class RecordingExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    with module._UTILITY_PROJECTION_CACHE_LOCK:
+        module._UTILITY_PROJECTION_CACHE.clear()
+        module._UTILITY_PROJECTION_PREWARM_INFLIGHT.clear()
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+        "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED": True,
+        "SHARED_LIBRARY_BROWSE_ONLY": True,
+    })
+
+    repository.queue_settings_projection_prewarm()
+
+    assert [submission[1] for submission in submissions] == ["problematic-files", "rules"]
 
 
 def test_postgres_library_browse_disables_background_utility_projection_prewarm_by_default(monkeypatch):
@@ -17128,14 +18175,51 @@ def _missing_browse_row(*, album_id, title, category, artist="Broadcast", stale=
     return row
 
 
+@pytest.mark.parametrize(
+    ("categories", "visible", "expected"),
+    [
+        (["new_arrivals"], [], False),
+        (["main_library"], [], True),
+        (["hoard"], [], True),
+        ([None], [], True),
+        (["new_arrivals", "hoard"], ["new_arrivals"], False),
+        (["new_arrivals", "hoard"], ["hoard"], True),
+        (["new_arrivals", "hoard"], [], True),
+    ],
+)
+def test_missing_album_retention_requires_permanent_source(categories, visible, expected):
+    from music_app.services import library_browse_postgres as library_browse
+
+    rows = [
+        _missing_browse_row(album_id=2, title="Deleted", category=category)
+        for category in categories
+    ]
+    result = library_browse._missing_album_projection_payloads(
+        rows, view_state={"visible_library_categories": visible},
+    )
+    assert bool(result) is expected
+
+
+def test_deleted_arrivals_do_not_make_surviving_hoard_album_missing():
+    from music_app.services import library_browse_postgres as library_browse
+
+    rows = [
+        _missing_browse_row(album_id=2, title="Kept", category="new_arrivals"),
+        _missing_browse_row(album_id=2, title="Kept", category="hoard", stale=False),
+    ]
+    assert library_browse._missing_album_projection_payloads(rows) == []
+
+
 @pytest.mark.parametrize("outside_match", ["album", "track", "artist"])
-def test_exact_artist_search_sidebar_includes_other_missing_matches(
+def test_exact_artist_search_sidebar_keeps_direct_artist_album_and_track_matches(
     monkeypatch, missing_album_browse_repository, outside_match,
 ):
     repository = missing_album_browse_repository
     active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
     matching = _missing_browse_row(album_id=2, title="Lost Album", category="main_library", artist="Other Artist")
     matching[{"album": "album_title", "track": "track_title", "artist": "artist_name"}[outside_match]] = "Broadcast Collaboration"
+    matching["search_album_title_match"] = outside_match == "album"
+    matching["search_matched_track_artist_ids"] = [matching["artist_id"]] if outside_match == "track" else []
     if outside_match == "artist":
         matching["artist_sort_name"] = "Broadcast Collaboration"
         matching["album_metadata"].update({
@@ -17164,11 +18248,76 @@ def test_exact_artist_search_sidebar_includes_other_missing_matches(
     })
     payload = repository.build_search_payload(query_params={"q": "Broadcast", "category": ["main_library"]})
 
-    expected_other = "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"
-    assert {row["artist"] for row in payload["artists_sidebar"]} == {"Broadcast", expected_other}
-    assert payload["artist_count"] == 2
+    expected = {"Broadcast", "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"}
+    assert {row["artist"] for row in payload["artists_sidebar"]} == expected
+    assert payload["artist_count"] == len(expected)
     assert payload["show_all_artists_sidebar_link"] is True
     assert payload["selected_artist"] == "Broadcast"
+
+
+@pytest.mark.parametrize("query, matched_ids, title_match, expected_extra", [
+    ("Ария", [2], False, True),
+    ("Ария", [], True, True),
+    ("Bella Ramsey", [1], False, False),
+    ("Neal Morse", [1], False, False),
+])
+def test_exact_artist_search_keeps_rendered_family_and_own_matches_without_sibling_credit_leakage(
+    monkeypatch, missing_album_browse_repository, query, matched_ids, title_match, expected_extra,
+):
+    repository = missing_album_browse_repository
+    family_artist = "Transatlantic" if query == "Neal Morse" else "Family Only"
+    primary = _browse_album_row(artist=query, album_id=1, album_key="primary", title="Primary")
+    extra = _browse_album_row(artist="БИ-2", album_id=2, album_key="other", title="Аллилуйя")
+    extra.update(search_matched_track_artist_ids=matched_ids, search_album_title_match=title_match)
+    extra["album_featured_artists"] = [
+        {"artist_id": 2, "artist_name": "БИ-2", "featured_kind": "owner"},
+        {"artist_id": 3, "artist_name": "Unrelated Soundtrack Artist", "featured_kind": "featured_track_artist"},
+    ]
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: query)
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: _partitioned_search_rows([primary, extra], []))
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {query: query}, "canonical_to_aliases": {query: [query]}, "projection_stale_reason": "",
+    })
+    monkeypatch.setattr(repository, "build_selected_artist_payload", lambda **kwargs: {
+        "selected_artist": query, "primary_artist_groups": [{"artist": query, "albums": [{"key": "primary"}]}],
+        "family_artist_groups": [{"artist": family_artist, "albums": [{"key": "family"}]}], "search_context": {},
+    })
+    payload = repository.build_search_payload(query_params={"q": query})
+    expected = {query, family_artist, *(["БИ-2"] if expected_extra else [])}
+    assert {row["artist"] for row in payload["artists_sidebar"]} == expected
+    assert payload["artist_count"] == len(expected)
+    assert payload["family_artist_groups"][0]["artist"] == family_artist
+    assert payload["selected_artist"] == query
+    assert payload["show_all_artists_sidebar_link"] is expected_extra
+
+
+def test_search_preview_carries_eligible_track_identity_for_sidebar_matching():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+    sql = _search_preview_sql()
+    assert "as search_matched_track_artist_ids" in sql
+    assert "as search_album_title_match" in sql
+    assert "eligible_album_tracks.track_id = matched_track_album_ids.track_id" in sql
+
+
+def test_selected_artist_loose_tracks_are_scoped_and_ready_in_initial_payload(
+    monkeypatch, missing_album_browse_repository,
+):
+    repository = missing_album_browse_repository
+    calls = []
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **kwargs: [])
+    monkeypatch.setattr(repository, "_load_selected_artist_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **kwargs: calls.append(kwargs) or [])
+    payload = repository.build_selected_artist_payload(
+        query_params={"artist": "Broadcast", "omit_sidebar": "1", "include_non_album": "1", "payload_tier": "gallery_summary"},
+        _relation_alias_maps={
+            "alias_to_canonical": {"Former Name": "Broadcast"},
+            "canonical_to_aliases": {"Broadcast": ["Former Name"]},
+        },
+    )
+    assert payload["non_album_tracks_deferred"] is False
+    assert len(calls) == 1
+    assert set(calls[0]["visible_artist_names"]) == {"Broadcast", "Former Name"}
+    assert calls[0]["include_library_wide"] is False
 
 
 def test_selected_artist_passes_expanded_owner_scope_to_missing_loader(
@@ -17210,9 +18359,11 @@ def test_selected_artist_missing_albums_respect_category_with_active_albums(
 
     albums = [album for group in payload["primary_artist_groups"] for album in group["albums"]]
     expected_missing = next(row["album_key"] for row in missing if row["file_library_root_category"] == category)
-    assert {album["key"] for album in albums} == {"active", expected_missing}
-    assert payload["album_count"] == 2
-    assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
+    expected = {"active"} if category == "new_arrivals" else {"active", expected_missing}
+    assert {album["key"] for album in albums} == expected
+    assert payload["album_count"] == len(expected)
+    if category != "new_arrivals":
+        assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
 
 
 @pytest.mark.parametrize(
@@ -18039,8 +19190,10 @@ def test_postgres_cover_variant_queue_uses_local_revision_cache(monkeypatch):
     ]
 
 
-def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypatch):
+@pytest.mark.parametrize("mode", ["album_folders", "custom"])
+def test_postgres_cover_variant_queue_honors_storage_policy_without_revision(monkeypatch, tmp_path, mode):
     from music_app.services import covers as covers_module
+    from music_app.services.generated_preview_storage import preview_storage_policy_from_mapping
     from music_app.services.library_browse_postgres import (
         _queue_display_cover_variants_for_groups,
     )
@@ -18054,14 +19207,14 @@ def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypa
         ),
     )
 
-    class AlbumFolderStoragePolicy:
-        def write_cache_root(self, source_path):
-            return Path(source_path).parent / ".album-haven"
+    policy = preview_storage_policy_from_mapping({
+        "mode": mode, "active_root": str(tmp_path / "ssd"),
+    })
 
     _queue_display_cover_variants_for_groups(
         {
             "DATA_DIR": r"C:\AlbumHavenData",
-            "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
         },
         [{"albums": [{"cover_path": r"N:\Music\Artist\Album\Art\Front.jpg"}]}],
         limit=1,
@@ -18070,7 +19223,7 @@ def test_postgres_cover_variant_queue_uses_local_cache_without_revision(monkeypa
     assert queued == [
         (
             r"N:\Music\Artist\Album\Art\Front.jpg",
-            str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
+            str(policy.write_cache_root(Path(r"N:\Music\Artist\Album\Art\Front.jpg"))),
             None,
         )
     ]
@@ -18153,6 +19306,17 @@ def test_live_watcher_reuses_scan_relations_after_cover_only_change(watcher_repa
     assert reused == original
 
 
+def _damage_current_artist_search_projection(connection, search_state):
+    # Search reads the current-semantics entries (migration 0111), not the legacy table.
+    if search_state == 'missing':
+        connection.execute('delete from library.local_artist_search_projection_current_entries')
+    else:
+        connection.execute(
+            "update library.local_artist_search_projection_current_entries "
+            "set canonical_artist_name = canonical_artist_name || ' (stale)'"
+        )
+
+
 @pytest.mark.parametrize("search_state", ["missing", "stale"])
 def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
     watcher_repair_inventory, monkeypatch, search_state,
@@ -18165,14 +19329,7 @@ def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
     fixture.seed(fixture.entry('Owner/Album/01.flac'))
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         original = persistence._commit_structural_relation_projection(connection, fixture.config)
-        if search_state == 'missing':
-            connection.execute("delete from library.local_artist_search_projection")
-        else:
-            connection.execute(
-                "update library.local_artist_search_projection "
-                "set source_fingerprint = case when source_fingerprint = repeat('0', 64) "
-                "then repeat('1', 64) else repeat('0', 64) end"
-            )
+        _damage_current_artist_search_projection(connection, search_state)
         connection.execute(
             "update library.local_albums set metadata = metadata || %s::jsonb",
             (json.dumps({'selected_cover_path': 'synthetic-cover.jpg'}),),
@@ -18209,14 +19366,8 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
     fixture.seed(entry)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         original = persistence._commit_structural_relation_projection(connection, fixture.config)
-        if search_state == 'missing':
-            connection.execute('delete from library.local_artist_search_projection')
-        elif search_state == 'stale':
-            connection.execute(
-                "update library.local_artist_search_projection "
-                "set source_fingerprint = case when source_fingerprint = repeat('0', 64) "
-                "then repeat('1', 64) else repeat('0', 64) end"
-            )
+        if search_state != 'ready':
+            _damage_current_artist_search_projection(connection, search_state)
 
     revision_before = fixture.adapter.load_inventory_mutation_revision()
 
@@ -18240,14 +19391,13 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
     assert not projections.relation_projection_stale_reason(after)
-    assert not projections.artist_search_projection_stale_reason(after)
+    # A damaged search projection stays reported for explicit startup reconciliation; the watcher never masks it.
+    assert bool(projections.artist_search_projection_stale_reason(after)) is (search_state != 'ready')
     assert after['relations_last_built'] == original['relations_last_built']
     assert persistence.deserialize_relation_views(after['relation_views']) == original['relation_views']
 
 
-def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
-    watcher_repair_inventory, monkeypatch,
-):
+def test_live_targeted_watcher_rebuilds_families_when_artist_changes(watcher_repair_inventory):
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import relation_projection_postgres as projections
     from tests.e2e.support import isolatedPostgres
@@ -18261,19 +19411,12 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
     revision_before = fixture.adapter.load_inventory_mutation_revision()
-    calls = []
-    original_builder = persistence.build_relation_views_from_postgres_rows
-
-    def build(config, rows):
-        calls.append(True)
-        return original_builder(config, rows)
-
-    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', build)
+    assert 'Guest' not in json.dumps(before['relation_views'])
     changed = {**entry, 'artist': 'Guest'}
+    # The watcher patches the changed album's relations in place instead of rebuilding the library.
     result = fixture.adapter.persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: changed},
     )
-    assert calls == [True]
     assert result['inventory_mutation_revision'] > revision_before
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         after = projections._relation_projection_scan_cache_from_row(
@@ -18281,7 +19424,64 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
         )
     assert not projections.relation_projection_stale_reason(after)
     assert not projections.artist_search_projection_stale_reason(after)
-    assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
+    # A scoped patch keeps the full publication's fingerprint and records the patch instead.
+    assert after['relation_projection']['targeted_patch_reason'] == 'targeted_reconciliation'
+    assert 'Guest' in json.dumps(after['relation_views'])
+
+
+def test_live_targeted_publication_keeps_another_writers_album_change_queued(
+    watcher_repair_inventory, monkeypatch,
+):
+    from contextlib import contextmanager
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry('Owner/Album/01.flac')
+    other = fixture.entry('Other/Second/01.flac', artist='Other', album='Second')
+    fixture.seed(entry, other)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        library_id, other_album_id = connection.execute(
+            "select tracks.library_id, tracks.album_id from library.local_track_files files "
+            "join library.local_tracks tracks on tracks.id=files.track_id where files.private_path=%s",
+            (other['path'],),
+        ).fetchone().values()
+    journaled = []
+    real_connect = fixture.adapter._connect
+
+    class AnotherWriterJournalsMidPublication:
+        """Commit another album's journal row right after the publication reads the journal."""
+
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+        def execute(self, sql, params=None):
+            result = self._connection.execute(sql, params)
+            if not journaled and 'local_relation_dirty_albums' in str(sql) and 'album_id>0' in str(sql):
+                journaled.append(True)
+                with isolatedPostgres._connect(fixture.setup_url) as writer:
+                    writer.execute('select library.mark_relation_album_dirty(%s,%s)', (library_id, other_album_id))
+            return result
+
+    @contextmanager
+    def connect(url):
+        with real_connect(url) as connection:
+            yield AnotherWriterJournalsMidPublication(connection)
+
+    monkeypatch.setattr(fixture.adapter, '_connect', connect)
+    result = fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: {**entry, 'title': 'Renamed'}},
+    )
+
+    assert journaled == [True]
+    assert result['inventory_mutation_revision'] > 0
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        queued = connection.execute(
+            'select album_id from library.local_relation_dirty_albums where library_id=%s', (library_id,),
+        ).fetchall()
+    assert [row['album_id'] for row in queued] == [other_album_id]
 
 
 def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
@@ -18387,6 +19587,28 @@ def test_album_detail_payload_by_id_resolves_current_key_before_loading(monkeypa
 
 
 
+def test_search_artist_tree_is_alphabetical_while_ranked_groups_choose_the_match():
+    from music_app.services import library_browse_postgres as browse
+
+    ranked = [{"artist": name, "albums": [{}]} for name in (
+        "Lost Frequencies", "Lostprophets", "T", "IQ", "M", "VA", "Oak", "Sia", "Ten", "ABBA",
+    )]
+    assert browse._top_search_selected_artist(ranked, query="lost") == "Lost Frequencies"
+    assert [item["artist"] for item in browse._artists_sidebar_from_groups(ranked, alphabetical=True)] == [
+        "ABBA", "IQ", "Lost Frequencies", "Lostprophets", "M", "Oak", "Sia", "T", "Ten", "VA",
+    ]
+    assert [item["artist"] for item in browse._artists_sidebar_from_groups(ranked)][:2] == ["Lost Frequencies", "Lostprophets"]
+
+
+@pytest.mark.parametrize(("category", "kept"), [("main_library", True), ("hoard", True), ("new_arrivals", False)])
+def test_deleted_main_and_hoard_albums_stay_as_missing_cards_until_confirmed(category, kept):
+    from music_app.services import library_browse_postgres as library_browse
+
+    rows = [_missing_browse_row(album_id=7, title="F♯ A♯ ∞", category=category)]
+    payloads = library_browse._missing_album_projection_payloads(rows)
+    assert bool(payloads) is kept
+
+
 def test_gallery_cover_prewarm_leaves_previews_a_running_move_has_not_reached(monkeypatch, tmp_path):
     """Gallery payloads during a reverse move must not regenerate a preview at the
     destination while it still waits in the source root to be moved."""
@@ -18440,14 +19662,16 @@ def _cte_body(sql: str, name: str) -> str:
     raise AssertionError(f"unterminated CTE {name}")
 
 
-@pytest.mark.parametrize("candidate_ids_page", [True, False])
-def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale(candidate_ids_page):
+@pytest.mark.parametrize("candidate_options", [
+    {}, {"candidate_ids_only": True}, {"candidate_ids_page": True},
+])
+def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale(candidate_options):
     """Cold Problematic Files took 30-40 s at 160k files: every request re-ran
     path regular expressions per file and sorted every file for distinct counts."""
     from music_app.services.library_browse_postgres import _problematic_files_sql
 
     sql = _problematic_files_sql(
-        candidate_summary=True, candidate_ids_page=candidate_ids_page, path_columns=True,
+        candidate_summary=True, path_columns=True, **candidate_options,
     )
     active_rows = _cte_body(sql, "active_problem_rows")
     assert "regexp_replace" not in active_rows
@@ -18476,7 +19700,8 @@ def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale
         assert "count(distinct" not in _cte_body(sql, cte)
     # A join on the union re-scanned every candidate per album (5 s at 9k candidates).
     assert "join candidate_album_ids" not in sql
-    assert "any(array(select album_id from candidate_album_ids))" in sql
+    if not candidate_options.get("candidate_ids_only"):
+        assert "any(array(select album_id from candidate_album_ids))" in sql
 
 
 def test_problematic_candidate_sql_keeps_inline_paths_before_projection_migration():
@@ -18510,3 +19735,98 @@ def test_problematic_page_rows_stay_scoped_to_the_selected_albums():
     assert "from selected_track_file_rows\n          join physical_file_context" in _cte_body(
         sql, "selected_active_track_file_rows"
     )
+
+
+def test_relation_alias_query_materializes_one_normalized_snapshot():
+    from music_app.services.library_browse_postgres import _relation_alias_maps_sql
+
+    sql = " ".join(_relation_alias_maps_sql().split())
+    assert "relation_snapshot as materialized (" in sql
+    assert sql.count("library.local_relation_views(") == 1
+    assert sql.count("relation_snapshot.relation_views ->") == 9
+    assert "from relation_snapshot limit 1" in sql
+
+
+def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypatch):
+    """Album Details' Problematic Files icon opened nothing on a large library: it
+    waited for the complete list. The track lookup reads only the track's album."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from music_app.services import library_browse_postgres as browse
+
+    track_path = r"D:\Music\Art Zoyd\Musique pour l'Odyssée\02.flac"
+    executed = []
+
+    class Connection:
+        def execute(self, sql, params):
+            executed.append(params)
+            return SimpleNamespace(fetchall=lambda: [{"album_key": "art zoyd::musique pour l'odyssée"}])
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _url: Connection(),
+    )
+    loaded_keys = []
+    monkeypatch.setattr(repository, "_browse_connection_context", connection_context)
+    monkeypatch.setattr(
+        repository, "_load_problematic_file_rows",
+        lambda album_key=None, **_kwargs: loaded_keys.append(album_key) or ["rows"],
+    )
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda: {"alias_to_canonical": {}})
+    monkeypatch.setattr(browse, "_problematic_album_projection_payloads", lambda rows: [
+        {"key": "art zoyd::musique pour l'odyssée::year::1979", "tracks": [{"path": "other.flac"}]},
+        {"key": "art zoyd::musique pour l'odyssée", "tracks": [{"path": track_path}]},
+    ])
+    monkeypatch.setattr(browse, "_problematic_album_detail_payload", lambda album: {"key": album["key"]})
+
+    assert repository.build_problematic_file_detail_payload_for_track_path(track_path) == {
+        "key": "art zoyd::musique pour l'odyssée",
+    }
+    assert executed == [{"path": track_path}]
+    assert loaded_keys == ["art zoyd::musique pour l'odyssée"]
+    assert repository.build_problematic_file_detail_payload_for_track_path("  ") is None
+
+
+def test_title_only_search_selects_the_artist_owning_the_most_matching_albums():
+    # Owner choice (2026-11-05): "Divine Comedy" names no artist; its three
+    # compilations belong to Colossus Project, while track artists appear on
+    # all three too and sort first alphabetically.
+    from music_app.services import library_browse_postgres as browse
+
+    # Search lists the same three compilations under every credited artist.
+    compilations = [{"name": f"Divine Comedy, Part {part}", "album_artist": "Colossus Project"} for part in ("I", "II", "III")]
+    groups = [{"artist": name, "albums": compilations} for name in ("Armalite", "CAP", "Colossus Project")]
+    groups.append({"artist": "Nemo", "albums": [{"name": "Divine Comedy Live", "album_artist": "Nemo"}]})
+    assert browse._top_search_selected_artist(groups, query="Divine Comedy") == "Colossus Project"
+    # An owner known by an alias still owns its albums.
+    aliased = [{**album, "album_artist": "The Colossus Project"} for album in compilations]
+    assert browse._top_search_selected_artist(
+        [*groups[:2], {"artist": "Colossus Project", "albums": aliased}], query="Divine Comedy",
+        canonical_to_aliases={"Colossus Project": ["The Colossus Project"]},
+    ) == "Colossus Project"
+    # A query naming an artist, or one of its aliases, keeps the ranked best match.
+    assert browse._top_search_selected_artist(groups, query="Armalite") == "Armalite"
+    assert browse._top_search_selected_artist(
+        groups, query="Armored Lite", canonical_to_aliases={"Armalite": ["Armored Lite"]},
+    ) == "Armalite"
+    # Equal ownership keeps the existing order.
+    tied = [{"artist": "CAP", "albums": [{"album_artist": "CAP"}]}, {"artist": "Nemo", "albums": [{"album_artist": "Nemo"}]}]
+    assert browse._top_search_selected_artist(tied, query="Divine Comedy") == "CAP"
+    # Owner (2026-11-09): "tender" matched only a track on a various-artists
+    # compilation, so no artist owns it and none is selected.
+    assert browse._top_search_selected_artist(groups[:2], query="Divine Comedy") == ""
+    christmas = [{"name": "The Best Christmas Album In The World Ever", "album_artist": "Various Artists"}]
+    assert browse._top_search_selected_artist([{"artist": "Broadcast", "albums": christmas}], query="tender") == ""
+
+def test_a_display_correction_is_a_problematic_file_until_written():
+    from music_app.services.library_browse_postgres import _physical_file_problem_reasons
+
+    assert list(_physical_file_problem_reasons({"text_corrections": {
+        "artist": {"original": "??", "corrected": "A", "kind": "lost_characters"},
+        "album_artist": {"original": "\u00c3\u00a9", "corrected": "\u00e9", "kind": "decoded"}}})) == [
+        "Track artist unreadable \u2014 using album artist", "Encoding problem"]
+    assert list(_physical_file_problem_reasons({})) == []

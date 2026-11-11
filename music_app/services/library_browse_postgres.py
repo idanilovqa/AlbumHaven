@@ -6,13 +6,14 @@ import binascii
 from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
+from functools import lru_cache, partial
 import hashlib
 import json
 import logging
 from pathlib import Path
 from os.path import basename, normcase
 import re
-from threading import Event, Lock
+from threading import Event, Lock, Timer
 from time import perf_counter, thread_time
 from types import SimpleNamespace
 from typing import Any
@@ -53,6 +54,7 @@ from music_app.services.listen_through import (
 from music_app.services.library_roots import (
     build_root_provenance_payload,
     configured_library_root_paths_snapshot,
+    library_category_slug,
     summarize_root_provenance_payloads,
 )
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
@@ -62,6 +64,8 @@ from music_app.services.opinion_read_seams import (
 )
 from music_app.services.metadata import (
     NON_ALBUM_EXCEPTION_VALUES,
+    TRACK_ARTIST_UNREADABLE_REASON,
+    text_correction_reason,
     build_text_repairs_for_entry,
     normalize_exception_value,
 )
@@ -102,6 +106,7 @@ _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
 # Built Problematic Files first pages, by limit, until the complete list is cached.
 _PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
+_PROBLEMATIC_LOOSE_TRACKS_KEY = "loose-source::all"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
 _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
@@ -109,6 +114,24 @@ _UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+# The last complete Problematic Files list survives invalidation so the first
+# page and early search answer at once while the fresh list rebuilds.
+_STALE_SERVED_UTILITY_KINDS = frozenset({"problematic-files"})
+# A list someone opened is rebuilt in the background after each library change,
+# so the next open answers from memory instead of rebuilding on the click.
+_REWARMED_UTILITY_KINDS = frozenset({"problematic-files", "rules"})
+_UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
+_UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
+_UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
+_UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
+# Candidate album ids per (cache key, generation); one whole-library pass
+# serves both the bounded first page and searches before the list completes.
+_PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
+_PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
+# Migration 0117's stored last complete list: read once per process when no
+# list is in memory; databases without the table skip it.
+_PROBLEMATIC_SNAPSHOT_CHECKED: set[tuple[str, str]] = set()
+_PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES: set[str] = set()
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
@@ -146,7 +169,7 @@ def invalidate_postgres_utility_projection_cache(
     normalized_database_url = str(database_url or "").strip()
     normalized_kinds = {
         str(kind or "").strip()
-        for kind in (kinds or ("problematic-files", "rules", "duplicate-identities", "duplicate-absence", "non-album-candidates", "relation-alias-maps"))
+        for kind in (kinds or ("problematic-files", "rules", "duplicate-identities", "duplicate-absence", "non-album-candidates", "relation-alias-maps", "loose-tracks"))
         if str(kind or "").strip()
     }
     if "problematic-files" in normalized_kinds:
@@ -154,6 +177,7 @@ def invalidate_postgres_utility_projection_cache(
         normalized_kinds.add(_PROBLEMATIC_FILES_PAGE_KIND)
     if not normalized_kinds:
         return
+    rewarms = []
     with _UTILITY_PROJECTION_CACHE_LOCK:
         if normalized_database_url:
             affected_keys = {
@@ -176,6 +200,28 @@ def invalidate_postgres_utility_projection_cache(
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
             _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            # A changed library may have removed or merged listed albums: the
+            # previous list is never served again (a click on a merged-away
+            # identity found no album). Only a stored list whose inventory
+            # fingerprint still matches may answer early.
+            _UTILITY_PROJECTION_STALE.pop(cache_key, None)
+            rewarm = _UTILITY_PROJECTION_REWARM.get(cache_key)
+            if rewarm is not None and cache_key not in _UTILITY_PROJECTION_REWARM_PENDING:
+                _UTILITY_PROJECTION_REWARM_PENDING.add(cache_key)
+                rewarms.append((cache_key, rewarm))
+    for cache_key, rewarm in rewarms:
+        # Let the invalidating write commit (and bursts settle) before rebuilding.
+        timer = Timer(
+            _UTILITY_PROJECTION_REWARM_DELAY_SECONDS, _run_utility_projection_rewarm, (cache_key, rewarm),
+        )
+        timer.daemon = True
+        timer.start()
+
+
+def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[[], None]) -> None:
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        _UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
+    rewarm()
 
 
 def _request_flag(value: object) -> bool:
@@ -498,6 +544,153 @@ class PostgresLibraryBrowseRepository:
                     ensure_gallery_summary=ensure_gallery_summary,
                 )
 
+    def build_library_loose_tracks_payload(
+        self,
+        *,
+        query_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Loose Tracks alone: no gallery is built or sent (owner PERF-1)."""
+        params = query_params or {}
+        view_state = _root_sidebar_view_state(query_params)
+        selected_artist = str(params.get("artist") or "").strip()
+        query = str(params.get("q") or "")
+        with self._connect_to_database() as connection:
+            tracks = self._load_non_album_track_snapshot(connection)
+            relation_alias_maps = None
+            if tracks is None and selected_artist:
+                if not self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+                    cache_key = self._utility_projection_cache_key("loose-tracks")
+                    with _UTILITY_PROJECTION_CACHE_LOCK:
+                        snapshot_marked_ready = cache_key in _UTILITY_PROJECTION_CACHE
+                    if snapshot_marked_ready:
+                        invalidate_postgres_utility_projection_cache(
+                            database_url=self._database_url,
+                            kinds=("loose-tracks",),
+                        )
+                    self.queue_utility_projection_prewarm("loose-tracks")
+                if _request_flag(params.get("availability")):
+                    return {
+                        "non_album_track_count": 0,
+                        "non_album_tracks_deferred": True,
+                    }
+                return {
+                    "non_album_tracks": [],
+                    "non_album_tracks_deferred": True,
+                    "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
+                }
+            if tracks is None and self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+                return {
+                    "library_non_album_tracks": [],
+                    "non_album_tracks_deferred": True,
+                    "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
+                }
+            if tracks is None:
+                relation_alias_maps = self._load_relation_alias_maps(connection=connection)
+                snapshot_fingerprint = _problematic_inventory_fingerprint(connection)
+                snapshot_view_state = dict(view_state)
+                snapshot_view_state["visible_library_categories"] = []
+                loaded = self._load_non_album_entries(
+                    view_state=snapshot_view_state,
+                    alias_to_canonical=relation_alias_maps["alias_to_canonical"],
+                    canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
+                    connection=connection,
+                    query="",
+                    include_library_wide=True,
+                )
+                entries = loaded[1] if isinstance(loaded, tuple) else loaded
+                configured_root_paths = (
+                    configured_library_root_paths_snapshot(self._config, connection=connection)
+                    if entries else ()
+                )
+                tracks = build_non_album_track_list(
+                    entries,
+                    config=self._config,
+                    configured_root_paths=configured_root_paths,
+                )
+                self._store_non_album_track_snapshot(
+                    connection,
+                    tracks,
+                    snapshot_fingerprint,
+                )
+            if query and relation_alias_maps is None:
+                relation_alias_maps = self._load_relation_alias_maps(connection=connection)
+            if selected_artist:
+                relation_alias_maps = relation_alias_maps or self._load_relation_alias_maps(
+                    connection=connection
+                )
+                family_context = _selected_artist_family_context_from_state(
+                    selected_artist,
+                    config=self._config,
+                    connect=self._connect,
+                    alias_to_canonical=relation_alias_maps["alias_to_canonical"],
+                    canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
+                    connection=connection,
+                )
+                visible_artist_names = _expanded_artist_name_list(
+                    [selected_artist, *family_context["family_artists"]],
+                    family_context["alias_to_canonical"],
+                    family_context["canonical_to_aliases"],
+                )
+                tracks = _filter_non_album_snapshot_tracks(
+                    tracks,
+                    visible_library_categories=list(
+                        view_state.get("visible_library_categories") or []
+                    ),
+                    visible_artist_names=visible_artist_names,
+                    alias_to_canonical=family_context["alias_to_canonical"],
+                    canonical_to_aliases=family_context["canonical_to_aliases"],
+                )
+                if _request_flag(params.get("availability")):
+                    return {"non_album_track_count": len(tracks)}
+                return {
+                    "non_album_tracks": tracks,
+                    "non_album_tracks_deferred": False,
+                    "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
+                }
+            tracks = _filter_non_album_snapshot_tracks(
+                tracks,
+                visible_library_categories=list(
+                    view_state.get("visible_library_categories") or []
+                ),
+                alias_to_canonical=(relation_alias_maps or {}).get("alias_to_canonical", {}),
+                canonical_to_aliases=(relation_alias_maps or {}).get("canonical_to_aliases", {}),
+                query=query,
+            )
+            return {
+                "library_non_album_tracks": tracks,
+                "non_album_tracks_deferred": False,
+                "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
+            }
+
+    def _load_non_album_track_snapshot(self, connection: Any) -> list[dict[str, object]] | None:
+        row = connection.execute(_non_album_track_snapshot_load_sql()).fetchone()
+        payload = _row_mapping(row).get("payload")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, Mapping):
+            return None
+        if payload.get(_SNAPSHOT_FINGERPRINT_KEY) != _problematic_inventory_fingerprint(connection):
+            return None
+        tracks = payload.get("tracks")
+        return [dict(track) for track in tracks] if isinstance(tracks, list) else None
+
+    def _store_non_album_track_snapshot(
+        self,
+        connection: Any,
+        tracks: list[dict[str, object]],
+        fingerprint: str,
+    ) -> None:
+        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+            return
+        document = json.dumps(
+            {
+                _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
+                "tracks": tracks,
+            },
+            default=str,
+        )
+        connection.execute(_non_album_track_snapshot_store_sql(), {"payload": document})
+
     def _load_non_album_entries(
         self,
         *,
@@ -516,8 +709,7 @@ class PostgresLibraryBrowseRepository:
             for value in visible_artist_names
             if str(value or "").strip()
         ]
-        scoped_query = str(query or "").strip()
-        scope_inventory_query = bool(scoped_artist_names or scoped_query) and not include_library_wide
+        scope_inventory_query = bool(scoped_artist_names) and not include_library_wide
         cached = (
             self._get_cached_utility_projection(kind)
             if fingerprint and not scope_inventory_query
@@ -529,19 +721,9 @@ class PostgresLibraryBrowseRepository:
             generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
         options = {"track_ids": cached["track_ids"]} if reuse else {}
         if scope_inventory_query:
-            if scoped_artist_names:
-                options["artist_names"] = scoped_artist_names
-            if scoped_query:
-                from music_app.services.view_search import split_search_terms
-
-                options["query_terms"] = sorted(
-                    {
-                        word
-                        for term in split_search_terms(scoped_query)
-                        for word in term.split()
-                        if word
-                    }
-                )
+            options["artist_names"] = scoped_artist_names
+        # Exact SQL text filtering can discard fuzzy and canonical-alias matches.
+        # Keep bounded eligibility/artist reads; the Python matcher owns text search.
         rows = [] if reuse and not options["track_ids"] else self._inventory_repository.load_non_album_candidates(
             limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=connection, **options,
         )
@@ -549,7 +731,7 @@ class PostgresLibraryBrowseRepository:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),
             }, generation)
-        scoped_entries = _non_album_entries_from_inventory_candidates(
+        return _non_album_entries_from_inventory_candidates(
             rows,
             visible_library_categories=list(
                 view_state.get("visible_library_categories") or []
@@ -558,16 +740,7 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=canonical_to_aliases,
             visible_artist_names=scoped_artist_names,
             query=query,
-        )
-        if not include_library_wide:
-            return scoped_entries
-        return scoped_entries, _non_album_entries_from_inventory_candidates(
-            rows,
-            visible_library_categories=list(
-                view_state.get("visible_library_categories") or []
-            ),
-            alias_to_canonical=alias_to_canonical,
-            canonical_to_aliases=canonical_to_aliases,
+            include_library_wide=include_library_wide,
         )
 
     def build_root_counts_payload(
@@ -649,34 +822,43 @@ class PostgresLibraryBrowseRepository:
             support_state = self._inventory_repository.load_support_state(
                 connection=connection,
             )
-            raw_rows, raw_preview_rows = self._load_root_startup_rows(
-                view_state,
-                root_alias_to_canonical,
-                connection=connection,
-            )
-            rows = _canonicalize_artist_rows(
-                raw_rows,
-                root_alias_to_canonical,
-            )
-            preview_rows = _canonicalize_artist_rows(
-                raw_preview_rows,
-                root_alias_to_canonical,
-            )
-            non_album_entries = self._load_non_album_entries(
-                view_state=view_state,
-                alias_to_canonical=relation_alias_maps["alias_to_canonical"],
-                canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
-                connection=connection,
-            )
-            configured_root_paths = (
-                configured_library_root_paths_snapshot(
-                    self._config,
+            # Owner REC-007: recounting every file's albums took 4-6 s on a 160k-file
+            # library each time a search was cleared. A ready gallery projection holds
+            # the same complete tree, as the page load uses it.
+            projected_sidebar = None
+            if not gallery_offset:
+                from music_app.services.gallery_projection_postgres import load_gallery_projection_sidebar
+
+                projected_sidebar = load_gallery_projection_sidebar(connection, view_state)
+            if projected_sidebar is not None:
+                rows = None
+                preview_rows = _canonicalize_artist_rows(
+                    self._load_root_startup_preview_rows(
+                        view_state,
+                        candidate_artists=_expanded_artist_name_list(
+                            [item["artist"] for item in projected_sidebar[0][:_STARTUP_PREVIEW_ARTIST_LIMIT]],
+                            root_alias_to_canonical,
+                            relation_alias_maps["canonical_to_aliases"] if root_alias_to_canonical else {},
+                        ),
+                        connection=connection,
+                    ),
+                    root_alias_to_canonical,
+                )
+            else:
+                raw_rows, raw_preview_rows = self._load_root_startup_rows(
+                    view_state,
+                    root_alias_to_canonical,
                     connection=connection,
                 )
-                if non_album_entries
-                else ()
-            )
-            preview_artist_groups = _root_album_browse_artist_groups(preview_rows)
+                rows = _canonicalize_artist_rows(
+                    raw_rows,
+                    root_alias_to_canonical,
+                )
+                preview_rows = _canonicalize_artist_rows(
+                    raw_preview_rows,
+                    root_alias_to_canonical,
+                )
+            preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[:_STARTUP_PREVIEW_ARTIST_LIMIT]
             missing_albums = _missing_album_projection_payloads(
                 self._load_missing_album_rows(connection=connection),
                 view_state=view_state,
@@ -705,43 +887,14 @@ class PostgresLibraryBrowseRepository:
                 close = getattr(connection, "close", None)
                 if callable(close):
                     close()
-        non_album_tracks = build_non_album_track_list(
-            non_album_entries,
-            config=self._config,
-            configured_root_paths=configured_root_paths,
-        )
-        artist_displays, artist_sort_values, artist_counts, album_count = (
-            _root_sidebar_aggregate(rows)
-        )
-        live_artist_count = len(artist_counts)
-        album_count += len(missing_albums)
-        for album in missing_albums:
-            artist = _canonical_artist_name(
-                album.get("album_artist") or "Unknown Artist", root_alias_to_canonical,
+        if projected_sidebar is not None:
+            # The projection already counts missing albums under their artists.
+            artists_sidebar, album_count = projected_sidebar
+            live_artist_count = len(artists_sidebar)
+        else:
+            artists_sidebar, album_count, live_artist_count = _root_sidebar_from_rows(
+                rows, missing_albums, root_alias_to_canonical,
             )
-            artist_key = _row_artist_identity({"artist_name": artist})
-            artist_displays.setdefault(artist_key, artist)
-            artist_sort_values.setdefault(artist_key, artist)
-            artist_counts[artist_key] = int(artist_counts.get(artist_key, 0)) + 1
-        ordered_artist_keys = sorted(
-            artist_counts,
-            key=lambda key: (
-                artist_collation_key(
-                    artist_sort_values.get(key, artist_displays.get(key, key))
-                ),
-                artist_collation_key(artist_displays.get(key, key)),
-            ),
-        )
-        artists_sidebar = [
-            {
-                "artist": artist_displays.get(artist_key, artist_key),
-                "artist_display": _artist_tree_display_value(
-                    artist_displays.get(artist_key, artist_key)
-                ),
-                "count": int(artist_counts[artist_key]),
-            }
-            for artist_key in ordered_artist_keys
-        ]
         payload = {
             "surface": _build_view_surface_payload("albums"),
             "shell_layout": _build_shell_layout_payload(
@@ -776,7 +929,10 @@ class PostgresLibraryBrowseRepository:
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
             "manual_version_links": support_state["manual_version_links"],
-            "non_album_tracks": non_album_tracks,
+            # As on the paged root gallery, Loose Tracks load on request (about a
+            # second on a large library), not with every tree.
+            "non_album_tracks": [],
+            "non_album_tracks_deferred": True,
             "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             "viewer_opinion_preferences": build_viewer_opinion_preferences_payload({}),
             "popularity_browse": build_popularity_browse_payload(viewer_opinion_preferences={}),
@@ -884,11 +1040,13 @@ class PostgresLibraryBrowseRepository:
             projection_stale = bool(cached_page and cached_page[3].get("projection_stale"))
             refresh_projection = bool(
                 paged and projection_context and (cached_page is None or projection_stale)
-                and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+                and (not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+                     or projection_context.get("incremental_membership"))
             )
             if refresh_projection and queue_projection_refresh:
                 schedule_gallery_projection_refresh(
                     self._config, connect=self._connect, view_state=view_state,
+                    incremental_membership=bool(projection_context.get("incremental_membership")),
                 )
             if refresh_projection and cached_page is None:
                 raise GalleryProjectionPending("Gallery is being prepared.")
@@ -971,6 +1129,8 @@ class PostgresLibraryBrowseRepository:
                         or hydrated.get(occurrence["album_key"])
                     )
                     if album is None:
+                        if projection_stale:
+                            raise GalleryProjectionPending("Gallery is being prepared.")
                         raise ValueError("Gallery changed; restart required.")
                     album = _copy_album_for_artist_occurrence(album, occurrence)
                     group = groups.setdefault(occurrence["artist_id"], dict(artist=artist,
@@ -1726,7 +1886,7 @@ class PostgresLibraryBrowseRepository:
                 rendered_selected_family_groups,
                 search_sidebar_artist_groups,
             )
-            payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups)
+            payload["artists_sidebar"] = _artists_sidebar_from_groups(sidebar_groups, alphabetical=True)
             payload["artist_count"] = len(sidebar_groups)
             selected_family_keys = {
                 _artist_display_dedupe_key(str(group.get("artist") or "").strip())
@@ -1890,6 +2050,11 @@ class PostgresLibraryBrowseRepository:
             "Poor art quality" in _problematic_album_reasons(detail_album)
         )
         detail_album.pop("_text_problem_reason_cache", None)
+        from music_app.services.album_release_candidates import load_release_candidates
+        detail_album.update(load_release_candidates(
+            connection, detail_album, self._inventory_repository.load_support_state(connection=connection),
+            resolved_releases=albums,
+        ))
 
         from music_app.services.album_details import _attach_album_detail_track_rows
 
@@ -2275,17 +2440,41 @@ class PostgresLibraryBrowseRepository:
             )
             payload["artist_groups"] = rendered_artist_groups
             if not omit_sidebar:
+                direct_content_artists = set()
+                for row in [*canonical_search_rows, *_canonicalize_artist_rows(search_missing_album_rows or [], alias_to_canonical)]:
+                    evidence = _row_mapping(row)
+                    source_artist_id = _coerce_int(evidence.get("source_artist_id"))
+                    matched_ids = evidence.get("search_matched_track_artist_ids") or []
+                    if (
+                        source_artist_id > 0 and source_artist_id in matched_ids
+                        or evidence.get("search_album_title_match") is True
+                        and _album_artist_relationship([evidence]) == "owned"
+                    ):
+                        direct_content_artists.add(_artist_display_dedupe_key(evidence.get("artist_name")))
+                matching_sidebar_artists = [
+                    str(group.get("artist") or "").strip()
+                    for group in sidebar_artist_groups
+                    if _artist_display_dedupe_key(group.get("artist")) in direct_content_artists
+                    or _artist_name_matches_search_query(
+                        query,
+                        str(group.get("artist") or "").strip(),
+                        canonical_to_aliases.get(
+                            str(group.get("artist") or "").strip(),
+                            [],
+                        ),
+                    )
+                ]
                 sidebar_groups = _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
-                    _without_release_coartists(
-                        sidebar_artist_groups,
+                    sidebar_artist_groups,
+                    artists=[
                         exact_artist_match,
-                        query=query,
-                        canonical_to_aliases=canonical_to_aliases,
-                    ),
+                        *(group.get("artist") for group in rendered_artist_groups),
+                        *matching_sidebar_artists,
+                    ],
                 )
                 payload["artists_sidebar"] = _artists_sidebar_from_groups(
-                    sidebar_groups
+                    sidebar_groups,
                 )
                 payload["artist_count"] = len(sidebar_groups)
                 selected_family_keys = {
@@ -2381,7 +2570,9 @@ class PostgresLibraryBrowseRepository:
             perf_counter() - grouping_subphase_started_at
         ) * 1000
         grouping_subphase_started_at = perf_counter()
-        selected_artist = "" if requested_all_artists else _top_search_selected_artist(artist_groups, query=query)
+        selected_artist = "" if requested_all_artists else _top_search_selected_artist(
+            artist_groups, query=query, canonical_to_aliases=canonical_to_aliases,
+        )
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
             config=self._config,
@@ -2511,7 +2702,8 @@ class PostgresLibraryBrowseRepository:
             ]
         )
         load_non_album_tracks = _should_load_non_album_tracks(params)
-        non_album_entries = (
+        include_library_wide_non_album = _request_flag(params.get("include_library_wide_non_album"))
+        loaded_non_album_entries = (
             self._load_non_album_entries(
                 view_state=view_state,
                 alias_to_canonical=(
@@ -2527,10 +2719,16 @@ class PostgresLibraryBrowseRepository:
                 visible_artist_names=non_album_scope_artists,
                 query=query,
                 connection=connection,
+                include_library_wide=include_library_wide_non_album,
             )
             if load_non_album_tracks
             else []
         )
+        library_non_album_entries = None
+        if isinstance(loaded_non_album_entries, tuple):
+            non_album_entries, library_non_album_entries = loaded_non_album_entries
+        else:
+            non_album_entries = loaded_non_album_entries
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
             config=self._config,
@@ -2648,6 +2846,11 @@ class PostgresLibraryBrowseRepository:
         }
         if search_context is not None:
             payload["search_context"] = search_context
+        if library_non_album_entries is not None:
+            payload["library_non_album_tracks"] = build_non_album_track_list(
+                library_non_album_entries,
+                config=self._config,
+            )
         phase_ms["finalize"] = (
             perf_counter() - finalize_started_at
         ) * 1000
@@ -2662,7 +2865,8 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups
             )
             payload["artists_sidebar"] = _artists_sidebar_from_groups(
-                sidebar_groups
+                sidebar_groups,
+                alphabetical=True,
             )
             payload["artist_count"] = len(sidebar_groups)
             phase_ms["sidebar"] = (
@@ -2728,7 +2932,13 @@ class PostgresLibraryBrowseRepository:
 
         def build(generation: int | None) -> dict[str, object]:
             payload = self._build_problematic_files_payload_uncached()
+            fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
             self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            cache_key = self._utility_projection_cache_key(kind)
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                current = cache_key is None or _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
+            if current and fingerprint:
+                self._queue_problematic_files_snapshot_store(payload, fingerprint)
             payload["projection_cache_status"] = "rebuilt"
             return payload
 
@@ -2739,17 +2949,24 @@ class PostgresLibraryBrowseRepository:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            return self._build_problematic_files_payload_from_rows(
+            payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(connection=connection),
             )
+            # Same snapshot as the rows: a stored list is served only while
+            # the inventory is still exactly this one.
+            payload[_SNAPSHOT_FINGERPRINT_KEY] = _problematic_inventory_fingerprint(connection)
+            return payload
 
     def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
-
         def cached() -> dict[str, object] | None:
             complete = self._get_cached_utility_projection("problematic-files", copy_payload=False)
+            status = "bounded"
+            if complete is None:
+                complete = self._get_stale_utility_projection("problematic-files")
+                status = "stale"
             if complete is not None:
                 # Copy only the page: the complete payload is megabytes on a real library.
                 page = deepcopy({key: value for key, value in complete.items() if key != "items"})
@@ -2757,7 +2974,7 @@ class PostgresLibraryBrowseRepository:
                 page["count"] = len(page["items"])
                 page["complete"] = False
                 page["total_candidate_count"] = None
-                page["projection_cache_status"] = "bounded"
+                page["projection_cache_status"] = status
                 return page
             # Until the complete list is cached, a built first page is reused: every
             # open would otherwise repeat the whole-library candidate query.
@@ -2771,14 +2988,29 @@ class PostgresLibraryBrowseRepository:
         )
 
     def _build_problematic_files_first_page(self, *, limit: int, generation: int | None) -> dict[str, object]:
+        # Re-evaluating the prior first-page albums avoids a whole-library cold query.
+        status = "bounded"
+        outdated_snapshot = self._load_problematic_files_snapshot(allow_outdated=True)
+        outdated_keys = [
+            str(item.get("key") or "") for item in (outdated_snapshot or {}).get("items") or []
+        ][:limit]
         with self._browse_connection_context() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            album_ids = self._load_problematic_candidate_ids(
-                connection=connection,
-                limit=limit,
-            )
+            if outdated_keys:
+                status = "revalidated"
+                album_ids = [
+                    int(_row_mapping(row)["id"])
+                    for row in connection.execute(
+                        "select id from library.local_albums where album_key = any(%(keys)s::text[])",
+                        {"keys": outdated_keys},
+                    ).fetchall()
+                ]
+            else:
+                album_ids = self._load_problematic_candidate_ids(
+                    connection=connection, limit=limit
+                )
             payload = self._build_problematic_files_payload_from_rows(
                 connection=connection,
                 rows=self._load_problematic_file_rows(
@@ -2793,12 +3025,89 @@ class PostgresLibraryBrowseRepository:
             )
         payload["complete"] = False
         payload["total_candidate_count"] = None
-        payload["projection_cache_status"] = "bounded"
+        payload["projection_cache_status"] = status
         self._set_cached_utility_projection(
             _PROBLEMATIC_FILES_PAGE_KIND,
-            {**(self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}),
-             str(limit): payload},
+            {
+                **(
+                    self._get_cached_utility_projection(
+                        _PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False
+                    )
+                    or {}
+                ),
+                str(limit): payload,
+            },
             expected_generation=generation,
+        )
+        return payload
+
+    def build_problematic_files_search(self, query: str) -> dict[str, object]:
+        """Every problematic album whose summary matches ``query``, without the full list.
+
+        The complete projection answers exactly once cached; the last complete
+        list answers at once while a fresh one rebuilds. With neither, SQL
+        narrows the candidate albums (the ones the complete list evaluates) to
+        those whose title, artist, year or track titles contain the text, and
+        only those are evaluated. Matches only visible in computed text
+        (problem reasons, repaired spellings) arrive with the complete list
+        (``complete: false``).
+        """
+        needle = str(query or "").strip().lower()
+        if not needle:
+            raise ValueError("Problematic Files search needs a query.")
+        complete, status = True, "hit"
+        cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is None:
+            complete, status = False, "stale"
+            cached_payload = self._get_stale_utility_projection("problematic-files")
+        if cached_payload is None:
+            cache_key = self._utility_projection_cache_key("problematic-files")
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                flight = _UTILITY_PROJECTION_SINGLEFLIGHT.get(cache_key)
+            if flight is not None:
+                flight.wait()
+            cached_payload = self._get_cached_utility_projection("problematic-files")
+            if cached_payload is not None:
+                complete, status = True, "hit"
+        if cached_payload is not None:
+            items = [
+                item for item in cached_payload.get("items") or []
+                if _problematic_summary_matches_query(item, needle)
+            ]
+            cached_payload.update(
+                items=items, count=len(items), initial_detail=None, complete=complete,
+                query=query, search_truncated=False, projection_cache_status=status,
+            )
+            return cached_payload
+        with self._browse_connection_context() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            connection.execute("SET LOCAL work_mem = '16MB'")
+            connection.execute("SET LOCAL jit = off")
+            album_ids = [
+                int(_row_mapping(row)["id"])
+                for row in connection.execute(
+                    _problematic_search_album_ids_sql(),
+                    {
+                        "needle": needle,
+                        "candidate_ids": sorted(self._problematic_candidate_album_ids(connection)),
+                        "limit": PROBLEMATIC_SEARCH_ALBUM_LIMIT + 1,
+                    },
+                ).fetchall()
+            ]
+            truncated = len(album_ids) > PROBLEMATIC_SEARCH_ALBUM_LIMIT
+            payload = self._build_problematic_files_payload_from_rows(
+                connection=connection,
+                rows=self._load_problematic_file_rows(
+                    connection=connection,
+                    album_ids=album_ids[:PROBLEMATIC_SEARCH_ALBUM_LIMIT],
+                ),
+                include_initial_detail=False,
+            )
+        items = [item for item in payload["items"] if _problematic_summary_matches_query(item, needle)]
+        payload.update(
+            items=items, count=len(items), complete=False,
+            total_candidate_count=None, query=query, search_truncated=truncated,
+            projection_cache_status="search",
         )
         return payload
 
@@ -2809,6 +3118,7 @@ class PostgresLibraryBrowseRepository:
         rows: list[object],
         missing_rows: list[object] | None = None,
         limit: int | None = None,
+        include_initial_detail: bool = True,
     ) -> dict[str, object]:
         albums = _problematic_album_projection_payloads(rows)
         duplicate_candidates = [
@@ -2846,7 +3156,7 @@ class PostgresLibraryBrowseRepository:
             projected_items = projected_items[:limit]
         items = [item for item, _album in projected_items]
         initial_detail = None
-        if projected_items:
+        if projected_items and include_initial_detail:
             first_album = projected_items[0][1]
             first_key = str(first_album.get("key") or "")
             first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
@@ -2888,6 +3198,57 @@ class PostgresLibraryBrowseRepository:
                     "alias_to_canonical", {}
                 )
                 return _problematic_album_detail_payload(album)
+        return None
+
+    def build_problematic_file_detail_payload_for_track_path(
+        self,
+        track_path: object,
+    ) -> dict[str, object] | None:
+        """Album Details opens a track's problem without waiting for the full
+        Problematic Files list, which can take tens of seconds on a large library."""
+        path = str(track_path or "").strip()
+        if not path:
+            return None
+        with self._browse_connection_context() as connection:
+            album_keys = [
+                str(_row_mapping(row)["album_key"])
+                for row in connection.execute(
+                    """
+                    select distinct library.local_albums.album_key
+                    from library.local_track_files
+                    join library.local_tracks
+                      on library.local_tracks.id = library.local_track_files.track_id
+                    join library.local_albums
+                      on library.local_albums.id = library.local_tracks.album_id
+                    join app.bootstrap_owners
+                      on app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                    join library.libraries
+                      on library.libraries.id = library.local_tracks.library_id
+                     and library.libraries.owner_account_id = app.bootstrap_owners.account_id
+                     and library.libraries.name = 'Local Library'
+                     and library.libraries.library_kind = 'local'
+                    where library.local_track_files.private_path = %(path)s
+                    """,
+                    {"path": path},
+                ).fetchall()
+            ]
+        for album_key in album_keys:
+            for album in _problematic_album_projection_payloads(
+                self._load_problematic_file_rows(album_key=album_key)
+            ):
+                track_paths = {
+                    str(track.get("path") or "").strip()
+                    for track in album.get("tracks") or []
+                    if isinstance(track, Mapping)
+                }
+                if path not in track_paths:
+                    continue
+                album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
+                    "alias_to_canonical", {}
+                )
+                detail = _problematic_album_detail_payload(album)
+                if detail is not None:
+                    return detail
         return None
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
@@ -3599,12 +3960,22 @@ class PostgresLibraryBrowseRepository:
         )
         cacheable = bool(fingerprint[0] and fingerprint[1])
         cached = (
-            self._get_cached_utility_projection("relation-alias-maps")
+            self._get_cached_utility_projection("relation-alias-maps", copy_payload=False)
             if cacheable
             else None
         )
         if cached and cached.get("fingerprint") == fingerprint:
-            return dict(cached.get("relation_views") or {})
+            # A generic deepcopy of ~19k aliases cost ~140 ms per search; the maps
+            # hold only strings and string lists, so copy just those containers.
+            views = cached.get("relation_views") or {}
+            return {
+                **views,
+                "alias_to_canonical": dict(views.get("alias_to_canonical") or {}),
+                "canonical_to_aliases": {
+                    canonical: list(aliases) if isinstance(aliases, list) else aliases
+                    for canonical, aliases in (views.get("canonical_to_aliases") or {}).items()
+                },
+            }
 
         generation = 0
         if cacheable:
@@ -3715,19 +4086,47 @@ class PostgresLibraryBrowseRepository:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
             def standalone_rows() -> list[object]:
-                from hashlib import sha256
-                from music_app.services.album_local_membership import physical_album_root
-
+                cached_paths: set[str] | None = None
+                if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+                    cached_payloads = []
+                    complete = self._get_cached_utility_projection(
+                        "problematic-files", copy_payload=False,
+                    )
+                    if isinstance(complete, Mapping):
+                        cached_payloads.append(complete)
+                    pages = self._get_cached_utility_projection(
+                        _PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False,
+                    )
+                    if isinstance(pages, Mapping):
+                        cached_payloads.extend(
+                            page for page in pages.values() if isinstance(page, Mapping)
+                        )
+                    for payload in cached_payloads:
+                        item = next((
+                            item for item in payload.get("items") or []
+                            if isinstance(item, Mapping)
+                            and item.get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY
+                        ), None)
+                        paths = {
+                            str(path).strip()
+                            for path in (item or {}).get("track_paths") or []
+                            if str(path or "").strip()
+                        }
+                        if paths:
+                            cached_paths = paths
+                            break
                 standalone = []
                 for raw in self._inventory_repository.load_non_album_candidates(
-                    limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=active_connection, unassigned_only=True,
+                    private_paths=cached_paths,
+                    limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+                    connection=active_connection,
+                    unassigned_only=True,
                 ):
                     row = dict(raw)
                     entry = dict(_row_json_mapping(row.get("file_entry")))
                     if row.get("album_id") is not None or not entry.get("local_album_membership_problem"):
                         continue
-                    root_identity = str(row.get("root_id") or "") + "::" + physical_album_root(row.get("private_path"))
-                    key = "loose-source::" + sha256(root_identity.encode("utf-8")).hexdigest()[:24]
+                    key = _PROBLEMATIC_LOOSE_TRACKS_KEY
                     if normalized_album_key is not None and key != normalized_album_key:
                         continue
                     row.update(album_key=key, file_private_path=row.get("private_path"),
@@ -3744,7 +4143,7 @@ class PostgresLibraryBrowseRepository:
                     standalone.append(row)
                 return standalone
 
-            if normalized_album_key and normalized_album_key.startswith("loose-source::"):
+            if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
                 return standalone_rows()
             if use_selected_album_ids:
                 if not selected_album_ids:
@@ -3912,15 +4311,150 @@ class PostgresLibraryBrowseRepository:
             ):
                 return
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
+            if kind in _STALE_SERVED_UTILITY_KINDS:
+                _UTILITY_PROJECTION_STALE.pop(cache_key, None)
+            if (
+                (kind in _REWARMED_UTILITY_KINDS and self._allow_background_prewarm)
+                or (
+                    kind == "loose-tracks"
+                    and self._use_shared_connection_pool
+                    and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+                )
+            ):
+                _UTILITY_PROJECTION_REWARM[cache_key] = partial(
+                    self.queue_utility_projection_prewarm, kind
+                )
+
+    def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
+        cache_key = self._utility_projection_cache_key(kind)
+        if cache_key is None:
+            return None
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            payload = _UTILITY_PROJECTION_STALE.get(cache_key)
+            load_snapshot = (
+                payload is None and kind == "problematic-files"
+                and cache_key not in _PROBLEMATIC_SNAPSHOT_CHECKED
+            )
+            if load_snapshot:
+                _PROBLEMATIC_SNAPSHOT_CHECKED.add(cache_key)
+        if load_snapshot:
+            # A restarted server has no list in memory: the last stored one
+            # answers the first page until the fresh list completes.
+            snapshot = self._load_problematic_files_snapshot()
+            if snapshot is not None:
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    if cache_key not in _UTILITY_PROJECTION_CACHE:
+                        _UTILITY_PROJECTION_STALE.setdefault(cache_key, snapshot)
+                    payload = _UTILITY_PROJECTION_STALE.get(cache_key)
+        return None if payload is None else deepcopy(payload)
+
+    def _problematic_snapshot_available(self) -> bool:
+        return (
+            self._use_shared_connection_pool
+            and self._database_url not in _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES
+        )
+
+    def _load_problematic_files_snapshot(self, *, allow_outdated: bool = False) -> dict[str, object] | None:
+        """The last stored list; one from before a later library change only when ``allow_outdated``.
+
+        An outdated list is never served as such: it may name albums since merged, split or
+        removed. It may only choose which albums a first page re-evaluates.
+        """
+        if not self._problematic_snapshot_available():
+            return None
+        try:
+            with self._connect_to_database() as connection:
+                row = connection.execute(_problematic_files_snapshot_load_sql()).fetchone()
+                current_fingerprint = _problematic_inventory_fingerprint(connection) if row is not None else None
+        except Exception as error:
+            if _is_undefined_table_error(error):
+                _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES.add(self._database_url)
+                return None
+            logging.getLogger(__name__).warning("Problematic Files snapshot could not be read.", exc_info=True)
+            return None
+        payload = _row_mapping(row).get("payload") if row is not None else None
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, Mapping):
+            return None
+        payload = dict(payload)
+        snapshot_version = payload.pop(_PROBLEMATIC_SNAPSHOT_VERSION_KEY, None)
+        snapshot_fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
+        if (
+            snapshot_version != _PROBLEMATIC_SNAPSHOT_VERSION
+            or snapshot_fingerprint != current_fingerprint
+            or not current_fingerprint
+        ):
+            return payload if allow_outdated else None
+        return payload
+
+    def _queue_problematic_files_snapshot_store(self, payload: Mapping[str, object], fingerprint: str) -> None:
+        # Browse-only instances never write the shared database.
+        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") or not self._problematic_snapshot_available():
+            return
+        document = json.dumps(
+            {
+                **{key: value for key, value in payload.items() if key != "projection_cache_status"},
+                _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
+                _PROBLEMATIC_SNAPSHOT_VERSION_KEY: _PROBLEMATIC_SNAPSHOT_VERSION,
+            },
+            default=str,
+        )
+        _UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(self._store_problematic_files_snapshot, document)
+
+    def _store_problematic_files_snapshot(self, document: str) -> None:
+        try:
+            with self._connect_to_database() as connection:
+                connection.execute(_problematic_files_snapshot_store_sql(), {"payload": document})
+        except Exception as error:
+            if _is_undefined_table_error(error):
+                _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES.add(self._database_url)
+                return
+            logging.getLogger(__name__).warning("Problematic Files snapshot could not be stored.", exc_info=True)
+
+    def _problematic_candidate_album_ids(self, connection: Any) -> frozenset[int]:
+        """Every album the complete list evaluates, computed once per invalidation generation."""
+        cache_key = self._utility_projection_cache_key("problematic-files")
+        with _PROBLEMATIC_CANDIDATE_IDS_LOCK:
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                generation = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) if cache_key else None
+                cached = _PROBLEMATIC_CANDIDATE_IDS.get(cache_key) if cache_key else None
+            if cached is not None and cached[0] == generation:
+                return cached[1]
+            cursor = _execute_problematic_sql(
+                connection,
+                self._database_url,
+                lambda path_columns: _problematic_files_sql(
+                    candidate_summary=True, candidate_ids_only=True, path_columns=path_columns,
+                ),
+                {
+                    "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
+                    "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+                },
+            )
+            # Loose files without an album join the union as null album ids.
+            album_ids = frozenset(
+                int(album_id) for row in cursor.fetchall()
+                if (album_id := _row_mapping(row)["album_id"]) is not None
+            )
+            if cache_key is not None:
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    _PROBLEMATIC_CANDIDATE_IDS[cache_key] = (generation, album_ids)
+            return album_ids
 
     def queue_settings_projection_prewarm(self) -> None:
-        if not self._allow_background_prewarm:
-            return
-        for kind in ("problematic-files", "rules"):
+        kinds = [] if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") else ["loose-tracks"]
+        kinds.extend(("problematic-files", "rules"))
+        for kind in kinds:
             self.queue_utility_projection_prewarm(kind)
 
     def queue_utility_projection_prewarm(self, kind: str) -> None:
-        if not self._allow_background_prewarm:
+        required_loose_track_refresh = (
+            kind == "loose-tracks"
+            and self._use_shared_connection_pool
+            and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
+        )
+        if not self._allow_background_prewarm and not required_loose_track_refresh:
             return
         cache_key = self._utility_projection_cache_key(kind)
         if cache_key is None:
@@ -3950,6 +4484,13 @@ class PostgresLibraryBrowseRepository:
                 self.build_problematic_files_payload()
             elif kind == "rules":
                 self.build_utility_rules_payload()
+            elif kind == "loose-tracks":
+                self.build_library_loose_tracks_payload()
+                self._set_cached_utility_projection(
+                    kind,
+                    {"ready": True},
+                    expected_generation=queued_generation,
+                )
             elif kind == "duplicate-identities":
                 with self._search_connection_context() as connection:
                     _load_duplicate_candidate_album_ids(connection, [], repository=self)
@@ -4083,20 +4624,12 @@ def _non_album_entry_from_inventory_candidate(row: object) -> dict[str, object]:
     return entry
 
 
-def _non_album_entries_from_inventory_candidates(
-    rows: Iterable[object],
-    *,
-    visible_library_categories: list[str],
+def _non_album_artist_scope(
+    visible_artist_names: Iterable[object],
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
-    visible_artist_names: Iterable[object] = (),
-    query: object = "",
-) -> list[dict[str, object]]:
-    from music_app.services.view_search import (
-        normalize_search_text,
-        search_terms_match_fields,
-        split_search_terms,
-    )
+) -> tuple[set[str], set[str]]:
+    from music_app.services.view_search import normalize_search_text
 
     visible_artists = {
         str(artist or "").strip()
@@ -4108,18 +4641,125 @@ def _non_album_entries_from_inventory_candidates(
         normalize_search_text(alias)
         for alias in _expanded_artist_name_list(
             visible_artists,
-            alias_to_canonical,
-            canonical_to_aliases,
+            alias_to_canonical or {},
+            canonical_to_aliases or {},
         )
         if normalize_search_text(alias)
     }
-    query_terms = split_search_terms(str(query or ""))
+    return visible_artist_keys, visible_path_parts
+
+
+def _non_album_entry_is_in_artist_scope(
+    artist_names: Iterable[object],
+    path: object,
+    visible_artist_keys: set[str],
+    visible_path_parts: set[str],
+) -> bool:
+    from music_app.services.view_search import normalize_search_text
+
+    if not visible_artist_keys:
+        return True
+    artist_keys = {local_inventory_identity_key(artist) for artist in artist_names} - {""}
+    path_parts = {
+        normalize_search_text(part)
+        for part in Path(str(path or "")).parts[:-1]
+    } - {""}
+    return bool(artist_keys & visible_artist_keys or path_parts & visible_path_parts)
+
+
+def _filter_non_album_snapshot_tracks(
+    tracks: Iterable[object],
+    *,
+    visible_library_categories: list[str],
+    visible_artist_names: Iterable[object] = (),
+    alias_to_canonical: Mapping[str, object] | None = None,
+    canonical_to_aliases: Mapping[str, object] | None = None,
+    query: object = "",
+) -> list[dict[str, object]]:
+    visible_artist_keys, visible_path_parts = _non_album_artist_scope(
+        visible_artist_names,
+        alias_to_canonical or {},
+        canonical_to_aliases or {},
+    )
+    query_text = str(query or "").strip()
+    filtered = []
+    for raw_track in tracks:
+        track = dict(_row_mapping(raw_track))
+        if not entry_visible_in_categories(track, visible_library_categories):
+            continue
+        if not _non_album_entry_is_in_artist_scope(
+            (track.get("artist"), track.get("album_artist")),
+            track.get("display_path") or track.get("path"),
+            visible_artist_keys,
+            visible_path_parts,
+        ):
+            continue
+        if query_text and not _non_album_entry_matches_query(
+            track,
+            query_text,
+            artist_names=_expanded_artist_name_list(
+                (track.get("artist"), track.get("album_artist")),
+                alias_to_canonical or {},
+                canonical_to_aliases or {},
+            ),
+        ):
+            continue
+        filtered.append(track)
+    return filtered
+
+
+def _non_album_entry_matches_query(
+    entry: Mapping[str, object],
+    query: object,
+    *,
+    artist_names: Iterable[object] = (),
+) -> bool:
+    from music_app.services.view_search import fold_search_accents
+
+    query_text = str(query or "")
+    folded_query = fold_search_accents(query_text)
+    if not folded_query:
+        return True
+    file_name = Path(str(entry.get("path") or "")).name
+    return any(
+        folded_query in fold_search_accents(str(value or ""))
+        for value in (*artist_names, entry.get("album_artist"), entry.get("artist"))
+    ) or any(
+        query_text.lower() in str(value or "").strip().lower()
+        for value in (
+            entry.get("album"), entry.get("title"), file_name,
+            Path(file_name).stem, entry.get("disc_subtitle"),
+        )
+    )
+
+
+def _non_album_entries_from_inventory_candidates(
+    rows: Iterable[object],
+    *,
+    visible_library_categories: list[str],
+    alias_to_canonical: Mapping[str, object],
+    canonical_to_aliases: Mapping[str, object],
+    visible_artist_names: Iterable[object] = (),
+    query: object = "",
+    include_library_wide: bool = False,
+) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Loose-track entries visible to the artist scope; with ``include_library_wide``
+    also the library-wide list, from one pass."""
+    visible_artist_keys, visible_path_parts = _non_album_artist_scope(
+        visible_artist_names,
+        alias_to_canonical,
+        canonical_to_aliases,
+    )
+    # Loose tracks follow the Gallery search rule (_search_preview_sql): the whole
+    # query inside an artist (accents folded), album, title, file or CD name.
+    query_text = str(query or "")
     normalized_alias_to_canonical = {
         local_inventory_identity_key(alias): canonical
         for alias, canonical in alias_to_canonical.items()
         if local_inventory_identity_key(alias)
     }
     entries: list[dict[str, object]] = []
+    library_entries: list[dict[str, object]] = []
     for row in rows:
         payload = _row_mapping(row)
         entry = _non_album_entry_from_inventory_candidate(payload)
@@ -4144,37 +4784,26 @@ def _non_album_entries_from_inventory_candidates(
         relative_path = str(
             payload.get("relative_path") or payload.get("private_path") or ""
         ).strip()
-        path_parts = {
-            normalize_search_text(part)
-            for part in Path(relative_path).parts[:-1]
-            if normalize_search_text(part)
-        }
-        if visible_artist_keys and (
-            local_inventory_identity_key(entry_artist) not in visible_artist_keys
-            and local_inventory_identity_key(canonical_artist) not in visible_artist_keys
-            and not visible_path_parts.intersection(path_parts)
+        in_artist_scope = _non_album_entry_is_in_artist_scope(
+            (entry_artist, canonical_artist),
+            relative_path,
+            visible_artist_keys,
+            visible_path_parts,
+        )
+        if not in_artist_scope and not include_library_wide:
+            continue
+        if not _non_album_entry_matches_query(
+            entry,
+            query_text,
+            artist_names=(entry_artist, canonical_artist),
         ):
             continue
-        if query_terms:
-            search_fields = [
-                normalize_search_text(str(value or ""))
-                for value in (
-                    entry_artist,
-                    canonical_artist,
-                    entry.get("artist"),
-                    entry.get("album"),
-                    entry.get("title"),
-                    entry.get("year"),
-                    entry.get("exception_type"),
-                    payload.get("relative_path"),
-                    payload.get("private_path"),
-                )
-                if str(value or "").strip()
-            ]
-            if not search_terms_match_fields(query_terms, search_fields):
-                continue
-        entries.append(entry)
-    return entries
+        if include_library_wide:
+            library_entries.append(entry)
+        if in_artist_scope:
+            # Separate dicts: callers enrich each list independently.
+            entries.append(dict(entry) if include_library_wide else entry)
+    return (entries, library_entries) if include_library_wide else entries
 
 def _connect(database_url: str) -> Any:
     if psycopg is None:
@@ -4475,6 +5104,39 @@ def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: M
     return page, snapshot["sidebar"], snapshot["album_count"], metadata
 
 
+def _root_sidebar_from_rows(
+    rows: list[object],
+    missing_albums: list[dict[str, object]],
+    alias_to_canonical: Mapping[str, object],
+) -> tuple[list[dict[str, object]], int, int]:
+    """The complete artist tree from recounted album rows, when no projection is ready."""
+    artist_displays, artist_sort_values, artist_counts, album_count = _root_sidebar_aggregate(rows)
+    live_artist_count = len(artist_counts)
+    album_count += len(missing_albums)
+    for album in missing_albums:
+        artist = _canonical_artist_name(album.get("album_artist") or "Unknown Artist", alias_to_canonical)
+        artist_key = _row_artist_identity({"artist_name": artist})
+        artist_displays.setdefault(artist_key, artist)
+        artist_sort_values.setdefault(artist_key, artist)
+        artist_counts[artist_key] = int(artist_counts.get(artist_key, 0)) + 1
+    ordered_artist_keys = sorted(
+        artist_counts,
+        key=lambda key: (
+            artist_collation_key(artist_sort_values.get(key, artist_displays.get(key, key))),
+            artist_collation_key(artist_displays.get(key, key)),
+        ),
+    )
+    artists_sidebar = [
+        {
+            "artist": artist_displays.get(artist_key, artist_key),
+            "artist_display": _artist_tree_display_value(artist_displays.get(artist_key, artist_key)),
+            "count": int(artist_counts[artist_key]),
+        }
+        for artist_key in ordered_artist_keys
+    ]
+    return artists_sidebar, album_count, live_artist_count
+
+
 def _root_sidebar_aggregate(
     rows: Iterable[object],
 ) -> tuple[dict[str, str], dict[str, str], dict[str, int], int]:
@@ -4666,20 +5328,25 @@ def _annotate_album_payload_problematic_tracks(
         and bool(_effective_row_exception_type(row_payload))
         and str(row_payload.get("file_private_path") or "").strip()
     }
-    problematic_track_paths = {
-        str(problem_row.get("path") or "").strip()
-        for problematic_album in _problematic_album_projection_payloads(rows)
-        for problem_row in _problematic_track_problem_rows(problematic_album)
-        if str(problem_row.get("path") or "").strip()
-        and str(problem_row.get("path") or "").strip() not in non_album_track_paths
-    }
+    # Album Details shows these reasons on the track's Problematic Files icon,
+    # so hovering it never needs a Problematic Files request.
+    problem_reasons_by_path: dict[str, list[str]] = {}
+    for problematic_album in _problematic_album_projection_payloads(rows):
+        for problem_row in _problematic_track_problem_rows(problematic_album):
+            path = str(problem_row.get("path") or "").strip()
+            if path and path not in non_album_track_paths:
+                reasons = problem_reasons_by_path.setdefault(path, [])
+                reasons.extend(
+                    str(reason) for reason in problem_row.get("reasons") or []
+                    if str(reason) not in reasons
+                )
     for album in albums:
         for track in album.get("tracks") or []:
             if isinstance(track, dict):
-                track["is_problematic"] = (
-                    str(track.get("path") or "").strip()
-                    in problematic_track_paths
-                )
+                reasons = problem_reasons_by_path.get(str(track.get("path") or "").strip())
+                track["is_problematic"] = reasons is not None
+                if reasons:
+                    track["problem_reasons"] = list(reasons)
 
 
 def _duplicate_sources_for_projected_album(album: Mapping[str, object], result: Mapping[str, object]) -> list[dict[str, object]]:
@@ -4819,7 +5486,7 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
           where owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ), requested_albums as materialized (
-          select albums.library_id, albums.id as album_id
+          select albums.library_id, albums.id as album_id, albums.metadata
           from target_library
           join library.local_albums albums
             on albums.library_id = target_library.library_id
@@ -4884,6 +5551,20 @@ def _duplicate_candidate_album_ids_for_keys_sql() -> str:
           join duplicate_identities using (
             album_artist_identity, album_identity, album_year
           )
+          union
+          select linked.id
+          from requested_albums
+          join library.local_albums linked
+            on linked.library_id=requested_albums.library_id
+           and linked.id::text=requested_albums.metadata
+                #>> '{{stray_duplicate_of,album_id}}'
+          union
+          select stray.id
+          from requested_albums
+          join library.local_albums stray
+            on stray.library_id=requested_albums.library_id
+           and stray.metadata #>> '{{stray_duplicate_of,album_id}}'
+                = requested_albums.album_id::text
         )
         select candidate_album_ids.album_id
         from candidate_album_ids
@@ -4962,6 +5643,18 @@ def _duplicate_sources_from_rows(
         str(payload.get("file_private_path") or ""),
         str(payload.get("album_key") or ""),
     ))
+    source_identities = {}
+    for payload in payloads:
+        file_entry = _row_json_mapping(payload.get("file_entry"))
+        album_id = _coerce_int(payload.get("album_id"))
+        if album_id and album_id not in source_identities:
+            source_identities[album_id] = {
+                "album": file_entry.get("album") or payload.get("album_title"),
+                "album_artist": (
+                    file_entry.get("album_artist") or payload.get("artist_name")
+                ),
+                "year": file_entry.get("year") or payload.get("album_release_year"),
+            }
     prepared_entries = []
     for payload in payloads:
         file_entry = _row_json_mapping(payload.get("file_entry"))
@@ -4970,6 +5663,18 @@ def _duplicate_sources_from_rows(
             entry = _problematic_file_entry_from_row(payload)
         else:
             entry = dict(entry)
+        ownership = _row_json_mapping(payload.get("stray_duplicate_of"))
+        if not ownership:
+            ownership = _row_json_mapping(
+                _row_json_mapping(payload.get("album_metadata")).get(
+                    "stray_duplicate_of"
+                )
+            )
+        source_identity = source_identities.get(
+            _coerce_int(ownership.get("album_id"))
+        )
+        if source_identity:
+            entry.update(source_identity)
         if payload.get("file_entry_is_object") is not True and not file_entry:
             entry.update(album=None, album_artist=None, year=None)
         entry["duration_seconds"] = _coerce_duration_seconds(payload.get("duration_seconds"))
@@ -5277,12 +5982,19 @@ def _missing_album_query_pattern(query: str) -> re.Pattern[str]:
     return re.compile(fnmatch.translate("".join(pattern)))
 
 
+@lru_cache(maxsize=131072)
+def _folded_search_identity(name: str) -> str:
+    from music_app.services.view_search import fold_search_accents
+
+    return fold_search_accents(local_inventory_identity_key(name))
+
+
 def _missing_album_search_artist_keys(
     query: str,
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
 ) -> list[str]:
-    normalized_query = local_inventory_identity_key(query)
+    normalized_query = _folded_search_identity(query)
     query_pattern = (
         _missing_album_query_pattern(query)
         if "%" in query or "_" in query
@@ -5290,7 +6002,8 @@ def _missing_album_search_artist_keys(
     )
 
     def matches(name: str) -> bool:
-        normalized_name = name.casefold() if query_pattern is not None else local_inventory_identity_key(name)
+        # Every search walks all ~19k alias names; their folded form never changes.
+        normalized_name = name.casefold() if query_pattern is not None else _folded_search_identity(name)
         return (
             bool(query_pattern.fullmatch(normalized_name))
             if query_pattern is not None
@@ -5350,6 +6063,14 @@ def _missing_album_projection_payloads(
         if not album_rows or not all(
             row.get("file_scan_cache_stale") is True for row in album_rows
         ):
+            continue
+        # Transitional arrivals disappear after deletion; permanent sources
+        # retain their missing-album warning until the owner confirms removal.
+        album_rows = [
+            row for row in album_rows
+            if library_category_slug(row.get("file_library_root_category")) != "new_arrivals"
+        ]
+        if not album_rows:
             continue
         first = album_rows[0]
         metadata = _problematic_album_metadata_from_row(first)
@@ -5418,6 +6139,7 @@ def _missing_album_projection_payloads(
                 "cover_path": None,
                 "inventory_status": "missing",
                 "missing_since": stale_timestamps[0] if stale_timestamps else None,
+                "missing_reason": _album_missing_reason(album_rows),
                 "track_count_preview": 0,
                 "total_duration_seconds": 0,
                 "tracks": [],
@@ -5426,6 +6148,15 @@ def _missing_album_projection_payloads(
             }
         )
     return missing_albums
+
+
+def _album_missing_reason(album_rows: list[Mapping[str, object]]) -> str | None:
+    """"unreachable" when any file's drive or share was unreachable, "deleted" when every file
+    was deleted, otherwise unknown (files marked missing before reasons were recorded)."""
+    reasons = {str(row.get("file_missing_reason") or "") for row in album_rows}
+    if "unreachable" in reasons:
+        return "unreachable"
+    return "deleted" if reasons == {"deleted"} else None
 
 
 def _missing_album_detail_payload(album: Mapping[str, object]) -> dict[str, object]:
@@ -5446,6 +6177,24 @@ def _missing_album_detail_payload(album: Mapping[str, object]) -> dict[str, obje
     payload.pop("file_private_path", None)
     payload.pop("track_paths", None)
     return payload
+
+
+def _album_is_split(metadata: Mapping[str, Any]) -> bool:
+    """Split releases: two or more equally main artists, each on their own tracks.
+
+    Rows persisted by the current scan carry ``is_split_album``. Rows persisted before split
+    detection existed lack the key; for those, a compilation credited "A / B" to exactly its
+    member artists is a split (a collaboration credits every track to both, so it is not a
+    compilation)."""
+    if "is_split_album" in metadata:
+        return bool(metadata.get("is_split_album"))
+    if any(str(metadata.get(field) or "").strip().casefold() == "split" for field in ("release_type", "edition")):
+        return True
+    if not metadata.get("is_compilation"):
+        return False
+    artists = {str(name or "").strip().casefold() for name in metadata.get("artists") or []} - {""}
+    credited = {part.strip().casefold() for part in re.split(r"\s+/\s+", str(metadata.get("album_artist") or ""))} - {""}
+    return len(artists) >= 2 and credited == artists
 
 
 def _nullable_int(value: object) -> int | None:
@@ -5555,6 +6304,7 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "album_rating": file_entry.get("album_rating"),
         "exception_type": _effective_row_exception_type(row_payload),
         "_text_mojibake_candidate": row_payload.get("file_text_mojibake_candidate"),
+        "text_corrections": _row_json_mapping(row_payload.get("file_text_corrections")) or file_entry.get("text_corrections"),
         "local_album_membership_problem": (
             row_payload["local_album_membership_problem"]
             if "local_album_membership_problem" in row_payload
@@ -5589,10 +6339,12 @@ def _album_file_year_mismatch(album: Mapping[str, object]) -> bool:
 
 
 _PROBLEM_REASON_IDENTITY_CODES = {
+    TRACK_ARTIST_UNREADABLE_REASON: "track-artist-unreadable",
     "Empty audio file": "empty-audio-file",
     "Mixed album metadata in one folder": "mixed-album-folder",
     "Missing artist": "missing-artist",
     "Missing album": "missing-album",
+    "Missing artist and album": "missing-artist-and-album",
     "Missing track title": "missing-track-title",
     "Missing track artist": "missing-track-artist",
     "Missing album artist": "missing-album-artist",
@@ -6119,6 +6871,13 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield str(entry["local_album_membership_problem"])
     if reviewable_edition_title(entry.get("album"), entry.get("edition")):
         yield "Edition descriptor in album name"
+    yield from _text_correction_problem_reasons(entry.get("text_corrections"))
+
+
+def _text_correction_problem_reasons(corrections: object) -> Iterable[str]:
+    """Problems the app corrects for display but the tags still carry."""
+    for field, correction in (corrections.items() if isinstance(corrections, Mapping) else ()):
+        yield text_correction_reason(field, correction.get("kind") if isinstance(correction, Mapping) else None)
 
 
 def _iter_problematic_track_reasons(
@@ -6363,6 +7122,131 @@ _PROBLEMATIC_OPTIONAL_SUMMARY_FIELDS = frozenset(
 )
 
 
+PROBLEMATIC_SEARCH_ALBUM_LIMIT = 2000
+
+
+def _problematic_summary_matches_query(album: Mapping[str, object], needle: str) -> bool:
+    """The Problematic Files list filter (getFilteredProblematicAlbums), server side."""
+    def texts(values: object) -> list[str]:
+        return [str(value or "") for value in values] if isinstance(values, list) else []
+
+    haystack = [
+        str(album.get(key) or "")
+        for key in ("name", "raw_name", "album_artist", "raw_album_artist", "year")
+    ]
+    haystack.append(str(album.get("search_text") or ""))
+    haystack += [str(track.get("title") or "") for track in album.get("tracks") or [] if isinstance(track, Mapping)]
+    for row in album.get("repair_preview_rows") or []:
+        if isinstance(row, Mapping):
+            haystack += [str(row.get(key) or "") for key in ("track_title", "original", "repaired")]
+    if needle in "\n".join(haystack).lower():
+        return True
+    pattern = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", re.IGNORECASE)
+    return any(pattern.search(reason) for reason in texts(album.get("problem_reasons")))
+
+
+def _problematic_search_album_ids_sql() -> str:
+    """Candidate albums whose own title, artist, year or track titles contain the needle."""
+    return """
+        select albums.id
+        from library.local_albums albums
+        left join library.local_artists artists on artists.id = albums.artist_id
+        where albums.id = any(%(candidate_ids)s::bigint[])
+          and (
+            strpos(lower(albums.title), %(needle)s) > 0
+            or strpos(lower(coalesce(artists.name, '')), %(needle)s) > 0
+            or strpos(lower(coalesce(albums.metadata ->> 'album_artist', '')), %(needle)s) > 0
+            or strpos(coalesce(albums.release_year::text, ''), %(needle)s) > 0
+            or exists (
+              select 1 from library.local_tracks tracks
+              where tracks.album_id = albums.id
+                and strpos(lower(tracks.title), %(needle)s) > 0
+            )
+          )
+        order by albums.id
+        limit %(limit)s
+    """
+
+
+_SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
+_PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
+_PROBLEMATIC_SNAPSHOT_VERSION = 1
+
+
+def _problematic_inventory_fingerprint(connection: Any) -> str:
+    """The inventory revision plus root and exception-override versions, as text."""
+    fingerprint = _duplicate_inventory_fingerprint(connection).get("fingerprint")
+    return json.dumps(fingerprint, default=str) if fingerprint else ""
+
+
+def _is_undefined_table_error(error: BaseException) -> bool:
+    return getattr(error, "sqlstate", None) == "42P01"
+
+
+_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL = """
+    select libraries.id
+    from app.bootstrap_owners owners
+    join library.libraries libraries
+      on libraries.owner_account_id = owners.account_id
+     and libraries.name = 'Local Library'
+     and libraries.library_kind = 'local'
+    where owners.owner_key = 'local-bootstrap-owner'
+    limit 1
+"""
+
+
+def _problematic_files_snapshot_load_sql() -> str:
+    return f"""
+        select snapshots.payload
+        from library.problematic_files_snapshots snapshots
+        where snapshots.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})
+    """
+
+
+def _problematic_files_snapshot_store_sql() -> str:
+    return f"""
+        insert into library.problematic_files_snapshots (library_id, payload, built_at)
+        select ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}), %(payload)s::jsonb, now()
+        where ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}) is not null
+        on conflict (library_id) do update
+          set payload = excluded.payload, built_at = excluded.built_at
+    """
+
+
+def _non_album_track_snapshot_load_sql() -> str:
+    return f"""
+        select snapshots.payload
+        from library.non_album_track_snapshots snapshots
+        where snapshots.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})
+    """
+
+
+def _non_album_track_snapshot_store_sql() -> str:
+    return f"""
+        insert into library.non_album_track_snapshots (library_id, payload, built_at)
+        select ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}), %(payload)s::jsonb, now()
+        where ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}) is not null
+        on conflict (library_id) do update
+        set payload = excluded.payload, built_at = excluded.built_at
+    """
+
+
+def _problematic_page_album_ids_sql() -> str:
+    """The first ``limit`` candidate albums in the complete list's order."""
+    return """
+        select albums.id as album_id
+        from library.local_albums albums
+        left join library.local_artists artists on artists.id = albums.artist_id
+        where albums.id = any(%(candidate_ids)s::bigint[])
+        order by
+          lower(coalesce(albums.title, '')) collate "C",
+          lower(coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name, '')) collate "C",
+          coalesce(albums.release_year::text, '') collate "C",
+          lower(coalesce(albums.album_key, '')) collate "C"
+        limit %(limit)s::integer
+    """
+
+
 def _path_file_type(path: object) -> str:
     filename = re.split(r"[\\/]", str(path or ""))[-1]
     _stem, separator, suffix = filename.rpartition(".")
@@ -6442,6 +7326,7 @@ def _problematic_album_summary_payload(
     if album.get("inventory_status") == "missing":
         payload["inventory_status"] = "missing"
         payload["missing_since"] = album.get("missing_since")
+        payload["missing_reason"] = album.get("missing_reason")
         payload["track_paths"] = []
         payload["tracks"] = []
     return {
@@ -6532,6 +7417,7 @@ def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, 
     if album.get("inventory_status") == "missing":
         detail["inventory_status"] = "missing"
         detail["missing_since"] = album.get("missing_since")
+        detail["missing_reason"] = album.get("missing_reason")
         detail["tracks"] = []
         detail["problematic_track_paths"] = []
     return detail
@@ -7887,7 +8773,7 @@ def _selected_artist_album_payloads(
                 "year": album_year,
                 "release_date": metadata.get("release_date"),
                 "edition": metadata.get("edition"),
-                "is_split_album": bool(metadata.get("is_split_album")),
+                "is_split_album": _album_is_split(metadata),
                 "root_provenance": dict(root_provenance),
                 "library_root_id": row_payload.get("file_library_root_id"),
                 "library_root_category": row_payload.get("file_library_root_category"),
@@ -8067,7 +8953,7 @@ def _root_album_browse_album_payloads(
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
-            "is_split_album": bool(metadata.get("is_split_album")),
+            "is_split_album": _album_is_split(metadata),
             "root_provenance": dict(_row_json_mapping(metadata.get("root_provenance"))),
             "library_root_category": metadata.get("library_root_category"),
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
@@ -8107,16 +8993,23 @@ def _root_album_browse_album_payloads(
 
 
 def _album_artist_relationship(rows: Iterable[object]) -> str:
+    from music_app.services.selected_artist_membership import album_artist_relationship
+
+    payloads = [_row_mapping(row) for row in rows]
     kinds = {
-        str(_row_mapping(row).get("featured_kind") or "").strip().casefold()
-        for row in rows
+        str(payload.get("featured_kind") or "").strip().casefold()
+        for payload in payloads
     }
-    return (
-        "featured"
-        if "owner" not in kinds
-        and kinds & {"featured_member", "featured_track_artist"}
-        else "owned"
-    )
+    if "owner" in kinds or not kinds & {"featured_member", "featured_track_artist"}:
+        return "owned"
+    for payload in payloads:
+        album_artist = _row_json_mapping(payload.get("album_metadata")).get("album_artist")
+        if album_artist and album_artist_relationship(
+            SimpleNamespace(album_artist=album_artist),
+            str(payload.get("artist_name") or ""), {},
+        ) == "owned":
+            return "owned"
+    return "featured"
 
 
 def _copy_album_for_artist_occurrence(
@@ -8415,18 +9308,57 @@ def _search_artist_groups(rows: list[object], *, query: str = "") -> list[dict[s
     return artist_groups
 
 
-def _top_search_selected_artist(artist_groups: list[dict[str, object]], *, query: str) -> str:
+def _top_search_selected_artist(
+    artist_groups: list[dict[str, object]],
+    *,
+    query: str,
+    canonical_to_aliases: Mapping[str, object] | None = None,
+) -> str:
+    """The artist a search auto-selects.
+
+    A query naming an artist keeps the ranked best match. A title-only query
+    ("Divine Comedy") names nobody, so every group ties and the alphabetical
+    first, often one track artist of a compilation, would hide the rest:
+    select the artist owning the most matching albums instead, counting each
+    album once for its owner (a compilation's album owner, not its credits).
+    """
     if not str(query or "").strip():
         return ""
-    for group in artist_groups:
+    artists = [str(group.get("artist") or "").strip() for group in artist_groups]
+    artists = [artist for artist in artists if artist]
+    if not artists:
+        return ""
+    aliases_by_artist = canonical_to_aliases or {}
+
+    def aliases(artist: str) -> list[object]:
+        value = aliases_by_artist.get(artist)
+        return list(value) if isinstance(value, (list, tuple, set)) else []
+
+    if any(_artist_name_matches_search_query(query, artist, aliases(artist)) for artist in artists):
+        return artists[0]
+    def owned_album_count(group: Mapping[str, object]) -> int:
+        # A group lists every matching album its artist appears on; it owns
+        # those whose album artist is that artist (or one of its aliases).
         artist = str(group.get("artist") or "").strip()
-        if artist:
-            return artist
-    return ""
+        names = {_artist_display_dedupe_key(name) for name in [artist, *aliases(artist)] if str(name or "").strip()}
+        return sum(
+            1 for album in group.get("albums") or []
+            if isinstance(album, Mapping) and _artist_display_dedupe_key(str(album.get("album_artist") or "")) in names
+        )
+
+    counts = [owned_album_count(group) for group in artist_groups if str(group.get("artist") or "").strip()]
+    best = max(counts)
+    # Ties keep the existing group order. When no artist owns a matching album (the
+    # title is only a track on someone else's compilation), no artist is selected.
+    return artists[counts.index(best)] if best else ""
 
 
-def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
+def _artists_sidebar_from_groups(
+    artist_groups: list[dict[str, object]],
+    *,
+    alphabetical: bool = False,
+) -> list[dict[str, object]]:
+    sidebar = [
         {
             "artist": str(group.get("artist") or "").strip(),
             "artist_display": _artist_tree_display_value(
@@ -8437,52 +9369,36 @@ def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list
         for group in artist_groups
         if str(group.get("artist") or "").strip()
     ]
-
-
-def _without_release_coartists(
-    groups: list[dict[str, object]],
-    artist: str,
-    *,
-    query: str,
-    canonical_to_aliases: Mapping[str, list[str]],
-) -> list[dict[str, object]]:
-    """Drop artists found only through a release they share with the searched artist."""
-    artist_key = _artist_display_dedupe_key(artist)
-    artist_album_keys = {
-        album.get("key")
-        for group in groups
-        if _artist_display_dedupe_key(str(group.get("artist") or "").strip()) == artist_key
-        for album in group.get("albums") or []
-    }
-
-    def _is_release_coartist(group: dict[str, object]) -> bool:
-        name = str(group.get("artist") or "").strip()
-        albums = list(group.get("albums") or [])
-        return (
-            bool(albums)
-            and _artist_display_dedupe_key(name) != artist_key
-            and all(album.get("key") in artist_album_keys for album in albums)
-            and not _artist_name_matches_search_query(
-                query,
-                name,
-                canonical_to_aliases.get(name, []),
-            )
-        )
-
-    return [group for group in groups if not _is_release_coartist(group)]
+    # Search ranks artists to choose its best match; the Artist Tree itself
+    # always keeps the library's normal alphabetical order.
+    if alphabetical:
+        sidebar.sort(key=lambda item: (
+            artist_collation_key(item["artist_display"] or item["artist"]),
+            artist_collation_key(item["artist"]),
+        ))
+    return sidebar
 
 
 def _merge_artist_groups_for_sidebar(
     primary_groups: list[dict[str, object]],
     extra_groups: list[dict[str, object]],
+    *,
+    artists: Iterable[object] | None = None,
 ) -> list[dict[str, object]]:
     merged: list[dict[str, object]] = []
     seen_keys: set[str] = set()
+    selected_keys = {
+        _artist_display_dedupe_key(artist)
+        for artist in (artists or [])
+        if str(artist or "").strip()
+    }
     for group in [*list(primary_groups or []), *list(extra_groups or [])]:
-        artist = str(group.get("artist") or "").strip()
-        if not artist:
+        group_artist = str(group.get("artist") or "").strip()
+        if not group_artist:
             continue
-        artist_key = _artist_display_dedupe_key(artist)
+        artist_key = _artist_display_dedupe_key(group_artist)
+        if selected_keys and artist_key not in selected_keys:
+            continue
         if artist_key in seen_keys:
             continue
         seen_keys.add(artist_key)
@@ -8535,6 +9451,8 @@ def _build_artist_page_gallery_payload(artist_ref: str) -> dict[str, object]:
 
 def _visible_album_clause(album_ref: str) -> str:
     return f"""
+             not ({album_ref}.metadata ? 'stray_duplicate_of')
+             and (
              %(category_count)s = 0
              or ({album_ref}.metadata #>> '{{root_provenance,primary_category}}') = any(%(visible_categories)s::text[])
              or exists (
@@ -8559,6 +9477,7 @@ def _visible_album_clause(album_ref: str) -> str:
                  ),
                  0
                ) = 0
+             )
              )
     """.strip()
 
@@ -9285,12 +10204,12 @@ from library.local_artists
         )
         order by
           regexp_replace(
-            lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)),
+            translate(lower(coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name)), U&'\\2018\\2019', U&'\\0027\\0027'),
             '^[[:punct:][:space:]]+',
             ''
           ),
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name),
-          regexp_replace(lower(library.local_artists.name), '^[[:punct:][:space:]]+', ''),
+          regexp_replace(translate(lower(library.local_artists.name), U&'\\2018\\2019', U&'\\0027\\0027'), '^[[:punct:][:space:]]+', ''),
           library.local_artists.name
         limit {normalized_candidate_limit};
     """
@@ -9424,13 +10343,13 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             dense_rank() over (
               order by
                 regexp_replace(
-                  lower(canonical_artist_sort_values.canonical_sort_name),
+                  translate(lower(canonical_artist_sort_values.canonical_sort_name), U&'\\2018\\2019', U&'\\0027\\0027'),
                   '^[[:punct:][:space:]]+',
                   ''
                 ),
                 canonical_artist_sort_values.canonical_sort_name,
                 regexp_replace(
-                  lower(canonical_artist_sort_values.canonical_artist_name),
+                  translate(lower(canonical_artist_sort_values.canonical_artist_name), U&'\\2018\\2019', U&'\\0027\\0027'),
                   '^[[:punct:][:space:]]+',
                   ''
                 ),
@@ -9583,6 +10502,7 @@ def _artist_search_projection_authority_sql() -> str:
     return """
         with bootstrap_context as (
           select
+            library.libraries.id as library_id,
             library.libraries.metadata #>>
               '{scan_cache,relation_projection,status}' as projection_status,
             library.libraries.metadata #>>
@@ -9600,7 +10520,14 @@ def _artist_search_projection_authority_sql() -> str:
           limit 1
         )
         select (
-          to_regclass('library.local_artist_search_projection') is not null
+          to_regclass('library.local_artist_search_projection_current') is not null
+          and exists(select 1 from library.local_relation_compatibility_state compatibility
+            join library.local_relation_projection_state state using(library_id)
+            where state.library_id=bootstrap_context.library_id
+              and compatibility.current_semantics='current-v11-explicit-collaboration'
+              and compatibility.legacy_semantics='legacy-v11-broad-aliases'
+              and compatibility.source_fingerprint=state.source_fingerprint
+              and compatibility.last_publication_xid=state.last_publication_xid)
           and bootstrap_context.projection_status in ('ready', 'stale')
           and bootstrap_context.builder_version = %(builder_version)s
           and bootstrap_context.source_fingerprint <> ''
@@ -10096,6 +11023,14 @@ def _search_preview_sql(
         if use_utf8_prefilter
         else ""
     )
+    disc_subtitle_prefilter_sql = (
+        "library.search_utf8_hex(lower(btrim("
+        "library.local_track_files.metadata #>> '{scan_cache,file_entry,disc_subtitle}'"
+        "))) like '%%' || "
+        "library.search_utf8_hex(lower(%(query_utf8_prefilter)s)) || '%%' and "
+        if use_utf8_prefilter
+        else ""
+    )
     preview_eligibility_sql = (
         f"""
         track_override_defaults as materialized (
@@ -10180,8 +11115,8 @@ def _search_preview_sql(
             library.local_artists.library_id,
             library.local_artists.id as artist_id
           from library.local_artists
-          where lower(btrim(coalesce(library.local_artists.name, '')))
-                  like lower(%(query_like)s) escape ''
+          where library.fold_search_accents(library.local_artists.name)
+                  like library.fold_search_accents(%(query_like)s) escape ''
              or library.local_artists.artist_key
                   = any(%(search_artist_keys)s::text[])
         ),
@@ -10190,16 +11125,16 @@ def _search_preview_sql(
             library.local_albums.library_id,
             library.local_albums.id as album_id
           from library.local_albums
-          where lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', '')))
-                like lower(%(query_like)s) escape ''
+          where library.fold_search_accents(library.local_albums.metadata ->> 'album_artist')
+                like library.fold_search_accents(%(query_like)s) escape ''
         ),
         credited_raw_artist_matches as materialized (
           select
             library.local_albums.library_id,
             library.local_albums.id as album_id
           from library.local_albums
-          where lower(btrim(coalesce(library.local_albums.metadata ->> 'artists', '')))
-                like lower(%(query_like)s) escape ''
+          where library.fold_search_accents(library.local_albums.metadata ->> 'artists')
+                like library.fold_search_accents(%(query_like)s) escape ''
             and exists (
                   select 1
                   from jsonb_array_elements_text(
@@ -10209,8 +11144,8 @@ def _search_preview_sql(
                       else '[]'::jsonb
                     end
                   ) as search_raw_artist(name)
-                  where lower(btrim(search_raw_artist.name))
-                    like lower(%(query_like)s) escape ''
+                  where library.fold_search_accents(search_raw_artist.name)
+                    like library.fold_search_accents(%(query_like)s) escape ''
                 )
         ),
         track_title_matches as materialized (
@@ -10227,7 +11162,7 @@ def _search_preview_sql(
               library.local_track_files.track_id,
               library.local_track_files.scan_cache_stale
             from library.local_track_files
-            where {file_path_prefilter_sql}(
+            where ({file_path_prefilter_sql}(
                 lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
                   escape ''
                 or lower(btrim(
@@ -10237,7 +11172,17 @@ def _search_preview_sql(
                     ''
                   )
                 )) like lower(%(query_like)s) escape ''
-              )
+              ))
+            union
+            -- A CD name match uses its own partial index (migration 0118).
+            select
+              library.local_track_files.track_id,
+              library.local_track_files.scan_cache_stale
+            from library.local_track_files
+            where btrim(library.local_track_files.metadata #>> '{{scan_cache,file_entry,disc_subtitle}}') <> ''
+              and {disc_subtitle_prefilter_sql}lower(btrim(
+                library.local_track_files.metadata #>> '{{scan_cache,file_entry,disc_subtitle}}'
+              )) like lower(%(query_like)s) escape ''
         ),
         matched_track_album_ids as materialized (
           select
@@ -10331,14 +11276,20 @@ def _search_preview_sql(
           where ({_visible_album_clause("library.local_albums")})
         ),
         eligible_matched_track_album_ids as materialized (
-          select distinct
+          select
             matched_track_album_ids.library_id,
-            matched_track_album_ids.album_id
+            matched_track_album_ids.album_id,
+            array_agg(distinct library.local_tracks.artist_id)
+              filter (where library.local_tracks.artist_id is not null) as matched_artist_ids
           from matched_track_album_ids
           join eligible_album_tracks
             on eligible_album_tracks.library_id = matched_track_album_ids.library_id
            and eligible_album_tracks.album_id = matched_track_album_ids.album_id
            and eligible_album_tracks.track_id = matched_track_album_ids.track_id
+          join library.local_tracks
+            on library.local_tracks.library_id = matched_track_album_ids.library_id
+           and library.local_tracks.id = matched_track_album_ids.track_id
+          group by matched_track_album_ids.library_id, matched_track_album_ids.album_id
         ),
         matched_album_ids as materialized (
           select album_title_matches.album_id
@@ -10543,6 +11494,13 @@ def _search_preview_sql(
           active_preview_rows as (
             select
               'active'::text as search_partition,
+              exists (
+                select 1 from album_title_matches
+                where album_title_matches.library_id = matched_album_rows.library_id
+                  and album_title_matches.album_id = matched_album_rows.album_id
+              ) as search_album_title_match,
+              coalesce(eligible_matched_track_album_ids.matched_artist_ids, array[]::bigint[])
+                as search_matched_track_artist_ids,
               matched_album_rows.artist_id,
               matched_album_rows.display_artist as artist_name,
               matched_album_rows.artist_sort_name,
@@ -10566,17 +11524,31 @@ def _search_preview_sql(
               null::text as file_library_root_category,
               coalesce(track_rollups.track_count, 0) as track_count,
               coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
-             from matched_album_rows
-             {_artist_musicbrainz_projection_joins_sql(
-                 library_id="matched_album_rows.library_id",
-                 artist_id="matched_album_rows.artist_id",
-             )}
-             left join track_rollups
+            from matched_album_rows
+            {_artist_musicbrainz_projection_joins_sql(
+                library_id="matched_album_rows.library_id",
+                artist_id="matched_album_rows.artist_id",
+            )}
+            left join eligible_matched_track_album_ids
+              on eligible_matched_track_album_ids.library_id = matched_album_rows.library_id
+             and eligible_matched_track_album_ids.album_id = matched_album_rows.album_id
+            left join track_rollups
               on track_rollups.album_id = matched_album_rows.album_id
           ),
           missing_preview_rows as (
             select
               'missing'::text as search_partition,
+              exists (
+                select 1 from album_title_matches
+                where album_title_matches.library_id = missing_album_ids.library_id
+                  and album_title_matches.album_id = missing_album_ids.album_id
+              ) as search_album_title_match,
+              case when exists (
+                select 1 from matched_track_album_ids
+                where matched_track_album_ids.library_id = missing_album_ids.library_id
+                  and matched_track_album_ids.track_id = library.local_tracks.id
+              ) then array[library.local_tracks.artist_id] else array[]::bigint[] end
+                as search_matched_track_artist_ids,
               library.local_artists.id as artist_id,
               library.local_artists.name as artist_name,
               library.local_artists.sort_name as artist_sort_name,
@@ -10934,47 +11906,51 @@ def _relation_alias_maps_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+        ), relation_snapshot as materialized (
+          select library.libraries.id, library.libraries.metadata,
+            library.local_relation_views(library.libraries.id) as relation_views
+          from library.libraries
+          join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         )
     select
-      library.libraries.id as library_id,
+      relation_snapshot.id as library_id,
       md5(coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_projection}',
+        relation_snapshot.metadata #> '{scan_cache,relation_projection}',
         '{}'::jsonb
       )::text) as relation_alias_fingerprint,
       coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
+        relation_snapshot.relation_views -> 'alias_to_canonical',
         '{}'::jsonb
       ) as alias_to_canonical,
       coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}',
+        relation_snapshot.relation_views -> 'canonical_to_aliases',
         '{}'::jsonb
       ) as canonical_to_aliases,
       coalesce(
-        library.libraries.metadata #> '{scan_cache,relation_projection}',
+        relation_snapshot.metadata #> '{scan_cache,relation_projection}',
         '{}'::jsonb
       ) as relation_projection,
           (
             not jsonb_path_exists(
-              library.libraries.metadata,
+              relation_snapshot.metadata,
               '$.scan_cache.relation_views'
             )
             and not jsonb_path_exists(
-              library.libraries.metadata,
+              relation_snapshot.metadata,
               '$.scan_cache.relation_projection'
             )
           ) as projection_snapshot_missing,
       coalesce(
-        jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,canonical_to_aliases}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,family_to_artists}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,folder_related}') = 'object'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists}') = 'array'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,artists_sidebar}') = 'array'
-        and jsonb_typeof(library.libraries.metadata #> '{scan_cache,relation_views,sidebar_families}') = 'array',
+        jsonb_typeof(relation_snapshot.relation_views -> 'alias_to_canonical') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'canonical_to_aliases') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'family_to_artists') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'folder_related') = 'object'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'artists') = 'array'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'artists_sidebar') = 'array'
+        and jsonb_typeof(relation_snapshot.relation_views -> 'sidebar_families') = 'array',
         false
       ) as projection_structure_complete
-        from library.libraries
-        join bootstrap_context on bootstrap_context.library_id = library.libraries.id
+        from relation_snapshot
         limit 1;
     """
 
@@ -11024,6 +12000,7 @@ def _missing_albums_sql(
           join library.local_tracks stale_tracks on stale_tracks.id = stale_files.track_id
           join bootstrap_context on bootstrap_context.library_id = stale_tracks.library_id
           where stale_files.scan_cache_stale is true
+          __STALE_ALBUM_SCOPE__
         ),
         missing_albums as (
           select
@@ -11084,6 +12061,8 @@ def _missing_albums_sql(
           library.local_track_files.scan_cache_stale as file_scan_cache_stale,
           library.local_track_files.metadata #>> '{scan_cache,stale_marked_at}'
             as file_stale_marked_at,
+          library.local_track_files.metadata #>> '{scan_cache,missing_reason}'
+            as file_missing_reason,
           library.local_track_files.library_root_id as file_library_root_id,
           library.library_roots.root_kind as file_library_root_category
         from missing_albums
@@ -11111,7 +12090,12 @@ def _missing_albums_sql(
           ''
         ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
         order by library.local_albums.album_key, library.local_tracks.id;
-    """.replace("__ARTIST_SCOPE__", artist_scope + (
+    """.replace("__STALE_ALBUM_SCOPE__", """
+            and exists (select 1 from library.local_albums scoped_album
+              where scoped_album.id = stale_tracks.album_id
+                and scoped_album.library_id = stale_tracks.library_id
+                and scoped_album.album_key = any(%(album_keys)s::text[]))
+    """ if scoped_albums else "").replace("__ARTIST_SCOPE__", artist_scope + (
         " and library.local_albums.album_key = any(%(album_keys)s::text[])" if scoped_albums else ""
     )).replace("__BOUNDED_ORDER__", bounded_order)
 
@@ -11205,6 +12189,7 @@ def _duplicate_source_rows_for_album_ids_sql() -> str:
             albums.title as album_title,
             albums.release_year as album_release_year,
             albums.cover_path as album_cover_path,
+            albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             coalesce(
                 nullif(albums.metadata ->> 'album_artist', ''),
                 artists.name
@@ -11276,9 +12261,9 @@ def _problematic_files_sql(
 
     if duplicate_sources_only and (not duplicate_candidates or candidate_summary or targeted_problem_owners):
         raise ValueError("Duplicate source projection requires only duplicate_candidates=True.")
-    if (candidate_ids_only or candidate_ids_page or selected_album_ids) and not candidate_summary:
+    if (candidate_ids_only or selected_album_ids) and not candidate_summary:
         raise ValueError("Problematic candidate query modes require candidate_summary=True.")
-    if sum((candidate_ids_only, candidate_ids_page, selected_album_ids)) > 1:
+    if candidate_ids_only and selected_album_ids:
         raise ValueError("Problematic candidate query modes are mutually exclusive.")
     inventory_physical_context = candidate_summary and not selected_album_ids
     physical_scope_ctes = ""
@@ -11344,7 +12329,8 @@ def _problematic_files_sql(
               or library.local_tracks.track_number <= 0) as track_problem,
             (library.local_track_files.scan_file_entry_is_object is true
               and (library.local_track_files.scan_file_text_mojibake_candidate is true
-                or library.local_track_files.scan_file_metadata_problem_candidate is true)) as file_problem,
+                or library.local_track_files.scan_file_metadata_problem_candidate is true
+                or text_corrections.track_file_id is not null)) as file_problem,
             nullif(lower(btrim(library.local_track_files.scan_file_album)), '') as file_album,
             nullif(lower(btrim(library.local_track_files.scan_file_album_artist)), '') as file_album_artist,
             nullif(btrim(coalesce(library.local_track_files.scan_file_year, '')), '') as file_year,
@@ -11358,6 +12344,8 @@ def _problematic_files_sql(
             on roots.id = library.local_track_files.library_root_id
            and roots.library_id = library.local_tracks.library_id
            and roots.is_active is true
+          left join library.local_track_file_text_corrections text_corrections
+            on text_corrections.track_file_id = library.local_track_files.id
           where library.local_track_files.scan_cache_stale is false
             and __PATH_KEY_PRESENT__
         ),
@@ -11438,9 +12426,9 @@ def _problematic_files_sql(
         ),
     """
     physical_file_ctes = (
-        local_album_membership_ctes_sql()
+        physical_scope_ctes
+        + local_album_membership_ctes_sql(scope_file_ids=not inventory_physical_context)
         + ","
-        + physical_scope_ctes
         + physical_file_ctes.replace(
             "__PHYSICAL_SCOPE_JOIN__", physical_scope_join,
         ).replace(
@@ -11608,6 +12596,13 @@ def _problematic_files_sql(
               )
             )
             or active_album_rollup.track_problem
+            or library.local_albums.metadata ? 'stray_duplicate_of'
+            or exists (
+              select 1 from library.local_albums stray_album
+              where stray_album.library_id=library.local_albums.library_id
+                and stray_album.metadata #>> '{stray_duplicate_of,album_id}'
+                    = library.local_albums.id::text
+            )
             or library.local_artists.scan_name_problem_candidate is true
             or active_album_rollup.file_problem
              or library.local_albums.id in (
@@ -11806,9 +12801,10 @@ def _problematic_files_sql(
             library.local_albums.title,
             library.local_albums.release_year,
             library.local_albums.cover_path,
+            library.local_albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             library.local_albums.metadata ->> 'album_artist' as album_artist
         """
-        album_result_projection = ""
+        album_result_projection = "selected_albums.stray_duplicate_of,"
         file_result_projection = "active_track_files.file_entry,"
         album_artist_result_expression = "selected_albums.album_artist"
     elif candidate_summary:
@@ -11820,6 +12816,7 @@ def _problematic_files_sql(
             library.local_albums.title,
             library.local_albums.release_year,
             library.local_albums.cover_path,
+            library.local_albums.metadata -> 'stray_duplicate_of' as stray_duplicate_of,
             library.local_albums.metadata ->> 'album_artist' as album_artist,
             library.local_albums.metadata ->> 'artists' as album_artists,
             coalesce((library.local_albums.metadata ->> 'is_compilation')::boolean, false) as album_is_compilation,
@@ -11853,6 +12850,8 @@ def _problematic_files_sql(
             library.local_track_files.scan_file_year as file_year,
             library.local_track_files.scan_file_track_number as file_track_number,
             library.local_track_files.scan_file_text_mojibake_candidate as file_text_mojibake_candidate,
+            (select text_corrections.text_corrections from library.local_track_file_text_corrections text_corrections
+              where text_corrections.track_file_id = library.local_track_files.id) as file_text_corrections,
             exception_override.override_payload ->> 'exception_type' as exception_type,
             exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
             coalesce(
@@ -11862,6 +12861,7 @@ def _problematic_files_sql(
         """
         album_result_projection = """
           selected_albums.album_artist,
+          selected_albums.stray_duplicate_of,
           selected_albums.album_artists,
           selected_albums.album_is_compilation,
           selected_albums.album_cover_revision,
@@ -11891,6 +12891,7 @@ def _problematic_files_sql(
           active_track_files.file_year,
           active_track_files.file_track_number,
           active_track_files.file_text_mojibake_candidate,
+          active_track_files.file_text_corrections,
           active_track_files.exception_type,
           active_track_files.exception_override_present,
         """
@@ -12283,12 +13284,23 @@ def _utility_rules_sql() -> str:
           limit 1
         ),
         relation_context as (
+          -- The whole-library alias map only explains ignored album-artist
+          -- problems; skip building it when no such rule exists.
           select
             library.libraries.id as library_id,
-            coalesce(
-              library.libraries.metadata #> '{scan_cache,relation_views,alias_to_canonical}',
-              '{}'::jsonb
-            ) as alias_to_canonical
+            case
+              when exists (
+                select 1
+                from library.ignored_repairs
+                where library.ignored_repairs.library_id = library.libraries.id
+                  and right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+              )
+                then coalesce(
+                  library.local_relation_views(library.libraries.id) -> 'alias_to_canonical',
+                  '{}'::jsonb
+                )
+              else '{}'::jsonb
+            end as alias_to_canonical
           from library.libraries
           join bootstrap_context
             on bootstrap_context.library_id = library.libraries.id
@@ -12310,7 +13322,7 @@ def _utility_rules_sql() -> str:
             ) as artist_name,
             null::text as file_private_path,
             null::jsonb as file_entry,
-            relation_context.alias_to_canonical
+            null::jsonb as alias_to_canonical
           from library.ignored_versions
           join bootstrap_context
             on bootstrap_context.library_id = library.ignored_versions.library_id
@@ -12339,7 +13351,10 @@ def _utility_rules_sql() -> str:
             ) as artist_name,
             library.local_track_files.private_path as file_private_path,
             library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
-            relation_context.alias_to_canonical
+            case
+              when right(library.ignored_repairs.repair_key, 14) = '::album_artist'
+                then relation_context.alias_to_canonical
+            end as alias_to_canonical
           from library.ignored_repairs
           join bootstrap_context
             on bootstrap_context.library_id = library.ignored_repairs.library_id

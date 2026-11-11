@@ -2,6 +2,8 @@
    The overlay owns its fallbacks: login.css tokens do not exist on the app page,
    and default accounts set no player tokens, so neither may be required. */
 .startup-progress {
+  /* Own fallbacks: the app document does not load login.css, and the
+     appearance tokens exist only for themed palettes. */
   --startup-progress-ink: var(--appearance-ink, #f5f7fb);
   --startup-progress-track: var(--appearance-player, rgba(24, 36, 53, 0.82));
   --startup-progress-fill: var(--appearance-play, #32bc73);
@@ -33,6 +35,8 @@
     0 0 8px color-mix(in srgb, var(--startup-progress-fill) 90%, transparent),
     0 0 20px color-mix(in srgb, var(--startup-progress-fill) 55%, transparent);
   will-change: width;
+  /* startup-progress.js animates every frame; a CSS transition would trail it. */
+  transition: none;
 }
 .startup-progress [data-startup-percent] {
   color: var(--startup-progress-fill);
@@ -43,4 +47,3 @@
     0 0 6px color-mix(in srgb, var(--startup-progress-fill) 90%, transparent),
     0 0 16px color-mix(in srgb, var(--startup-progress-fill) 55%, transparent);
 }
-@media (prefers-reduced-motion: reduce) { .startup-progress .progress-fill { transition: none; } }

@@ -45,10 +45,12 @@ export class SearchToolbarActions {
 
   async settleDebouncedPrefixesThenSubmit(query, prefixes, options = {}) {
     const completedQuery = String(query || '');
+    await expect(this.searchToolbar.galleryHeader).toBeVisible();
     for (const prefix of prefixes) {
       const typedPrefix = String(prefix || '');
       await this.searchToolbar.input.fill(typedPrefix);
       await expect(this.searchToolbar.input).toHaveValue(typedPrefix);
+      await expect(this.searchToolbar.galleryHeader).toBeVisible();
     }
     if (await this.searchToolbar.input.inputValue() !== completedQuery) {
       await this.searchToolbar.input.fill(completedQuery);
@@ -56,6 +58,7 @@ export class SearchToolbarActions {
     }
     await this.searchToolbar.input.press('Enter');
     await this.waitForQuery(completedQuery, options);
+    await expect(this.searchToolbar.galleryHeader).toBeVisible();
   }
 
   async searchAndReadViewDataPayload(query, options = {}) {

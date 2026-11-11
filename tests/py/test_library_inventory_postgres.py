@@ -167,6 +167,17 @@ def test_candidate_query_pushes_artist_and_text_scope_into_postgres():
     assert "{scan_cache,file_entry,artists}" in normalized_sql
     assert "lower(active_track_files.private_path) like any(%(artist_path_patterns)s::text[])" in normalized_sql
     assert "unnest(%(query_patterns)s::text[])" in normalized_sql
+    assert "regexp_replace(" in normalized_sql
+    assert (
+        "coalesce(library.local_track_files.relative_path, "
+        "active_track_files.private_path, '')"
+    ) in normalized_sql
+    assert "'^.*[\\\\/]'" in normalized_sql
+    assert "library.local_track_files.relative_path, library.local_track_files.metadata" not in normalized_sql
+    assert (
+        "library.local_track_files.metadata #> '{scan_cache,file_entry,artists}', "
+        "active_track_files.private_path"
+    ) not in normalized_sql
     assert params["artist_names"] == ["radiohead", "thom yorke"]
     assert params["artist_path_patterns"] == ["%radiohead%", "%thom yorke%"]
     assert params["query_patterns"] == ["%a%", "%kid%"]
@@ -424,6 +435,13 @@ def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
 
     for forbidden in ("mbid", "musicbrainz", "lastfm", "last.fm", "integration."):
         assert forbidden not in sql
+
+
+def test_non_album_candidates_read_stored_membership_without_per_row_cte_scans():
+    sql = " ".join(inventory_module._non_album_candidates_sql().lower().split())
+    assert "(select problem from local_album_membership" not in sql
+    assert "exists (select 1 from local_album_membership" not in sql
+    assert "library.local_track_files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'" in sql
 
 
 def test_non_album_candidate_query_projects_custom_collection_name():

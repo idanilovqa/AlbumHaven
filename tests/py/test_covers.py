@@ -22,6 +22,19 @@ except ImportError:  # pragma: no cover - mirrors runtime optional dependency ha
 pytestmark = pytest.mark.skipif(PILImage is None, reason="Pillow not installed")
 
 
+def test_reserve_preserves_byte_distinct_visually_similar_cover(tmp_path):
+    original = tmp_path / "cover.jpg"
+    PILImage.new("RGB", (64, 64), color=(100, 100, 100)).save(original, format="JPEG")
+    incoming = io.BytesIO()
+    PILImage.new("RGB", (64, 64), color=(101, 101, 101)).save(incoming, format="JPEG")
+    previous = original.read_bytes()
+    assert previous != incoming.getvalue()
+    assert covers_module.images_are_visually_similar(original, incoming.getvalue())
+    reserve = covers_module.reserve_existing_cover_variant(tmp_path, incoming.getvalue())
+    assert reserve.read_bytes() == previous
+    assert covers_module.reserve_existing_cover_variant(tmp_path, previous) is None
+
+
 def test_find_cover_image_prefers_front_filename_over_larger_booklet(tmp_path: Path):
     front = tmp_path / "front-scan.jpg"
     booklet = tmp_path / "booklet-page.jpg"
@@ -1656,3 +1669,23 @@ def test_cover_variant_revision_accepts_only_content_hashes():
     assert covers_module.normalize_cover_variant_revision("A" * 64) == "a" * 64
     assert covers_module.normalize_cover_variant_revision("process-session-token") == ""
     assert covers_module.normalize_cover_variant_revision("1234567890") == ""
+
+
+@pytest.mark.parametrize(("duplicate_name", "reserved"), [(None, True), ("Art/CD.JPG", False)])
+def test_replaced_cover_is_kept_only_when_no_album_image_holds_its_bytes(
+    tmp_path, duplicate_name, reserved
+):
+    from music_app.services.covers import reserve_existing_cover_variant
+
+    (tmp_path / "cover.jpg").write_bytes(b"original")
+    if duplicate_name:
+        (tmp_path / duplicate_name).parent.mkdir(parents=True)
+        (tmp_path / duplicate_name).write_bytes(b"original")
+    managed = tmp_path / ".album-haven" / "v1" / "cover_variants" / "copy.jpg"
+    managed.parent.mkdir(parents=True)
+    managed.write_bytes(b"original")
+
+    result = reserve_existing_cover_variant(tmp_path, b"replacement")
+
+    assert (result == tmp_path / "cover-existing-1.jpg") is reserved
+    assert sorted(tmp_path.glob("cover-existing-*.jpg")) == ([tmp_path / "cover-existing-1.jpg"] if reserved else [])

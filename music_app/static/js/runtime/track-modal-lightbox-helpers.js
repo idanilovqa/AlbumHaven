@@ -26,10 +26,15 @@ function albumRequiresHydration(album) {
 }
 
 function renderTrackModalLoadingState(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
+  if (els.header && typeof buildTrackModalHeaderHtml === 'function') {
+    els.header.innerHTML = buildTrackModalHeaderHtml(album);
+    els = getTrackModalElements();
+  } else {
+    els.title.textContent = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean).join(' - ');
+  }
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
     els.folder.dataset.album = '';
@@ -71,6 +76,7 @@ function renderTrackModalLoadingState(album) {
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (els.title) {
     els.title.textContent = '';
   }
@@ -364,6 +370,16 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
   if (cachedAlbum && !albumRequiresHydration(cachedAlbum)) {
     const indexedAlbum = getIndexedAlbum(normalizedAlbumKey);
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
+    if (Array.isArray(cachedAlbum.release_candidate_family_keys)
+      && typeof getManualVersionFamilyKeys === 'function') {
+      const rules = typeof getAlbumReleaseRules === 'function' ? getAlbumReleaseRules(cachedAlbum) : state.view;
+      const currentFamily = [...getManualVersionFamilyKeys(String(cachedAlbum.key || ''), rules?.manual_version_links || {})].sort();
+      const cachedFamily = [...cachedAlbum.release_candidate_family_keys].map(String).sort();
+      if (JSON.stringify(currentFamily) !== JSON.stringify(cachedFamily)) {
+        invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
+        return null;
+      }
+    }
     const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
     const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
     const pendingMutationOwnsCachedMembership = Boolean(
@@ -473,6 +489,7 @@ function renderTrackModalIdentitySplitChoices(releases) {
   const choices = Array.isArray(releases) ? releases : [];
   if (choices.length < 2) return false;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   state.ui.trackModalIdentitySplitChoices = choices;
   els.subtitle.textContent = 'This album was split—choose the current release';
   els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
@@ -1043,8 +1060,11 @@ function closeImageLightbox() {
 }
 
 function closeTrackModal() {
+  // An empty second artbox never outlives Album Details.
+  if (typeof clearPendingAlbumAdditionalArtbox === 'function') clearPendingAlbumAdditionalArtbox();
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
   const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();
@@ -1174,7 +1194,6 @@ function dismissForegroundModal(modal) {
     'cover-lookup-modal': () => closeCoverLookupModal(),
     'cover-lookup-delete-confirm-modal': () => closeCoverLookupDeleteConfirm(),
     'non-album-modal': () => closeNonAlbumModal(),
-    'version-picker-modal': () => closeVersionPickerModal(),
   }[modal.id];
   if (close) close();
   else {

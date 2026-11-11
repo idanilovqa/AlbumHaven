@@ -6,7 +6,8 @@ param(
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string]$Case,
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string[]]$Cases,
     [string]$FixtureDistribution,
-    [string]$PythonPath = $env:PLAYWRIGHT_PYTHON
+    [string]$PythonPath = $env:PLAYWRIGHT_PYTHON,
+    [ValidateRange(1, 65535)][int]$PostgresPort = 5432
 )
 
 Set-StrictMode -Version Latest
@@ -158,11 +159,11 @@ function Import-EnvironmentFile([string]$Path) {
 
 function Get-PostgresAdminPassword([string]$PgpassPath) {
     foreach ($line in (Get-Content -LiteralPath $PgpassPath)) {
-        if ($line -match '^localhost:5432:(?:\*|postgres):postgres:(.+)$') {
+        if ($line -match "^(?:localhost|127\.0\.0\.1|\*):(?:$PostgresPort|\*):(?:\*|postgres):postgres:(.+)$") {
             return $Matches[1].Replace('\:', ':').Replace('\\', '\')
         }
     }
-    throw "PGPASSFILE has no localhost:5432 entry for the postgres role: $PgpassPath"
+    throw "PGPASSFILE has no loopback:$PostgresPort entry for the postgres role: $PgpassPath"
 }
 
 function Assert-OwnedTempRoot([string]$Candidate) {
@@ -257,7 +258,7 @@ function Invoke-PostgresBootstrap(
         '-GithubEnv', $GithubEnv,
         '-StatePath', $StatePath,
         '-PythonPath', $python,
-        '-Port', '5432',
+        '-Port', [string]$PostgresPort,
         '-SkipFixtureLoad'
     )
     $previousErrorActionPreference = $ErrorActionPreference

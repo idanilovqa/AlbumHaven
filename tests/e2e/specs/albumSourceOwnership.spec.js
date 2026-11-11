@@ -206,6 +206,40 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
   });
 });
 
+test('SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its soundtrack source in Problematic Files', { tag: '@area:album-details' }, async ({
+  galleryActions, utilityTabBarActions, utilityProblematicFilesActions,
+  searchToolbarActions, settingsModalAppBarActions, stepLogger,
+}) => {
+  test.setTimeout(240000);
+  const fixture = ownedFixture;
+  await stepLogger.step('Keep the complete soundtrack and hide the guest copy album', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await searchToolbarActions.search('The Prince Of Egypt', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('The Prince Of Egypt');
+    await expect.poll(() => galleryActions.readAlbumIdentityCardCount({
+      artist: 'Various Artists', album: 'The Prince Of Egypt', year: '2026',
+    })).toBe(1);
+    await expect.poll(() => galleryActions.readAlbumIdentityCardCount({
+      artist: 'Ofra Haza & Eden Riegel', album: 'The Prince Of Égypt', year: '2025',
+    })).toBe(0);
+  });
+  await stepLogger.step('Show the guest file as a duplicate beside the soundtrack source', async () => {
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('problematic-files');
+    await utilityProblematicFilesActions.waitForReady();
+    await utilityProblematicFilesActions.search('Various Artists');
+    await utilityProblematicFilesActions.waitForSearchResults('Various Artists');
+    const summary = await utilityProblematicFilesActions.selectAlbumByTitle('The Prince Of Egypt');
+    expect(summary.artist).toBe('Various Artists');
+    expect(summary.problemReasons).toContain('Duplicate files');
+    const rows = await utilityProblematicFilesActions.readDetectedTrackRows();
+    const stray = rows.find(row => row.path === fixture.soundtrackStrayPath);
+    expect(stray, 'missing guest duplicate beside soundtrack source').toBeTruthy();
+    expect(stray.reasons.some(reason => /duplicate/iu.test(reason))).toBe(true);
+  });
+});
+
 test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder', { tag: '@area:cover-providers' }, async ({
   galleryActions, trackModalActions, coverLookupActions, stepLogger,
 }) => {

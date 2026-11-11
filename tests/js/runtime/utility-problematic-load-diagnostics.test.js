@@ -235,6 +235,9 @@ function loadHelper(overrides = {}) {
       if (typeof callback === 'function') callback();
       return 1;
     },
+    // Debounced work (the server-side search) stays pending unless a test runs it.
+    scheduleBrowserTimeout() { return 0; },
+    clearBrowserTimeout() { return true; },
     showToast(message, variant, duration) {
       calls.toasts.push([message, variant, duration]);
     },
@@ -244,6 +247,120 @@ function loadHelper(overrides = {}) {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
+
+test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
+  const overlay = { hidden: true };
+  const requested = [];
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const { context, calls } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url) {
+      requested.push(String(url));
+      return json({ complete: !String(url).endsWith('?limit=50'), items: [{ key: 'a', name: 'A', detail_loaded: false }] });
+    },
+  });
+
+  context.prefetchProblematicFilesForSettingsIntent();
+  await context.state.utility.completeLoadPromise;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requested, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+  assert.equal(calls.renders, 0, 'a closed Settings modal is not painted');
+
+  overlay.hidden = false;
+  await context.loadActiveUtilityTab(true);
+  assert.equal(requested.length, 2, 'Settings opened right after the prefetch reuses it');
+  assert.equal(calls.renders, 1);
+});
+
+function loadSearchHelper(searchBody) {
+  const overlay = { hidden: false };
+  const timers = [];
+  const requested = [];
+  const loaded = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserTimeout(callback) { timers.push(callback); return timers.length; },
+    clearBrowserTimeout(id) { timers[id - 1] = null; },
+    async fetch(url) {
+      requested.push(String(url));
+      return { ok: true, status: 200, async json() { return searchBody; } };
+    },
+  });
+  Object.assign(loaded.context.state.utility, {
+    loaded: true,
+    problematicFilesComplete: false,
+    problematicSummaryRequestToken: 3,
+    problematicFiles: [{ key: 'first-page', name: 'First Page Album' }],
+  });
+  const runTimers = async () => {
+    const pending = timers.splice(0).filter(Boolean);
+    pending.forEach((callback) => callback());
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  return { ...loaded, requested, runTimers };
+}
+
+test('a search before the complete list arrives adds the server matches beyond the first page', async () => {
+  const { context, calls, requested, runTimers } = loadSearchHelper({
+    complete: false,
+    items: [{ key: 'first-page', name: 'First Page Album' }, { key: 'album-097', name: 'Needle Album' }],
+  });
+
+  context.state.utility.searchQuery = 'needle';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = '  Needle album ';
+  context.scheduleProblematicServerSearch();
+  await runTimers();
+
+  assert.deepEqual(requested, ['/utilities/problematic-files?q=Needle%20album'], 'only the settled query is sent');
+  assert.deepEqual([...context.state.utility.problematicFiles].map((item) => item.key), ['first-page', 'album-097']);
+  assert.equal(calls.renders, 1);
+});
+
+test('the complete list, a newer query or a reload discards a server search answer', async () => {
+  for (const supersede of [
+    (utility) => { utility.problematicFilesComplete = true; },
+    (utility) => { utility.searchQuery = 'other'; },
+    (utility) => { utility.problematicSummaryRequestToken = 4; },
+  ]) {
+    const { context, calls } = loadSearchHelper({ items: [{ key: 'late', name: 'Late' }] });
+    context.state.utility.searchQuery = 'late';
+    const search = context.searchProblematicFilesOnServer('late');
+    supersede(context.state.utility);
+    await search;
+    assert.deepEqual([...context.state.utility.problematicFiles].map((item) => item.key), ['first-page']);
+    assert.equal(calls.renders, 0);
+  }
+});
+
+test('a complete list, an empty or a one-character query needs no server search', async () => {
+  const { context, requested, runTimers } = loadSearchHelper({ items: [] });
+  context.state.utility.searchQuery = '   ';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = ' x ';
+  context.scheduleProblematicServerSearch();
+  context.state.utility.searchQuery = 'xy';
+  context.state.utility.problematicFilesComplete = true;
+  context.scheduleProblematicServerSearch();
+  await runTimers();
+  assert.deepEqual(requested, []);
+});
+
+test('the Settings-intent prefetch skips other tabs and an already open modal', () => {
+  const overlay = { hidden: true };
+  const requested = [];
+  const { context } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url) { requested.push(String(url)); return new Promise(() => {}); },
+  });
+
+  context.state.utility.activeTab = 'appearance';
+  context.prefetchProblematicFilesForSettingsIntent();
+  context.state.utility.activeTab = 'problematic-files';
+  overlay.hidden = false;
+  context.prefetchProblematicFilesForSettingsIntent();
+
+  assert.deepEqual(requested, []);
+});
 
 test('optimistic problematic-file mutations wait through a paint before rollback', async () => {
   const scheduledFrames = [];
@@ -440,6 +557,15 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(completeLoadSettled, false);
   assert.ok(calls.renders >= 2, 'the bounded response must paint before completion');
 
+  // Rules -> Problematic Files while the complete list loads: the tab shell
+  // painted "Loading..."; the first page it already has must repaint at once
+  // (the real library otherwise showed "Loading..." for 32 s).
+  context.state.utility.activeTab = 'problematic-files';
+  const rendersBeforeReturn = calls.renders;
+  const returned = context.loadProblematicFiles(false, { render: false, renderInitialPage: true });
+  assert.equal(calls.renders, rendersBeforeReturn + 1);
+  assert.equal(requestedUrls.length, 2, 'returning to the tab must not request the list again');
+
   context.state.utility.selectedProblematicKey = 'first';
   fullResponse.resolve({
     ok: true,
@@ -463,6 +589,7 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
     },
   });
   const result = await load;
+  assert.equal(await returned, result);
 
   assert.deepEqual(Array.from(result, (item) => item.key), ['first', 'second']);
   assert.equal(context.state.utility.problematicFiles[0].name, 'First canonical detail');
@@ -513,6 +640,46 @@ test('a render-suppressed complete load paints the refreshed detail that replace
   assert.ok(calls.renders >= 1, 'the refreshed detail replaced the clicked request, so it must paint');
 });
 
+test('a changed complete summary keeps the loaded off-page detail usable until its refresh lands', async () => {
+  const fullResponse = createDeferred();
+  const refreshedDetail = createDeferred();
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const detail = (name) => ({ key: 'off-page', name, detail_loaded: true, tracks: [],
+    repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] });
+  let detailRequests = 0;
+  const { context } = loadHelper({
+    async fetch(url) {
+      const target = String(url);
+      if (target.endsWith('?limit=50')) {
+        return json({ complete: false, items: [{ key: 'first-page', name: 'First page', detail_loaded: false }] });
+      }
+      if (target.includes('/detail?')) {
+        detailRequests += 1;
+        return detailRequests === 1 ? json(detail('Clicked detail')) : refreshedDetail.promise;
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true, { render: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.state.utility.problematicFiles.push({ key: 'off-page', name: 'Off page', detail_loaded: false });
+  context.state.utility.selectedProblematicKey = 'off-page';
+  await context.loadProblematicAlbumDetail('off-page', true);
+  fullResponse.resolve(json({ items: [
+    { key: 'first-page', name: 'First page', detail_loaded: false },
+    { key: 'off-page', name: 'Off page', issue_count: 2, detail_loaded: false },
+  ] }));
+  for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+
+  const visible = context.state.utility.problematicFiles.find((item) => item.key === 'off-page');
+  assert.equal(detailRequests, 2, 'a changed summary still refreshes the selected detail');
+  assert.equal(visible.detail_loaded, true, 'problem controls stay usable while the refresh is in flight');
+  assert.equal(visible.name, 'Clicked detail');
+  refreshedDetail.resolve(json(detail('Refreshed detail')));
+  await load;
+  assert.equal(context.state.utility.problematicFiles.find((item) => item.key === 'off-page').name, 'Refreshed detail');
+});
 test('loadProblematicFiles reuses its owned complete request for a concurrent forced load', async () => {
   const fullResponse = createDeferred();
   const requestedUrls = [];
@@ -574,6 +741,50 @@ test('navigation-owned Problematic Files loading paints the bounded page before 
       utility: {
         activeTab: 'problematic-files',
         problematicNavigationActiveToken: {},
+      },
+    },
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              complete: false,
+              items: [{ key: 'first', name: 'First', detail_loaded: false }],
+            };
+          },
+        };
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true, {
+    render: false,
+    renderInitialPage: true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(context.state.utility.problematicFiles[0]?.key, 'first');
+  assert.ok(calls.renders >= 1, 'navigation must paint the bounded page');
+
+  fullResponse.resolve({
+    ok: true,
+    status: 200,
+    async json() { return { items: [{ key: 'first', name: 'First', detail_loaded: false }] }; },
+  });
+  await load;
+});
+
+test('navigation-owned Problematic Files loading paints active-query matches before completion', async () => {
+  const fullResponse = createDeferred();
+  const { context, calls } = loadHelper({
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        problematicNavigationActiveToken: {},
+        searchQuery: 'First',
       },
     },
     async fetch(url) {
@@ -2030,10 +2241,11 @@ test('a pending Problematic Files response cannot rerender a different active ta
   assert.equal(calls.renders, 1, 'cached background reads must not replace the active loop player DOM');
 });
 
-function createTargetNavigationHarness({ previewKeys = ['alpha', 'beta'], fullKeys = previewKeys } = {}) {
+function createTargetNavigationHarness({ previewKeys = ['alpha', 'beta'], fullKeys = previewKeys, directKeys = [] } = {}) {
   const preview = createDeferred();
   const full = createDeferred();
   const requests = [];
+  const trackLookups = [];
   const opens = [];
   const trackPath = (key) => `/synthetic/${key}/track.flac`;
   const summary = (key) => ({ key, name: key, detail_loaded: false,
@@ -2044,6 +2256,13 @@ function createTargetNavigationHarness({ previewKeys = ['alpha', 'beta'], fullKe
   const response = (data, status = 200) => ({ ok: status === 200, status, json: async () => data });
   const { context, calls } = loadHelper({
     fetch(url) {
+      const lookup = new URL(String(url), 'http://synthetic.test').searchParams.get('track_path');
+      if (lookup) {
+        // Album Details' direct track lookup; 404 unless the test opts in.
+        trackLookups.push(lookup);
+        const key = directKeys.find((candidate) => trackPath(candidate) === lookup);
+        return Promise.resolve(key ? response(detail(key)) : response({ ok: false }, 404));
+      }
       requests.push(String(url));
       if (String(url).endsWith('?limit=50')) return preview.promise;
       if (String(url).includes('/detail?')) {
@@ -2067,7 +2286,7 @@ function createTargetNavigationHarness({ previewKeys = ['alpha', 'beta'], fullKe
   };
   const finishPreview = () => preview.resolve(response({ complete: false, items: previewKeys.map(summary) }));
   const finishFull = () => full.resolve(response({ items: fullKeys.map(summary) }));
-  return { context, calls, requests, opens, preview, full, trackPath, summary, detail,
+  return { context, calls, requests, trackLookups, opens, preview, full, trackPath, summary, detail,
     response, finishPreview, finishFull };
 }
 
@@ -2091,7 +2310,29 @@ test('track navigation opens hydrated preview target before full summary and kee
     'same-summary continuation must not duplicate target hydration');
 });
 
-test('outside-preview track waits for canonical full-summary identity without guessed detail requests', async () => {
+test('outside-preview track opens its server-resolved album before the full list arrives', async () => {
+  const h = createTargetNavigationHarness({ previewKeys: ['alpha'], fullKeys: ['alpha', 'omega'], directKeys: ['omega'] });
+  const navigation = h.context.openUtilityModalForTrack(h.trackPath('omega'));
+  try {
+    await navigation;
+    assert.deepEqual(h.trackLookups, [h.trackPath('omega')]);
+    assert.deepEqual(h.opens, [{ key: 'omega', loaded: true, track: h.trackPath('omega') }]);
+    assert.equal(h.requests.filter((url) => url.includes('/detail?')).length, 0);
+    h.finishPreview();
+    await settleTargetNavigation();
+    assert.deepEqual(h.context.state.utility.problematicFiles.map((item) => item.key), ['alpha', 'omega'],
+      'the bounded page must keep the opened album until the complete list confirms it');
+    assert.equal(h.context.state.utility.selectedProblematicKey, 'omega');
+  } finally {
+    h.finishPreview();
+    h.finishFull();
+    await h.context.state.utility.completeLoadPromise;
+  }
+  assert.deepEqual(h.context.state.utility.problematicFiles.map((item) => item.key), ['alpha', 'omega']);
+  assert.equal(h.context.state.utility.pinnedProblematicKey, '');
+});
+
+test('outside-preview track without a direct match waits for canonical full-summary identity without guessed detail requests', async () => {
   const h = createTargetNavigationHarness({ previewKeys: ['alpha'], fullKeys: ['alpha', 'omega'] });
   const navigation = h.context.openUtilityModalForTrack(h.trackPath('omega'));
   h.finishPreview();
@@ -2183,6 +2424,9 @@ for (const terminal of ['error', 'superseded']) {
     const h = createTargetNavigationHarness();
     let settled = false;
     const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta')).finally(() => { settled = true; });
+    // The direct track lookup misses first; supersede the summary load it then starts.
+    await settleTargetNavigation();
+    assert.deepEqual(h.trackLookups, [h.trackPath('beta')]);
     if (terminal === 'superseded') h.context.state.utility.problematicSummaryRequestToken += 1;
     h.preview.resolve(terminal === 'error'
       ? h.response({ error: 'Synthetic preview failure' }, 503)
@@ -2222,7 +2466,7 @@ test('full summary continuation retains an in-flight target detail when summary 
   const detailResponse = createDeferred();
   const fetch = h.context.fetch;
   h.context.fetch = (url) => {
-    if (String(url).includes('/detail?')) {
+    if (String(url).includes('/detail?album_key')) {
       h.requests.push(String(url));
       return detailResponse.promise;
     }
@@ -2255,7 +2499,7 @@ test('track navigation survives an in-flight summary refresh that retains its ta
   const fetch = h.context.fetch;
   let detailRequests = 0;
   h.context.fetch = (url) => {
-    if (String(url).includes('/detail?')) {
+    if (String(url).includes('/detail?album_key')) {
       h.requests.push(String(url));
       detailRequests += 1;
       if (detailRequests === 1) return firstDetail.promise;
@@ -2289,7 +2533,7 @@ test('track navigation retries detail superseded by a completed summary refresh'
   const fetch = h.context.fetch;
   let detailRequests = 0;
   h.context.fetch = (url) => {
-    if (String(url).includes('/detail?')) {
+    if (String(url).includes('/detail?album_key')) {
       h.requests.push(String(url));
       detailRequests += 1;
       if (detailRequests === 1) return firstDetail.promise;
@@ -2328,7 +2572,7 @@ test('track navigation waits for a full summary when refresh supersedes detail o
   const fetch = h.context.fetch;
   let detailRequests = 0;
   h.context.fetch = (url) => {
-    if (String(url).includes('/detail?')) {
+    if (String(url).includes('/detail?album_key')) {
       h.requests.push(String(url));
       detailRequests += 1;
       if (detailRequests === 1) return firstDetail.promise;
@@ -2379,7 +2623,7 @@ test('track navigation follows a refreshed canonical key for the same track', as
   };
   let detailRequests = 0;
   h.context.fetch = (url) => {
-    if (String(url).includes('/detail?')) {
+    if (String(url).includes('/detail?album_key')) {
       h.requests.push(String(url));
       detailRequests += 1;
       if (detailRequests === 1) return firstDetail.promise;
@@ -2412,7 +2656,7 @@ test('mutation invalidation during preview-derived detail cannot open obsolete s
   const detailResponse = createDeferred();
   const fetch = h.context.fetch;
   h.context.fetch = (url) => {
-    if (String(url).includes('/detail?')) {
+    if (String(url).includes('/detail?album_key')) {
       h.requests.push(String(url));
       return detailResponse.promise;
     }
@@ -2442,7 +2686,7 @@ for (const previewDetailState of ['loaded', 'in-flight']) {
     const freshDetail = { ...h.detail('beta'), ...freshSummary, detail_loaded: true,
       tracks: [{ path: h.trackPath('beta'), title: 'Updated track title' }] };
     h.context.fetch = (url) => {
-      if (String(url).includes('/detail?')) {
+      if (String(url).includes('/detail?album_key')) {
         h.requests.push(String(url));
         detailRequests += 1;
         if (detailRequests === 1) {
@@ -2508,7 +2752,7 @@ test('full summary removing target while preview detail is pending cannot open o
   const h = createTargetNavigationHarness();
   const detail = createDeferred();
   const fetch = h.context.fetch;
-  h.context.fetch = (url) => String(url).includes('/detail?') ? detail.promise : fetch(url);
+  h.context.fetch = (url) => String(url).includes('/detail?album_key') ? detail.promise : fetch(url);
   const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
   h.finishPreview();
   await settleTargetNavigation();
@@ -2524,7 +2768,7 @@ test('full-summary initial detail supersedes an older in-flight preview detail',
   const h = createTargetNavigationHarness();
   const oldDetail = createDeferred();
   const fetch = h.context.fetch;
-  h.context.fetch = (url) => String(url).includes('/detail?') ? oldDetail.promise : fetch(url);
+  h.context.fetch = (url) => String(url).includes('/detail?album_key') ? oldDetail.promise : fetch(url);
   const navigation = h.context.openUtilityModalForTrack(h.trackPath('beta'));
   h.finishPreview();
   await settleTargetNavigation();
@@ -2536,6 +2780,41 @@ test('full-summary initial detail supersedes an older in-flight preview detail',
   await h.context.state.utility.completeLoadPromise;
   assert.equal(h.context.state.utility.problematicFiles.find((item) => item.key === 'beta').name,
     'Canonical initial detail');
+});
+
+test('Settings keeps its body hidden until the requested section renders (no Problematic Files flash)', () => {
+  const attributes = new Map([['data-active-tab', 'problematic-files']]);
+  const overlay = {
+    hidden: true,
+    getAttribute: (name) => (attributes.has(name) ? attributes.get(name) : null),
+    toggleAttribute: (name, force) => { if (force) attributes.set(name, ''); else attributes.delete(name); },
+  };
+  const { context } = loadHelper({
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
+      querySelectorAll() { return []; },
+    },
+    getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserAnimationFrame() { return 1; },
+    renderUtilityModalContent() {},
+  });
+  context.state.utility.activeTab = 'appearance';
+  context.openUtilityModal({ forceLoad: false });
+  assert.equal(overlay.hidden, false, 'the shell still paints first');
+  assert.equal(attributes.has('data-utility-tab-pending'), true, 'the stale section is not shown');
+
+  attributes.set('data-active-tab', 'appearance');
+  context.closeUtilityModal();
+  context.openUtilityModal({ forceLoad: false });
+  assert.equal(attributes.has('data-utility-tab-pending'), false, 'reopening the same section shows it at once');
+
+  const runtime = require('node:path').join(__dirname, '../../../music_app');
+  const fs = require('node:fs');
+  assert.match(fs.readFileSync(require('node:path').join(runtime, 'static/js/runtime/utility-renderers-and-actions.js'), 'utf8'),
+    /setAttribute\('data-active-tab', activeTab\);\s*els\.overlay\?\.removeAttribute\?\.\('data-utility-tab-pending'\)/);
+  assert.match(fs.readFileSync(require('node:path').join(runtime, 'static/css/runtime/utilities.css'), 'utf8'),
+    /#utility-modal\[data-utility-tab-pending\] \.utility-modal-body \{ visibility: hidden; \}/);
 });
 
 test('a forced refresh keeps the complete list on screen instead of painting its bounded page', async () => {

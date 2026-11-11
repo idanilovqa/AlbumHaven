@@ -26,6 +26,10 @@ const helperPath = path.join(
   'tag-editor-and-optimistic-updates.js',
 );
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
+  + '\n' + vm.runInNewContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'album-track-table.js'), 'utf8')
+      + '\nmatchesAlbumTrackSearch',
+  ).toString()
   + '\n' + fs.readFileSync(helperPath, 'utf8');
 
 test('openTagEditor hydrates an album on mobile', () => {
@@ -184,6 +188,7 @@ function loadHelper(albums, overrides = {}) {
 test('marking an album version completes without waiting for the canonical gallery refresh', async () => {
   let resolveRefresh;
   let refreshStarted = 0;
+  let refreshOptions = null;
   const context = loadHelper([], {
     state: {
       modalReleases: [],
@@ -201,8 +206,9 @@ test('marking an album version completes without waiting for the canonical galle
       context.state.view = { ...context.state.view, ...patch };
     },
     buildApiUrl: () => '/api/library',
-    fetchAndRender() {
+    fetchAndRender(_url, _push, options) {
       refreshStarted += 1;
+      refreshOptions = options;
       return new Promise((resolve) => { resolveRefresh = resolve; });
     },
     scheduleBrowserAnimationFrame(callback) { callback(); },
@@ -216,6 +222,8 @@ test('marking an album version completes without waiting for the canonical galle
 
   assert.equal(saved, true);
   assert.equal(refreshStarted, 1);
+  // UI-11 (owner): the gallery updates in the background (mounted, same scroll), never behind the Loading page.
+  assert.equal(refreshOptions?.preserveScroll, true);
   assert.equal(context.state.view.manual_version_links.child, 'parent');
   resolveRefresh(true);
   await marking;
@@ -228,7 +236,6 @@ test('album editions render the same keyboard tab component as Home', () => {
     { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
   ];
   context.state.modalReleaseIndex = 1;
-  context.renderVersionContextMenu = () => {};
   const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
   context.renderTrackModalTabs({ tabs });
   assert.equal(tabs.hidden, false);
@@ -284,6 +291,40 @@ test('version tabs are the sole edition indicator while standalone editions reta
     standalone.elements.header.innerHTML,
     /album-details-header__tag">Special Edition<\/span>/,
   );
+});
+
+test('re-rendering an unchanged album keeps its header (and Close) in place', () => {
+  // The summary render and the hydrated details usually build the same header;
+  // rewriting it replaced Close under the pointer and a close click waited ~500 ms.
+  const album = {
+    key: 'stable', name: 'Stable Album', album_artist: 'Stable Artist', year: 2001,
+    release_type: 'ALBUM', cover_path: 'C:\\Music\\Stable\\cover.png', tracks: [],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: 'blob:stable-cover', cached: true }),
+  });
+  let html = '';
+  let writes = 0;
+  Object.defineProperty(elements.header, 'innerHTML', {
+    configurable: true,
+    get: () => html,
+    set: (value) => { writes += 1; html = value; },
+  });
+
+  context.renderTrackModalRelease(album);
+  context.renderTrackModalRelease({ ...album, tracks: [] });
+  assert.equal(writes, 1);
+
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 2, 'a changed header still re-renders');
+  assert.match(html, /2002/);
+
+  // Closing clears the title in place; reopening the same album must restore it.
+  html = '<div class="album-details-header"></div>';
+  context.renderTrackModalRelease({ ...album, year: 2002 });
+  assert.equal(writes, 3, 'a header edited by another owner is rewritten');
+  assert.match(html, /Stable Album/);
 });
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
@@ -481,6 +522,31 @@ test('track modal cover transition hides pending image chrome over a blank place
     ['Original - 2000', 'Special Edition - 2000'],
   );
 }
+
+test('version tabs print edition names in release title case without changing the tags', () => {
+  const original = { key: 'original', name: 'My Life in the Bush of Ghosts', album_artist: 'Brian Eno', year: 1981 };
+  const remaster = {
+    key: 'remaster',
+    name: 'My Life in the Bush of Ghosts',
+    album_artist: 'Brian Eno',
+    year: 2006,
+    edition: '2005 remaster',
+  };
+  const suffixed = {
+    key: 'suffixed',
+    name: 'My Life in the Bush of Ghosts (deluxe edition of the MTV iTunes cd)',
+    album_artist: 'Brian Eno',
+    year: 2010,
+  };
+  const context = loadHelper([original, remaster, suffixed]);
+  const releaseSet = context.getAlbumReleaseSet(remaster);
+
+  assert.deepEqual(
+    Array.from(releaseSet.releases, (item) => item.tabLabel),
+    ['Original - 1981', 'Deluxe Edition Of The MTV iTunes Cd - 2010', '2005 Remaster - 2006'],
+  );
+  assert.equal(remaster.edition, '2005 remaster');
+});
 
 test('openTagEditor orders a copied track list by disc, track number, and natural filename', () => {
   const originalTracks = [
@@ -876,6 +942,50 @@ test('Album Details falls back to natural filename order when track numbers are 
   );
 });
 
+test('one CD with some tracks missing the disc tag shows as one track list in track order', () => {
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+  });
+  const tracks = [7, 8, 1, 2, 3, 4, 5, 6].map((number) => ({
+    key: `track-${number}`,
+    path: `C:\\Music\\Archspire\\The Vessel\\${number}.flac`,
+    disc_number: number > 6 ? null : 1,
+    disc_number_raw: number > 6 ? '' : '1',
+    track_number: number,
+  }));
+
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.equal(grouped.groups.length, 1);
+  assert.equal(grouped.multiDisc, false);
+  assert.deepEqual(
+    Array.from(grouped.groups[0].tracks, (track) => track.track_number),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  const html = context.buildTrackListHtml(tracks);
+  assert.doesNotMatch(html, /CD ?1/);
+});
+
+test('copies of an album in two folders are never pooled into one CD', () => {
+  const context = loadHelper([]);
+  const copy = (folder, disc) => [1, 2].map((number) => ({
+    path: `${folder}\\${number}.flac`, disc_number: disc, disc_number_raw: disc ? String(disc) : '', track_number: number,
+  }));
+  const tracks = [
+    ...copy('N:\\Music\\Dragonland\\2002 - Holy War', 1),
+    ...copy('C:\\Downloads\\Dragonland - Holy War (Deluxe Edition) (2014)', null),
+  ];
+
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.equal(grouped.groups.length, 2);
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.tracks.length), [2, 2]);
+});
+
 test('Album Details ignores bonus-like album and path words when the raw disc label is ordinary', () => {
   const context = loadHelper([]);
   const grouped = context.groupAlbumTracks([
@@ -1020,6 +1130,55 @@ test('Album Details separates exact main and bonus durations for mixed explicit 
       { isBonus: false, durationSeconds: 180 },
       { isBonus: true, durationSeconds: 245 },
     ],
+  );
+});
+
+test('Album Details highlights matching track credits without highlighting unrelated compilation tracks', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: 'the court' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: value => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+  const tracks = [
+    { path: 'court.flac', title: 'Anastasius Epitaph', artist: 'The Court', track_number: 1 },
+    { path: 'other.flac', title: 'The Crossing', artist: 'Willowglass', track_number: 2 },
+    { path: 'title.flac', title: 'The Court of Dreams', artist: 'Another Artist', track_number: 3 },
+  ];
+  context.buildTrackListHtml(tracks, {
+    album_artist: 'Various Artists',
+    track_rows: tracks.map(track => ({ path: track.path, title: track.title, secondary_artist: track.artist })),
+  });
+  assert.deepEqual(Array.from(renderedConfig.groups.flatMap(group => group.tracks), track => track.isSearchMatch),
+    [true, false, true]);
+});
+
+test('Album Details highlights every track on a disc whose CD name matches the search', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: 'v-rox festival' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: value => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+  context.buildTrackListHtml([
+    { path: 'cd1-1.mp3', title: 'Opener', disc_number: 1, total_discs: 2, disc_subtitle: 'Moscow 2014', track_number: 1 },
+    { path: 'cd2-1.mp3', title: 'Encore', disc_number: 2, total_discs: 2, disc_subtitle: 'V-ROX Festival 2015', track_number: 1 },
+    { path: 'cd2-2.mp3', title: 'Finale', disc_number: 2, total_discs: 2, disc_subtitle: 'V-ROX Festival 2015', track_number: 2 },
+  ], { album_artist: 'Owner' });
+
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, group => [group.discLabel, Array.from(group.tracks, track => track.isSearchMatch)]),
+    [['CD 1 • Moscow 2014', [false]], ['CD 2 • V-ROX Festival 2015', [true, true]]],
   );
 });
 
@@ -1478,6 +1637,8 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
   const scheduledTimers = [];
   const mutationClaim = { id: 'tag-edit-claim-1' };
   const claimCalls = [];
+  const optimisticSplitCalls = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -1504,6 +1665,10 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     },
     applyUpdatedAlbumsToCurrentView(albums, options) {
       applyCalls.push({ albums, options });
+    },
+    recordCoverLookupOptimisticSplit(...args) {
+      optimisticSplitCalls.push(args);
+      return optimisticSplit;
     },
     updateOpenTrackModalAfterTagEdit() {},
     renderView(options) {
@@ -1552,6 +1717,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     'an empty queued response must retain the already-rendered optimistic state without another apply',
   );
   assert.strictEqual(applyCalls[0].albums, optimisticAlbums);
+  assert.deepEqual(optimisticSplitCalls, [[album, optimisticAlbums]]);
   assert.equal(
     renderCalls.length,
     1,
@@ -1575,6 +1741,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     mutationClaim,
     'the queued save-task watcher must receive the optimistic mutation ownership claim',
   );
+  assert.strictEqual(watchedTasks[0].options.coverLookupOptimisticSplit, optimisticSplit);
   assert.strictEqual(claimCalls[0][0], album);
   assert.deepEqual(Array.from(claimCalls[0][1]), [trackPath]);
   assert.deepEqual(
@@ -2852,6 +3019,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     },
   };
   const alerts = [];
+  const clearedOptimisticSplits = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -2864,6 +3033,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
       return { [trackPath]: { album: values[trackPath].album, edition: values[trackPath].edition } };
     },
     buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    recordCoverLookupOptimisticSplit() { return optimisticSplit; },
+    clearCoverLookupOptimisticSplit(split) { clearedOptimisticSplits.push(split); },
     deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
     applyUpdatedAlbumsToCurrentView() { return [album]; },
     updateOpenTrackModalAfterTagEdit() {},
@@ -2901,6 +3072,7 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     alerts.at(-1)[0],
     'Source changed during the tag edit. Retry with the preserved values.',
   );
+  assert.deepEqual(clearedOptimisticSplits, [optimisticSplit]);
 });
 
 test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {
@@ -2958,6 +3130,99 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
     logHistoryLink: true,
   });
 });
+
+test('a failed tag edit whose files could not be put back says those files keep the new tags', async () => {
+  const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\01 - Track.flac';
+  const album = {
+    key: 'ддт::ремиксы::2000',
+    name: 'Ремиксы',
+    album_artist: 'ДДТ',
+    tracks: [{ path: trackPath, album: 'Ремиксы' }],
+  };
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { album: 'Ремиксы 2' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    async prependUtilityLogHistoryEntry() {},
+    async fetch() {
+      return {
+        ok: false,
+        async json() {
+          return {
+            ok: false,
+            error: `Structural tag edit database commit failed and media compensation also failed: ${trackPath}: file is in use`,
+            save_task_id: 'failed-tag-save',
+            save_task_status: 'failed',
+            failure_stage: 'persistence',
+            edit_outcome: 'recovery_pending',
+            log_entry: { id: 'tag-edit-failure-43', action: 'Tag edit failed' },
+          };
+        },
+      };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(
+    alerts.at(-1)[0],
+    'Tags were not saved, and some files could not be put back. Those files keep the new tags; the Gallery shows them after the next library scan.',
+  );
+  assert.doesNotMatch(alerts.at(-1)[0], /C:\Music/);
+});
+
+for (const [name, fetchResult] of [
+  ['the connection drops', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ['a proxy answers instead of the server', () => Promise.resolve({ ok: false, json: async () => { throw new SyntaxError('not JSON'); } })],
+]) {
+  test(`a tag save whose answer is lost when ${name} reloads instead of reporting failure`, async () => {
+    const trackPath = 'C:\Music\Artist\Album\01 - Track.flac';
+    const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, album: 'Album' }] };
+    const alerts = [];
+    const restored = [];
+    let refreshes = 0;
+    const closedModal = { hidden: true };
+    const context = loadHelper([album], {
+      document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+      getTagEditConfirmElements() { return { overlay: closedModal }; },
+      getTagEditorElements() { return { overlay: closedModal }; },
+      buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+      buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+      deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+      applyUpdatedAlbumsToCurrentView(albums, options) { if (options?.tagEdits?.[trackPath]?.album === 'Album') restored.push(albums); return albums; },
+      updateOpenTrackModalAfterTagEdit() {},
+      renderView() {},
+      showRepairAlert(...args) { alerts.push(args); },
+      async prependUtilityLogHistoryEntry() {},
+      async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+      fetch: fetchResult,
+    });
+    context.state.ui = { viewStateRevision: 7 };
+    context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+    await context.confirmManualTagEdit();
+
+    assert.match(alerts.at(-1)[0], /may already be saved/);
+    assert.equal(refreshes, 1);
+    assert.deepEqual(restored, []);
+  });
+}
 
 test('failed tag save does not replace a newer tag editor session', () => {
   const originalDraft = { album: { key: 'original' }, sessionMutationClaim: null };
@@ -4878,6 +5143,124 @@ test('Album Details passes exact explicit bonus and main durations to final summ
     { path: 'bonus-title.flac', title: 'Bonus', duration_seconds: 180 },
   ], { total_duration_seconds: 180 });
   assert.equal(config.bonusLength, '');
+});
+
+test('every version tab after the original offers Separate release through the shared album menu', async () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const calls = [];
+  const context = loadHelper([], {
+    escapeHtml: value => String(value),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    ensureAlbumCardContextMenu: () => menu,
+    hideAlbumCardContextMenu: () => { menu.hidden = true; menu.dataset.menuKind = ''; },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null) },
+  });
+  const buttons = [{ dataset: {} }, { dataset: {} }, { dataset: {} }];
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original' },
+    { key: 'remaster', tabLabel: 'Remastered' },
+    { key: 'duplicate', tabLabel: 'Duplicate' },
+  ];
+  context.state.modalReleaseIndex = 0;
+  const tablist = { querySelectorAll: () => buttons, querySelector: () => null, addEventListener() {} };
+  context.mountInPageTabs = () => {};
+  context.renderTrackModalTabs({ tabs: { hidden: true, innerHTML: '', querySelector: () => tablist } });
+  assert.deepEqual(buttons.map((button) => button.dataset.versionContextKey), [undefined, 'remaster', 'duplicate']);
+
+  context.showVersionContextMenu('remaster', 40, 60);
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.albumKey, 'remaster');
+  assert.match(menu.innerHTML, /class="album-card-context-menu-item" data-album-card-action="separate-release" data-separate-release-key="remaster">Separate release</);
+  context.hideVersionContextMenu();
+  assert.equal(menu.hidden, true);
+
+  context.ignoreAlbumVersion = async (key) => calls.push(['ignore', key]);
+  context.unmarkAlbumVersion = async (key) => calls.push(['unmark', key]);
+  context.state.view.manual_version_links = { linked: 'original' };
+  await context.separateAlbumRelease('remaster');
+  await context.separateAlbumRelease('linked');
+  assert.deepEqual(calls, [['ignore', 'remaster'], ['unmark', 'linked']], 'automatic versions become a version rule; manual links are unmarked');
+});
+
+test('release candidates remain symmetric when the gallery only contains Helloween 1985', () => {
+  const ep = { key: 'helloween::helloween::year::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, preview_only: true };
+  const studio = { key: 'helloween::helloween::year::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, preview_only: true };
+  const context = loadHelper([ep]);
+  const candidates = [ep, studio];
+  const fromEp = context.getAlbumReleaseSet({ ...ep, release_candidates: candidates });
+  const fromStudio = context.getAlbumReleaseSet({ ...studio, release_candidates: candidates });
+  const expected = [ep.key, studio.key];
+  assert.deepEqual(Array.from(fromEp.releases, release => release.key), expected);
+  assert.deepEqual(Array.from(fromStudio.releases, release => release.key), expected);
+  assert.equal(fromEp.selectedIndex, 0);
+  assert.equal(fromStudio.selectedIndex, 1);
+});
+
+
+test('release base title fixtures match the server candidate contract', () => {
+  const context = loadHelper([]);
+  const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'album-release-base-titles.json'), 'utf8'));
+  vectors.forEach(([title, expected]) => assert.equal(context.normalizeAlbumBaseName(title), expected, title));
+});
+
+test('authoritative release candidates preserve ignore and manual-family rules outside the gallery', () => {
+  const original = { key: 'artist::original', name: 'Album', album_artist: 'Artist', year: 2000 };
+  const edition = { key: 'artist::deluxe', name: 'Album (Deluxe Edition)', album_artist: 'Artist', year: 2020 };
+  const manual = { key: 'other::bonus', name: 'Different Title', album_artist: 'Other', year: 2021 };
+  const context = loadHelper([]);
+  context.state.view.ignored_version_keys = [edition.key];
+  context.state.view.manual_version_links = { [manual.key]: original.key };
+  const result = context.getAlbumReleaseSet({ ...original, release_candidates: [original, edition, manual] });
+  assert.deepEqual(Array.from(result.releases, release => release.key), [original.key, manual.key]);
+  const ignored = context.getAlbumReleaseSet({ ...edition, release_candidates: [original, edition, manual] });
+  assert.deepEqual(Array.from(ignored.releases, release => release.key), [edition.key]);
+});
+
+test('details rule snapshot covers empty-shell opening until current rules arrive', () => {
+  const original = { key: 'original', name: 'Album', album_artist: 'Artist', year: 2000 };
+  const edition = { key: 'edition', name: 'Album (Deluxe Edition)', album_artist: 'Artist', year: 2020 };
+  const bonus = { key: 'bonus', name: 'Bonus', album_artist: 'Other', year: 2021 };
+  const album = { ...original, release_candidates: [original, edition, bonus],
+    release_candidate_rules: { ignored_version_keys: [edition.key], manual_version_links: { [bonus.key]: original.key } } };
+  const context = loadHelper([]);
+  context.state.view.version_rules_loaded = { ignored: false, manual: false };
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, bonus.key]);
+  context.state.view.version_rules_loaded.manual = true;
+  context.state.view.manual_version_links = {};
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key]);
+  context.state.view.version_rules_loaded = { ignored: true, manual: true };
+  context.state.view.ignored_version_keys = [];
+  context.state.view.manual_version_links = {};
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, item => item.key), [original.key, edition.key]);
+});
+
+test('Album Details names a tracklist section from album.track_sections on its first track (MusicBrainz contract)', () => {
+  // Contract with MusicBrainz Delivery 3: album.track_sections = [{ first_track_path, title }].
+  const { context } = createTrackModalCoverContext();
+  const track = (number, title) => ({ path: `C:/Music/Wallet Box/CD6/${number}.flac`, title, disc_number: 6, track_number: number });
+  const markup = context.buildTrackListHtml([track(1, 'Introducción'), track(2, 'Tema'), track(11, 'Libertango')], {
+    track_sections: [
+      { first_track_path: 'C:/Music/Wallet Box/CD6/1.flac', title: 'Suite Punta Del Este' },
+      { first_track_path: '', title: 'Ignored without a first track' },
+    ],
+  });
+  assert.equal((markup.match(/album-track-table__section-title">Suite Punta Del Este</g) || []).length, 1);
+  assert.ok(markup.indexOf('Suite Punta Del Este') < markup.indexOf('Introducción'), 'the name sits above its first track');
+  assert.doesNotMatch(markup, /Ignored without a first track/);
+});
+
+require('node:test')('same-name albums are versions only when the server found shared tracks (Helloween 1985 vs 2021)', () => {
+  const candidates = [
+    { key: 'helloween::1985', name: 'Helloween', album_artist: 'Helloween', year: 1985, shares_tracks: true },
+    { key: 'helloween::2021', name: 'Helloween', album_artist: 'Helloween', year: 2021, shares_tracks: false },
+    { key: 'helloween::2006', name: 'Helloween (Remastered 2006)', album_artist: 'Helloween', year: 2006, shares_tracks: true },
+  ];
+  const album = { ...candidates[0], release_candidates: candidates };
+  const context = loadHelper(candidates);
+  assert.deepEqual(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key), ['helloween::1985', 'helloween::2006']);
+  context.state.view.manual_version_links = { 'helloween::2021': 'helloween::1985' };
+  assert.ok(Array.from(context.getAlbumReleaseSet(album).releases, (item) => item.key).includes('helloween::2021'), 'a manual link still groups');
 });
 
 test('Album Details hands each disc its private disc rating and the album rating to the track table', () => {

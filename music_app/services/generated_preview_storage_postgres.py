@@ -235,6 +235,16 @@ class PostgresGeneratedPreviewStorageRepository:
                 "Preview relocation cleanup failure could not be recorded."
             )
 
+    def covered_source_paths(self, *, operation_id: str) -> list[str]:
+        """Where the move's previews came from, so their album folders can be cleaned afterwards."""
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                "select distinct source_path from app.generated_preview_relocation_items"
+                " where operation_id = %(operation_id)s::uuid",
+                {"operation_id": str(UUID(str(operation_id)))},
+            ).fetchall()
+        return [str(_row_mapping(row).get("source_path") or "") for row in rows]
+
     def finish_operation(self, operation_id: str) -> dict[str, object]:
         with self._connect_to_database() as connection:
             with _transaction(connection):
@@ -337,13 +347,24 @@ def _load_sql() -> str:
     return """
         select storage.*,
                inventory.inventory_count,
-               inventory.inventory_bytes
+               inventory.inventory_bytes,
+               outcomes.rechecked_count,
+               outcomes.regenerate_later_count
         from app.generated_preview_storage storage
         cross join (
           select count(*) as inventory_count,
                  coalesce(sum(byte_count), 0) as inventory_bytes
           from app.generated_preview_inventory
         ) inventory
+        -- UI-8: moved with a fresh checksum, or left to be regenerated (a cancel's skips record no checksum).
+        cross join lateral (
+          select count(*) filter (where item.status = 'completed' and item.actual_sha256 <> item.expected_sha256)
+                   as rechecked_count,
+                 count(*) filter (where item.status = 'skipped' and item.actual_sha256 is not null)
+                   as regenerate_later_count
+          from app.generated_preview_relocation_items item
+          where item.operation_id = storage.operation_id
+        ) outcomes
         where storage_key = 1;
     """
 
@@ -609,8 +630,11 @@ def _complete_item_sql() -> str:
             and status = 'running'
           returning *
         ), inventory_moved as (
+          -- A preview re-checked during the move (UI-8) records the checksum it was moved with.
           update app.generated_preview_inventory inventory
           set current_path = finished.target_path,
+              byte_count = case when %(status)s = 'completed' then finished.actual_bytes else inventory.byte_count end,
+              sha256 = case when %(status)s = 'completed' then finished.actual_sha256 else inventory.sha256 end,
               updated_at = now()
           from finished
           where inventory.id = finished.inventory_id
@@ -621,14 +645,16 @@ def _complete_item_sql() -> str:
           set completed_count = completed_count + case when %(status)s <> 'failed' then 1 else 0 end,
               failed_count = failed_count + case when %(status)s = 'failed' then 1 else 0 end,
               completed_bytes = completed_bytes + case when %(status)s <> 'failed' then %(byte_count)s else 0 end,
+              -- The planned bytes follow what was really moved: a re-checked preview's new size, none for a skip.
+              total_bytes = total_bytes + case when %(status)s <> 'failed' then %(byte_count)s - finished.expected_bytes else 0 end,
               failure_summary = case
                 when %(status)s = 'failed' and jsonb_array_length(failure_summary) < 20
                 then failure_summary || jsonb_build_array(jsonb_build_object('item_id', %(item_id)s, 'error', %(last_error)s))
                 else failure_summary
               end,
               updated_at = now()
+          from finished
           where storage.operation_id = %(operation_id)s::uuid
-            and exists (select 1 from finished)
           returning storage.storage_key
         )
         select id from finished;

@@ -14,7 +14,7 @@ function loadStartupProgress() {
   const retry = { addEventListener() {}, focus() {} };
   const content = { inert: false };
   const root = {
-    dataset: { startupProgress: '50' },
+    dataset: { startupProgress: '25' },
     hidden: true,
     querySelector(selector) {
       return {
@@ -53,6 +53,8 @@ function loadStartupProgress() {
   return {
     content,
     controller: window.AlbumHavenStartupProgress,
+    fill,
+    percentLabel,
     root,
     runNextFrame,
     startupMarks: window.__ALBUM_HAVEN_STARTUP_MARKS__,
@@ -67,7 +69,7 @@ test('startup progress records the first visible feedback boundary', () => {
   assert.equal(typeof ui.startupMarks[0].atMs, 'number');
 });
 
-test('startup completion releases the usable app within two paint frames', () => {
+test('startup completion holds the full bar before releasing the usable app', () => {
   const ui = loadStartupProgress();
   ui.runNextFrame(0);
   assert.equal(ui.root.hidden, false);
@@ -75,8 +77,58 @@ test('startup completion releases the usable app within two paint frames', () =>
 
   ui.controller.finish();
   ui.runNextFrame(16);
-  ui.runNextFrame(32);
+  ui.runNextFrame(716);
+  assert.equal(ui.root.hidden, false);
+  ui.runNextFrame(732);
+  ui.runNextFrame(748);
+  assert.equal(ui.root.hidden, false);
+  ui.runNextFrame(916);
+  ui.runNextFrame(932);
+  ui.runNextFrame(948);
 
   assert.equal(ui.root.hidden, true);
   assert.equal(ui.content.inert, false);
+});
+
+test('startup completion animates the visible bar to 100 before hiding', () => {
+  const ui = loadStartupProgress();
+  ui.runNextFrame(100);
+  ui.controller.show(75);
+  ui.runNextFrame(200);
+  ui.runNextFrame(550);
+  const widthBeforeFinish = Number.parseFloat(ui.fill.style.width);
+
+  ui.controller.finish();
+
+  assert.equal(ui.root.hidden, false);
+  assert.equal(ui.percentLabel.textContent, `${Math.round(widthBeforeFinish)}%`);
+  assert.equal(Number.parseFloat(ui.fill.style.width), widthBeforeFinish);
+  ui.runNextFrame(600);
+  ui.runNextFrame(1300);
+  assert.equal(ui.root.hidden, false);
+  assert.equal(ui.percentLabel.textContent, '100%');
+  assert.equal(ui.fill.style.width, '100.000%');
+  ui.runNextFrame(1316);
+  assert.equal(ui.root.hidden, false);
+  ui.runNextFrame(1332);
+  assert.equal(ui.root.hidden, false);
+  ui.runNextFrame(1500);
+  ui.runNextFrame(1516);
+  ui.runNextFrame(1532);
+  assert.equal(ui.root.hidden, true);
+});
+
+test('startup progress keeps moving between real bootstrap milestones', () => {
+  const ui = loadStartupProgress();
+  ui.runNextFrame(0);
+  ui.controller.show(70);
+  ui.runNextFrame(100);
+  ui.runNextFrame(600);
+  const firstWidth = Number.parseFloat(ui.fill.style.width);
+  ui.runNextFrame(950);
+  ui.runNextFrame(1100);
+  ui.runNextFrame(1450);
+
+  assert.ok(Number.parseFloat(ui.fill.style.width) > firstWidth);
+  assert.ok(Number.parseFloat(ui.fill.style.width) < 100);
 });

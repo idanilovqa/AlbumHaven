@@ -6,6 +6,49 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+
+test('retained source and destination cards refresh action identity without replacing artwork', () => {
+  for (const reuse of ['cached', 'mounted']) {
+    for (const oldRevision of [0, undefined]) {
+      const albumKey = oldRevision === undefined ? 'artist::destination' : 'artist::source';
+      const { context } = createRuntimeContext();
+      const grid = vm.runInContext('virtualGrid', context);
+      const image = new context.HTMLImageElement();
+      image.complete = true;
+      image.naturalWidth = 480;
+      const action = (revision) => ({
+        attributes: { 'data-album': JSON.stringify({ key: albumKey, identity_revision: revision }),
+          'data-album-key': albumKey, 'data-album-version-key': 'current-version' },
+        getAttribute(name) { return this.attributes[name] ?? null; },
+        setAttribute(name, value) { this.attributes[name] = value; },
+        removeAttribute(name) { delete this.attributes[name]; },
+      });
+      const oldActions = [action(oldRevision), action(oldRevision)];
+      const freshAction = action(1);
+      const retained = {
+        getAttribute(name) { return name === 'data-gallery-card-key' ? albumKey : 'same-visual'; },
+        querySelector(selector) { return selector.includes('img') ? image : oldActions[0]; },
+        querySelectorAll() { return oldActions; },
+      };
+      let replacement;
+      const fresh = {
+        getAttribute: retained.getAttribute,
+        querySelector() { return freshAction; },
+        replaceWith(node) { replacement = node; },
+      };
+      const nextRoot = { querySelectorAll() { return [fresh]; } };
+      if (reuse === 'cached') {
+        grid.albumCardNodeCache.set(albumKey, retained);
+        grid.reuseRenderedAlbumCards(nextRoot);
+      } else {
+        grid.reuseMatchingMountedAlbumCards({ querySelectorAll() { return [retained]; } }, nextRoot);
+      }
+      assert.equal(replacement, retained);
+      assert.equal(retained.querySelector('img'), image);
+      assert.deepEqual(oldActions.map(node => JSON.parse(node.getAttribute('data-album')).identity_revision), [1, 1]);
+    }
+  }
+});
 const alertComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'alert-components.js');
 const alertComponentSource = fs.readFileSync(alertComponentPath, 'utf8');
 const albumArtboxPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-artbox.js');
@@ -3955,6 +3998,29 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
 {
   const { context, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
+  context.state.view.artist_groups = [{
+    artist: 'Art Zoyd',
+    artist_display: 'Art Zoyd',
+    albums: [{ key: 'art-zoyd-1', name: 'Génération sans futur', tracks: [] }],
+  }];
+  context.state.gallery.mainState = context.createGalleryMainState({
+    sources: { main_library: false, new_arrivals: false, hoard: false },
+  });
+  virtualGrid.setGroups = () => {
+    containerEl.children = [];
+    containerEl.innerHTML = '';
+  };
+
+  context.renderArtistGroups();
+
+  assert.match(containerEl.innerHTML, /data-gallery-empty-selection/);
+  assert.match(containerEl.innerHTML, /Select at least one of the sources to see the Library/);
+  assert.doesNotMatch(containerEl.innerHTML, /Art Zoyd|Artist Family/);
+}
+
+{
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
   context.state.view.selected_artist = 'Mono';
   context.state.view.selected_artist_family_display_mode = 'chronological';
   context.state.view.primary_artist_groups = [
@@ -4016,7 +4082,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   const cardsMarkup = containerEl.innerHTML;
   const cardsRenderKey = context.getAlbumCardRenderKey(album, { displayMode: 'cards' });
   assert.match(cardsMarkup, /data-gallery-display="cards"/);
-  assert.match(cardsMarkup, /class="album-subtitle"><span data-gallery-metadata-text>Broadcast · 2005<\/span><\/div>/);
+  assert.match(cardsMarkup, /class="album-subtitle gallery-card__metadata"><span class="gallery-card__artist"><span data-gallery-metadata-text>Broadcast<\/span><\/span><span class="gallery-card__year">· 2005<\/span><\/div>/);
   assert.doesNotMatch(cardsMarkup, /class="album-year"/);
 
   context.state.gallery.mainState = context.reduceGalleryMainState(
@@ -5959,6 +6025,73 @@ test('artist blocks place owned albums before a counted Featured On subsection',
         { kind: 'subheading', title: 'Featured On', count: 1 },
         { kind: 'row', albums: [featured] },
     ]);
+});
+
+test('a split release stays in the main discography instead of Featured On (Jordsjø / Breidablik)', () => {
+    const { context } = createRuntimeContext();
+    context.isGallerySplitAlbum = (album) => album.is_split_album === true;
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const owned = { key: 'jordsjo::nattfiolen', name: 'Nattfiolen', artist_relationship: 'owned' };
+    const split = { key: 'jordsjo / breidablik::kontraster', name: 'Kontraster', artist_relationship: 'featured', is_split_album: true };
+    const guest = { key: 'va::guest', name: 'Guest spot', artist_relationship: 'featured' };
+    const blocks = virtualGrid.getBlocksForSection({ group: { albums: [owned, split, guest] } });
+    assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+        { kind: 'row', albums: [owned, split] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+});
+
+test('Separate Split Albums gives each release type its own split section before Featured On', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const owned = { key: 'jordsjo::nattfiolen', name: 'Nattfiolen', release_type: 'Album', artist_relationship: 'owned' };
+    const studioSplit = { key: 'jordsjo / breidablik::kontraster', name: 'Kontraster', release_type: 'Album', artist_relationship: 'featured', is_split_album: true };
+    const compilationSplit = { key: 'jordsjo / breidablik::collected', name: 'Collected split', release_type: 'Compilation', artist_relationship: 'owned', is_split_album: true };
+    const guest = { key: 'va::guest', name: 'Guest spot', artist_relationship: 'featured' };
+    const section = { group: { albums: [compilationSplit, owned, studioSplit, guest] } };
+    context.state.gallery.mainState = { ...context.state.gallery.mainState, splitAlbums: 'separate' };
+    assert.deepEqual(JSON.parse(JSON.stringify(virtualGrid.getBlocksForSection(section))), [
+        { kind: 'subheading', title: 'Studio Albums', count: 1 },
+        { kind: 'row', albums: [owned] },
+        { kind: 'subheading', title: 'Studio Split', count: 1 },
+        { kind: 'row', albums: [studioSplit] },
+        { kind: 'subheading', title: 'Compilation Split', count: 1 },
+        { kind: 'row', albums: [compilationSplit] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+    context.state.gallery.mainState = { ...context.state.gallery.mainState, splitAlbums: 'show' };
+    assert.deepEqual(JSON.parse(JSON.stringify(virtualGrid.getBlocksForSection(section))), [
+        { kind: 'row', albums: [compilationSplit, owned, studioSplit] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [guest] },
+    ]);
+});
+
+test('selected Hans Zimmer keeps joint owners and one chronological Featured On section', () => {
+  const { context } = createRuntimeContext();
+  const preferencePath = path.join(path.dirname(helperPath), 'gallery-display-preference-helpers.js');
+  vm.runInContext(fs.readFileSync(preferencePath, 'utf8'), context, { filename: preferencePath });
+  context.state.view.selected_artist = 'Hans Zimmer';
+  context.state.gallery.combineSimilarArtistsByArtist = {};
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.columns = 2;
+  const score = { key: 'score', name: 'Spirit', year: 2002, album_artist: 'Hans Zimmer', artist_relationship: 'owned' };
+  const joint = { key: 'joint', name: 'Spirit', year: 2002, album_artist: 'Bryan Adams / Hans Zimmer', artist_relationship: 'owned' };
+  const earlier = { key: 'guest-1989', name: 'Rain Man', year: 1989, album_artist: 'Various Artists', artist_relationship: 'featured' };
+  const later = { key: 'guest-2020', name: 'Later soundtrack', year: 2020, album_artist: 'Composer A & Composer B', artist_relationship: 'featured' };
+  const groups = context.buildDisplayGroups([{ artist: 'Hans Zimmer', albums: [score, later, joint, earlier] }]);
+  assert.deepEqual(Array.from(groups, group => group.artist), ['Hans Zimmer']);
+  const blocks = groups.flatMap(group => virtualGrid.getBlocksForSection({ group }));
+  assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+    { kind: 'row', albums: [score, joint] },
+    { kind: 'subheading', title: 'Featured On', count: 2 },
+    { kind: 'row', albums: [earlier, later] },
+  ]);
+  assert.equal(joint.album_artist, 'Bryan Adams / Hans Zimmer');
 });
 
 test('artist blocks render a Featured On subsection for a featured-only artist', () => {

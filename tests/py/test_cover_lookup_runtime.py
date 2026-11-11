@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import inspect
 import io
 import os
@@ -366,10 +366,10 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
     monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
     monkeypatch.setattr(
         cover_lookup_runtime,
-        "create_cover_lookup_task",
+        "admit_cover_lookup_task",
         lambda album, track_paths, manual_urls=None, *, config=None,
         preferred_task_id="", allow_preferred_path_rebind=False: (
-            queue_events.append("create-task") or ("task-123", cancel_event)
+            queue_events.append("create-task") or ("task-123", cancel_event, True)
         ),
     )
     monkeypatch.setattr(
@@ -431,10 +431,10 @@ def test_retry_queue_preserves_the_existing_notification_id(config, logger, monk
 
     def create_task(_album, _track_paths, _manual_urls=None, **kwargs):
         captured.update(kwargs)
-        return "eden-existing-task", object()
+        return "eden-existing-task", object(), True
 
     monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
-    monkeypatch.setattr(cover_lookup_runtime, "create_cover_lookup_task", create_task)
+    monkeypatch.setattr(cover_lookup_runtime, "admit_cover_lookup_task", create_task)
     monkeypatch.setattr(cover_lookup_runtime, "register_cover_lookup_future", lambda *_args, **_kwargs: None)
 
     task_id = cover_lookup_runtime.queue_cover_lookup_task(
@@ -449,6 +449,114 @@ def test_retry_queue_preserves_the_existing_notification_id(config, logger, monk
     assert task_id == "eden-existing-task"
     assert captured["preferred_task_id"] == "eden-existing-task"
     assert captured["allow_preferred_path_rebind"] is True
+
+
+@pytest.mark.parametrize("times_out", [False, True])
+def test_retry_waits_for_terminal_worker_without_creating_another_notification(
+    config, logger, monkeypatch, tmp_path, times_out,
+):
+    cover_lookup_tasks.reset_cover_lookup_runtime_state()
+    path = str(tmp_path / "retry" / "01.mp3")
+    album = _album_payload(Path(path))
+    task_id, _ = cover_lookup_tasks.create_cover_lookup_task(album, {path})
+    old_future = Future()
+    old_future.set_running_or_notify_cancel()
+    cover_lookup_tasks.register_cover_lookup_future(task_id, old_future)
+    cover_lookup_tasks.update_cover_lookup_task(task_id, status="completed", progress=100)
+    waiting = Event()
+    submitted = []
+    original_wait = cover_lookup_tasks.wait_for_cover_lookup_workers
+
+    def wait_for_worker(task_id, timeout):
+        waiting.set()
+        return original_wait(task_id, timeout)
+
+    def create_task(album, paths, manual_urls=None, **kwargs):
+        kwargs.pop("config", None)
+        return (*cover_lookup_tasks.create_cover_lookup_task(album, paths, manual_urls, **kwargs), True)
+
+    class Executor:
+        def submit(self, _function, _job, *_args):
+            future = Future()
+            submitted.append(future)
+            return future
+
+    monkeypatch.setattr(cover_lookup_runtime, "wait_for_cover_lookup_workers", wait_for_worker)
+    monkeypatch.setattr(cover_lookup_runtime, "admit_cover_lookup_task", create_task)
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", Executor())
+    if times_out:
+        monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_FINISH_WAIT_SECONDS", 0)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as callers:
+            retry = callers.submit(cover_lookup_runtime.queue_cover_lookup_task,
+                album, {path}, config=config, logger=logger, preferred_task_id=task_id)
+            assert waiting.wait(2)
+            if times_out:
+                with pytest.raises(cover_lookup_runtime.CoverLookupFinishingError, match="still finishing"):
+                    retry.result(timeout=2)
+                assert submitted == []
+                assert len(cover_lookup_tasks.list_cover_lookup_tasks()) == 1
+                assert cover_lookup_tasks.cover_lookup_result(task_id)["status"] == "completed"
+            else:
+                other_path = str(tmp_path / "other" / "01.mp3")
+                other_id = cover_lookup_runtime.queue_cover_lookup_task(
+                    _album_payload(Path(other_path)), {other_path}, config=config, logger=logger,
+                )
+                assert other_id != task_id
+                assert not retry.done()
+                cover_lookup_tasks.update_cover_lookup_task(task_id, progress_label="Old worker tail")
+                old_future.set_result(None)
+                assert retry.result(timeout=2) == task_id
+                task = cover_lookup_tasks.cover_lookup_result(task_id)
+                assert task["status"] == "pending"
+                assert task["progress"] == 0
+                assert task["progress_label"] == "Queued"
+                assert len(cover_lookup_tasks.list_cover_lookup_tasks()) == 2
+    finally:
+        if not old_future.done():
+            old_future.set_result(None)
+        for future in submitted:
+            future.cancel()
+        cover_lookup_tasks.reset_cover_lookup_runtime_state()
+
+
+def test_overlapping_album_search_starts_keep_one_notification_and_worker(config, logger, monkeypatch, tmp_path):
+    cover_lookup_tasks.reset_cover_lookup_runtime_state()
+    album = _album_payload(tmp_path / "overlap" / "01.mp3")
+    paths = {str(tmp_path / "overlap" / "01.mp3")}
+    submitted = []
+    release_create = Event()
+    creation_started = Event()
+
+    class Executor:
+        def submit(self, _function, _job, *_args):
+            future = Future()
+            submitted.append(future)
+            return future
+
+    def create_task(album, paths, manual_urls=None, **kwargs):
+        creation_started.set()
+        assert release_create.wait(2)
+        return (*cover_lookup_tasks.create_cover_lookup_task(album, paths, manual_urls), True)
+
+    monkeypatch.setattr(cover_lookup_runtime, "admit_cover_lookup_task", create_task)
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", Executor())
+    try:
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            first = callers.submit(cover_lookup_runtime.queue_cover_lookup_task,
+                album, paths, config=config, logger=logger)
+            assert creation_started.wait(2)
+            second = callers.submit(cover_lookup_runtime.queue_cover_lookup_task,
+                album, paths, config=config, logger=logger)
+            release_create.set()
+            assert first.result(timeout=2) == second.result(timeout=2)
+        assert len(submitted) == 1
+        assert len(cover_lookup_tasks.list_cover_lookup_tasks()) == 1
+    finally:
+        release_create.set()
+        for future in submitted:
+            future.cancel()
+        cover_lookup_tasks.reset_cover_lookup_runtime_state()
 
 
 @pytest.mark.parametrize("cancel_during_preparation", [False, True])
@@ -468,8 +576,8 @@ def test_queue_cover_lookup_task_defers_album_preparation_to_worker(
     monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
     monkeypatch.setattr(
         cover_lookup_runtime,
-        "create_cover_lookup_task",
-        lambda *_args, **_kwargs: ("task-deferred", Event()),
+        "admit_cover_lookup_task",
+        lambda *_args, **_kwargs: ("task-deferred", Event(), True),
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -534,8 +642,8 @@ def test_queue_cover_lookup_task_reports_deferred_preparation_failure(
     monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", FakeExecutor())
     monkeypatch.setattr(
         cover_lookup_runtime,
-        "create_cover_lookup_task",
-        lambda *_args, **_kwargs: ("task-deferred", object()),
+        "admit_cover_lookup_task",
+        lambda *_args, **_kwargs: ("task-deferred", object(), True),
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -615,7 +723,7 @@ def test_run_cover_lookup_job_starts_provider_deadline_inside_worker(monkeypatch
         runtime_job.cancel_event,
         runtime_job.manual_urls,
     )
-    assert captured["kwargs"] == {"provider_deadline_at": 765.5}
+    assert captured["kwargs"] == {"provider_deadline_at": 765.5, "search_generation": ""}
     assert captured["deadline_config"] is runtime_job.config
 
 
@@ -645,8 +753,8 @@ def test_queued_fifth_cover_lookup_gets_full_provider_budget_after_worker_satura
     monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", executor)
     monkeypatch.setattr(
         cover_lookup_runtime,
-        "create_cover_lookup_task",
-        lambda *_args, **_kwargs: ("task-fifth", Event()),
+        "admit_cover_lookup_task",
+        lambda *_args, **_kwargs: ("task-fifth", Event(), True),
     )
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -1096,6 +1204,56 @@ def test_run_cover_lookup_task_does_not_require_bandcamp_after_acceptable_manual
         "height": 1400,
         "score": 1.0,
     }]
+
+
+def test_empty_retry_preserves_retained_cards_in_task_and_durable_snapshot(config, logger, library_state, monkeypatch, tmp_path):
+    track_path = tmp_path / "song.mp3"
+    album = {**_album_payload(track_path), "id": 41}
+    retained = [{"id": "retained", "source": "apple", "url": "https://images.example/retained.jpg"}]
+    finished = []
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def publish_generation(self, **_kwargs):
+            return True
+
+        def finish_generation(self, **kwargs):
+            finished.append(kwargs)
+            return True
+
+    monkeypatch.setattr(cover_lookup_runtime, "AlbumCoverCandidateSnapshotRepository", Repository)
+    monkeypatch.setattr(cover_lookup_runtime, "COVER_LOOKUP_PROVIDER_REGISTRY", _FakeCoverLookupProviderRegistry(
+        service_matches=[], manual_matches=[], bandcamp_matches=[],
+        discogs_archive_matches=([], []), artist_website_matches=[],
+    ))
+    monkeypatch.setattr(cover_lookup_runtime, "log_app_event", lambda *_args, **_kwargs: None)
+    task_id, cancel_event = cover_lookup_tasks.create_cover_lookup_task(album, {str(track_path)})
+    cover_lookup_tasks.update_cover_lookup_task(task_id, possible_matches=retained)
+    cover_lookup_runtime._run_cover_lookup_task(
+        task_id, config, logger, config["MUSICBRAINZ_USER_AGENT"], album, {str(track_path)}, cancel_event,
+    )
+    result = cover_lookup_tasks.cover_lookup_result(task_id)
+    assert result["status"] == "completed"
+    assert [item["id"] for item in result["possible_matches"]] == ["retained"]
+    assert finished[-1]["status"] == "completed"
+    assert [item["id"] for item in finished[-1]["candidates"]] == ["retained"]
+
+
+def test_queue_joins_remote_execution_without_submitting_another_worker(config, logger, monkeypatch, tmp_path):
+    monkeypatch.setattr(cover_lookup_runtime, "cover_lookup_admission_state", lambda *_args, **_kwargs: ("", ""))
+    monkeypatch.setattr(cover_lookup_runtime, "admit_cover_lookup_task", lambda *_args, **_kwargs: ("remote-task", Event(), False))
+
+    class Executor:
+        def submit(self, *_args):
+            pytest.fail("A joined durable execution must not launch providers")
+
+    monkeypatch.setattr(cover_lookup_runtime, "_COVER_LOOKUP_EXECUTOR", Executor())
+    track = tmp_path / "song.mp3"
+    assert cover_lookup_runtime.queue_cover_lookup_task(
+        _album_payload(track), {str(track)}, config=config, logger=logger,
+    ) == "remote-task"
 
 
 def test_manual_lookup_publishes_each_merged_provider_stage_and_completes_snapshot_generation(
@@ -2393,7 +2551,7 @@ def test_run_cover_lookup_task_discards_unpublished_results_when_parallel_bandca
             assert search_generation == "task-canceled-during-provider"
             assert search_kind == "manual"
 
-        def publish_candidates(self, candidates):
+        def publish_candidates(self, candidates, *, preserve_order=False):
             assert [candidate["id"] for candidate in candidates] == ["accepted-service-result"]
             terminal_events.append("candidate-accepted")
             return True
@@ -2465,7 +2623,8 @@ def test_run_cover_lookup_task_routes_every_cancel_finalization_through_one_term
     source = inspect.getsource(cover_lookup_runtime._run_cover_lookup_task)
 
     assert "finalize_cover_lookup_task_canceled(" not in source
-    assert "_terminalize_canceled_cover_lookup_task(" in source
+    assert "partial(_terminalize_canceled_cover_lookup_task," in source
+    assert "terminalize_canceled(" in source
 
 
 def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_without_fetching_bytes(config, logger, library_state, monkeypatch, tmp_path: Path):
@@ -4002,11 +4161,13 @@ def test_successful_remote_save_publishes_fetch_and_persistence_phase_metrics(co
     assert final_snapshot["phase_timings_ms"]["persistence"] > 1.5
 
 
+@pytest.mark.parametrize("retain_prior_candidates", [False, True])
 def test_progressive_service_candidates_accumulate_provider_stages(
     config,
     logger,
     monkeypatch,
     tmp_path: Path,
+    retain_prior_candidates,
 ):
     track_path = tmp_path / "song.mp3"
     album = _album_payload(track_path)
@@ -4023,6 +4184,16 @@ def test_progressive_service_candidates_accumulate_provider_stages(
         "lookup_group": "services",
     }
     published_ids: list[tuple[str, ...]] = []
+    running_ids = []
+    running_snapshot_ids = []
+    failures = []
+    prior = {"id": "previous-search", "url": "https://images.example/previous.jpg", "source": "discogs"}
+    if retain_prior_candidates:
+        from tests.py.test_album_cover_candidate_publisher import FakeSnapshotRepository
+        repository = FakeSnapshotRepository()
+        album["id"] = 41
+        monkeypatch.setattr(cover_lookup_runtime, "AlbumCoverCandidateSnapshotRepository", lambda _config: repository)
+        monkeypatch.setattr(cover_lookup_runtime, "cover_lookup_result", lambda _task_id: {"possible_matches": [prior]})
 
     class StagedServiceRegistry:
         def search_music_service_matches(self, _query, *, on_candidates=None, **_kwargs):
@@ -4037,13 +4208,19 @@ def test_progressive_service_candidates_accumulate_provider_stages(
         def search_discogs_and_cover_art_archive_matches(self, _query, **_kwargs):
             return [], []
 
-        def search_artist_website_fallback_matches(self, _query, **_kwargs):
+        def search_artist_website_matches(self, _query, **_kwargs):
             return []
 
     def capture_update(_task_id, **changes):
+        if changes.get("status") == "failed":
+            failures.append(changes.get("error") or changes.get("message"))
         possible_matches = changes.get("possible_matches")
         if possible_matches is not None:
             published_ids.append(tuple(str(candidate["id"]) for candidate in possible_matches))
+            if changes.get("status") != "completed":
+                running_ids.append(published_ids[-1])
+                if retain_prior_candidates:
+                    running_snapshot_ids.append(tuple(candidate["url"] for candidate in repository.snapshot["candidates"]))
 
     monkeypatch.setattr(cover_lookup_runtime, "COVER_LOOKUP_PROVIDER_REGISTRY", StagedServiceRegistry())
     monkeypatch.setattr(cover_lookup_runtime, "update_cover_lookup_task", capture_update)
@@ -4061,7 +4238,15 @@ def test_progressive_service_candidates_accumulate_provider_stages(
     )
 
     first_deezer_snapshot = next(ids for ids in published_ids if deezer_candidate["id"] in ids)
-    assert first_deezer_snapshot == (apple_candidate["id"], deezer_candidate["id"])
+    assert failures == []
+    expected = (apple_candidate["id"], deezer_candidate["id"])
+    assert first_deezer_snapshot == ((prior["id"], *expected) if retain_prior_candidates else expected)
+    assert published_ids[-1] == expected
+    if retain_prior_candidates:
+        assert all(prior["id"] in ids for ids in running_ids)
+        assert all(prior["url"] in urls for urls in running_snapshot_ids)
+        assert repository.snapshot["status"] == "completed"
+        assert {item["url"] for item in repository.snapshot["candidates"]} == {apple_candidate["url"], deezer_candidate["url"]}
 
 
 def test_progressive_candidate_publication_never_regresses_to_an_older_provider_subset(
@@ -4214,7 +4399,7 @@ def test_progressive_provider_cannot_publish_after_terminal_task(
         def __init__(self, _repository, **_kwargs):
             pass
 
-        def publish_candidates(self, candidates):
+        def publish_candidates(self, candidates, *, preserve_order=False):
             publisher_events.append(
                 "publish:" + ",".join(str(candidate["id"]) for candidate in candidates)
             )
@@ -4294,3 +4479,46 @@ def test_progressive_provider_cannot_publish_after_terminal_task(
     assert late_candidate_done.wait(timeout=1)
 
     assert publisher_events[-1] == "fail"
+
+
+def test_remote_cover_images_are_remembered_and_the_oldest_leave_first(monkeypatch):
+    """Every Cover Look Up open downloaded each REMOTE card's image from its provider again."""
+    from collections import OrderedDict
+
+    from music_app.services import cover_lookup_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE", OrderedDict())
+    monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE_BYTES", 0)
+    monkeypatch.setattr(runtime, "_REMOTE_IMAGE_CACHE_MAX_BYTES", 10)
+
+    assert runtime.cached_remote_cover_image("https://images.example/a.jpg") is None
+    runtime.remember_remote_cover_image("https://images.example/a.jpg", b"aaaaaa", "image/jpeg")
+    assert runtime.cached_remote_cover_image("https://images.example/a.jpg") == (b"aaaaaa", "image/jpeg")
+    runtime.remember_remote_cover_image("https://images.example/b.jpg", b"bbbbbb", "image/png")
+    assert runtime.cached_remote_cover_image("https://images.example/a.jpg") is None
+    assert runtime.cached_remote_cover_image("https://images.example/b.jpg") == (b"bbbbbb", "image/png")
+    assert runtime._REMOTE_IMAGE_CACHE_BYTES == 6
+
+
+def test_probe_measurement_is_remembered_by_image_content(monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from music_app.services import cover_provider_runtime
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(buffer, "PNG")
+    payload = buffer.getvalue()
+    decodes = []
+    real_decode = cover_provider_runtime.decode_image_bytes
+    monkeypatch.setattr(cover_provider_runtime, "decode_image_bytes", lambda raw: decodes.append(1) or real_decode(raw))
+    monkeypatch.setattr(cover_provider_runtime, "http_get_bytes", lambda *_args, **_kwargs: payload)
+    monkeypatch.setattr(cover_provider_runtime, "_PROBE_MEASUREMENTS", type(cover_provider_runtime._PROBE_MEASUREMENTS)())
+
+    first = cover_provider_runtime.probe_candidate_metrics("https://a.example/1.png", user_agent="t", service="s", context="c")
+    second = cover_provider_runtime.probe_candidate_metrics("https://a.example/1.png?n=2", user_agent="t", service="s", context="c")
+
+    assert len(decodes) == 1
+    assert {k: first[k] for k in ("width", "height", "sharpness")} == {k: second[k] for k in ("width", "height", "sharpness")}
+    assert second["raw_bytes"] == payload

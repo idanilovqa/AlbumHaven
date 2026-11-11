@@ -147,6 +147,7 @@ function loadRuntime(overrides = {}) {
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;'),
     console,
+    hasHydratedLibraryNonAlbumTracks: () => false,
     albumHasDisplayCover: album => Boolean(album?.cover_url),
     buildAlbumDisplayCoverUrl: album => album?.cover_url || '',
     buildAlbumLightboxCoverUrl: album => album?.cover_url || '',
@@ -165,14 +166,14 @@ function requireContract(context, name) {
   return context[name];
 }
 
-test('search gallery retains artist information and dividers in artist section headings', () => {
+test('search gallery shows artist information in the header and in artist section headings', () => {
   const context = loadRuntime({ state: { view: { query: 'Neal Morse' } } });
   const config = { artist: 'Neal Morse', artistCount: 1, albumCount: 3, contextKind: 'artist' };
   const galleryBar = context.buildGalleryBarHtml(config);
   const artistHeading = context.buildFamilyArtistHeaderHtml(config);
 
-  // The owner asked for the artist's i icon in the header during search too.
-  assert.match(galleryBar, /data-artist-info-trigger/);
+  // Owner (11-08): the header names one artist during a search too, so its info icon shows there.
+  assert.match(galleryBar, /data-artist-info-trigger="1" data-artist="Neal Morse"/);
   assert.match(
     artistHeading,
     /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,
@@ -181,7 +182,8 @@ test('search gallery retains artist information and dividers in artist section h
   const opener = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function openGalleryArtistInfo('));
   assert.doesNotMatch(opener.slice(0, opener.search(/\r?\n}\r?\n/)), /state\.view\.query/);
   const chrome = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function updateGalleryMainChrome('));
-  assert.doesNotMatch(chrome.slice(0, chrome.search(/\r?\n}\r?\n/)), /closeGalleryMainSurface/, 'searching does not close an open artist panel');
+  assert.match(chrome.slice(0, chrome.search(/\r?\n}\r?\n/)), /openingQuery[\s\S]*closeGalleryMainSurface\(false\)/,
+    'a changed search closes the artist panel whose information it replaced');
 });
 
 function plain(value) {
@@ -366,8 +368,8 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(singleArtistBar, /data-artist-info-trigger/);
   assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
   // "Alestorm (i) • 4 albums" on the title line; the summary line is free for pills.
-  assert.match(singleArtistBar, /data-gallery-context-inline-total>4 albums<\/span>/);
-  assert.match(singleArtistBar, /data-gallery-context-summary hidden><\/span>/);
+  assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
+  assert.match(singleArtistBar, /data-gallery-context-summary>4 albums<\/span>/);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -425,11 +427,12 @@ test('current GalleryBar owner puts the album count on the name line and the pil
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#1c1730;[^}]*--ui-metadata-pill-country-border:\s*#8b6fd6;[^}]*--ui-metadata-pill-country-ink:\s*#cbb8ff;[^}]*background:\s*var\(--ui-metadata-pill-country-fill\)/s);
   assert.match(buttonComponentCssSource, /:root\[data-appearance-mode='light'\] \.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#f1ecfd;[^}]*--ui-metadata-pill-country-ink:\s*#4a2e99;/s);
   assert.doesNotMatch(galleryMainCssSource, /ui-metadata-pill--country/, 'no page-local country colour');
-  assert.match(markup, /data-gallery-context-inline-total>4 albums</, 'the count follows the name and i icon');
-  assert.match(markup, /data-gallery-context-summary hidden><\/span>/);
+  assert.match(markup, /data-gallery-context-inline-total hidden><\/span>/);
+  assert.match(markup, /data-gallery-context-summary>4 albums</, 'the count sits below the name and i icon');
   assert.match(galleryMainCssSource, /\.gallery-bar__artist-total::before\s*\{[^}]*content:\s*"\\2022"/s, 'a fat dot leads the count');
   // Summary and pills share one fixed-height second line, so the header never shifts while scrolling.
   assert.match(galleryMainCssSource, /\.gallery-bar__summary,\s*\.gallery-bar__artist-metadata\s*\{[^}]*min-height:\s*20px/s);
+  assert.doesNotMatch(mobileLayoutCssSource, /\.gallery-bar__summary:empty\s*\{[^}]*display:\s*none/s);
 });
 
 test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {
@@ -588,6 +591,104 @@ function createStateForContract() {
   };
 }
 
+test('artist non-album tracks stay disabled until the family count is known', () => {
+  const requested = [];
+  const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: selector => selector === '[data-open-non-album-tracks]' ? [button] : [],
+      querySelector: () => null,
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+    hydrateArtistNonAlbumAvailability: () => { requested.push('availability'); return new Promise(() => {}); },
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options); return new Promise(() => {}); },
+    hasHydratedArtistNonAlbumAvailability: () => Boolean(context.state.view.non_album_track_count_scope),
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.updateGalleryMainControls();
+  assert.deepEqual(requested, ['availability']);
+  assert.equal(button.disabled, true);
+  assert.equal(button['aria-disabled'], 'true');
+  context.state.view.non_album_track_count = 1;
+  context.state.view.non_album_track_count_scope = 'artist-family:agalloch';
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false);
+  assert.equal(button['aria-disabled'], 'false');
+  context.state.view.non_album_track_count = 0;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'a confirmed empty artist collection is disabled');
+  context.state.view = {
+    query: 'Release',
+    selected_artist: 'Agalloch',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-scoped search retains its deferred menu fetch');
+  button.dataset.libraryWide = '1';
+  context.hasHydratedLibraryNonAlbumTracks = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
+  context.hasHydratedLibraryNonAlbumTracks = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'library-wide Loose Tracks is a navigation destination and stays pressable when empty');
+  button.dataset.libraryWide = '';
+  context.state.view = { query: 'Bright Eyes', selected_artist: '', non_album_tracks_deferred: true };
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(requested.at(-1).libraryWide, true, 'search checks library-wide loose tracks without opening the menu');
+  assert.equal(button.dataset.searchMatch, 'false');
+  context.hasNonAlbumSearchMatches = () => true;
+  context.updateGalleryMainControls();
+  assert.equal(button.dataset.searchMatch, 'true');
+  assert.equal(button['aria-description'], 'Contains tracks matching your search');
+});
+
+test('the phone Loose Tracks tab shows the search dot like the desktop button', () => {
+  const tab = { dataset: {}, setAttribute(name, value) { this[name] = value; } };
+  const context = loadRuntime({
+    state: { view: { query: 'Dragonland', selected_artist: '' } },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: selector => (selector === '.mobile-artists-mode-button[data-navigation-mode="collections"]' ? tab : null),
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [],
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+  context.hasNonAlbumSearchMatches = options => options.libraryWide === true;
+  context.updateGalleryMainControls();
+  assert.equal(tab.dataset.searchMatch, 'true');
+  context.hasNonAlbumSearchMatches = () => false;
+  context.updateGalleryMainControls();
+  assert.equal(tab.dataset.searchMatch, 'false');
+});
+
+test('a search with an artist selected loads that artist\'s loose tracks only once its menu is open', () => {
+  const requested = [];
+  const menu = { hidden: true };
+  const context = loadRuntime({
+    state: { view: { query: 'Release', selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
+    window: {},
+    document: {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      getElementById: id => (id === 'gallery-album-types-menu' ? menu : null),
+    },
+    hydrateDeferredNonAlbumTracks: options => { requested.push(options.libraryWide); return new Promise(() => {}); },
+  });
+  const hydrate = requireContract(context, 'hydrateDeferredNonAlbumTracksForAlbumTypes');
+  hydrate();
+  assert.deepEqual(requested, [true], 'a closed menu keeps the search to its library-wide probe');
+  menu.hidden = false;
+  hydrate();
+  assert.deepEqual(requested, [true, true, false], 'the open menu also resolves the artist\'s own button');
+});
+
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
   assert.match(
     indexTemplateSource,
@@ -607,7 +708,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /Boolean\(button\.dataset\.libraryWide === '1' && state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /const artistFamily = !libraryWide && selectedArtist[\s\S]*?const familyCountReady = artistFamily[\s\S]*?hasHydratedArtistNonAlbumAvailability\(\);[\s\S]*?Number\(state\.view\.non_album_track_count\) > 0/,
   );
   assert.match(
     galleryMainInteractionsSource,
@@ -725,7 +826,7 @@ test('client Gallery state defaults to all sources, Studio plus EP and Compilati
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'cards',
     familyArtists: [],
   });
@@ -756,7 +857,7 @@ test('new primary artist navigation resets filters while preserving the display 
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'covers',
     familyArtists: [],
   });
@@ -776,7 +877,7 @@ test('source, featured relationship, unavailable type, view, and family transiti
     sources: { main_library: true, new_arrivals: true, hoard: false },
     albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: false,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
@@ -835,7 +936,7 @@ test('relationship controls synchronize and dispatch without enabling release-ty
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
     showFeaturedOn: false,
-    showSplitAlbums: true,
+    splitAlbums: 'show',
     view: 'cards',
     familyArtists: [],
   } }, view: {} };
@@ -854,7 +955,8 @@ test('relationship controls synchronize and dispatch without enabling release-ty
   });
   context.updateGalleryMainControls();
   assert.equal(featuredAttributes.get('aria-pressed'), 'false');
-  assert.equal(splitAttributes.get('aria-pressed'), 'true');
+  assert.equal(splitAttributes.get('aria-valuenow'), '2');
+  assert.equal(splitAttributes.get('aria-valuetext'), 'Show Split Albums');
   assert.equal(featured.disabled, false);
   assert.equal(releaseType.disabled, true);
 
@@ -869,11 +971,13 @@ test('relationship controls synchronize and dispatch without enabling release-ty
 
   context.handleGalleryMainClick({
     preventDefault: () => prevented.push(true),
+    detail: 1,
+    clientX: 0,
     target: { closest: selector => selector === '[data-gallery-split-albums]' ? split : null },
   });
   assert.deepEqual(plain(actions), [
     { type: 'toggle-featured-on' },
-    { type: 'toggle-split-albums' },
+    { type: 'set-split-albums', mode: 'separate' },
   ]);
   assert.equal(prevented.length, 2);
 });
@@ -1258,11 +1362,11 @@ test('all unavailable release types remain inert while catalog-backed facts are 
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
   assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep', 'compilation']);
-  assert.equal(createGalleryMainState().showSplitAlbums, true);
-  assert.equal(
-    reduceGalleryMainState(createGalleryMainState(), { type: 'toggle-split-albums' }).showSplitAlbums,
-    false,
-  );
+  assert.equal(createGalleryMainState().splitAlbums, 'show');
+  for (const mode of ['hide', 'separate', 'show']) {
+    assert.equal(reduceGalleryMainState(createGalleryMainState(), { type: 'set-split-albums', mode }).splitAlbums, mode);
+  }
+  assert.equal(reduceGalleryMainState(createGalleryMainState(), { type: 'set-split-albums', mode: 'bogus' }).splitAlbums, 'show');
   for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
@@ -1303,9 +1407,16 @@ test('all unavailable release types remain inert while catalog-backed facts are 
         { key: 'studio', release_type: 'Album', source: 'main_library' },
       ],
     }],
-    filterState: { ...createGalleryMainState(), showSplitAlbums: false },
+    filterState: { ...createGalleryMainState(), splitAlbums: 'hide' },
   }));
   assert.deepEqual(withoutSplits.groups[0].albums.map((album) => album.key), ['studio']);
+  for (const splitAlbums of ['show', 'separate']) {
+    const withSplits = plain(filterGalleryModel({
+      groups: [{ artist: 'Jordsjø', albums: [{ key: 'split', release_type: 'Split', source: 'main_library' }] }],
+      filterState: { ...createGalleryMainState(), splitAlbums },
+    }));
+    assert.deepEqual(withSplits.groups[0].albums.map((album) => album.key), ['split'], splitAlbums);
+  }
 });
 
 test('art-only Gallery hover frame covers the complete card edge', () => {
@@ -1665,6 +1776,71 @@ test('full root gallery summary preserves client-filtered and query totals', () 
     { ...view, query: 'Artist' }, filtered, context.createGalleryMainState(),
   ), filtered);
 });
+test('a source switch over a partial gallery keeps an immediate exact count below the title', () => {
+  const context = loadRuntime();
+  const partial = { initial_view_partial: true, artist_count: 120, album_count: 900, loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'] };
+  const mounted = { artistCount: 80, albumCount: 200 };
+  const hoardOnly = context.createGalleryMainState({ sources: { main_library: false, new_arrivals: false, hoard: true } });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly, null, {
+      hoard: { artistCount: 7, albumCount: 11 },
+    }))),
+    { artistCount: 7, albumCount: 11 },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly))),
+    { artistCount: 120, albumCount: 900 },
+  );
+  const complete = { ...partial, initial_view_partial: false };
+  assert.equal(context.resolveGallerySummaryTotals(complete, mounted, hoardOnly), mounted);
+});
+
+test('source total prefetch caches the exact Postgres count and refreshes the active header', async () => {
+  const requests = [];
+  const state = {
+    gallery: {
+      mainState: {
+        sources: { main_library: false, new_arrivals: false, hoard: true },
+      },
+      sourceTotalsByScope: {},
+      pendingSourceTotalScopes: new Set(),
+    },
+    view: {
+      query: '',
+      selected_artist: '',
+      loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+      artist_count: 120,
+      album_count: 900,
+    },
+  };
+  let failPrefetch = true;
+  const context = loadRuntime({
+    state,
+    URLSearchParams,
+    fetch: async (url) => {
+      requests.push(url);
+      if (failPrefetch) throw new Error('offline');
+      return { ok: true, json: async () => ({ artist_count: 7, album_count: 11 }) };
+    },
+  });
+  let headerRefreshes = 0;
+  context.updateGalleryMainChrome = () => { headerRefreshes += 1; };
+
+  await context.prefetchGallerySourceTotals(['hoard']);
+  assert.equal(state.gallery.pendingSourceTotalScopes.size, 0);
+  failPrefetch = false;
+  await context.prefetchGallerySourceTotals(['hoard']);
+
+  assert.deepEqual(requests, [
+    '/home-data?omit_sidebar=1&category=hoard',
+    '/home-data?omit_sidebar=1&category=hoard',
+  ]);
+  assert.deepEqual(plain(state.gallery.sourceTotalsByScope), {
+    hoard: { artistCount: 7, albumCount: 11 },
+  });
+  assert.equal(headerRefreshes, 1);
+});
 test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
   const name = { textContent: '' };
   const summary = { textContent: '' };
@@ -1688,7 +1864,7 @@ test('partial bootstrap gallery chrome reports empty results after all sources a
   assert.equal(summary.textContent, '0 artists · 0 albums');
 });
 
-test('gallery bar stays hidden throughout active search transitions', () => {
+test('gallery bar stays visible throughout active search transitions', () => {
   assert.match(bootstrapGalleryEventHandlersSource,
     /function updateGallerySearchDraftQuery\(nextQuery\)[\s\S]*?syncGalleryBarSearchVisibility\(\);/);
   const name = { textContent: '' };
@@ -1711,12 +1887,12 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
   context.state.ui.searchDraftQuery = 'neal morse';
   context.updateGalleryMainChrome();
-  assert.equal(bar.hidden, true, 'draft query hides stale Gallery context while loading');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = '';
   context.state.view.query = 'neal morse';
   context.updateGalleryMainChrome();
-  assert.equal(bar.hidden, true, 'committed query keeps Gallery context hidden');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = 'neal morse';
   context.state.view.selected_artist = 'Neal Morse';
@@ -1725,7 +1901,7 @@ test('gallery bar stays hidden throughout active search transitions', () => {
 
   context.state.ui.searchDraftQuery = 'neal morse band';
   context.syncGalleryBarSearchVisibility();
-  assert.equal(bar.hidden, true, 'editing a resolved artist query hides its stale Gallery family controls');
+  assert.equal(bar.hidden, false, 'Gallery header remains visible during search');
 
   context.state.ui.searchDraftQuery = '';
   context.state.view.selected_artist = '';
@@ -1734,9 +1910,9 @@ test('gallery bar stays hidden throughout active search transitions', () => {
   assert.equal(bar.hidden, false, 'clearing search restores Gallery context');
 });
 
-test('server-rendered searches hide the gallery bar only until an artist is resolved', () => {
+test('server-rendered searches retain the gallery bar', () => {
   assert.match(indexTemplateSource,
-    /gallery_bar\('Gallery'[^)]*hidden=query and not effective_selected_artist\)/);
+    /gallery_bar\('Gallery'[^)]*aria_label='Gallery controls'\)/);
 });
 
 test('root gallery summary counts canonical albums once across artist credits after filtering', () => {
@@ -2045,6 +2221,18 @@ test('reopening a family drawer cancels the earlier closing callbacks', () => {
   assert.equal(run.hiddenWrites(), writes);
 });
 
+test('ID-012: each click on the Split Albums switch moves Show -> Separate -> Hide -> Show', () => {
+  const context = loadRuntime();
+  const state = { splitAlbums: 'show' };
+  context.ensureGalleryMainState = () => state;
+  const visited = [];
+  for (let click = 0; click < 3; click += 1) {
+    state.splitAlbums = context.resolveSplitAlbumsSwitchMode();
+    visited.push(state.splitAlbums);
+  }
+  assert.deepEqual(visited, ['separate', 'hide', 'show']);
+  assert.match(galleryMainCssSource, /data-switch-position="1"\] \.gallery-switch__track \{ background: color-mix\(in oklch, #4da3ff 72%, var\(--appearance-play, #4bc173\)\); \}/);
+});
 
 test('artist information links MusicBrainz and Discogs only for an accepted match, as icon and text', () => {
   const ButtonComponent = require('../../../music_app/static/js/button-component.js');

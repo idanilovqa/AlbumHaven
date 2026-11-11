@@ -486,7 +486,10 @@ test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records 
             await galleryActions.restoreGalleryScrollPosition(preEditScrollTop);
             await openAlbumDetails(SOURCE_ALBUM);
           }
-          const summary = await trackModalActions.waitForInteractiveSummary({ timeout: 3000 });
+          const summary = await trackModalActions.waitForInteractiveSummary({
+            timeout: 3000,
+            expectedTitle: albumDetailsTitle(SOURCE_ALBUM),
+          });
           const titles = await trackModalActions.readTrackTitles();
           recordRendererViolation(
             violations,

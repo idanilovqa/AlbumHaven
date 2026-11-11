@@ -50,10 +50,8 @@ test('Cover Lookup links only the album name while artist and year remain plain'
   assert.match(source, /data-open-cover-lookup-album-details="1"/);
   assert.match(source, /els\.subtitle\.innerHTML\s*=\s*buildCoverLookupAlbumSubtitleHtml\(album\)/);
 
-  const link = cssRule('.cover-lookup-modal-album-link');
-  assert.match(link, /background:\s*transparent/);
-  assert.match(link, /text-decoration-line:\s*underline/);
-  assert.match(link, /text-underline-offset:/);
+  assert.match(source, /class="ui-text-link cover-lookup-modal-album-link"/);
+  assert.match(cssRule('.cover-lookup-modal-subtitle-separator'), /white-space:\s*pre/);
 });
 
 test('cover source entry is compact, supports picker and drop, and omits redundant helper copy', () => {
@@ -163,6 +161,14 @@ test('gallery sections expose live image counts and omit empty remote and match 
   assert.match(source, /possibleMatches\.length\s*\|\|\s*taskRunning/);
   assert.doesNotMatch(source, /No remote cover is currently selected/);
   assert.doesNotMatch(source, /No remote matches yet/);
+});
+
+test('ADD COVER ART keeps its divider attached to the heading', () => {
+  const attachedComposer = cssRule('.cover-lookup-section-heading + .cover-lookup-manual-add');
+  const divider = cssRule('.cover-lookup-manual-divider');
+  assert.match(attachedComposer, /margin-top:\s*-12px/);
+  assert.match(divider, /margin-top:\s*0/);
+  assert.match(source, /cover-lookup-section-heading[^]*cover-lookup-manual-add[^]*cover-lookup-manual-divider/);
 });
 
 test('provider rows include readable labels, Deezer heart, CAA, and external markers', () => {

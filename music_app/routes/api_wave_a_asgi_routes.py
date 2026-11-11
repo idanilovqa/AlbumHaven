@@ -54,8 +54,10 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
+from music_app.services.missing_album_rescan import MissingAlbumRescan
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 from music_app.services.library_roots import (
+    get_library_roots,
     library_root_cache_identity,
     load_library_root_settings,
 )
@@ -102,6 +104,7 @@ from music_app.services.state import (
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.utility_rule_mutations import (
     create_version_exception,
+    clear_version_exceptions,
     mark_manual_version_link,
     revert_rule_key,
     unmark_manual_version_link,
@@ -114,6 +117,8 @@ from music_app.services.utility_rules import (
 from music_app.services.edit_workflows import (
     handle_edit_tags_request,
     handle_repair_album_request,
+    previous_tag_values,
+    restore_media_tag_values,
 )
 from music_app.services.edit_state import find_album_dicts_by_track_paths
 
@@ -187,6 +192,43 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     await run_in_threadpool(update_runtime_after_removal)
     return JSONResponse({"ok": True, **result})
 
+
+@router.post("/api/library/albums/{album_key:path}/keep-missing")
+async def keep_missing_album(request: Request, album_key: str) -> JSONResponse:
+    """The user keeps a missing album; it is never removed automatically afterwards."""
+    await require_action("library.inventory.manage")(request)
+    try:
+        await run_in_threadpool(PostgresMissingAlbumRemovalService(_app_config(request)).keep_missing, album_key)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
+    except MissingAlbumNotFound:
+        return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/library/albums/{album_key:path}/rescan")
+async def rescan_missing_album(request: Request, album_key: str) -> JSONResponse:
+    """Restore a missing album found where it was or where it moved, or say why it is still missing."""
+    await require_action("library.inventory.manage")(request)
+    normalized_key = str(album_key or "").strip()
+    reconcile = getattr(request.app.state, "reconcile_library_paths", None)
+    if not normalized_key:
+        return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
+    if not callable(reconcile):
+        return JSONResponse(
+            {"ok": False, "error": "Library watching is not running.", "code": "rescan_unavailable"},
+            status_code=503,
+        )
+    config = _app_config(request)
+    try:
+        result = await run_in_threadpool(
+            MissingAlbumRescan(config, reconcile=reconcile, roots=get_library_roots(config)).rescan,
+            normalized_key,
+        )
+    except MissingAlbumNotFound:
+        return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
+    return JSONResponse({"ok": True, **result})
+
 _EDIT_WRITE_WORKERS = 2
 _STRUCTURAL_EDIT_FIELDS = {
     "album",
@@ -211,14 +253,6 @@ _MEDIA_TAG_EDIT_FIELDS = {
     "edition",
     "album_type",
     "album_rating",
-}
-_TARGETED_INVENTORY_EDIT_FIELDS = {
-    "title",
-    "genre",
-    "track_number",
-    "disc_number",
-    "total_discs",
-    "disc_subtitle",
 }
 _SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS = _STRUCTURAL_EDIT_FIELDS | _MEDIA_TAG_EDIT_FIELDS
 
@@ -565,7 +599,7 @@ async def library_settings_read(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "ok": True,
-            "allowed_actions": allowed_actions_for_request(request, ("library.settings.manage", "library.filesystem.browse", "library.paths.read")).as_payload(),
+            "allowed_actions": allowed_actions_for_request(request, ("library.settings.manage", "library.filesystem.browse", "library.paths.read", "library.files.edit_tags")).as_payload(),
             "settings": await run_in_threadpool(load_library_root_settings, _app_config(request), **scope),
         }
     )
@@ -573,11 +607,10 @@ async def library_settings_read(request: Request) -> JSONResponse:
 
 @router.get("/library-settings/browse")
 async def library_settings_browse(request: Request, path: str = "") -> JSONResponse:
-    from music_app.services.policy_asgi import allowed_actions_for_request
+    from music_app.services.policy_asgi import can_browse_server_folders
     await root_request_scope(request)
     config = _app_config(request)
-    actions = allowed_actions_for_request(request, ("library.filesystem.browse", "library.paths.read")).as_payload()
-    if config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted" or not all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read")):
+    if not can_browse_server_folders(request):
         from fastapi import HTTPException
         raise HTTPException(403, "Directory browsing is unavailable")
     return JSONResponse({"ok": True, **await run_in_threadpool(bounded_directories, config, path)})
@@ -608,6 +641,14 @@ async def library_settings_write(request: Request) -> JSONResponse:
         return _json_response(
             ({"ok": False, "error": "Library settings payload must be an object."}, 400)
         )
+    if settings_payload.get("metadata_corrections") == "write_tags":
+        # Turning on "Write in tags" lets the app edit tags on the user's behalf.
+        from music_app.services.policy_asgi import allowed_actions_for_request
+
+        current = await run_in_threadpool(load_library_root_settings, _app_config(request), **scope)
+        may_edit_tags = allowed_actions_for_request(request, ("library.files.edit_tags",)).as_payload().get("library.files.edit_tags") is True
+        if current.get("metadata_corrections") != "write_tags" and not may_edit_tags:
+            return _json_response(({"ok": False, "error": "Writing corrections in tags needs permission to edit tags."}, 403))
 
     try:
         replace_live_watch_roots = getattr(
@@ -822,19 +863,8 @@ def _is_selected_postgres_targeted_structural_edit_request(
         if not isinstance(raw_edits, Mapping):
             return False
         field_sets.add(frozenset(str(field or "") for field in raw_edits))
-    if len(field_sets) == 1 and next(iter(field_sets)) in {
-        frozenset({"album"}),
-        frozenset({"year"}),
-        frozenset({"artist"}),
-        frozenset({"album_artist"}),
-        frozenset({"artist", "album_artist"}),
-        frozenset({"album", "artist"}),
-        frozenset({"album", "album_artist"}),
-        frozenset({"album", "artist", "album_artist"}),
-    }:
-        return True
-    return bool(field_sets) and all(
-        bool(fields) and fields <= _TARGETED_INVENTORY_EDIT_FIELDS
+    return any(fields & _MEDIA_TAG_EDIT_FIELDS for fields in field_sets) and all(
+        bool(fields) and fields <= (_MEDIA_TAG_EDIT_FIELDS | {"exception_type", "custom_collection_name"})
         for fields in field_sets
     )
 
@@ -1040,23 +1070,13 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
                 exception_rollbacks[path] = normalize_exception_value(
                     previous_entry.get("exception_type")
                 )
-            reverse_repairs = {
-                field: str(
-                    (
-                        previous_entry.get("release_date")
-                        or previous_entry.get("year")
-                    )
-                    if field == "year"
-                    else previous_entry.get(field)
-                    or ""
-                )
-                for field in path_field_names
-                if field in _MEDIA_TAG_EDIT_FIELDS
-            }
+            reverse_repairs = previous_tag_values(
+                previous_entry, path_field_names & _MEDIA_TAG_EDIT_FIELDS,
+            )
             if not reverse_repairs:
                 continue
             try:
-                _apply_repairs_worker(path, reverse_repairs)
+                restore_media_tag_values(_apply_repairs_worker, path, reverse_repairs)
             except Exception as exc:
                 failures.append(f"{path}: {exc}")
         if exception_rollbacks:
@@ -1112,23 +1132,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
                 or previous_entry.get(field, "")
                 != updated_entry.get(field, "")
             }
-            reverse_repairs = {
-                field: str(
-                    (
-                        previous_entry.get("release_date")
-                        or previous_entry.get("year")
-                    )
-                    if field == "year"
-                    else previous_entry.get(field)
-                    or ""
-                )
-                for field in path_field_names
-                if field in _MEDIA_TAG_EDIT_FIELDS
-            }
+            reverse_repairs = previous_tag_values(
+                previous_entry, path_field_names & _MEDIA_TAG_EDIT_FIELDS,
+            )
             if not reverse_repairs:
                 continue
             try:
-                _apply_repairs_worker(path, reverse_repairs)
+                restore_media_tag_values(_apply_repairs_worker, path, reverse_repairs)
             except Exception as exc:
                 failures.append(f"{path}: {exc}")
         if failures:
@@ -1631,6 +1641,13 @@ async def mark_album_version(request: Request) -> JSONResponse:
     )
     if mutation_error:
         return _json_response(({"ok": False, "error": mutation_error}, 400))
+    ignored_version_keys = clear_version_exceptions(
+        config,
+        [album_key, parent_album_key],
+        load_keys=load_ignored_version_keys,
+        save_keys=save_ignored_version_keys,
+    )
+    invalidate_utility_rules_payload_cache(library_state)
     log_app_event(
         config,
         logger,
@@ -1639,7 +1656,11 @@ async def mark_album_version(request: Request) -> JSONResponse:
         album_key=album_key,
         parent_album_key=parent_album_key,
      history_scope=history_scope)
-    return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
+    return JSONResponse({
+        "ok": True,
+        "manual_version_links": manual_version_links,
+        "ignored_version_keys": sorted(ignored_version_keys),
+    })
 
 
 @router.post("/versions/unmark")
@@ -1800,6 +1821,7 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
             _app_config(request),
             source_path,
             indexed_paths=authoritative_track_paths,
+            paths_only=bool(payload.get("paths_only")),
         )
     except (FileNotFoundError, OSError, ValueError):
         return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)
@@ -1811,15 +1833,26 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     history_scope = await history_scope_for_request(request, required=False)
     request_started = perf_counter()
     payload = await _json_payload(request)
+    return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
+
+
+async def run_edit_tags_payload(request: Request, payload, *, history_scope, started: float | None = None) -> ResponseValue:
+    """The whole Edit Tags pipeline for one payload: reservation, intent,
+    media write, save task, History. The route and Library Data Corrections
+    (with a request bound only to the app) both run it."""
+    request_started = perf_counter() if started is None else started
+    if history_scope is not None:
+        # Save-task finalizers record History from the request's scope.
+        request.state.history_scope = history_scope
     if payload is None or not payload.get("confirmed"):
-        return _json_response(({"ok": False, "error": "Tag edit was not confirmed"}, 400))
+        return {"ok": False, "error": "Tag edit was not confirmed"}, 400
 
     album, album_error = _require_album_payload(payload)
     updates = payload.get("updates")
     if album_error is not None:
-        return _json_response(album_error)
+        return album_error
     if not isinstance(updates, dict) or not updates:
-        return _json_response(({"ok": False, "error": "No tag edits were provided"}, 400))
+        return ({"ok": False, "error": "No tag edits were provided"}, 400)
 
     album_track_path_set, _track_error = _require_album_track_paths(album)
     requested_track_paths = (album_track_path_set or set()) | {str(path) for path in updates.keys() if str(path)}
@@ -1853,7 +1886,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
                 _postgres_exception_only_edit_state, request, payload
             )
         except ValueError as exc:
-            return _json_response(({"ok": False, "error": str(exc)}, 400))
+            return ({"ok": False, "error": str(exc)}, 400)
         get_state = lambda: postgres_edit_state
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
@@ -1908,7 +1941,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     }
     if "proposal_ids" in payload:
         from pathlib import Path
-        from music_app.services.metadata import read_editable_tag_values
+        from music_app.services.metadata import entry_with_original_tag_text, read_editable_tag_values
         from music_app.services.problem_suggestions import validate_problem_suggestions, _FIELDS
 
         def validate_proposals(st, submitted_updates):
@@ -1953,8 +1986,10 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             if needs_postgres_edit_state:
                 st.update(_postgres_exception_only_edit_state(request, payload))
             previous_entries = st.get("file_cache") or {}
+            # The edit writes what differs from the tags, not from the display
+            # correction, so a written correction is never skipped as unchanged.
             st["file_cache"] = {**previous_entries, **{
-                path: {**(previous_entries.get(path) or {}), **entry}
+                path: {**(previous_entries.get(path) or {}), **entry_with_original_tag_text(entry)}
                 for path, entry in entries.items()
             }}
             return verified
@@ -1983,4 +2018,4 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         result = _selected_postgres_media_write_response(result)
     if isinstance(payload.get("proposal_ids"), list):
         result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
-    return _json_response(result)
+    return result

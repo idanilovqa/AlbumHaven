@@ -17,6 +17,11 @@ stroke: none;
 display: inline-flex;
 align-items: center;
 justify-content: center;
+box-sizing: border-box;
+border-width: 1px;
+border-style: solid;
+border-radius: 10px;
+text-decoration: none;
 line-height: 1;
 text-align: center;
 vertical-align: middle;
@@ -28,7 +33,7 @@ transition: background 150ms ease, border-color 150ms ease, color 150ms ease, ou
 .ui-button[hidden] { display: none !important; }
 .ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ui-button--medium { box-sizing: border-box; height: 34px; min-height: 34px; padding: 0 12px; }
-.ui-button--small { min-height: 26px; }
+.ui-button--small { box-sizing: border-box; height: 26px; min-height: 26px; padding: 0 8px; font-size: 0.75rem; }
 .ui-button--primary {
 border-color: var(--appearance-primary-button, var(--accent));
 background: var(--appearance-primary-button, var(--accent));
@@ -107,6 +112,27 @@ width: 18px;
 height: 18px;
 }
 .action-button__content { display: grid; place-items: center; }
+/* ActionButton badge: a solid, high-contrast number on the icon's lower-right corner. */
+.action-button--badged .action-button__content { position: relative; }
+.action-button__badge {
+position: absolute;
+right: -8px;
+bottom: -7px;
+box-sizing: border-box;
+min-width: 15px;
+height: 15px;
+padding: 0 3px;
+border-radius: 999px;
+background: var(--appearance-ink, var(--text, #f3f6fa));
+box-shadow: 0 0 0 2px var(--appearance-neutral-button-background, var(--appearance-control, var(--panel, #1e2c3e)));
+color: var(--appearance-neutral-button-background, var(--appearance-control, var(--panel, #1e2c3e)));
+font-size: 10px;
+font-weight: 800;
+line-height: 15px;
+text-align: center;
+font-variant-numeric: tabular-nums;
+pointer-events: none;
+}
 .action-button__icon { display: block; }
 .action-button__icon.ui-icon {
 display: block;
@@ -123,6 +149,22 @@ fill: currentColor;
 }
 .action-button[aria-busy='true'] {
 position: relative;
+}
+/* A text button working on its action (owner, 11-10: a click always shows a reaction): a spinner before the label. */
+.ui-button:not(.action-button)[aria-busy='true'] .ui-button__content::before {
+content: '';
+display: inline-block;
+width: 12px;
+height: 12px;
+margin-right: 7px;
+vertical-align: -2px;
+border: 2px solid currentColor;
+border-right-color: transparent;
+border-radius: 50%;
+animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+.ui-button:not(.action-button)[aria-busy='true'] .ui-button__content::before { animation: none; border-right-color: currentColor; }
 }
 .action-button[aria-busy='true'] .action-button__content {
 visibility: hidden;
@@ -148,13 +190,19 @@ background: var(--appearance-item-action-pressed, var(--appearance-item-action-h
 .action-button:focus-visible {
 outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
+.action-button--bare:not(:focus-visible),
+:root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close']:not(:focus-visible) {
+  outline: none;
+}
 .action-button--bare:not(.trigger-anchor-open):not(.global-player *),
+:root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close'],
 :root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive) {
 border-color: transparent;
 background: transparent;
 box-shadow: none;
 }
 .action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
+:root [role='dialog'] :is(.action-button, .icon-button)[aria-label^='Close']:hover:not(:disabled):not([aria-disabled='true']),
 :root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
 border-color: transparent;
 background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) !important;
@@ -267,3 +315,80 @@ outline-offset: -1px !important;
 border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
 box-shadow: none !important;
 }
+
+/* Shared server-path field (PathInput): text input plus folder-browse action inside one surface. */
+.ui-path-input { box-sizing: border-box; display: flex; align-items: center; min-width: 0; width: 100%; border: 1px solid var(--appearance-line, var(--border, var(--line))); border-radius: 10px; background: var(--appearance-control, var(--surface, var(--surface-2))); padding-right: 4px; }
+.ui-path-input input, .ui-path-input input:focus { flex: 1 1 auto; min-width: 0; min-height: 38px; padding: 0 12px; border: 0; background: transparent; color: inherit; box-shadow: none; outline: none; }
+.ui-path-input .action-button { flex: 0 0 auto; border: 0; }
+.ui-path-input:has(> input:disabled) { opacity: .45; cursor: not-allowed; }
+.ui-path-input:has(> input:disabled) input { cursor: not-allowed; }
+.settings-folder-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+
+/* Shared radio option: a plain native radio and its label, like the tag-writing choices in Settings (no frame). */
+.ui-radio-option { display: flex; align-items: center; gap: 10px; width: fit-content; color: var(--appearance-ink, var(--text, var(--ink))); font-weight: 700; cursor: pointer; }
+/* Owner (11-10): a selected radio shows a filled dot in the theme's play/accent color inside its ring, in light and
+   dark themes alike; the browser's native radio rendered only a ring in the neutral control color. */
+.ui-radio-option input[type='radio'] { --ui-radio-accent: var(--appearance-play, var(--appearance-accent, var(--accent, #34ca78))); flex: 0 0 auto; appearance: none; -webkit-appearance: none; display: inline-grid; place-content: center; width: 16px; height: 16px; margin: 0; border: 2px solid var(--appearance-muted, var(--muted, currentColor)); border-radius: 50%; background: transparent; cursor: pointer; }
+.ui-radio-option input[type='radio']::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--ui-radio-accent); transform: scale(0); transition: transform .12s ease-out; }
+.ui-radio-option input[type='radio']:checked { border-color: var(--ui-radio-accent); }
+.ui-radio-option input[type='radio']:checked::before { transform: scale(1); }
+@media (prefers-reduced-motion: reduce) { .ui-radio-option input[type='radio']::before { transition: none; } }
+.ui-radio-option input[type='radio']:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #72baff)); outline-offset: 2px; }
+.ui-radio-option:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.ui-radio-option:has(input:disabled) input { cursor: not-allowed; }
+.ui-radio-group { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.ui-radio-group > legend { margin: 0 0 10px; padding: 0; font-size: 11px; font-weight: 700; }
+
+/* Shared dropdown control: positions a neutral chevron against the control, not its label. */
+.ui-dropdown-control { position: relative; width: 100%; }
+.ui-dropdown-control::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--muted, var(--appearance-muted, #9ca3af));
+  border-bottom: 1.5px solid var(--muted, var(--appearance-muted, #9ca3af));
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+/* Text link: a button that reads as inline text and is underlined only on hover/focus. */
+.ui-text-link,
+.ui-text-link:is(:hover, :active, :focus-visible):not(:disabled) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.ui-text-link {
+  text-align: inherit;
+  text-decoration: none;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.ui-text-link:is(:hover, :focus-visible):not(:disabled) {
+  color: var(--text, currentColor);
+  text-decoration-line: underline;
+}
+
+/* Shared server-path field (PathInput): text input plus folder-browse action inside one surface. */
+.ui-path-input { box-sizing: border-box; display: flex; align-items: center; min-width: 0; width: 100%; border: 1px solid var(--appearance-line, var(--border, var(--line))); border-radius: 10px; background: var(--appearance-control, var(--surface, var(--surface-2))); padding-right: 4px; }
+.ui-path-input input, .ui-path-input input:focus { flex: 1 1 auto; min-width: 0; min-height: 38px; padding: 0 12px; border: 0; background: transparent; color: inherit; box-shadow: none; outline: none; }
+.ui-path-input .action-button { flex: 0 0 auto; border: 0; }
+.ui-path-input:has(> input:disabled) { opacity: .45; cursor: not-allowed; }
+.ui-path-input:has(> input:disabled) input { cursor: not-allowed; }
+.settings-folder-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+
+/* Shared radio option: a plain native radio and its label, like the tag-writing choices in Settings (no frame). */
+.ui-radio-option { display: flex; align-items: center; gap: 10px; width: fit-content; color: var(--appearance-ink, var(--text, var(--ink))); font-weight: 700; cursor: pointer; }
+.ui-radio-option input[type='radio'] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--appearance-control-selected, var(--appearance-accent, var(--accent))); cursor: pointer; }
+.ui-radio-option input[type='radio']:focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #72baff)); outline-offset: 2px; }
+.ui-radio-option:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.ui-radio-option:has(input:disabled) input { cursor: not-allowed; }
+.ui-radio-group { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.ui-radio-group > legend { margin: 0 0 10px; padding: 0; font-size: 11px; font-weight: 700; }

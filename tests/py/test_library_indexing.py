@@ -26,7 +26,7 @@ def test_cooperative_scan_yield_releases_request_threads_at_bounded_intervals(mo
     assert sleeps == [0.001, 0.001]
 
 
-def test_ordered_scan_metadata_entries_reads_misses_concurrently_but_yields_discovery_order(
+def test_ordered_scan_metadata_entries_read_each_disk_sequentially_and_disks_in_parallel(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -35,22 +35,27 @@ def test_ordered_scan_metadata_entries_reads_misses_concurrently_but_yields_disc
         (path, SimpleNamespace(st_mtime=1.0, st_size=1))
         for path in paths
     ]
-    barrier = threading.Barrier(4)
+    disk_of = {path: ("usb-a" if int(path.stem) % 2 == 0 else "usb-b") for path in paths}
+    barrier = threading.Barrier(2)
     lock = threading.Lock()
-    active_reads = 0
+    active_by_disk = {"usb-a": 0, "usb-b": 0}
+    peak_by_disk = {"usb-a": 0, "usb-b": 0}
     peak_reads = 0
     completion_order = []
 
     def read_metadata(path):
-        nonlocal active_reads, peak_reads
+        nonlocal peak_reads
+        disk = disk_of[path]
         with lock:
-            active_reads += 1
-            peak_reads = max(peak_reads, active_reads)
-        barrier.wait(timeout=2)
+            active_by_disk[disk] += 1
+            peak_by_disk[disk] = max(peak_by_disk[disk], active_by_disk[disk])
+            peak_reads = max(peak_reads, sum(active_by_disk.values()))
+        if int(path.stem) < 2:
+            barrier.wait(timeout=2)
         time.sleep((4 - int(path.stem)) * 0.03)
         with lock:
             completion_order.append(path.name)
-            active_reads -= 1
+            active_by_disk[disk] -= 1
         return {"path": str(path), "title": path.stem}
 
     monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
@@ -61,10 +66,13 @@ def test_ordered_scan_metadata_entries_reads_misses_concurrently_but_yields_disc
             file_stats,
             {},
             expected_scan_generation=7,
+            disk_key_for=disk_of.__getitem__,
         )
     )
 
-    assert peak_reads == 4
+    # One reader per disk: never two reads on one disk, two disks at once.
+    assert peak_by_disk == {"usb-a": 1, "usb-b": 1}
+    assert peak_reads == 2
     assert completion_order != [path.name for path in paths]
     assert [path for path, _stat, _existing, _entry, _read in entries] == paths
     assert [entry["title"] for _path, _stat, _existing, entry, _read in entries] == [
@@ -103,6 +111,33 @@ def test_iter_scandir_entries_reports_directory_read_failure_with_path_and_error
         "error": "directory access denied",
         "error_type": "PermissionError",
     }]
+
+
+def test_iter_scandir_entries_retries_a_transient_device_reset(tmp_path: Path, monkeypatch):
+    # sandbox2 2026-11-04: the N: USB disk reset mid-scan and whole subtrees
+    # were skipped. A transient device error is retried before it is recorded.
+    root = tmp_path / "Library"
+    root.mkdir()
+    (root / "01.flac").write_bytes(b"media")
+    real_scandir = library_indexing.os.scandir
+    calls = []
+    failures = []
+
+    def flaky_scandir(path):
+        calls.append(path)
+        if len(calls) <= 2:
+            raise OSError(5, "The I/O device reported an I/O error")
+        return real_scandir(path)
+
+    monkeypatch.setattr(library_indexing, "_TRANSIENT_DIRECTORY_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(library_indexing.os, "scandir", flaky_scandir)
+
+    entries = list(library_indexing._iter_scandir_entries(
+        root, record_file_error=lambda action, **fields: failures.append(action),
+    ))
+
+    assert [entry.name for entry in entries] == ["01.flac"]
+    assert failures == [] and len(calls) == 3
 
 
 def test_iter_scandir_entries_reports_directory_entry_inspection_failure(
@@ -354,6 +389,7 @@ def test_scan_library_file_cache_reuses_unchanged_cached_entry(tmp_path: Path, m
         "size": stat.st_size,
         "cover_path": str(cover_path),
         "remote_cover_url": "https://example.test/cover.jpg",
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
     library_state = {"file_cache": {str(track_path): existing_entry}}
@@ -718,6 +754,7 @@ def test_scan_library_file_cache_reuses_existing_cover_validation_for_multiple_c
         "mtime": stat.st_mtime,
         "size": stat.st_size,
         "cover_path": str(cover_path),
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
 
@@ -787,6 +824,7 @@ def test_incremental_scan_reuses_unchanged_persisted_cover_validation(tmp_path: 
         "cover_validation_path": str(cover_path),
         "cover_validation_mtime_ns": cover_stat.st_mtime_ns,
         "cover_validation_size": cover_stat.st_size,
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
 
@@ -992,6 +1030,7 @@ def test_cache_aware_incremental_scan_skips_unchanged_partial_album_publication(
             "mtime": stat.st_mtime,
             "size": stat.st_size,
             "cover_path": None,
+            "compilation_tag": None,
             "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
         }
 
@@ -1146,6 +1185,7 @@ def test_scan_library_file_cache_recovers_unchanged_v2_unknown_album_metadata(
         }
         if complete:
             entry["metadata_schema_version"] = FILE_METADATA_SCHEMA_VERSION
+            entry["compilation_tag"] = None
             entry["release_date"] = None
         return entry
 
@@ -1233,6 +1273,7 @@ def test_force_scan_preserves_persisted_album_compilation_classification(
         "size": 0,
         "cover_path": None,
         "is_compilation": False,
+        "compilation_tag": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
     monkeypatch.setattr(
@@ -1262,6 +1303,52 @@ def test_force_scan_preserves_persisted_album_compilation_classification(
     )
 
     assert updated_file_cache[str(track_path)]["is_compilation"] is False
+
+
+def test_cached_album_classification_cannot_mask_unread_physical_compilation_tag(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from mutagen.id3 import TCMP
+    from music_app.services import metadata
+    from music_app.services.library import build_albums_from_file_cache
+
+    folder = tmp_path / "Rain Man"
+    folder.mkdir()
+    previous = {}
+    tags_by_path = {}
+    for number, artist in enumerate(["Belle Stars", "Watcher Compilation Performer"], start=1):
+        path = folder / f"{number}.mp3"
+        path.write_bytes(b"synthetic soundtrack")
+        stat = path.stat()
+        previous[str(path)] = {
+            "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
+            "album": "Rain Man", "album_artist": "Various Artists", "artist": artist,
+            "title": f"Track {number}", "track_number": number, "year": 1988,
+            "release_date": None, "is_compilation": False,
+            "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        }
+        tags_by_path[str(path)] = {
+            "TALB": ["Rain Man"], "TPE2": ["Various Artists"], "TPE1": [artist],
+            "TIT2": [f"Track {number}"], "TRCK": [str(number)], "TDRC": ["1988"],
+            "TCMP": TCMP(encoding=3, text=["1"]),
+        }
+    monkeypatch.setattr(metadata, "MutagenFile", lambda path: SimpleNamespace(tags=tags_by_path[str(path)]))
+    reads = []
+    def read_metadata(path):
+        reads.append(str(path))
+        return metadata.read_metadata_for_file(path)
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
+    monkeypatch.setattr(library_indexing, "find_cover_for_track_folder", lambda *_args, **_kwargs: None)
+
+    updated, _ = library_indexing.scan_library_file_cache(
+        {"file_cache": previous}, roots=[tmp_path], supported_extensions={".mp3"},
+        image_extensions={".jpg"}, exception_overrides={}, use_existing_cache=True,
+    )
+    assert sorted(reads) == sorted(previous)
+    assert all(entry["compilation_tag"] is True for entry in updated.values())
+    albums = build_albums_from_file_cache(updated)
+    assert len(albums) == 1
+    assert albums[0].album_artist == "Various Artists"
+    assert albums[0].is_compilation is True
 
 
 def test_partial_scan_publish_schedule_keeps_first_browse_and_bounds_rebuilds():
@@ -1767,6 +1854,7 @@ def test_cache_aware_scan_resolves_root_provenance_once_per_track_folder(
                 "mtime": 1.0,
                 "size": album_index + 1,
                 "cover_path": None,
+                "compilation_tag": None,
                 "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
             }
             existing_file_cache[str(path)] = entry
@@ -1855,3 +1943,104 @@ def test_scan_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path: P
     assert all(entry["cover_path"] is None for entry in updated.values())
 
 
+
+
+def test_interleave_by_disk_alternates_disks_and_keeps_each_disk_order(tmp_path: Path):
+    stats = SimpleNamespace(st_mtime=1.0, st_size=1)
+    d_files = [(tmp_path / "d" / f"{index}.mp3", stats) for index in range(3)]
+    n_files = [(tmp_path / "n" / f"{index}.mp3", stats) for index in range(2)]
+    keys = {"d": "disk:6", "n": "disk:7"}
+    disk_key_for = lambda path: keys[path.parent.name]
+
+    interleaved = library_indexing._interleave_by_disk(d_files + n_files, disk_key_for)
+
+    assert [item[0] for item in interleaved] == [
+        d_files[0][0], n_files[0][0], d_files[1][0], n_files[1][0], d_files[2][0],
+    ]
+    assert library_indexing._interleave_by_disk(d_files, disk_key_for) == d_files
+
+
+def test_root_disk_key_lookup_uses_the_longest_matching_root(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(library_indexing, "physical_disk_key", lambda root: f"disk-of:{Path(root).name}")
+    lookup = library_indexing._root_disk_key_lookup([tmp_path, tmp_path / "Nested"])
+    assert lookup(tmp_path / "Nested" / "a.mp3") == "disk-of:Nested"
+    assert lookup(tmp_path / "Other" / "a.mp3") == f"disk-of:{tmp_path.name}"
+    assert lookup(Path("Z:/elsewhere/a.mp3")) == ""
+
+def test_scan_rereads_unchanged_files_from_a_historical_reader_version(tmp_path: Path, monkeypatch):
+    from music_app.services import metadata
+
+    path = tmp_path / "a.mp3"
+    stat = SimpleNamespace(st_mtime=1.0, st_size=2)
+    stored = {"path": str(path), "mtime": 1.0, "size": 2, "title": "Stored", "metadata_schema_version": 5}
+    changed = tmp_path / "b.mp3"
+    changed_stored = {**stored, "path": str(changed), "mtime": 0.5}
+    reads = []
+
+    def read_metadata(read_path):
+        reads.append(read_path.name)
+        return {"path": str(read_path), "mtime": 1.0, "size": 2, "title": "Read", "artists": ["A"],
+                "is_compilation": None, "compilation_tag": None,
+                "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION}
+
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", read_metadata)
+    entries = {
+        entry_path.name: entry
+        for entry_path, _stat, _existing, entry, _read in library_indexing._ordered_scan_metadata_entries(
+            {"scan_generation": 1, "scan_in_progress": True},
+            [(path, stat), (changed, stat)],
+            {str(path): stored, str(changed): changed_stored},
+            expected_scan_generation=1,
+        )
+    }
+
+    # Historical versions changed derivations broadly: both files are re-read in full.
+    assert reads == ["a.mp3", "b.mp3"]
+    assert entries["a.mp3"]["title"] == entries["b.mp3"]["title"] == "Read"
+    assert entries["a.mp3"]["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION
+
+def test_scan_reports_each_album_folder_once_whole_and_each_root_once(tmp_path: Path, monkeypatch):
+    main, empty = tmp_path / "Main", tmp_path / "Empty"
+    tracks = [
+        main / "Artist" / "Box" / "CD1" / "01.mp3", main / "Artist" / "Box" / "CD2" / "01.mp3",
+        main / "Artist" / "Single" / "01.mp3", main / "Artist" / "Single" / "02.mp3",
+    ]
+    for track in tracks:
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"audio")
+    empty.mkdir()
+    unchanged = tracks[3]
+    previous = {str(unchanged): {
+        "path": str(unchanged), "mtime": unchanged.stat().st_mtime, "size": unchanged.stat().st_size,
+        "title": "02", "metadata_schema_version": 6, "release_date": None, "compilation_tag": None,
+    }}
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", lambda path: {
+        "path": str(path), "title": path.stem, "album": path.parent.name,
+        "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+    })
+    reports = []
+
+    library_indexing.scan_library_file_cache(
+        {"file_cache": previous, "albums": [object()]},
+        roots=[main, empty],
+        supported_extensions={".mp3"},
+        image_extensions=set(),
+        exception_overrides={},
+        root_definitions=[{"id": "main", "path": str(main)}, {"id": "empty", "path": str(empty)}],
+        on_entries_ready=lambda root_id, folders, complete, changed: reports.append(
+            (root_id, {Path(folder).name: sorted(Path(path).parent.name for path in entries)
+                       for folder, entries in folders.items()}, complete, sorted(Path(path).name for path in changed))
+        ),
+    )
+
+    main_reports = [report for report in reports if report[0] == "main"]
+    # The two-disc album arrives once, whole; the reused file is not "changed".
+    assert sorted(
+        ((folders, changed) for _root, folders, _complete, changed in main_reports),
+        key=lambda report: list(report[0]),
+    ) == [
+        ({"Box": ["CD1", "CD2"]}, ["01.mp3", "01.mp3"]),
+        ({"Single": ["Single", "Single"]}, ["01.mp3"]),
+    ]
+    assert [complete for _root, _folders, complete, _changed in main_reports] == [False, True]
+    assert ("empty", {}, True, []) in reports

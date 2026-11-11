@@ -112,16 +112,37 @@ async function selectStorage(page, { mode, root = '' }) {
   await adminServer.mode(mode).check({ timeout: 10_000 });
   if (mode === 'custom') {
     await expect(adminServer.path).toBeEnabled({ timeout: 10_000 });
+    if (current.mode !== 'custom') {
+      // Owner (11-09, UI-8): the proposed folder is the field's value, not a hint.
+      await expect(adminServer.path).toHaveValue(current.suggested_path);
+      await expect(adminServer.save).toBeEnabled();
+    }
+    // Owner (11-09, UI-7): the folder icon opens the server's own folders.
+    await expect(adminServer.browse).toBeEnabled();
+    await adminServer.browse.click({ timeout: 10_000 });
+    const chooser = page.getByRole('dialog', { name: 'Choose server folder' });
+    await expect(chooser).toBeVisible();
+    await expect(chooser.locator('[data-folder-path]').first()).toBeVisible();
+    await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(chooser).toBeHidden();
     await adminServer.path.fill(root, { timeout: 10_000 });
   }
-  page.once('dialog', (dialog) => dialog.accept());
+  // Owner (11-09): the move is confirmed in the app's own dialog; a browser confirm() fails the test.
+  const browserDialog = (dialog) => { throw new Error(`Unexpected browser dialog: ${dialog.message()}`); };
+  page.on('dialog', browserDialog);
+  await adminServer.save.click({ timeout: 10_000 });
+  const confirm = page.getByRole('dialog', { name: 'Move album previews' });
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toContainText('Covers stay available while the move runs.');
   const [response] = await Promise.all([
     page.waitForResponse((candidate) => (
       candidate.request().method() === 'PUT'
       && new URL(candidate.url()).pathname === '/admin/server/preview-storage'
     ), { timeout: 10_000 }),
-    adminServer.save.click({ timeout: 10_000 }),
+    confirm.getByRole('button', { name: 'Move previews', exact: true }).click({ timeout: 10_000 }),
   ]);
+  page.off('dialog', browserDialog);
+  await expect(confirm).toBeHidden();
   expect(response.status()).toBe(202);
   return response.json();
 }
@@ -208,8 +229,41 @@ test(
         const albumCacheRoot = path.join(fixture.albumDirectory, '.album-haven');
         initialHashes = hashTree(albumCacheRoot);
         if (fs.existsSync(customRoot)) fs.rmSync(customRoot, { recursive: true });
+        // Owner (11-10): a move with a failed file has not switched yet, and Settings must say so. A different file
+        // already at one preview's destination is the one failure the move refuses.
+        const [conflictRelative, conflictSource] = Object.keys(initialHashes)
+          .filter((relative) => relative.startsWith('cover_variants/') && !relative.includes('f'.repeat(40)))
+          .sort();
+        const conflictTarget = path.join(customRoot, 'v1', conflictRelative);
+        fs.mkdirSync(path.dirname(conflictTarget), { recursive: true });
+        fs.writeFileSync(conflictTarget, fs.readFileSync(path.join(albumCacheRoot, conflictSource)));
         const started = await selectStorage(page, { mode: 'custom', root: customRoot });
         expect(['queued', 'running']).toContain(started.operation_state);
+        // Owner (11-09, UI-8): once the move has recorded its list, a preview that changes on disk (regenerated
+        // with the inventory recorder off, as on sandbox3) has a stale checksum, and one may disappear. The stale
+        // one still moves and is re-checked; the missing one is left to be regenerated. Neither fails the move.
+        await waitForStorageState(
+          page,
+          (state) => state.operation_state === 'running' && Number(state.completed_count) > 0,
+          'the preview move should be under way',
+        );
+        const notYetMoved = Object.keys(hashTree(albumCacheRoot))
+          .filter((relative) => relative.startsWith('cover_variants/') && !relative.includes('f'.repeat(40)))
+          .sort();
+        expect(notYetMoved.length).toBeGreaterThanOrEqual(3);
+        const [regeneratedRelative, staleRelative, missingRelative] = notYetMoved.slice(-3);
+        // A real preview of another size stands in for the regenerated one: a valid image with a new checksum.
+        const regenerated = fs.readFileSync(path.join(albumCacheRoot, regeneratedRelative));
+        fs.writeFileSync(path.join(albumCacheRoot, staleRelative), regenerated);
+        fs.rmSync(path.join(albumCacheRoot, missingRelative));
+        initialHashes[staleRelative] = createHash('sha256').update(regenerated).digest('hex');
+        delete initialHashes[missingRelative];
+        // Owner (11-09): a preview written into the album folder after the move passed it (never recorded) is moved
+        // by the move's cleanup, which then removes the emptied .album-haven folder.
+        const lateRelative = `cover_variants/ee/${'e'.repeat(40)}.webp`;
+        fs.mkdirSync(path.join(albumCacheRoot, 'cover_variants', 'ee'), { recursive: true });
+        fs.writeFileSync(path.join(albumCacheRoot, lateRelative), regenerated);
+        initialHashes[lateRelative] = createHash('sha256').update(regenerated).digest('hex');
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
@@ -253,13 +307,86 @@ test(
         await coverLookupActions.closeModal();
         await trackModalActions.close();
 
+        const unfinished = await waitForStorageState(
+          page,
+          (state) => state.operation_state === 'completed_with_failures',
+          'the move should finish with the one refused file',
+        );
+        expect({ mode: unfinished.mode, failed: unfinished.failed_count }).toEqual({ mode: 'album_folders', failed: 1 });
+        const adminServer = new AdminServerPage(page);
+        // Owner (11-10): "that needs to also come as notification in notification panel ... Clicking in the
+        // notification will lead the user to that server setting page", and a pop-up alert so the owner notices.
+        await galleryActions.goto('/?surface=albums');
+        await galleryActions.waitForGalleryReady();
+        await expect(page.locator('#toast-layer .toast').filter({ hasText: 'Move album previews failed. Your attention is needed.' }))
+          .toBeVisible({ timeout: 10_000 });
+        await coverLookupActions.openDrawer();
+        const attention = page.locator('#preview-move-attention [data-preview-move-attention]');
+        await expect(attention).toBeVisible();
+        await expect(attention).toContainText('Move album previews failed');
+        await expect(attention).toContainText('Your attention is needed');
+        await expect(attention).toContainText('1 file failed');
+        await attention.click();
+        await expect(page).toHaveURL(/\/admin\/server$/);
+        await expect(adminServer.heading).toBeVisible();
+        // Owner (11-10): the option the owner chose stays chosen after a reload, marked not finished.
+        await page.goto('/admin/server');
+        await expect(adminServer.mode('custom')).toBeChecked();
+        await expect(page.locator('label.ui-radio-option').filter({ has: adminServer.mode('custom') }))
+          .toContainText('Special path (not finished)');
+        // The note asks for Retry, as wide as its message.
+        await expect(adminServer.status).toContainText(
+          `Moving to ${customRoot}: 1 file failed. The switch happens after they're retried.`,
+        );
+        const [noteBox, formBox] = await Promise.all([adminServer.status.boundingBox(), adminServer.form.boundingBox()]);
+        expect(noteBox.width).toBeLessThan(formBox.width - 40);
+        // Owner (11-10): the selected radio shows a filled dot in its ring.
+        // parity-check: allow-read-only-measurement-evaluate -- read the rendered radio dot
+        expect(await adminServer.mode('custom').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(1);
+        expect(await adminServer.mode('album_folders').evaluate((input) => new DOMMatrix(getComputedStyle(input, '::before').transform).a)).toBe(0);
+        fs.rmSync(conflictTarget);
+        // Owner (11-10): "I clicked Retry failed files - but saw no reaction". The button shows it is working at
+        // once, the note goes once Retry is clicked, and the summary line carries the progress and result.
+        // parity-check: allow-read-only-measurement-evaluate -- record the Retry button, note and summary on every frame
+        await page.evaluate(() => {
+          const frames = [];
+          window.__retryFrames = frames;
+          const read = () => {
+            const button = document.querySelector('[data-preview-retry]');
+            const status = document.querySelector('[data-preview-status]');
+            const counts = document.querySelector('[data-preview-counts]')?.textContent || '';
+            const entry = `${button?.getAttribute('aria-busy') === 'true' ? 'busy' : 'idle'}|${status && !status.hidden ? 'note' : 'no-note'}|${counts}`;
+            if (frames.at(-1) !== entry) frames.push(entry);
+            if (frames.length < 400 && !/cleaned up/.test(counts)) requestAnimationFrame(read);
+          };
+          requestAnimationFrame(read);
+        });
+        await adminServer.retry.click();
+        await expect(adminServer.counts).toContainText('cleaned up 1 cache folders', { timeout: 60_000 });
+        await expect(adminServer.status).toBeHidden();
+        await expect(adminServer.mode('custom')).toBeChecked();
+        await expect(page.locator('label.ui-radio-option').filter({ has: adminServer.mode('custom') })).toHaveText('Special path');
+        const retryFrames = await page.evaluate(() => window.__retryFrames);
+        const clickedAt = retryFrames.findIndex((frame) => frame.startsWith('busy|'));
+        expect(clickedAt, JSON.stringify(retryFrames)).toBeGreaterThan(-1);
+        expect(retryFrames[clickedAt], 'the note goes as the button turns busy').toMatch(/^busy\|no-note\|/);
+        expect(retryFrames.slice(clickedAt).some((frame) => frame.includes('|note|')), JSON.stringify(retryFrames)).toBe(false);
         const completed = await waitForStorageState(
           page,
           (state) => state.mode === 'custom' && state.operation_state === 'completed' && !state.requested_mode,
-          'custom preview relocation should complete',
+          'custom preview relocation should complete after the retry',
         );
         expect(completed.failed_count).toBe(0);
+        expect({ rechecked: completed.rechecked_count, regenerateLater: completed.regenerate_later_count })
+          .toEqual({ rechecked: 1, regenerateLater: 1 });
         expect(hashTree(path.join(customRoot, 'v1'))).toMatchObject(initialHashes);
+        await page.goto('/admin/server');
+        await expect(adminServer.mode('custom')).toBeChecked();
+        await expect(adminServer.counts).toContainText('cleaned up 1 cache folders');
+        // The late preview was never recorded, so the reverse move below does not bring it back.
+        delete initialHashes[lateRelative];
+        await expect(adminServer.counts).toContainText(/ moved · 1 re-checked · 1 to be regenerated · 0 failed · cleaned up 1 cache folders$/);
+        await expect(page.locator('[data-preview-failure]')).toBeHidden();
         expect(hashTree(albumCacheRoot)).toEqual({});
         testArtifacts.queueJsonAttachment('generated-preview-storage-relocation-performance.json', {
           galleryReady,
@@ -333,6 +460,8 @@ test(
           expect(bounds).not.toBeNull();
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
           const albumFolders = adminServer.mode('album_folders');
+          // The choices render disabled until the page reads the storage state.
+          await expect(albumFolders).toBeEnabled();
           await albumFolders.focus();
           await expect(albumFolders).toBeFocused();
         }

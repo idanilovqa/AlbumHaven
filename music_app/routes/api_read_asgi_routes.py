@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request, normalize_
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
 
 import logging
+import shlex
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable, Mapping
@@ -46,8 +47,10 @@ from music_app.services.album_identity_lineage_postgres import (
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
+    is_library_browse_postgres_available,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
+from music_app.services.private_track_search import build_private_track_search_contract
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.routes.musicbrainz_enrichment_asgi import (
@@ -69,6 +72,9 @@ from music_app.services.view_payloads import (
     project_missing_album_actions,
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.playlist_read_seams import build_view_surface_payload
+from music_app.services.recent_listen_read_seams import build_recent_listen_payloads
+from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
@@ -123,6 +129,11 @@ def _project_missing_album_actions_for_request(
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
                 if not allowed_actions.as_payload().get("library.paths.read"):
                     value["duplicate_sources"] = []
+            if not allowed_actions.as_payload().get("library.paths.read"):
+                for key in ("non_album_tracks", "library_non_album_tracks"):
+                    for track in value.get(key) or ():
+                        if isinstance(track, dict):
+                            track.pop("display_path", None)
             if "suggested_edits" in value or (
                 "album_id" in value and value.get("key") and "album_artist" in value
             ):
@@ -582,6 +593,18 @@ def _transient_scan_view_response(
     return JSONResponse(payload)
 
 
+@router.get("/library/loose-tracks")
+def library_loose_tracks(request: Request) -> JSONResponse:
+    """Loose Tracks without the gallery the full view-data response carries."""
+    if not is_library_browse_postgres_available(_app_config(request)):
+        return JSONResponse({"ok": False, "error": "Loose Tracks needs the Postgres library."}, status_code=409)
+    payload = PostgresLibraryBrowseRepository(_app_config(request)).build_library_loose_tracks_payload(
+        query_params=request.query_params,
+    )
+    payload["inventory_mutation_revision"] = int(_library_state(request).get("inventory_mutation_revision") or 0)
+    return JSONResponse(payload)
+
+
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
@@ -679,6 +702,12 @@ def view_data(request: Request) -> JSONResponse:
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(compact_selected_artist_wire_payload(payload))
+    if _is_postgres_search_loose_tracks_prefetch_request(request):
+        payload = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_library_loose_tracks_payload(query_params=request.query_params)
+        payload["inventory_mutation_revision"] = request_inventory_mutation_revision
+        return JSONResponse(payload)
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -827,6 +856,8 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         "gallery_scale_percent",
         "category",
         "omit_sidebar",
+        "include_non_album",
+        "include_library_wide_non_album",
     }
     if any(str(key) not in allowed_search_params for key in request.query_params.keys()):
         return False
@@ -840,6 +871,17 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         return False
     selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
     return selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES
+
+
+def _is_postgres_search_loose_tracks_prefetch_request(request: Request) -> bool:
+    params = request.query_params
+    return (
+        _is_postgres_album_search_request(request)
+        and not str(params.get("payload_tier") or "").strip()
+        and _request_flag_value(params.get("omit_sidebar"))
+        and _request_flag_value(params.get("include_non_album"))
+        and _request_flag_value(params.get("include_library_wide_non_album"))
+    )
 
 
 def _is_postgres_album_search_candidate(request: Request) -> bool:
@@ -956,66 +998,138 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
     normalized = str(query or "").strip()
     if not normalized:
         return True
-    for token in normalized.split():
+    malformed_quotes = False
+    try:
+        tokens = shlex.split(normalized)
+    except ValueError:
+        malformed_quotes = True
+        tokens = normalized.split()
+    grammar = build_private_track_search_contract()["grammar"]
+    for token in tokens:
+        if malformed_quotes:
+            token = token.strip("\"'\\")
         candidate = token[1:] if token.startswith("-") else token
+        if malformed_quotes:
+            candidate = candidate.strip("\"'\\")
         if "%" in candidate or "_" in candidate:
             return True
-        if candidate.startswith("#"):
+        if candidate.startswith("#") or candidate in grammar["shortcut_tokens"]:
             return True
-        field, _, value = candidate.partition(":")
-        if field and value:
+        field_name, separator, _value = candidate.partition(":")
+        if separator and field_name.casefold() in grammar["field_terms"]:
             return True
     return False
 
 
+_HOME_POSTGRES_PARAMS = frozenset({
+    "gallery_scope", "gallery_display", "gallery_display_mode", "gallery_scale_percent",
+    "category", "omit_sidebar", "include_non_album", "include_library_wide_non_album",
+    "client_surface", "client_surface_class",
+})
+
+
 @router.get("/home-data")
 async def home_data(request: Request) -> JSONResponse:
-    _hydrate_cached_library_for_asgi(request)
+    # Every builder below is synchronous library work. Running it on the event
+    # loop stalled every other request (search, covers, status) until it ended.
     request_started_at = time.perf_counter()
+    try:
+        payload = await run_in_threadpool(_build_home_data_payload, request)
+    except GalleryProjectionPending:
+        return JSONResponse(
+            {"ok": False, "code": "gallery_projection_pending", "error": "Gallery is being prepared."},
+            status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+        )
+    _log_view_data_request_from_asgi(request, payload, request_started_at)
+    return JSONResponse(payload)
+
+
+def _build_home_data_payload(request: Request) -> dict[str, object]:
     library_state = _library_state(request)
-    browse_state = resolve_active_scan_browse_state(library_state)
-    payload = build_home_payload(
+    if (
+        not library_state.get("scan_in_progress")
+        and select_runtime_persistence_adapter("library_browse", _app_config(request)).effective_backend
+        == PERSISTENCE_BACKEND_POSTGRES
+    ):
+        return _build_postgres_home_payload(request)
+    _hydrate_cached_library_for_asgi(request)
+    return build_home_payload(
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
-        library_state=browse_state,
-        client_surface_class=resolve_client_surface_class(
-            request.query_params.get("client_surface")
-            or request.query_params.get("client_surface_class")
-            or request.headers.get("X-Album-Haven-Client-Surface")
-            or request.headers.get("X-Album-Haven-Client-Surface-Class")
-        ),
+        library_state=resolve_active_scan_browse_state(library_state),
+        client_surface_class=_home_client_surface_class(request),
     )
-    if not library_state.get("scan_in_progress"):
-        selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
-        if selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES:
-            omit_sidebar = _request_flag_value(request.query_params.get("omit_sidebar"))
-            repository = PostgresLibraryBrowseRepository(_app_config(request))
-            payload_builder = (
-                repository.build_root_counts_payload
-                if omit_sidebar
-                else repository.build_root_sidebar_payload
-            )
-            root_sidebar_payload = await run_in_threadpool(
-                payload_builder,
-                query_params=request.query_params,
-            )
-            authoritative_fields = [
-                "artist_count",
-                "album_count",
-                "show_all_artists_sidebar_link",
-            ]
-            if not omit_sidebar:
-                authoritative_fields.insert(0, "artists_sidebar")
-            payload.update(
-                {
-                    field: root_sidebar_payload[field]
-                    for field in authoritative_fields
-                    if field in root_sidebar_payload
-                }
-            )
-    _log_view_data_request_from_asgi(request, payload, request_started_at)
-    return JSONResponse(payload)
+
+
+def _home_client_surface_class(request: Request) -> str:
+    return resolve_client_surface_class(
+        request.query_params.get("client_surface")
+        or request.query_params.get("client_surface_class")
+        or request.headers.get("X-Album-Haven-Client-Surface")
+        or request.headers.get("X-Album-Haven-Client-Surface-Class")
+    )
+
+
+def _build_postgres_home_payload(request: Request) -> dict[str, object]:
+    """Home is a shell over the bounded Postgres root, never a whole-library rebuild.
+
+    The legacy builder computed every root artist group and every loose-track
+    candidate (over two minutes at library scale) only to discard the groups.
+    """
+    from starlette.datastructures import QueryParams
+
+    config = _app_config(request)
+    repository = PostgresLibraryBrowseRepository(config)
+    omit_sidebar = _request_flag_value(request.query_params.get("omit_sidebar"))
+    root_params = QueryParams([
+        ("surface", "albums"),
+        ("gallery_page_size", "1"),
+        *(
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key in _HOME_POSTGRES_PARAMS and key not in {"client_surface", "client_surface_class"}
+        ),
+    ])
+    payload = repository.build_root_startup_preview_payload(
+        query_params=root_params,
+        library_state=_postgres_browse_library_state(request),
+    )
+    payload.pop("gallery_page", None)
+    payload.update({
+        "surface": build_view_surface_payload("home"),
+        "shell_layout": build_shell_layout_payload(
+            active_surface="home", selected_artist="", local_tree_submode="",
+        ),
+        "artist_groups": [],
+        "primary_artist_groups": [],
+        "family_artist_groups": [],
+        "selected_artist": "",
+        "all_artists_active": False,
+        "payload_tier": "full",
+        "initial_view_partial": False,
+    })
+    if omit_sidebar and _request_flag_value(request.query_params.get("include_non_album")):
+        # Loose Tracks reads only its tracks from this follow-up. Counts,
+        # hydration and recent-listen matching over every track froze it.
+        payload.pop("artists_sidebar", None)
+        return payload
+    sidebar_payload = (
+        repository.build_root_counts_payload(query_params=request.query_params)
+        if omit_sidebar
+        else repository.build_root_sidebar_payload(query_params=request.query_params)
+    )
+    for field in ("artists_sidebar", "artist_count", "album_count", "show_all_artists_sidebar_link"):
+        if field in sidebar_payload and (field != "artists_sidebar" or not omit_sidebar):
+            payload[field] = sidebar_payload[field]
+    if omit_sidebar:
+        payload.pop("artists_sidebar", None)
+    _hydrate_cached_library_for_asgi(request)
+    payload.update(build_recent_listen_payloads(config, _library_state(request).get("albums", []) or []))
+    payload["inventory_mutation_revision"] = int(
+        _library_state(request).get("inventory_mutation_revision") or 0
+    )
+    return payload
 
 
 @router.get("/album-details")
@@ -1090,6 +1204,18 @@ async def album_details(request: Request) -> JSONResponse:
                 )
             except (RuntimeError, OSError):
                 lineage = {"status": "unresolved", "album": None, "choices": []}
+            if lineage["status"] == "split" and album_id is not None and album_key:
+                surviving_album = next(
+                    (
+                        choice
+                        for choice in lineage["choices"]
+                        if choice.get("album_id") == album_id
+                        and choice.get("album_key") == album_key
+                    ),
+                    None,
+                )
+                if surviving_album is not None:
+                    lineage = {"status": "resolved", "album": surviving_album, "choices": []}
             if lineage["status"] == "split":
                 return JSONResponse(
                     {
@@ -1164,6 +1290,8 @@ async def album_details(request: Request) -> JSONResponse:
             _app_config(request),
             payload,
         )
+        if _positive_album_id(payload.get("album_id")):
+            await run_in_threadpool(_attach_additional_artworks, request, payload)
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse({"ok": True, "album": payload})
 
@@ -1180,6 +1308,27 @@ async def album_details(request: Request) -> JSONResponse:
         _apply_transient_scan_album_rating_overlays(request, [payload])
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse({"ok": True, "album": payload})
+
+
+def _positive_album_id(value: object) -> int:
+    try:
+        album_id = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return album_id if album_id > 0 else 0
+
+
+def _attach_additional_artworks(request: Request, payload: dict[str, object]) -> None:
+    """Add the album's extra artboxes; Album Details still opens if they cannot be read."""
+    from music_app.services.album_additional_artworks_postgres import AlbumAdditionalArtworkRepository
+
+    album_id = _positive_album_id(payload.get("album_id"))
+    try:
+        payload["additional_artworks"] = AlbumAdditionalArtworkRepository(_app_config(request)).list_for_album(
+            album_id=album_id,
+        )
+    except Exception:
+        _app_logger(request).exception("Additional artworks could not be read for album %s", album_id)
 
 
 def _should_use_postgres_album_detail_path(
@@ -1247,17 +1396,19 @@ def _unsupported_postgres_non_album_modal_response(
 def utilities_problematic_files(
     request: Request,
     limit: int | None = Query(default=None, ge=1, le=200),
+    q: str = Query(default="", max_length=200),
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         # The owner's Artist rows load beside the page, adding no readiness time.
         with ThreadPoolExecutor(max_workers=1) as pool:
             artist_items = pool.submit(load_problematic_artist_items, request)
-            payload = (
-                repository.build_problematic_files_page(limit=limit)
-                if limit is not None
-                else repository.build_problematic_files_payload()
-            )
+            if q.strip():
+                payload = repository.build_problematic_files_search(q)
+            elif limit is not None:
+                payload = repository.build_problematic_files_page(limit=limit)
+            else:
+                payload = repository.build_problematic_files_payload()
             _project_missing_album_actions_for_request(request, payload)
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
@@ -1274,6 +1425,18 @@ def utilities_problematic_files(
 @router.get("/utilities/problematic-files/detail")
 def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
     album_key = str(request.query_params.get("album_key", "") or "")
+    track_path = str(request.query_params.get("track_path", "") or "")
+    if not album_key and track_path and _is_postgres_utility_projection_request(request):
+        payload = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_problematic_file_detail_payload_for_track_path(track_path)
+        if payload is None:
+            return JSONResponse(
+                {"ok": False, "error": "Problematic album not found."},
+                status_code=404,
+            )
+        _project_missing_album_actions_for_request(request, payload)
+        return JSONResponse(payload)
     if not album_key:
         return JSONResponse({"ok": False, "error": "Missing album_key."}, status_code=400)
     if _is_postgres_utility_projection_request(request):

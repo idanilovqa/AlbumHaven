@@ -142,6 +142,8 @@ const state = {
     relatedFilterDefaultPrimaryGroups: [],
     relatedFilterDefaultFamilyGroups: [],
     mainGalleryVisibleCategories: ['main_library', 'hoard', 'new_arrivals'],
+    sourceTotalsByScope: {},
+    pendingSourceTotalScopes: new Set(),
   },
   utility: {
     activeTab: 'problematic-files',
@@ -383,7 +385,6 @@ const state = {
       pendingPastedImageId: '',
       selectedRemoteId: '',
       possibleMatches: [],
-      currentReleases: [],
       candidateSnapshot: null,
       candidateGeneration: '',
       activeLocalSelectionPath: '',
@@ -404,17 +405,6 @@ const state = {
   modalReleases: [],
   modalReleaseIndex: 0,
   modalDuplicateSourceIndices: {},
-  modalVersionContextMenu: {
-    albumKey: '',
-    x: 0,
-    y: 0,
-    visible: false,
-  },
-  versionPicker: {
-    album: null,
-    selectedTargetKey: '',
-    saving: false,
-  },
 };
 
 const ALBUM_MENU_LOG_PREFIX = '[AlbumHaven][AlbumContextMenu]';
@@ -532,6 +522,27 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+let searchPendingRailFallback = null;
+function releaseSearchPendingRail() {
+  if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+  searchPendingRailFallback = null;
+  const rail = document.getElementById('shell-navigation-rail');
+  rail?.removeAttribute?.('data-search-pending');
+  rail?.setAttribute?.('aria-busy', 'false');
+}
+function holdSearchPendingRail(searching) {
+  const rail = document.getElementById('shell-navigation-rail');
+  if (searching) {
+    if (searchPendingRailFallback !== null) clearTimeout(searchPendingRailFallback);
+    searchPendingRailFallback = null;
+    rail?.setAttribute?.('data-search-pending', '');
+    rail?.setAttribute?.('aria-busy', 'true');
+  } else if (rail?.hasAttribute?.('data-search-pending') && searchPendingRailFallback === null) {
+    // renderSidebar releases it with the new tree; a search whose tree needs no re-render releases it shortly.
+    searchPendingRailFallback = setTimeout(releaseSearchPendingRail, 1000);
+  }
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
@@ -608,6 +619,7 @@ function renderSidebar() {
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
   ensureSidebarVirtualScrollListeners(el);
+  if (!state.ui?.pendingGallerySearch) releaseSearchPendingRail();
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
@@ -793,6 +805,9 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
+  // NEW-005 (owner): while a search runs, the side panel never shows the previous search's tree (leaving Loose
+  // Tracks briefly showed the old selected artist). The tree shows again once it has rendered the new results.
+  holdSearchPendingRail(searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;

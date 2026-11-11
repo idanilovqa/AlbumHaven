@@ -113,6 +113,8 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
 
   await stepLogger.step('Retain the valid image and pasted URL when remote extraction fails', async () => {
     await coverLookupActions.pasteManualUrl(missingUrl);
+    await expect(lookup.manualExtractButton).toBeEnabled();
+    await expect(lookup.manualExtractButton).toHaveAttribute('aria-disabled', 'false');
     const failed = await coverLookupActions.extractComposerLinks();
     expect(failed.status).toBe(400);
     expect(failed.payload.ok).toBe(false);
@@ -120,6 +122,8 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await expect(lookup.manualStatus).toHaveText("Couldn't extract images.");
     await expect(lookup.manualStatus).toHaveAttribute('role', 'alert');
     await expect(lookup.manualUrlInput).toHaveValue(missingUrl);
+    await expect(lookup.manualExtractButton).toBeEnabled();
+    await expect(lookup.findBetterButton).toBeEnabled();
     await expect(lookup.stagedCoverCardByName(pickerName)).toBeVisible();
     await expect(lookup.stagedCoverCardByName('image.png')).toBeVisible();
     await expect(lookup.pendingAttachments).toHaveCount(0);
@@ -130,9 +134,15 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
 
   await stepLogger.step('Hide manual composition on mobile, then extract on desktop without losing the staged choice', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(lookup.manualUrlInput).toBeHidden();
-    await expect(lookup.manualExtractButton).toBeHidden();
-    await expect(lookup.manualDropZone).toBeHidden();
+    await expect(lookup.manualUrlInput).toBeVisible();
+    await expect(lookup.manualExtractButton).toBeVisible();
+    await expect(lookup.manualDropZone).toBeVisible();
+    await coverLookupActions.pasteManualUrl(imageUrl);
+    await coverLookupActions.expectComposerFitsViewport();
+    const mobileExtracted = await coverLookupActions.extractComposerLinks();
+    expect(mobileExtracted.status).toBe(200);
+    expect(mobileExtracted.payload.ok).toBe(true);
+    await expect(lookup.stagedCoverCardByName(pickerName)).toHaveClass(/\bis-active\b/);
     await page.setViewportSize({ width: 1280, height: 844 });
     await expect(lookup.manualUrlInput).toBeVisible();
     await coverLookupActions.pasteManualUrl(imageUrl);
@@ -179,6 +189,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
   const pickerPath = path.resolve('music_app', 'static', 'images', pickerName);
   const expectedCover = findFixtureCoverBySubtitle(Object.values(MANUAL_PROVIDER_COVER).join(' - '));
   expect(expectedCover).not.toBeNull();
+  let previousLocalCover = null;
   let savedCoverPath = '';
   let savedCoverRevision = '';
   let savedPreviewHash = '';
@@ -201,18 +212,25 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       USER_OWNED_IMPROVEMENT_TARGET.album,
       /^[1-9]\d* covers? found$/,
     );
-    await coverLookupActions.closeDrawer();
-    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
-      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await coverLookupActions.openTask(USER_OWNED_IMPROVEMENT_TARGET.album);
+    await coverLookupActions.waitForModalResultsReady();
+    await lookup.albumDetailsLink.click();
+    await expect(lookup.modal).toBeHidden();
+    await expect(lookup.drawer).toBeVisible();
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
+    previousLocalCover = (await coverLookupActions.readLocalCoverCandidates())
+      .find(candidate => candidate.isActive);
+    expect(previousLocalCover).toBeTruthy();
     await coverLookupActions.chooseComposerImages([pickerPath]);
     await expect(lookup.pendingAttachmentByName(pickerName)).toBeVisible();
     await lookup.manualExtractButton.click();
     const stagedCover = lookup.stagedCoverCardByName(pickerName);
     await expect(stagedCover).toBeVisible();
+    await expect(lookup.taskCardByTitle(USER_OWNED_IMPROVEMENT_TARGET.album)).not.toContainText('Art chosen');
     await coverLookupActions.selectOnlyCover(stagedCover);
+    await expect(lookup.taskCardByTitle(USER_OWNED_IMPROVEMENT_TARGET.album)).not.toContainText('Art chosen');
 
     const saveResponsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
@@ -232,7 +250,14 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
     await expect(lookup.modal).toBeHidden();
+    // The notification must update while Album Details remains open.
+    await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
+    await expect(lookup.drawer).toBeVisible();
+    await expect(lookup.taskCoverByTitle(USER_OWNED_IMPROVEMENT_TARGET.album))
+      .toHaveAttribute('src', new RegExp(savedCoverRevision));
+    await coverLookupActions.waitForTaskCoverDecoded(USER_OWNED_IMPROVEMENT_TARGET.album);
     await trackModalActions.close();
+    await coverLookupActions.closeDrawer();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
     await coverLookupActions.waitForTaskStatus(
@@ -312,6 +337,30 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     );
     expect(reloadedCardCover.sha256).toBe(savedPreviewHash);
   });
+  await stepLogger.step('Reopen, select the previous distinct image, and retain the replacement too', async () => {
+    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
+      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const candidates = await coverLookupActions.readLocalCoverCandidates();
+    const previous = candidates.find(candidate => candidate.image.sha256 === previousLocalCover.image.sha256);
+    expect(previous).toBeTruthy();
+    expect(previous.isActive).toBe(false);
+    await coverLookupActions.selectLocalCoverByNameAndSave(previous.name);
+    await expect(lookup.modal).toBeHidden();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const reopened = await coverLookupActions.readLocalCoverCandidates();
+    expect(reopened.find(candidate => candidate.isActive)?.image.sha256)
+      .toBe(previousLocalCover.image.sha256);
+    const replacement = reopened.find(candidate => candidate.image.sha256 === savedPreviewHash);
+    expect(replacement).toBeTruthy();
+    expect(replacement.isActive).toBe(false);
+    await coverLookupActions.selectLocalCoverByNameAndSave(replacement.name);
+    await expect(lookup.modal).toBeHidden();
+  });
+
 });
 
 test('FTC-COVERS-022 cover gallery loading starts before the task list responds', { tag: '@area:cover-providers' }, async ({
@@ -322,6 +371,37 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
   trackModalActions,
 }) => {
   let appleCandidate = null;
+  let knownCandidateIds = [];
+
+  await stepLogger.step('Open and reopen the indexed local gallery without false empty states or lost cards', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
+      .toEqual(COVER_LOOKUP_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    const lookup = coverLookupActions.coverLookup;
+    // The pinned test library also keeps its placeholder cover.png in this folder; it is a real local image.
+    const expectedNames = ['cover.jpg', 'cover.png', 'Art/Back.jpg', 'Art/CD.JPG', 'Art/Front.jpg', 'Art/Front-Larger.jpg'];
+    for (let opening = 0; opening < 2; opening += 1) {
+      const observation = await lookup.startLocalInventoryObservation(expectedNames.length);
+      let evidence;
+      try {
+        await trackModalActions.openCoverLookup();
+        await expect(lookup.manualUrlInput).toBeVisible();
+        await expect(lookup.localCoverCards).toHaveCount(expectedNames.length);
+        const names = await coverLookupActions.readLocalCoverNames();
+        expect(names.map(name => name.replaceAll('\\', '/')).sort()).toEqual([...expectedNames].sort());
+        await coverLookupActions.waitForModalResultsReady();
+      } finally {
+        evidence = await lookup.finishLocalInventoryObservation(observation);
+      }
+      expect(evidence.sawKnownCards).toBe(true);
+      const badSamples = evidence.samples.filter(sample => sample.empty || sample.wrongPlaceholderCount || sample.lostKnownCards);
+      expect(badSamples, `opening ${opening + 1}: ${JSON.stringify(badSamples.slice(0, 5))}`).toEqual([]);
+      await coverLookupActions.closeModal();
+    }
+    await trackModalActions.close();
+  });
 
   await stepLogger.step('Hold real candidate image bytes at the isolated provider', async () => {
     await coverLookupActions.holdCandidateImageFixture();
@@ -343,7 +423,13 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
       (candidate) => candidate.source === 'Apple Music',
     );
     expect(appleCandidate?.id).toBeTruthy();
+    knownCandidateIds = await coverLookupActions.readRemoteCandidateIds();
+    await expect(coverLookupActions.coverLookup.remoteCoverCards).toHaveCount(knownCandidateIds.length);
+    await expect(coverLookupActions.coverLookup.manualUrlInput).toBeVisible();
     await coverLookupActions.waitForCandidateImageFixtureBlocked();
+    const pendingPreview = coverLookupActions.coverLookup.remotePreviewById(appleCandidate.id);
+    await expect(pendingPreview).toHaveAttribute('aria-busy', 'true');
+    await expect(pendingPreview).toHaveClass(/is-loading/);
   });
 
   await stepLogger.step('Reopen the gallery while candidate image bytes remain blocked', async () => {
@@ -351,6 +437,10 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
     const requestOrder = await trackModalActions.openCoverLookupAndReadRequestOrder();
     expect(requestOrder).toContain('gallery-request');
     expect(requestOrder).toContain('tasks-response');
+    // Known choices must stay mounted even when the provider cannot deliver image bytes yet.
+    await expect(coverLookupActions.coverLookup.remoteCoverCards).toHaveCount(knownCandidateIds.length);
+    expect(await coverLookupActions.readRemoteCandidateIds()).toEqual(knownCandidateIds);
+    await expect(coverLookupActions.coverLookup.manualUrlInput).toBeVisible();
     await coverLookupActions.waitForModalResultsReady();
     const heldEvidence = await coverLookupActions.readProviderFixtureEvidence();
     expect(heldEvidence.candidate_image_released).toBe(false);
@@ -361,6 +451,9 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
     await coverLookupActions.releaseCandidateImageFixture();
     const renderedImage = await coverLookupActions.readRemoteCandidateEvidence(appleCandidate.id);
     expect(renderedImage.sha256).toBeTruthy();
+    const loadedPreview = coverLookupActions.coverLookup.remotePreviewById(appleCandidate.id);
+    await expect(loadedPreview).toHaveAttribute('aria-busy', 'false');
+    await expect(loadedPreview).not.toHaveClass(/is-loading/);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
 });
@@ -592,6 +685,14 @@ test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved w
     await coverLookupActions.waitForModalResultsReady();
     await expect(coverLookupActions.coverLookup.modalSubtitle).toContainText(NOTIFICATION_ACTIONED_TARGET.album);
     await coverLookupActions.coverLookup.waitForDrawerState(true);
+    const stagedImageName = 'album-haven-cloud-vinyl.png';
+    await coverLookupActions.chooseComposerImages([
+      path.resolve('music_app', 'static', 'images', stagedImageName),
+    ]);
+    await coverLookupActions.coverLookup.manualExtractButton.click();
+    await expect(coverLookupActions.coverLookup.stagedCoverCardByName(stagedImageName)).toBeVisible();
+    // Extracting stages a choice; only Save may mark the finished notification as actioned.
+    await expect(coverLookupActions.coverLookup.taskCardByTitle(actionedTaskTitle)).not.toContainText('Art chosen');
     await coverLookupActions.selectFirstRemoteCoverAndSave();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
@@ -644,14 +745,26 @@ test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved w
     await expect(failedTaskCard).toHaveCount(1);
     await coverLookupActions.setProviderFixtureMode('normal');
     await coverLookupActions.holdLaterProviderFixture();
-    await retryIcon.click();
-    await expect(failedTaskCard).toHaveCount(1);
-    await coverLookupActions.waitForTaskActive(failedTaskTitle);
-    await coverLookupActions.waitForLaterProviderFixtureBlocked({
-      requireNoCoverArtArchiveRequests: false,
-    });
-    await coverLookupActions.setProviderFixtureMode('failed');
-    await coverLookupActions.releaseLaterProviderFixture();
+    try {
+      await retryIcon.click();
+      await expect(failedTaskCard).toHaveCount(1);
+      await coverLookupActions.waitForTaskActive(failedTaskTitle);
+      await expect(failedTaskCard).toHaveClass(/\bis-running\b/);
+      await expect(failedTaskCard).not.toHaveClass(/\bis-(?:failed|completed)\b/);
+      await expect(coverLookupActions.coverLookup.taskStatusByTitle(failedTaskTitle))
+        .toHaveText(/^(Queued|Searching)$/);
+      await expect(coverLookupActions.coverLookup.taskProgressWithin(failedTaskCard))
+        .toHaveAttribute('style', /^width:\s*\d{1,2}(?:\.\d+)?%;?$/);
+      await expect(coverLookupActions.coverLookup.taskElapsedByTitle(failedTaskTitle))
+        .toHaveText(/^Elapsed [0-5]s$/);
+      await coverLookupActions.waitForRunningTaskElapsedToAdvance(failedTaskTitle);
+      await coverLookupActions.waitForLaterProviderFixtureBlocked({
+        requireNoCoverArtArchiveRequests: false,
+      });
+      await coverLookupActions.setProviderFixtureMode('failed');
+    } finally {
+      await coverLookupActions.releaseLaterProviderFixture();
+    }
     await coverLookupActions.waitForTaskStatus(failedTaskTitle, 'Lookup failed');
     await expect(failedTaskCard).toHaveCount(1);
     await coverLookupActions.setProviderFixtureMode('normal');
@@ -766,6 +879,124 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
   await coverLookupActions.waitForDrawerOpen();
   await expect(coverLookupActions.coverLookup.taskCardById(repeated.taskId)).toHaveCount(1);
   await coverLookupActions.waitForTaskStatusById(repeated.taskId, /^(?:\d+ )?covers found$/u);
+  const orderBeforeRestart = await coverLookupActions.readVisibleTaskIds();
+  const manyManualUrls = Array.from({ length: 30 }, (_, index) => {
+    const url = new URL(buildFixtureManualUrls(expectedCovers[0])[1]);
+    url.searchParams.set('candidate', String(index));
+    return url.toString();
+  });
+  for (const manualUrls of [[], buildFixtureManualUrls(expectedCovers[0]).slice(1), manyManualUrls]) {
+    await coverLookupActions.openTaskById(repeated.taskId);
+    await coverLookupActions.waitForModalReady();
+    await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.enterManualUrls(manualUrls);
+    const priorCandidateIds = await coverLookupActions.readRemoteCandidateIds();
+    expect(priorCandidateIds.length).toBeGreaterThan(0);
+    const continuity = await coverLookupActions.coverLookup
+      .startRemoteCandidateContinuityObservation(priorCandidateIds);
+    let continuityEvidence;
+    let continuityFinished = false;
+    let newCandidateIds = [];
+    await coverLookupActions.holdLaterProviderFixture();
+    try {
+      const repeatedStart = await coverLookupActions.startSearch();
+      expect(String(repeatedStart.task?.id || '').trim()).toBe(repeated.taskId);
+      await coverLookupActions.coverLookup.waitForDrawerState(true);
+      const card = coverLookupActions.coverLookup.taskCardById(repeated.taskId);
+      await expect(card).toHaveCount(1);
+      await expect(card).toHaveClass(/\bis-running\b/);
+      await expect(card).not.toHaveClass(/\bis-(?:failed|completed)\b/);
+      const status = coverLookupActions.coverLookup.taskStatusById(repeated.taskId);
+      await expect(status).toHaveText(/^(Queued|Searching)$/);
+      await expect(status).toHaveClass(/\bis-running\b/);
+      await expect(coverLookupActions.coverLookup.taskProgressWithin(card))
+        .toHaveAttribute('style', /^width:\s*\d{1,2}(?:\.\d+)?%;?$/);
+      await expect(coverLookupActions.coverLookup.taskElapsedByTitle(repeated.identity.album))
+        .toHaveText(/^Elapsed [0-5]s$/);
+      await coverLookupActions.waitForRunningTaskElapsedToAdvance(repeated.identity.album);
+      await coverLookupActions.waitForLaterProviderFixtureBlocked({
+        requireNoCoverArtArchiveRequests: false,
+      });
+      expect(await coverLookupActions.readVisibleTaskIds()).toEqual(orderBeforeRestart);
+      await expect(coverLookupActions.coverLookup.modal).toBeVisible();
+      for (const candidateId of priorCandidateIds) {
+        await expect(coverLookupActions.coverLookup.remoteCoverCardById(candidateId)).toBeVisible();
+      }
+      if (manualUrls === manyManualUrls) {
+        await expect.poll(async () => {
+          newCandidateIds = (await coverLookupActions.readRemoteCandidateIds())
+            .filter((candidateId) => !priorCandidateIds.includes(candidateId));
+          return newCandidateIds.length;
+        // The provider stays held until released, so ordering, not the default 10 s poll, is the contract:
+        // measuring 30 full-size (7500 px) fixture images takes about 18 s on a developer machine.
+        }, { timeout: 60_000, message: 'The gallery must render all 30 new manual candidates before the held provider finishes.' })
+          .toBeGreaterThanOrEqual(30);
+        for (const candidateId of newCandidateIds) {
+          await expect(coverLookupActions.coverLookup.remoteCoverCardById(candidateId)).toBeVisible();
+        }
+      }
+      continuityFinished = true;
+      continuityEvidence = await coverLookupActions.coverLookup
+        .finishRemoteCandidateContinuityObservation(continuity);
+      await coverLookupActions.closeModal();
+      await coverLookupActions.waitForDrawerOpen();
+      if (manualUrls.length === 0) {
+        await page.reload();
+        await galleryActions.waitForGalleryReady();
+        await coverLookupActions.openDrawer();
+        await coverLookupActions.waitForDrawerOpen();
+      }
+      const reopenedGalleryResponse = page.waitForResponse((response) => (
+        response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/utilities/cover-lookup/gallery'
+      ));
+      await coverLookupActions.openTaskById(repeated.taskId);
+      await (await reopenedGalleryResponse).finished();
+      await coverLookupActions.waitForModalReady();
+      await coverLookupActions.waitForModalResultsReady();
+      await expect(card).toHaveClass(/\bis-running\b/);
+      for (const candidateId of priorCandidateIds) {
+        await expect(coverLookupActions.coverLookup.remoteCoverCardById(candidateId)).toBeVisible();
+      }
+      expect(await coverLookupActions.readVisibleTaskIds()).toEqual(orderBeforeRestart);
+    } finally {
+      try {
+        if (!continuityFinished) {
+          continuityEvidence = await coverLookupActions.coverLookup
+            .finishRemoteCandidateContinuityObservation(continuity);
+        }
+      } finally {
+        await coverLookupActions.releaseLaterProviderFixture();
+      }
+    }
+    expect(continuityEvidence.retainedNodes).toBe(true);
+    for (const visibleIds of continuityEvidence.samples) {
+      expect(visibleIds).toEqual(expect.arrayContaining(priorCandidateIds));
+    }
+    await coverLookupActions.waitForModalSearchCompleted();
+    await coverLookupActions.waitForTaskStatusById(repeated.taskId, /^(?:\d+ )?covers found$/u);
+    expect(await coverLookupActions.readVisibleTaskIds()).toEqual(orderBeforeRestart);
+    for (const candidateId of newCandidateIds) {
+      await expect(coverLookupActions.coverLookup.remoteCoverCardById(candidateId)).toBeVisible();
+    }
+    await coverLookupActions.closeModal();
+    if (newCandidateIds.length) {
+      await page.reload();
+      await galleryActions.waitForGalleryReady();
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.waitForDrawerOpen();
+      await coverLookupActions.openTaskById(repeated.taskId);
+      await coverLookupActions.waitForModalReady();
+      await coverLookupActions.waitForModalResultsReady();
+      for (const candidateId of newCandidateIds) {
+        await expect(coverLookupActions.coverLookup.remoteCoverCardById(candidateId)).toBeVisible();
+      }
+      expect((await coverLookupActions.readRemoteCandidateIds())
+        .filter((candidateId) => newCandidateIds.includes(candidateId))).toEqual(newCandidateIds);
+      expect(await coverLookupActions.readVisibleTaskIds()).toEqual(orderBeforeRestart);
+      await coverLookupActions.closeModal();
+    }
+  }
   await coverLookupActions.closeDrawer();
 
   await coverLookupActions.openDrawer();
@@ -1042,8 +1273,9 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(modal.activeLocalCover.coverPath).toBe(selectedCoverPath);
     expect(persistedSelectedRemoteCover.sha256).toBe(selectedRemoteCover.sha256);
     expect(persistedCandidateSummary?.selected).toBe(false);
+    // The replaced cover.jpg had no other copy, so exactly one backup keeps it for reselection.
     expect((await coverLookupActions.readLocalCoverNames())
-      .some((name) => /^cover-existing-/i.test(name))).toBe(false);
+      .filter((name) => /^cover-existing-/i.test(name))).toHaveLength(1);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
 });
@@ -1319,16 +1551,18 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
 
     await coverLookupActions.openDrawer();
     await coverLookupActions.openTaskWithKeyboard(SPLIT_FIXTURE.album, 'Enter');
-    const selector = page.getByRole('group', {
-      name: 'This album was split—choose the current release',
-    });
+    const selector = coverLookupActions.coverLookup.splitReleaseChooser;
     await expect(selector).toBeVisible();
+    await expect(coverLookupActions.coverLookup.modal).toBeHidden();
+    await expect(coverLookupActions.coverLookup.splitReleaseChoices).toHaveCount(2);
+    await expect(coverLookupActions.coverLookup.splitReleaseOpenButton).toBeDisabled();
     const requestPromise = page.waitForRequest((request) => (
       request.method() === 'POST'
       && new URL(request.url()).pathname === '/utilities/cover-lookup/gallery'
       && request.postDataJSON()?.album?.name === SPLIT_FIXTURE.splitAlbum
     ));
-    await selector.getByRole('button', { name: new RegExp(SPLIT_FIXTURE.splitAlbum) }).click();
+    await coverLookupActions.coverLookup.splitReleaseChoiceByTitle(SPLIT_FIXTURE.splitAlbum).click();
+    await coverLookupActions.coverLookup.splitReleaseOpenButton.click();
     const request = await requestPromise;
 
     await expect(coverLookupActions.coverLookup.modal).toBeVisible();
@@ -2287,6 +2521,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     expect(neutralCandidate).toBeTruthy();
     expect(neutralCandidate.resolution).toBe('600x600');
     expect(neutralCandidate.selected).toBe(false);
+    await expect(coverLookupActions.coverLookup.suggestedCoverCards).toHaveCount(0);
     const neutralCandidateEvidence = await coverLookupActions.readRemoteCandidateEvidence(neutralCandidate.id);
     expect(neutralCandidateEvidence.naturalWidth).toBe(600);
     expect(neutralCandidateEvidence.naturalHeight).toBe(600);
@@ -2335,6 +2570,19 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     const evidenceAfterOpen = await coverLookupActions.readProviderFixtureEvidence();
     expect(evidenceAfterOpen).toEqual(evidenceBeforeOpen);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
+    const suggestedCard = coverLookupActions.coverLookup.remoteCoverCardById(automaticCandidate.id);
+    await expect(suggestedCard).toBeVisible();
+    // INT-028 (owner, 11-07): opened from Album Details, the already applied automatic pick is not suggested
+    // again; a suggestion follows only an unactioned search and only for sharper art than the current cover.
+    await expect(suggestedCard).not.toHaveClass(/\bis-suggested\b/);
+    await expect(suggestedCard).not.toHaveClass(/\bis-active\b/);
+    await expect(coverLookupActions.coverLookup.activeLocalCoverCard).toHaveClass(/\bis-active\b/);
+    await coverLookupActions.selectLocalCoverByNameAndSave('cover.jpg');
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    await expect(suggestedCard).toBeVisible();
+    await expect(suggestedCard).not.toHaveClass(/\bis-suggested\b/);
+    await expect(coverLookupActions.coverLookup.activeLocalCoverCard).toHaveClass(/\bis-active\b/);
   });
 });
 
@@ -2462,8 +2710,9 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await coverLookupActions.waitForModalReady();
     const reopenedUpgrade = await coverLookupActions.inspectModalComponents();
     expect(reopenedUpgrade.activeLocalCover.coverPath).toBe(upgradedAlbum.cover_path);
+    // The replaced cover.jpg had no other copy, so exactly one backup keeps it for reselection.
     expect((await coverLookupActions.readLocalCoverNames())
-      .some((name) => /^cover-existing-/i.test(name))).toBe(false);
+      .filter((name) => /^cover-existing-/i.test(name))).toHaveLength(1);
     expect((await coverLookupActions.readRemoteCandidateSummaries())
       .find((candidate) => candidate.imageSrc.includes('user-owned-same-art-improvement'))
       ?.selected).toBe(false);

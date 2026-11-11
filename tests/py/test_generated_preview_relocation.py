@@ -53,6 +53,9 @@ class FakeRepository:
     def operation_lock(self):
         return nullcontext(True)
 
+    def covered_source_paths(self, *, operation_id):
+        return []
+
     def stage_inventory(self, *, operation_id):
         self.staged.append(operation_id)
 
@@ -140,6 +143,95 @@ def test_same_volume_move_is_atomic_and_checkpointed(tmp_path):
     assert repository.completed[0]["status"] == "completed"
 
 
+def test_relocation_removes_empty_album_preview_tree_and_preserves_music(tmp_path):
+    album = tmp_path / "album"
+    source = album / ".album-haven/cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"preview")
+    music = album / "song.mp3"
+    music.write_bytes(b"music")
+    target = tmp_path / "ssd/v1/cover_variants/ab/preview.webp"
+    repository = FakeRepository([item(source, target, b"preview")])
+    run_worker(repository)
+    assert target.read_bytes() == b"preview"
+    assert not (album / ".album-haven").exists()
+    assert music.read_bytes() == b"music"
+
+
+def test_relocation_prunes_only_moved_preview_ancestors_without_scanning_siblings(tmp_path, monkeypatch):
+    root = tmp_path / "album/.album-haven"
+    source = root / "cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"preview")
+    sibling = root / "cover_variants/cd/keep.webp"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"keep")
+    target = tmp_path / "ssd/preview.webp"
+
+    def unexpected_listing(_path):
+        raise AssertionError("Relocating one preview must not enumerate cache siblings")
+
+    monkeypatch.setattr(Path, "iterdir", unexpected_listing)
+    run_worker(FakeRepository([item(source, target, b"preview")]))
+    assert not source.parent.exists()
+    assert sibling.read_bytes() == b"keep"
+    assert target.read_bytes() == b"preview"
+
+
+@pytest.mark.parametrize("same_volume", [True, False])
+def test_pruning_failure_preserves_verified_relocation(tmp_path, monkeypatch, caplog, same_volume):
+    source = tmp_path / "album/.album-haven/cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    content = b"verified-preview"
+    source.write_bytes(content)
+    target = tmp_path / "ssd/preview.webp"
+    repository = FakeRepository([item(source, target, content)])
+    monkeypatch.setattr(relocation, "_same_volume", lambda _source, _target: same_volume)
+
+    def fail_pruning(directory, *, emptied_directory):
+        assert directory == source.parents[2]
+        assert emptied_directory == source.parent
+        assert not source.exists()
+        assert target.read_bytes() == content
+        raise PermissionError("empty preview directory is locked")
+
+    monkeypatch.setattr(relocation, "remove_empty_album_preview_directories", fail_pruning)
+    run_worker(repository)
+
+    assert not source.exists()
+    assert target.read_bytes() == content
+    assert repository.completed == [{
+        "operation_id": repository.operation_id,
+        "item_id": 1,
+        "status": "completed",
+        "byte_count": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "error": None,
+    }]
+    assert "empty preview directory is locked" in caplog.text
+
+
+def test_relocation_preserves_unrecognized_files_in_preview_directory(tmp_path):
+    source = tmp_path / "album/.album-haven/cover_variants/ab/preview.webp"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"preview")
+    keep = source.parents[2] / "keep.txt"
+    keep.write_text("keep")
+    target = tmp_path / "ssd/preview.webp"
+    run_worker(FakeRepository([item(source, target, b"preview")]))
+    assert keep.read_text() == "keep"
+    assert not source.parent.exists()
+
+
+def test_previous_relocation_empty_directories_are_pruned(tmp_path):
+    from music_app.services.generated_preview_storage import remove_empty_album_preview_directories
+    root = tmp_path / "album/.album-haven"
+    (root / "v1/cover_variants/ab").mkdir(parents=True)
+    remove_empty_album_preview_directories(root)
+    assert not root.exists()
+    assert root.parent.exists()
+
+
 def test_same_volume_move_preserves_source_recreated_after_terminal_checkpoint(tmp_path):
     content = b"preview-recreated-during-relocation"
     source = tmp_path / "source.webp"
@@ -184,17 +276,72 @@ def test_cross_volume_copy_deletes_source_before_terminal_checkpoint(tmp_path, m
     assert repository.completed[0]["status"] == "completed"
 
 
-def test_hash_mismatch_fails_without_deleting_source_or_publishing_target(tmp_path):
-    source = tmp_path / "source.webp"
-    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.webp"
-    source.write_bytes(b"unexpected")
-    repository = FakeRepository([item(source, target, b"expected")])
+def _png(color) -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# Owner (11-09, UI-8): previews are regenerable, so a stale inventory checksum never fails the owner's move.
+def test_stale_checksum_preview_moves_with_its_current_checksum(tmp_path):
+    recorded, regenerated = _png("red"), _png("blue")
+    source = tmp_path / "source.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    source.write_bytes(regenerated)
+    repository = FakeRepository([item(source, target, recorded)])
 
     run_worker(repository)
 
-    assert source.read_bytes() == b"unexpected"
+    assert target.read_bytes() == regenerated
+    assert not source.exists()
+    result = repository.completed[0]
+    assert result["status"] == "completed" and result["error"] is None
+    assert (result["byte_count"], result["sha256"]) == (len(regenerated), hashlib.sha256(regenerated).hexdigest())
+
+
+def test_missing_source_preview_is_left_to_be_regenerated(tmp_path):
+    source = tmp_path / "missing.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    repository = FakeRepository([item(source, target, _png("red"))])
+
+    run_worker(repository)
+
     assert not target.exists()
+    assert repository.completed[0]["status"] == "skipped"
+    assert repository.completed[0]["byte_count"] == 0
+    assert repository.completed[0]["error"] is None
+
+
+def test_corrupt_source_preview_is_left_to_be_regenerated_without_publishing_it(tmp_path):
+    source = tmp_path / "source.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    source.write_bytes(b"not an image")
+    repository = FakeRepository([item(source, target, _png("red"))])
+
+    run_worker(repository)
+
+    assert source.read_bytes() == b"not an image"
+    assert not target.exists()
+    assert repository.completed[0]["status"] == "skipped"
+
+
+def test_a_different_file_at_the_destination_is_refused(tmp_path):
+    recorded, regenerated, other = _png("red"), _png("blue"), _png("green")
+    source = tmp_path / "source.png"
+    target = tmp_path / "managed/v1/cover_variants/ab/abcdef.png"
+    source.write_bytes(regenerated)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(other)
+    repository = FakeRepository([item(source, target, recorded)])
+
+    run_worker(repository)
+
+    assert source.read_bytes() == regenerated
+    assert target.read_bytes() == other
     assert repository.completed[0]["status"] == "failed"
+    assert "different file already exists" in repository.completed[0]["error"]
 
 
 def test_restart_accepts_verified_target_when_source_already_disappeared(tmp_path):
@@ -436,3 +583,107 @@ def test_worker_recovers_requested_location_left_before_operation_start():
 
     assert len(repository.started) == 1
     assert repository.finished == [repository.operation_id]
+
+
+# Owner (11-09): "application should clean them during such a preview move". A move to a custom folder leaves no
+# .album-haven folders behind in the album folders it covered.
+def _album_cache(tmp_path, name):
+    cache = tmp_path / "music" / name / ".album-haven"
+    (cache / "cover_variants" / "ab").mkdir(parents=True)
+    return cache
+
+
+def test_cleanup_moves_a_newer_preview_and_removes_the_folder(tmp_path):
+    cache = _album_cache(tmp_path, "Album")
+    late = cache / "cover_variants" / "ab" / "abcdef.png"
+    late.write_bytes(_png("red"))
+    root = tmp_path / "custom"
+
+    summary = relocation.clean_album_preview_folders([cache], root, operation_id="op")
+
+    assert summary == {"cleaned": 1, "kept": [], "left": []}
+    assert (root / "v1" / "cover_variants" / "ab" / "abcdef.png").read_bytes() == _png("red")
+    assert not cache.exists()
+    assert (tmp_path / "music" / "Album").is_dir(), "the album folder itself stays"
+
+
+def test_cleanup_removes_an_empty_cache_folder(tmp_path):
+    cache = _album_cache(tmp_path, "Empty")
+
+    summary = relocation.clean_album_preview_folders([cache], tmp_path / "custom", operation_id="op")
+
+    assert summary["cleaned"] == 1
+    assert not cache.exists()
+
+
+def test_cleanup_keeps_and_reports_a_folder_with_other_files(tmp_path):
+    cache = _album_cache(tmp_path, "Notes")
+    (cache / "notes.txt").write_text("mine", encoding="utf-8")
+    (cache / "cover_variants" / "ab" / "abcdef.png").write_bytes(_png("blue"))
+    root = tmp_path / "custom"
+
+    summary = relocation.clean_album_preview_folders([cache], root, operation_id="op")
+
+    assert summary == {"cleaned": 0, "kept": [str(cache)], "left": []}
+    assert (cache / "notes.txt").read_text(encoding="utf-8") == "mine", "user files are never deleted"
+    assert (root / "v1" / "cover_variants" / "ab" / "abcdef.png").exists(), "the app's own preview still moves"
+    assert not (cache / "cover_variants").exists()
+
+
+def test_cleanup_keeps_a_preview_when_the_destination_holds_a_different_file(tmp_path):
+    cache = _album_cache(tmp_path, "Conflict")
+    late = cache / "cover_variants" / "ab" / "abcdef.png"
+    late.write_bytes(_png("red"))
+    published = tmp_path / "custom" / "v1" / "cover_variants" / "ab" / "abcdef.png"
+    published.parent.mkdir(parents=True)
+    published.write_bytes(_png("green"))
+
+    summary = relocation.clean_album_preview_folders([cache], tmp_path / "custom", operation_id="op")
+
+    assert summary["kept"] == [str(cache)]
+    assert late.read_bytes() == _png("red")
+    assert published.read_bytes() == _png("green")
+
+
+def test_cleanup_leaves_an_unreachable_drive_for_later(tmp_path, monkeypatch):
+    cache = _album_cache(tmp_path, "Offline")
+    monkeypatch.setattr(relocation, "_drive_reachable", lambda _directory: False)
+
+    summary = relocation.clean_album_preview_folders([cache], tmp_path / "custom", operation_id="op")
+
+    assert summary == {"cleaned": 0, "kept": [], "left": [str(cache)]}
+    assert cache.exists()
+
+
+def test_finishing_a_custom_move_cleans_its_album_folders_and_retries_unreachable_ones(tmp_path, monkeypatch):
+    moved = _album_cache(tmp_path, "Moved")
+    offline = _album_cache(tmp_path, "Offline")
+    root = tmp_path / "custom"
+
+    class CustomMove(FakeRepository):
+        def load(self):
+            return {**super().load(), "requested_mode": "custom", "requested_root": str(root)}
+
+        def covered_source_paths(self, *, operation_id):
+            assert operation_id == self.operation_id
+            return [str(moved / "cover_variants" / "ab" / "one.png"), str(offline / "cover_variants" / "ab" / "two.png")]
+
+    reachable = {"offline": False}
+    monkeypatch.setattr(relocation, "_drive_reachable", lambda directory: directory != offline or reachable["offline"])
+    repository = CustomMove([])
+    worker = GeneratedPreviewRelocationWorker(repository, batch_size=2, sync_grace_seconds=0)
+
+    worker._drain()
+
+    assert not moved.exists()
+    assert offline.exists()
+    assert worker.cleanup_summary == {"cleaned_count": 1, "kept_count": 0, "left_count": 1}
+
+    # Once the drive is back, a later pass cleans it.
+    reachable["offline"] = True
+    worker._next_cleanup_at = 0.0
+    repository.operation_state = "completed"
+    worker._drain()
+
+    assert not offline.exists()
+    assert worker.cleanup_summary == {"cleaned_count": 1, "kept_count": 0, "left_count": 0}

@@ -1,4 +1,14 @@
 const GALLERY_RELEASE_TYPES = ['studio', 'ep', 'live', 'demo', 'compilation', 'single'];
+const GALLERY_RELEASE_TYPE_LABELS = Object.freeze({ studio: 'Studio', ep: 'EP', live: 'Live', demo: 'Demo', compilation: 'Compilation', single: 'Single' });
+// Section titles for an artist's own releases when split albums are shown separately.
+const GALLERY_RELEASE_TYPE_SECTION_TITLES = Object.freeze({ studio: 'Studio Albums', ep: 'EPs', live: 'Live Albums', demo: 'Demos', compilation: 'Compilations', single: 'Singles' });
+// Split Albums switch positions, left to right.
+const GALLERY_SPLIT_ALBUM_MODES = ['hide', 'separate', 'show'];
+const GALLERY_SPLIT_ALBUM_LABELS = Object.freeze({ hide: 'Hide Split Albums', separate: 'Separate Split Albums', show: 'Show Split Albums' });
+
+function normalizeGallerySplitAlbumsMode(value) {
+  return GALLERY_SPLIT_ALBUM_MODES.includes(value) ? value : 'show';
+}
 const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
   'Neal Morse': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Neal_Morse2.jpg?width=480',
   'Devin Townsend': 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Devin_Townsend_(cropped).jpg?width=480',
@@ -11,7 +21,7 @@ function createGalleryMainState(overrides = {}) {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep', 'compilation'],
     showFeaturedOn: overrides.showFeaturedOn !== false,
-    showSplitAlbums: overrides.showSplitAlbums !== false,
+    splitAlbums: normalizeGallerySplitAlbumsMode(overrides.splitAlbums),
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -39,8 +49,8 @@ function reduceGalleryMainState(current, action = {}) {
     next.sources[action.source] = !next.sources[action.source];
   } else if (action.type === 'toggle-featured-on') {
     next.showFeaturedOn = !next.showFeaturedOn;
-  } else if (action.type === 'toggle-split-albums') {
-    next.showSplitAlbums = !next.showSplitAlbums;
+  } else if (action.type === 'set-split-albums') {
+    next.splitAlbums = normalizeGallerySplitAlbumsMode(action.mode);
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -126,7 +136,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
       && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
-      && (filterState.showSplitAlbums !== false || !isGallerySplitAlbum(album))
+      && (filterState.splitAlbums !== 'hide' || !isGallerySplitAlbum(album))
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -149,6 +159,10 @@ function activeGallerySourceCategories(mainState) {
 
 function gallerySourceScopesEqual(left = [], right = []) {
   return left.length === right.length && left.every(source => right.includes(source));
+}
+
+function gallerySourceScopeKey(categories = []) {
+  return [...new Set(categories)].sort().join('|');
 }
 
 function withActiveGallerySources(view, mainState) {
@@ -218,7 +232,7 @@ function resolveGalleryBarContext(config = {}) {
     : summaryContext;
 }
 
-function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
+function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups, sourceTotalsByScope = {}) {
   if (view.selected_artist) return mountedTotals;
   let rootTotals = mountedTotals;
   if (Array.isArray(groups)) {
@@ -232,12 +246,24 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     rootTotals = { ...mountedTotals, albumCount: keys.size + unkeyedCount };
   }
   if (view.query) return rootTotals;
+  // Counting mounted albums is exact only for a complete view that holds every chosen
+  // source; otherwise the true totals arrive with the source request.
+  const loadedSources = view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'];
+  const activeSources = filterState ? activeGallerySourceCategories(filterState) : [];
+  if (activeSources.length && !gallerySourceScopesEqual(activeSources, loadedSources)
+    && (view.initial_view_partial || activeSources.some(source => !loadedSources.includes(source)))) {
+    const cached = sourceTotalsByScope[gallerySourceScopeKey(activeSources)];
+    return cached || {
+      artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : rootTotals.artistCount,
+      albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : rootTotals.albumCount,
+    };
+  }
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 3
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
     || filterState.showFeaturedOn === false
-    || filterState.showSplitAlbums === false
+    || filterState.splitAlbums === 'hide'
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;

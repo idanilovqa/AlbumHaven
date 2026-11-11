@@ -2,6 +2,7 @@
   const root = document.querySelector('[data-startup-progress]');
   if (!root) return;
   const bar = root.querySelector('[role="progressbar"]');
+  const meter = root.querySelector('[data-startup-meter]');
   const percentLabel = root.querySelector('[data-startup-percent]');
   const error = root.querySelector('[data-startup-error]');
   const previousInert = new Map();
@@ -9,9 +10,14 @@
   let percent = 0;
   let targetPercent = 0;
   let animationFrame = 0;
-  let animationStartedAt = 0;
+  let animationStartedAt = null;
   let animationStartPercent = 0;
+  let driftStartedAt = null;
+  let completionRenderedAt = null;
+  let lastFrameTime = 0;
   const animationDurationMs = 700;
+  const driftIntervalMs = 500;
+  const completionHoldMs = 200;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
   const markFirstVisibleFeedback = () => {
     const queue = Array.isArray(window.__ALBUM_HAVEN_STARTUP_MARKS__)
@@ -40,24 +46,42 @@
   const finishHide = () => window.requestAnimationFrame(() => window.requestAnimationFrame(hide));
   const animate = timestamp => {
     animationFrame = 0;
-    const frameTime = Number.isFinite(timestamp)
-      ? timestamp
-      : (animationStartedAt || 0) + animationDurationMs;
-    if (!animationStartedAt) animationStartedAt = frameTime;
+    const frameTime = Number.isFinite(timestamp) ? timestamp : lastFrameTime + animationDurationMs;
+    lastFrameTime = frameTime;
+    if (animationStartedAt === null) animationStartedAt = frameTime;
     if (percent < targetPercent) {
       const elapsed = Math.min(1, (frameTime - animationStartedAt) / animationDurationMs);
       const eased = 1 - ((1 - elapsed) ** 3);
       render(animationStartPercent + ((targetPercent - animationStartPercent) * eased));
     }
-    if (percent < targetPercent) animationFrame = window.requestAnimationFrame(animate);
-    else if (completed && percent === 100) finishHide();
+    if (!completed && targetPercent >= 50 && targetPercent < 95) {
+      if (driftStartedAt === null) driftStartedAt = frameTime;
+      const increments = Math.floor((frameTime - driftStartedAt) / driftIntervalMs);
+      if (increments > 0) {
+        targetPercent = Math.min(95, targetPercent + increments);
+        animationStartPercent = percent;
+        animationStartedAt = frameTime;
+        driftStartedAt += increments * driftIntervalMs;
+      }
+    }
+    if (percent < targetPercent || (!completed && targetPercent < 95)) {
+      animationFrame = window.requestAnimationFrame(animate);
+    } else if (completed && percent === 100) {
+      if (completionRenderedAt === null) completionRenderedAt = frameTime;
+      if (frameTime - completionRenderedAt < completionHoldMs) {
+        animationFrame = window.requestAnimationFrame(animate);
+      } else {
+        finishHide();
+      }
+    }
   };
   const show = value => {
     const next = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
     if (completed || next < targetPercent) return;
     targetPercent = next;
     animationStartPercent = percent;
-    animationStartedAt = 0;
+    animationStartedAt = null;
+    driftStartedAt = null;
     root.hidden = false;
     markFirstVisibleFeedback();
     for (const element of document.body.children) {
@@ -77,25 +101,35 @@
       if (completed) return;
       completed = true;
       targetPercent = 100;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
-      render(100);
-      finishHide();
+      animationStartPercent = percent;
+      animationStartedAt = null;
+      driftStartedAt = null;
+      completionRenderedAt = null;
+      lastFrameTime = 0;
+      if (reducedMotion) {
+        render(100);
+        finishHide();
+      } else if (!animationFrame) {
+        animationFrame = window.requestAnimationFrame(animate);
+      }
     },
     fail() {
       if (completed || root.hidden) return;
       completed = true;
       error.hidden = false;
-      bar.hidden = true;
+      meter.hidden = true;
       root.querySelector('[data-startup-retry]').focus();
     },
     reset() {
       completed = false; targetPercent = 0;
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       animationFrame = 0;
-      animationStartedAt = 0;
+      animationStartedAt = null;
       animationStartPercent = 0;
-      render(0); error.hidden = true; bar.hidden = false; hide();
+      driftStartedAt = null;
+      completionRenderedAt = null;
+      lastFrameTime = 0;
+      render(0); error.hidden = true; meter.hidden = false; hide();
     },
   };
   root.querySelector('[data-startup-retry]').addEventListener('click', () => window.location.reload());
@@ -105,9 +139,12 @@
     }
   }, true);
   window.addEventListener('error', () => window.AlbumHavenStartupProgress.fail());
-  // Signed-in pages continue from the 25% sign-in stage instead of restarting at 0.
-  if (root.dataset.startupProgress === '50') {
-    render(25);
-    show(50);
+  // The server paints the document's starting stage (sign-in 0, app 50), so the
+  // first frame already shows it and progress only moves forward from there.
+  const initialPercent = Number(root.dataset.startupProgress) || 0;
+  if (initialPercent > 0) {
+    targetPercent = initialPercent;
+    render(initialPercent);
+    show(initialPercent);
   }
 })();

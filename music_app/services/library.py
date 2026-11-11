@@ -21,7 +21,7 @@ from music_app.services.album_display_metadata import (
     build_album_display_metadata_payload,
     has_album_display_metadata_values,
 )
-from music_app.services.artist_credits import deduplicate_repeated_album_artist_members
+from music_app.services.artist_credits import deduplicate_repeated_album_artist_members, track_artist_credit_members
 from music_app.services.listen_through import (
     album_top_item_visible_for_viewer,
     default_album_preference_overlay,
@@ -108,7 +108,11 @@ def _is_collaboration_variant(value: object, base: object) -> bool:
         return False
     if not value_key.startswith(base_key):
         return False
-    remainder = value_key[len(base_key):].strip()
+    raw_remainder = value_key[len(base_key):]
+    remainder = raw_remainder.strip()
+    if remainder.startswith("/") and not raw_remainder[:1].isspace():
+        # 'To/Die/For' and 'AC/DC' are one name; only 'Owner / Guest' credits two.
+        return False
     return any(remainder.startswith(prefix) for prefix in _COLLAB_REMAINDER_PREFIXES)
 
 
@@ -267,6 +271,11 @@ def _dominant_track_artist(track_artist_counts: Counter[str]) -> str:
 
 
 def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str, list[str]]:
+    physical_compilation_states = {
+        entry["compilation_tag"]
+        for entry in entries
+        if type(entry.get("compilation_tag")) is bool
+    }
     persisted_compilation_states = {
         entry.get("is_compilation")
         for entry in entries
@@ -277,6 +286,9 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         if len(persisted_compilation_states) == 1
         else None
     )
+    if physical_compilation_states:
+        # A positive track-level compilation flag must not become an inferred split.
+        persisted_compilation_state = True in physical_compilation_states
 
     def compilation_state(inferred_state: bool) -> bool:
         if persisted_compilation_state is None:
@@ -316,7 +328,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     track_artist_values = []
     for entry in entries:
         structured_artists = entry.get("artists")
-        if isinstance(structured_artists, (list, tuple)):
+        if isinstance(structured_artists, (list, tuple)) and any(str(artist or "").strip() for artist in structured_artists):
             track_artist_values.extend(
                 _normalize_display_artist_name(artist).strip()
                 for artist in structured_artists
@@ -359,6 +371,30 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)
     ]
+    # A single-performer subset keeps its physical VA credit, but its logical
+    # owner must agree between Edit Tags and the next scan. A known absent tag
+    # is stronger evidence than an older derived compilation classification.
+    known_compilation_tags = all("compilation_tag" in entry for entry in entries)
+    positive_compilation = True in physical_compilation_states or (
+        not known_compilation_tags and persisted_compilation_state is True
+    )
+    if explicit_various and not positive_compilation and len(distinct_track_artists) == 1:
+        solo_artist = distinct_track_artists[0]
+        if (not _is_various_artist(solo_artist) and solo_artist.casefold() != "unknown artist"
+                and len(track_artist_credit_members(solo_artist, solo_artist)) == 1):
+            return False, solo_artist, [solo_artist]
+
+    if explicit_various and not positive_compilation and len(distinct_track_artists) == 2 and all(
+        not _is_various_artist(artist) and artist.casefold() != "unknown artist"
+        for artist in distinct_track_artists
+    ):
+        return compilation_state(True), _format_shared_album_artist(distinct_track_artists), distinct_track_artists
+    if len(distinct_track_artists) >= 2 and any(
+        str(entry.get("album_type") or "").strip().casefold() == "split"
+        for entry in entries
+    ):
+        members = matched_album_artist_members if len(matched_album_artist_members) >= 2 else distinct_track_artists
+        return compilation_state(True), _format_shared_album_artist(members), members
     primary_artist = main_disc_album_artist or next(
         (value for value in album_artist_values if value.strip()),
         "",
@@ -450,6 +486,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     )
     if (
         display_album_artist == "Various Artists"
+        and not explicit_various
         and persisted_compilation_state is not True
         and len(display_member_artists) <= 3
         and display_member_artists
@@ -1276,11 +1313,14 @@ def _ordered_album_duplicate_track_groups(
     if len(ordered_groups) <= 1:
         return []
     identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
-    counts = Counter(identities)
     qualifying_indexes = {
         index
         for index, identity in enumerate(identities)
-        if identity is not None and counts[identity] > 1
+        if identity is not None and any(
+            other_index != index and identity == other_identity
+            and _duplicate_track_groups_overlap(ordered_groups[index][1], ordered_groups[other_index][1])
+            for other_index, other_identity in enumerate(identities)
+        )
     }
     for index, (_, tracks) in enumerate(ordered_groups):
         if index in qualifying_indexes:
@@ -1324,12 +1364,11 @@ def _duplicate_album_identity_values(
     album: object,
     year: object,
 ) -> tuple[str, str, int] | None:
-    artist = " ".join(
-        unicodedata.normalize("NFC", str(album_artist or "")).casefold().split()
-    )
-    title = " ".join(
-        unicodedata.normalize("NFC", str(album or "")).casefold().split()
-    )
+    from music_app.services.view_search import fold_search_accents
+
+    # Matches library.duplicate_identity_text: case and Latin accents fold.
+    artist = " ".join(fold_search_accents(unicodedata.normalize("NFC", str(album_artist or ""))).split())
+    title = " ".join(fold_search_accents(unicodedata.normalize("NFC", str(album or ""))).split())
     normalized_year = safe_int(year)
     if (
         not artist
@@ -1354,6 +1393,14 @@ def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | Non
             return None
         identities.add(identity)
     return next(iter(identities)) if len(identities) == 1 else None
+
+
+def _duplicate_track_groups_overlap(left: list[Track], right: list[Track]) -> bool:
+    titles = {
+        title for track in left
+        if (title := _normalized_duplicate_card_text(track.title)) and title != "unknown track"
+    }
+    return any(_normalized_duplicate_card_text(track.title) in titles for track in right)
 
 
 def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
@@ -1646,12 +1693,17 @@ def _link_duplicate_album_sources(
             identities.setdefault(identity, []).append((folder_paths[folder], tracks))
     duplicate_groups_by_identity = {
         identity: sorted(
-            groups,
+            [group for index, group in enumerate(groups) if any(
+                other_index != index and _duplicate_track_groups_overlap(group[1], other[1])
+                for other_index, other in enumerate(groups)
+            )],
             key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
         )
         for identity, groups in identities.items()
         if len(groups) > 1
     }
+    duplicate_groups_by_identity = {identity: groups for identity, groups in duplicate_groups_by_identity.items() if len(groups) > 1}
+    duplicate_folders = {os.path.normcase(folder) for groups in duplicate_groups_by_identity.values() for folder, _ in groups}
     sources_by_identity: dict[tuple[str, str, int], list[dict[str, object]]] = {}
 
     def materialize_identity_sources(identity: tuple[str, str, int]) -> list[dict[str, object]]:
@@ -1683,12 +1735,12 @@ def _link_duplicate_album_sources(
 
     contexts: list[dict[str, object]] = []
     for album, folder_keys in zip(albums, album_folder_keys):
-        own_identities = {folder_identities[key] for key in folder_keys}
+        own_identities = {folder_identities[key] for key in folder_keys if key in duplicate_folders}
         duplicate_identities = tuple(sorted(own_identities.intersection(duplicate_groups_by_identity)))
         source_track_groups = [
             tracks
             for identity in duplicate_identities
-            for _, tracks in identities[identity]
+            for _, tracks in duplicate_groups_by_identity[identity]
         ]
         linked_tracks: list[Track] = []
         if duplicate_identities:

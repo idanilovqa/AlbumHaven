@@ -92,6 +92,83 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-037 a CD name search finds its album and highlights that disc",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-disc-subtitle-search"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-reconciliation"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "disc-subtitle-search-match",
+      "album-details-disc-subtitle-highlight"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-disc-subtitle-search",
+      "filesystemCopy": "media/cases/watcher-reconciliation"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/gallerySourceSwitchLoading.functional.spec.js",
+    "case": "FTC-GALLERY-SOURCES-001 switching to only New Arrivals shows loading, never an empty Library",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "gallery-source-switch-loading",
+    "databaseScenarios": [
+      "settings:owned-new-arrivals-root"
+    ],
+    "filesystemScenarios": [
+      "media-copy:settings-root-picker-new-arrivals-album"
+    ],
+    "expectedContracts": [
+      "source-switch-shows-shared-loader",
+      "source-switch-never-renders-empty-library",
+      "new-arrivals-albums-render-after-switch"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:gallery-source-switch-loading",
+      "filesystemCopy": "settings-root-picker-fixture/New Arrivals source switch"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryHomeFromSettings.functional.spec.js",
+    "case": "FTC-GALLERY-HOME-002 Home from the admin panel opens library Home, not the earlier search",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:artist-family-search"
+    ],
+    "filesystemScenarios": [
+      "media:artist-family-search"
+    ],
+    "expectedContracts": [
+      "admin-home-clears-search",
+      "admin-home-resets-artist-tree",
+      "admin-home-renders-library-home"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
     "case": "FTC-SEARCH-NAV-030 watcher keeps possessive project identity separate from base artist",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -313,6 +390,82 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-COVERS-045 a cover beside the CD folders saves, and the second artbox owns its selection",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:disc-folder-cover-and-second-artbox"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-disc-folder-cover"
+    ],
+    "expectedContracts": [
+      "shared-album-folder-cover-save",
+      "second-artbox-selection",
+      "second-artbox-art-blocked-in-cover-lookup"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-disc-folder-cover",
+      "filesystemCopy": "media/cases/watcher-disc-folder-cover"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-COVERS-046 a split notification asks during the running search and keeps the chosen release",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:split-during-held-search"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-split-chooser"
+    ],
+    "expectedContracts": [
+      "split-chooser-during-running-search",
+      "chosen-split-release-final"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-split-chooser",
+      "filesystemCopy": "media/cases/watcher-split-chooser"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-030 marking a separated release as a version again removes its version exception",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:same-name-versions-separated-and-relinked"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-version-rule"
+    ],
+    "expectedContracts": [
+      "version-exception-removed-on-relink",
+      "rule-name-truncated"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-version-rule",
+      "filesystemCopy": "media/cases/watcher-version-rule"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/trackSubtitleProjection.spec.js",
     "case": "FTC-LIBROOTS-020 watcher collapses track subtitle and part frames without Full Scan",
     "profile": "functional-core",
@@ -358,6 +511,50 @@
       "single-continuation-request-owner",
       "no-stationary-first-page-boundary",
       "mobile-mounted-card-continuation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+    "case": "FTC-GALLERY-STARTUP-007 desktop sign-in progress never restarts and keeps a visible advancing bar",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "auth:sign-in-cold-load"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "startup-progress-monotonic-across-sign-in",
+      "startup-progress-visible-bar-width-matches-percent",
+      "desktop-cold-load"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/startupProgressColdLoad.functional.spec.js",
+    "case": "FTC-GALLERY-STARTUP-007M mobile sign-in progress never restarts and keeps a visible advancing bar",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "auth:sign-in-cold-load"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "startup-progress-monotonic-across-sign-in",
+      "startup-progress-visible-bar-width-matches-percent",
+      "mobile-cold-load"
     ],
     "ownerApproval": "approved"
   },
@@ -479,10 +676,34 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+    "case": "FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons and Loose Tracks as one side-bar button",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:artist-tree-side-bar"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "navigation-tree-header-has-only-fold-control",
+      "loose-tracks-single-side-bar-button-under-artist-tree",
+      "side-bar-buttons-draw-their-icons"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-side-bar",
+      "filesystemCopy": "media/cases/artist-tree-side-bar"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -498,6 +719,29 @@
       "native-full-scan-recovery"
     ],
     "globalMutationReason": "Revokes only the unique runtime role INSERT privilege on local_track_files inside its owned database, restoring it in finally before recovery.",
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+    "case": "FTC-TAGS-028 adds the missing sibling disc without losing selection or unsaved edits",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "album:folder-expansion-main-and-festival"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core",
+      "folder:fourteen-track-main-disc-and-fourteen-track-va-disc"
+    ],
+    "expectedContracts": [
+      "tag-editor-folder-expansion-adds-missing-sibling-disc",
+      "tag-editor-folder-expansion-preserves-selection-and-unsaved-values",
+      "tag-editor-folder-expansion-preserves-disc-order-and-metadata",
+      "tag-editor-folder-expansion-does-not-save-or-merge-albums"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -888,6 +1132,35 @@
       "databaseIdentity": "case:temporary-album-restore",
       "filesystemCopy": "media/cases/temporary-album-restore"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryDataCorrections.spec.js",
+    "case": "FTC-LIBRARY-CORRECTIONS-001 an unreadable track artist shows the album artist, is a problem, and Write in tags fixes the tags",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "tag-edit:library-data-corrections-write-in-tags"
+    ],
+    "filesystemScenarios": [
+      "media-copy:unreadable-track-artist"
+    ],
+    "expectedContracts": [
+      "unreadable-credit-shows-album-artist",
+      "unreadable-credit-is-problematic",
+      "write-in-tags-corrects-file-tags",
+      "correction-recorded-in-history"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:library-data-corrections",
+      "filesystemCopy": "media/cases/library-data-corrections"
+    },
+    "globalMutationReason": "Switches the library-wide Library Data Corrections setting to Write in tags, which writes tags for every pending correction, and restores Display only.",
     "ownerApproval": "approved"
   },
   {
@@ -1784,7 +2057,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
+    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2609,6 +2882,26 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/responsiveGallery.spec.js",
+    "case": "FTC-MOBILE-WEB-008 switching Chrome device emulation from phone back to web restores the full web layout and mouse input",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:responsive-rated-cards"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool"
+    ],
+    "expectedContracts": [
+      "device-emulation-restores-web-layout",
+      "mouse-input-after-touch-emulation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
     "case": "FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload",
     "profile": "functional-core",
@@ -2623,6 +2916,57 @@
     "expectedContracts": [
       "canonical-positive-card-counts"
     ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/compilationTitleSearch.spec.js",
+    "case": "FTC-SEARCH-NAV-036 a title-only search selects the artist owning every matching compilation",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "search:title-only-compilation-owner"
+    ],
+    "filesystemScenarios": [
+      "media-copy:compilation-title-search"
+    ],
+    "expectedContracts": [
+      "title-only-search-selects-album-owner",
+      "q-only-url-matches-visible-search"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:compilation-title-search",
+      "filesystemCopy": "media/cases/compilation-title-search"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/searchDuringScan.spec.js",
+    "case": "FTC-SEARCH-NAV-035 a pasted search URL without an artist loads its results while a full rescan runs",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "executionWave": 4,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "databaseScenarios": [
+      "search:q-only-url-during-full-rescan"
+    ],
+    "filesystemScenarios": [
+      "media:full-rescan-of-shared-fixture"
+    ],
+    "expectedContracts": [
+      "startup-hydration-during-scan",
+      "q-only-url-matches-visible-search"
+    ],
+    "globalMutationReason": "Runs one Full Rescan of the functional fixture so a page loads while the scan is active; the rescan re-reads unchanged media and the case waits for the scan and cover refresh to go idle before finishing.",
     "ownerApproval": "approved"
   },
   {
@@ -2743,6 +3087,25 @@
     ],
     "expectedContracts": [
       "direct-and-visible-search-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+    "case": "FTC-SEARCH-NAV-003 finds accented artist names through visible search and direct links",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:accented-artist"
+    ],
+    "filesystemScenarios": [
+      "media:accented-artist"
+    ],
+    "expectedContracts": [
+      "accented-and-plain-artist-query-parity"
     ],
     "ownerApproval": "approved"
   },
@@ -3175,7 +3538,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js",
-    "case": "FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation › far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups",
+    "case": "FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation \u203a far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3196,7 +3559,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js",
-    "case": "FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation › root continuation starts eight viewports early and never reaches a hard stop during its real request",
+    "case": "FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation \u203a root continuation starts eight viewports early and never reaches a hard stop during its real request",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3212,12 +3575,11 @@
     ],
     "ownerApproval": "approved"
   },
-
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › mobile Cards › long-press Scroll, album, Back restores an artist beyond the first root page",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration \u203a mobile Cards \u203a long-press Scroll, album, Back restores an artist beyond the first root page",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3238,7 +3600,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › mobile Cards › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration \u203a mobile Cards \u203a long-press Scroll, ordinary scroll to another artist, album, Back retains the new position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3259,7 +3621,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness › All Artists round-trip reports synthetic-data responsiveness and memory timings",
+    "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness \u203a All Artists round-trip reports synthetic-data responsiveness and memory timings",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3279,7 +3641,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-005 direct-loads a filtered Ария gallery with the complete Artist Family labels",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-005 direct-loads a filtered \u0410\u0440\u0438\u044f gallery with the complete Artist Family labels",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3298,7 +3660,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-026 clears an Ария search after filtering to Виталий Дубинин without remounting the gallery or reducing Artist Family",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-026 clears an \u0410\u0440\u0438\u044f search after filtering to \u0412\u0438\u0442\u0430\u043b\u0438\u0439 \u0414\u0443\u0431\u0438\u043d\u0438\u043d without remounting the gallery or reducing Artist Family",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3318,7 +3680,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3338,7 +3700,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/appOpenAllArtists.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI › App open renders All Artists UI and explicit full root browse uses library_browse",
+    "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI \u203a App open renders All Artists UI and explicit full root browse uses library_browse",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3358,7 +3720,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
+    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -3379,7 +3741,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
+    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -3400,7 +3762,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI › Root album browse UI reports library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI \u203a Root album browse UI reports library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3419,7 +3781,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js",
-    "case": "FTC-COVERS-019P Cover Lookup interaction timing › opens, renders a candidate, selects it, and accepts Save within the interaction budgets",
+    "case": "FTC-COVERS-019P Cover Lookup interaction timing \u203a opens, renders a candidate, selects it, and accepts Save within the interaction budgets",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3442,7 +3804,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse › Search UI reports direct library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse \u203a Search UI reports direct library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3461,7 +3823,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a Selected artist UI reports library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3480,7 +3842,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3499,7 +3861,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Stale projection keeps selected startup and superseding Home responsive",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a Stale projection keeps selected startup and superseding Home responsive",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -3521,7 +3883,7 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view",
+    "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness \u203a FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3540,7 +3902,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/utilitiesResponsiveness.spec.js",
-    "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness › FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information",
+    "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness \u203a FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3559,7 +3921,7 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI \u203a Problematic Files renders populated Postgres summary and automatic detail",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3579,7 +3941,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/utilityRules.spec.js",
-    "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI › Rules and sibling utility tabs report library_browse telemetry and timing",
+    "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI \u203a Rules and sibling utility tabs report library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -3707,7 +4069,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3732,7 +4094,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-015 unchanged isolated cached startup stays effectively idle",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-015 unchanged isolated cached startup stays effectively idle",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3755,7 +4117,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-016 isolated incremental scan surfaces one new album promptly",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-016 isolated incremental scan surfaces one new album promptly",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3778,7 +4140,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3801,7 +4163,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3824,7 +4186,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -3845,7 +4207,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks › FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
+    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -4170,7 +4532,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/albumTrackTable.spec.js",
-    "case": "ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout",
+    "case": "Album Details header actions show no edge on hover while keyboard focus keeps its outline without shifting layout",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -6286,6 +6648,291 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "Library Status component retains a usable catalog after a cancelled scan"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery Searching and Nothing found states sit on the palette's main surface (desktop)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery Searching and Nothing found states sit on the palette's main surface (desktop)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/libraryStatusPage.spec.js",
+    "case": "gallery Searching and Nothing found states sit on the palette's main surface (mobile)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery Searching and Nothing found states sit on the palette's main surface (mobile)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/pageHeaderAlignment.spec.js",
+    "case": "page headers place the subtitle under the title like the Gallery header (desktop)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "page headers place the subtitle under the title like the Gallery header (desktop)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/pageHeaderAlignment.spec.js",
+    "case": "page headers place the subtitle under the title like the Gallery header (mobile)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "page headers place the subtitle under the title like the Gallery header (mobile)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/navigationTreeStickyHeader.spec.js",
+    "case": "the navigation-tree header stays at the top of the side panel while the tree scrolls",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the navigation-tree header stays at the top of the side panel while the tree scrolls"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "a short gallery name shares its row with the gallery buttons on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a short gallery name shares its row with the gallery buttons on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "a long gallery name is printed in full above the gallery buttons on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a long gallery name is printed in full above the gallery buttons on mobile"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileLibraryModeButtons.spec.js",
+    "case": "mobile library drawer expands only the selected mode (artists)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile library drawer expands only the selected mode (artists)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileLibraryModeButtons.spec.js",
+    "case": "mobile library drawer expands only the selected mode (collections)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile library drawer expands only the selected mode (collections)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "mobile bottom sheets slide back down when closed (INT-023)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile bottom sheets slide back down when closed (INT-023)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupFrames.spec.js",
+    "case": "a selected suggested cover keeps the green suggestion ring around the blue selection",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected suggested cover keeps the green suggestion ring around the blue selection"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumSecondArtboxSize.spec.js",
+    "case": "the album cover keeps its size when a second artbox is added",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover keeps its size when a second artbox is added"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumSecondArtboxSize.spec.js",
+    "case": "the album cover keeps its size when a second artbox is added (with service links)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover keeps its size when a second artbox is added (with service links)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/versionPickerTreeItem.spec.js",
+    "case": "Mark As A Version selects an album with the same wide navigation-tree item as the split-release choice",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Mark As A Version selects an album with the same wide navigation-tree item as the split-release choice"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/radioOptionDot.spec.js",
+    "case": "a selected shared radio shows a filled accent dot (dark theme)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected shared radio shows a filled accent dot (dark theme)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/radioOptionDot.spec.js",
+    "case": "a selected shared radio shows a filled accent dot (light theme)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a selected shared radio shows a filled accent dot (light theme)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/secondArtboxDuplicatePicture.spec.js",
+    "case": "the second artbox lookup dims a picture that matches the album cover and keeps different art selectable",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the second artbox lookup dims a picture that matches the album cover and keeps different art selectable"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/secondArtboxDuplicatePicture.spec.js",
+    "case": "the album cover lookup dims a picture that matches the second artbox",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the album cover lookup dims a picture that matches the second artbox"
     ],
     "ownerApproval": "approved"
   },
@@ -8918,7 +9565,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Devin submit to first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration \u203a Devin submit to first expected album visible"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -8933,7 +9580,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Neal Morse submit to first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration \u203a Neal Morse submit to first expected album visible"
   },
   {
     "config": "playwright.component.config.js",
@@ -9142,6 +9789,35 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its soundtrack source in Problematic Files",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "soundtrack-album-artist-ownership",
+      "guest-track-artist-ownership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:small-soundtrack-guest",
+      "filesystemCopy": "media/cases/small-soundtrack-guest"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
     "case": "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -9170,7 +9846,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
-      "case": "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+    "case": "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -9269,7 +9945,11 @@
     "expectedContracts": [
       "requested-album-loading-identity",
       "stale-album-details-never-visible",
-      "desktop-album-details-transition"
+      "desktop-album-details-transition",
+      "composite-soundtrack-complete-track-render",
+      "cached-album-details-reopen",
+      "speculative-details-request-reuse",
+      "blocked-art-does-not-block-track-render"
     ],
     "ownerApproval": "approved"
   },
@@ -9292,7 +9972,33 @@
     "expectedContracts": [
       "requested-album-loading-identity",
       "stale-album-details-never-visible",
-      "mobile-album-details-transition"
+      "mobile-album-details-transition",
+      "composite-soundtrack-complete-track-render",
+      "cached-album-details-reopen",
+      "speculative-details-request-reuse",
+      "blocked-art-does-not-block-track-render"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+    "case": "FTC-MOBILE-HOME-001 mobile Home clears an active search and resets the Artists tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:mobile-home-reset"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "mobile-home-clears-search",
+      "mobile-home-clears-search-results-dot",
+      "mobile-home-resets-artist-tree"
     ],
     "ownerApproval": "approved"
   },
@@ -9311,7 +10017,6 @@
     ],
     "ownerApproval": "approved"
   },
-
   {
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
@@ -9331,7 +10036,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "stacked_bar stacks source markers below Back without overlap",
+    "case": "stacked_bar shows source labels beside the album type",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9346,7 +10051,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
-    "case": "editorial_canvas stacks source markers below Back without overlap",
+    "case": "editorial_canvas shows source labels beside the album type",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9482,14 +10187,26 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js",
-    "case": "FTC-NOTIFICATIONS-001P large notification history › keeps history bounded and leaves search responsive",
+    "case": "FTC-NOTIFICATIONS-001P large notification history \u203a keeps history bounded and leaves search responsive",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
-    "databaseScenarios": ["large-library:notification-history-528"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["notification-count-without-history-load", "cursor-pagination", "virtualized-history-window", "post-history-navigation-responsiveness", "bounded-notification-memory"],
-    "mutationOwnership": {"databaseIdentity": "case:ftc-notifications-001p"},
+    "databaseScenarios": [
+      "large-library:notification-history-528"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "notification-count-without-history-load",
+      "cursor-pagination",
+      "virtualized-history-window",
+      "post-history-navigation-responsiveness",
+      "bounded-notification-memory"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-notifications-001p"
+    },
     "ownerApproval": "approved"
   },
   {
@@ -9518,143 +10235,226 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeDesktopBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration › desktop Cards › desktop Scroll, album, Close retains the jumped-to position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration \u203a desktop Cards \u203a desktop Scroll, album, Close retains the jumped-to position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["desktop-artist-tree-context-menu", "anchored-root-gallery-restoration", "stable-desktop-album-close"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "desktop-artist-tree-context-menu",
+      "anchored-root-gallery-restoration",
+      "stable-desktop-album-close"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeDesktopBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration › desktop Cards › desktop Scroll, ordinary scroll, album, Close retains the departure position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration \u203a desktop Cards \u203a desktop Scroll, ordinary scroll, album, Close retains the departure position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["desktop-artist-tree-context-menu", "anchored-root-gallery-restoration", "stable-desktop-album-close"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "desktop-artist-tree-context-menu",
+      "anchored-root-gallery-restoration",
+      "stable-desktop-album-close"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryPresentationAnchor.spec.js",
-    "case": "FTC-GALLERY-NAV-034 synthetic-large mobile presentation anchoring › Mobile Cards, covers and rows retain the jumped-to release",
+    "case": "FTC-GALLERY-NAV-034 synthetic-large mobile presentation anchoring \u203a Mobile Cards, covers and rows retain the jumped-to release",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["gallery-presentation-semantic-anchor", "mobile-gallery-position-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "gallery-presentation-semantic-anchor",
+      "mobile-gallery-position-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryPresentationAnchor.spec.js",
-    "case": "FTC-GALLERY-NAV-034 synthetic-large desktop presentation anchoring › Desktop Cards and covers retain the jumped-to release",
+    "case": "FTC-GALLERY-NAV-034 synthetic-large desktop presentation anchoring \u203a Desktop Cards and covers retain the jumped-to release",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["gallery-presentation-semantic-anchor", "desktop-gallery-position-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "gallery-presentation-semantic-anchor",
+      "desktop-gallery-position-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/gallerySearchHomeAnchor.spec.js",
-    "case": "FTC-GALLERY-NAV-037 synthetic-large desktop search and Home anchoring › search and Home destinations do not rebound after settling",
+    "case": "FTC-GALLERY-NAV-037 synthetic-large desktop search and Home anchoring \u203a search and Home destinations do not rebound after settling",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["search-destination-semantic-anchor", "home-destination-semantic-anchor", "desktop-gallery-position-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "search-destination-semantic-anchor",
+      "home-destination-semantic-anchor",
+      "desktop-gallery-position-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability \u203a mobile Cards \u203a native touch swipes track the commanded gesture without reverse movement or layout jitter",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["native-touch-scroll-monotonicity", "mobile-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "native-touch-scroll-monotonicity",
+      "mobile-gallery-layout-coordinate-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Covers › native touch swipes track the commanded gesture without reverse movement or layout jitter",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability \u203a mobile Covers \u203a native touch swipes track the commanded gesture without reverse movement or layout jitter",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["native-touch-scroll-monotonicity", "mobile-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "native-touch-scroll-monotonicity",
+      "mobile-gallery-layout-coordinate-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Rows › native touch swipes track the commanded gesture without reverse movement or layout jitter",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability \u203a mobile Rows \u203a native touch swipes track the commanded gesture without reverse movement or layout jitter",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["native-touch-scroll-monotonicity", "mobile-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "native-touch-scroll-monotonicity",
+      "mobile-gallery-layout-coordinate-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Cards › native wheel input tracks the commanded gesture without reverse movement or layout jitter",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability \u203a desktop Cards \u203a native wheel input tracks the commanded gesture without reverse movement or layout jitter",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["native-wheel-scroll-monotonicity", "desktop-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "native-wheel-scroll-monotonicity",
+      "desktop-gallery-layout-coordinate-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › mobile Cards › real continuation response during held touch keeps gallery coordinates stable",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap \u203a mobile Cards \u203a real continuation response during held touch keeps gallery coordinates stable",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["real-gallery-continuation-response-overlap", "native-touch-scroll-monotonicity", "mobile-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "real-gallery-continuation-response-overlap",
+      "native-touch-scroll-monotonicity",
+      "mobile-gallery-layout-coordinate-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › desktop Cards › full preserve-scroll response during wheel sequence keeps gallery coordinates stable",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap \u203a desktop Cards \u203a full preserve-scroll response during wheel sequence keeps gallery coordinates stable",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library", "media-copy:gallery-native-response-overlap"],
-    "expectedContracts": ["real-full-gallery-refresh-response-overlap", "native-wheel-scroll-monotonicity", "desktop-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library",
+      "media-copy:gallery-native-response-overlap"
+    ],
+    "expectedContracts": [
+      "real-full-gallery-refresh-response-overlap",
+      "native-wheel-scroll-monotonicity",
+      "desktop-gallery-layout-coordinate-stability"
+    ],
     "mutationOwnership": {
       "databaseIdentity": "case:gallery-native-response-overlap-watcher",
       "filesystemCopy": "media/cases/gallery-native-response-overlap"
@@ -9662,107 +10462,170 @@
     "ownerApproval": "approved"
   },
   {
-      "config": "playwright.synthetic-large-library.config.cjs",
-      "project": "synthetic-large-library",
-      "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
-      "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › desktop Cards › real continuation response during wheel sequence keeps gallery coordinates stable",
-      "profile": "synthetic-large-library",
-      "setupScope": "suite",
-      "stateMode": "read-only",
-      "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-      "filesystemScenarios": ["media:synthetic-large-library"],
-      "expectedContracts": ["real-gallery-continuation-response-overlap", "native-wheel-scroll-monotonicity", "desktop-gallery-layout-coordinate-stability"],
-      "ownerApproval": "approved"
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap \u203a desktop Cards \u203a real continuation response during wheel sequence keeps gallery coordinates stable",
+    "profile": "synthetic-large-library",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "real-gallery-continuation-response-overlap",
+      "native-wheel-scroll-monotonicity",
+      "desktop-gallery-layout-coordinate-stability"
+    ],
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
-    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter",
+    "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability \u203a desktop Covers \u203a native wheel input tracks the commanded gesture without reverse movement or layout jitter",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["native-wheel-scroll-monotonicity", "desktop-gallery-layout-coordinate-stability"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "native-wheel-scroll-monotonicity",
+      "desktop-gallery-layout-coordinate-stability"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › mobile Covers › long-press Scroll, album, Back restores an artist beyond the first root page",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration \u203a mobile Covers \u203a long-press Scroll, album, Back restores an artist beyond the first root page",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["mobile-artist-tree-long-press", "anchored-root-gallery-restoration", "stable-mobile-album-back"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "mobile-artist-tree-long-press",
+      "anchored-root-gallery-restoration",
+      "stable-mobile-album-back"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › mobile Covers › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration \u203a mobile Covers \u203a long-press Scroll, ordinary scroll to another artist, album, Back retains the new position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["mobile-artist-tree-long-press", "anchored-root-gallery-restoration", "stable-mobile-album-back"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "mobile-artist-tree-long-press",
+      "anchored-root-gallery-restoration",
+      "stable-mobile-album-back"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › mobile Rows › long-press Scroll, album, Back restores an artist beyond the first root page",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration \u203a mobile Rows \u203a long-press Scroll, album, Back restores an artist beyond the first root page",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["mobile-artist-tree-long-press", "anchored-root-gallery-restoration", "stable-mobile-album-back"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "mobile-artist-tree-long-press",
+      "anchored-root-gallery-restoration",
+      "stable-mobile-album-back"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › mobile Rows › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration \u203a mobile Rows \u203a long-press Scroll, ordinary scroll to another artist, album, Back retains the new position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["mobile-artist-tree-long-press", "anchored-root-gallery-restoration", "stable-mobile-album-back"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "mobile-artist-tree-long-press",
+      "anchored-root-gallery-restoration",
+      "stable-mobile-album-back"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeDesktopBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration › desktop Covers › desktop Scroll, album, Close retains the jumped-to position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration \u203a desktop Covers \u203a desktop Scroll, album, Close retains the jumped-to position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["desktop-artist-tree-context-menu", "anchored-root-gallery-restoration", "stable-desktop-album-close"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "desktop-artist-tree-context-menu",
+      "anchored-root-gallery-restoration",
+      "stable-desktop-album-close"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistTreeDesktopBack.spec.js",
-    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration › desktop Covers › desktop Scroll, ordinary scroll, album, Close retains the departure position",
+    "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration \u203a desktop Covers \u203a desktop Scroll, ordinary scroll, album, Close retains the departure position",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["desktop-artist-tree-context-menu", "anchored-root-gallery-restoration", "stable-desktop-album-close"],
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "desktop-artist-tree-context-menu",
+      "anchored-root-gallery-restoration",
+      "stable-desktop-album-close"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -9775,7 +10638,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["pending-scroll-presentation-anchor-preservation"],
+    "expectedContracts": [
+      "pending-scroll-presentation-anchor-preservation"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -9788,7 +10653,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["pending-scroll-presentation-anchor-preservation"],
+    "expectedContracts": [
+      "pending-scroll-presentation-anchor-preservation"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -9801,7 +10668,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["deep-presentation-frame-anchor-preservation"],
+    "expectedContracts": [
+      "deep-presentation-frame-anchor-preservation"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -9814,7 +10683,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["deep-presentation-frame-anchor-preservation"],
+    "expectedContracts": [
+      "deep-presentation-frame-anchor-preservation"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -9827,7 +10698,9 @@
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["virtual-featured-on-divider-geometry"],
+    "expectedContracts": [
+      "virtual-featured-on-divider-geometry"
+    ],
     "ownerApproval": "approved"
   },
   {
@@ -10014,11 +10887,13 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js",
-    "case": "FTC-TAGS-026P synthetic-large repeated Edit Tags recovery › repeated saves leave navigation responsive",
+    "case": "FTC-TAGS-026P synthetic-large repeated Edit Tags recovery \u203a repeated saves leave navigation responsive",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
-    "databaseScenarios": ["large-library:repeated-edit-tags-post-edit-navigation"],
+    "databaseScenarios": [
+      "large-library:repeated-edit-tags-post-edit-navigation"
+    ],
     "filesystemScenarios": [
       "media:synthetic-large-library",
       "media-copy:ddt-edit-tags-post-edit"
@@ -10029,7 +10904,7 @@
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:ftc-tags-026p",
-      "filesystemCopy": "media/writable/ДДТ"
+      "filesystemCopy": "media/writable/\u0414\u0414\u0422"
     },
     "ownerApproval": "approved"
   },
@@ -10037,25 +10912,35 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js",
-    "case": "FTC-SEARCH-NAV-029P synthetic-large album-title search performance › correct album becomes visible within the approved budget",
+    "case": "FTC-SEARCH-NAV-029P synthetic-large album-title search performance \u203a correct album becomes visible within the approved budget",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:album-title-search"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
-    "expectedContracts": ["album-title-search-visible-content-timing"],
+    "databaseScenarios": [
+      "large-library:album-title-search"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "album-title-search-visible-content-timing"
+    ],
     "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js",
-    "case": "FTC-SEARCH-NAV-030P synthetic-large track-title search performance › correct album and highlighted track become visible within approved budgets",
+    "case": "FTC-SEARCH-NAV-030P synthetic-large track-title search performance \u203a correct album and highlighted track become visible within approved budgets",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "read-only",
-    "databaseScenarios": ["large-library:track-title-search-highlight"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
+    "databaseScenarios": [
+      "large-library:track-title-search-highlight"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
     "expectedContracts": [
       "track-title-search-visible-content-timing",
       "album-details-matching-track-highlight-timing"
@@ -10073,8 +10958,13 @@
     "appProcessScope": "isolated",
     "appProcessOrder": "after-shared",
     "executionWave": 5,
-    "databaseScenarios": ["functional-core:generated-preview-storage"],
-    "filesystemScenarios": ["media:functional-core", "media-copy:generated-preview-storage"],
+    "databaseScenarios": [
+      "functional-core:generated-preview-storage"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core",
+      "media-copy:generated-preview-storage"
+    ],
     "expectedContracts": [
       "generated-preview-storage-byte-identity",
       "generated-preview-relocation-restart-recovery",
@@ -10087,6 +10977,814 @@
       "filesystemCopy": "media/cases/generated-preview-storage"
     },
     "globalMutationReason": "The case changes the server-wide generated-preview policy and files only in its isolated database, app process, and owned media copy, then verifies reverse relocation and cleans that owned state during teardown.",
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.mobile-layout.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-layout/mobileLayout.spec.js",
+    "case": "mobile Home and empty Search restore the unfiltered artist tree",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "global-mutation",
+    "databaseScenarios": [
+      "generated:phase7-mobile-reset"
+    ],
+    "filesystemScenarios": [
+      "generated:mobile-layout-media"
+    ],
+    "expectedContracts": [
+      "mobile-home-clears-search",
+      "empty-search-restores-unfiltered-artist-tree"
+    ],
+    "ownerApproval": "approved",
+    "globalMutationReason": "The generated mobile suite owns its isolated Postgres database, temporary media and browser contexts; its phase7 fixture resets application rows before each case."
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-SEARCH-NAV-032 watcher sorts I\u2019m with Her before IZZ without changing display names",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": [
+      "watcher:targeted-create-and-artist-collation"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-artist-collation-curly"
+    ],
+    "expectedContracts": [
+      "watcher-production-revision",
+      "targeted-postgres-publication",
+      "leading-punctuation-collation",
+      "display-name-preservation",
+      "restart-idempotent-artist-projection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-artist-collation-curly",
+      "filesystemCopy": "media/cases/watcher-artist-collation-curly"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumArtworkFit.spec.js",
+    "case": "Gallery and Album Details show the full 360x480 cover at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumArtworkFit.spec.js",
+    "case": "Gallery and Album Details show the full 480x360 cover at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumArtworkFit.spec.js",
+    "case": "Gallery and Album Details show the full 360x480 cover at 1440px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumArtworkFit.spec.js",
+    "case": "Gallery and Album Details show the full 480x360 cover at 1440px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "full-artwork-fit-consistency",
+      "no-artwork-crop"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "long track artist credits pan without moving the row at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "track-credit-overflow-pan",
+      "row-position-stability"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "long track artist credits pan without moving the row at 960px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "track-credit-overflow-pan",
+      "row-position-stability"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "Loose Tracks keep #, Track and Length in view and show File path only with room in a 340px table",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-340px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "Loose Tracks keep #, Track and Length in view and show File path only with room in a 760px table",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-keep-track-and-length-in-view-and-show-file-path-only-with-room-in-a-760px-table"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumAdditionalArtbox.spec.js",
+    "case": "two artboxes stay square inside the cover column (new Add art box)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "two-artboxes-stay-square-inside-the-cover-column-new-add-art-box"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/albumAdditionalArtbox.spec.js",
+    "case": "two artboxes stay square inside the cover column (saved art with links)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "two-artboxes-stay-square-inside-the-cover-column-saved-art-with-links"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "mobile Cover Look Up bottom sheet slides up from the bottom edge and rests there",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-cover-look-up-bottom-sheet-slides-up-from-the-bottom-edge-and-rests-there"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/bottomSheetSlide.spec.js",
+    "case": "bottom sheets appear without sliding when the device asks for reduced motion",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bottom-sheets-appear-without-sliding-when-the-device-asks-for-reduced-motion"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/duplicateFolderAlert.spec.js",
+    "case": "duplicate album files alert puts numbered folder buttons beside its text with readable numbers",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "duplicate-album-files-alert-puts-numbered-folder-buttons-beside-its-text-with-readable-numbers"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "desktop poor-art warning sits on the art top-right and expands leftward to its text with no dead space",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "desktop-poor-art-warning-sits-on-the-art-top-right-and-expands-leftward-to-its-text-with-no-dead-space"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "the Album page setting hides the poor-art warning",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the-album-page-setting-hides-the-poor-art-warning"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "mobile poor-art warning sits on the page body top-right, not in the header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-poor-art-warning-sits-on-the-page-body-top-right-not-in-the-header"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artistInfoMobileSheet.spec.js",
+    "case": "mobile artist info sits at the bottom without an anchored trigger outline",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-artist-info-bottom-sheet",
+      "no-trigger-anchor-outline"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/closeButtonConsistency.spec.js",
+    "case": "close controls retain canonical component sizing across modal surfaces",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "canonical-close-control-sizing",
+      "lightbox-keyboard-two-pixel-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupAlbumPage.spec.js",
+    "case": "album-entry Cover Lookup keeps its extractor and uses GalleryBar geometry at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "cover-lookup-extractor-available",
+      "gallery-header-geometry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupAlbumPage.spec.js",
+    "case": "album-entry Cover Lookup keeps its extractor and uses GalleryBar geometry at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "cover-lookup-extractor-available",
+      "gallery-header-geometry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupMobileHeader.spec.js",
+    "case": "mobile Cover Lookup truncates long identity without growing its header at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-mobile-cover-lookup-header",
+      "long-identity-truncation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupMobileHeader.spec.js",
+    "case": "mobile Cover Lookup truncates long identity without growing its header at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-mobile-cover-lookup-header",
+      "long-identity-truncation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupMobileHeader.spec.js",
+    "case": "mobile Cover Lookup truncates long identity without growing its header at 768px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-mobile-cover-lookup-header",
+      "long-identity-truncation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardMetadataMotion.spec.js",
+    "case": "mobile Gallery year stays visible and stationary while its artist pans at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "stationary-visible-release-year",
+      "artist-overflow-motion",
+      "gallery-card-control-retention"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardMetadataMotion.spec.js",
+    "case": "mobile Gallery year stays visible and stationary while its artist pans at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "stationary-visible-release-year",
+      "artist-overflow-motion",
+      "gallery-card-control-retention"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksPerformance.spec.js",
+    "case": "large loose-track sections stay responsive and stable at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-rendering-responsiveness",
+      "collapse-scroll-stability"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/looseTracksPerformance.spec.js",
+    "case": "large loose-track sections stay responsive and stable at 1000px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-track-rendering-responsiveness",
+      "collapse-scroll-stability"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile classic_bar places Gallery-style source badges for its layout at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "mobile-source-badges-on-album-art"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile stacked_bar places Gallery-style source badges for its layout at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "mobile-source-badges-on-album-art"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile editorial_canvas places Gallery-style source badges for its layout at 320px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "mobile-source-badges-on-album-art"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile classic_bar places Gallery-style source badges for its layout at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "mobile-source-badges-on-album-art"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile stacked_bar places Gallery-style source badges for its layout at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "mobile-source-badges-on-album-art"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "mobile editorial_canvas places Gallery-style source badges for its layout at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "mobile-source-badges-on-album-art"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "classic_bar shows source labels beside the album type",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement",
+      "source-labels-and-header-handoff"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/alertActionStability.spec.js",
+    "case": "alert removal action stays in place when hovered and accepts an edge click",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "alert-action-hover-geometry-stability",
+      "alert-removal-edge-click"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/alertActionStability.spec.js",
+    "case": "bare lightbox close has no pointer outline and retains its keyboard focus ring",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "lightbox-close-pointer-style",
+      "lightbox-close-keyboard-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card identities keep exact years with artist section",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card identities keep exact years with gallery header",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryCardIdentity.spec.js",
+    "case": "production card metadata distinguishes numeric artists, unknown years, and absent artists",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-card-canonical-artist-year-identity",
+      "gallery-card-metadata-pom-parity"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "sign-in progress continues on the app document without restarting or uncovering the page",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-continuity",
+      "startup-progress-first-frame-cover"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress keeps a colored bar without a themed palette or the sign-in stylesheet",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-default-colors",
+      "startup-progress-no-width-transition"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress paints its starting stage before the script runs",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-server-painted-stage"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "a startup failure hides the whole meter, never a lone percent",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-failure-hides-meter"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/textOnlyControls.spec.js",
+    "case": "text-only controls never paint a hover fill (parchment-pine)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "text-link-underline-only-hover",
+      "spaced-cover-lookup-subtitle",
+      "bare-album-details-header-actions",
+      "in-page-tabs-no-hover-fill"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/textOnlyControls.spec.js",
+    "case": "text-only controls never paint a hover fill (harbor-mint)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "text-link-underline-only-hover",
+      "spaced-cover-lookup-subtitle",
+      "bare-album-details-header-actions",
+      "in-page-tabs-no-hover-fill"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/notificationIdentity.spec.js",
+    "case": "FTC-COVERS-044 saved notification tracks recover missing identity history without duplicating cards",
+    "profile": "functional-core",
+    "fixtureScenario": "notificationIdentity",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "notification-missing-history",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:missing-identity-history"
+    ],
+    "filesystemScenarios": [
+      "media-copy:notification-missing-history"
+    ],
+    "expectedContracts": [
+      "complete-saved-paths-recover-visible-card",
+      "split-card-requires-visible-release-choice",
+      "deleted-owner-remains-excluded",
+      "notification-membership-stable-through-tag-rename"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:notification-missing-history",
+      "filesystemCopy": "media/cases/notification-missing-history"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "an artist takeover keeps the album count below the aligned artist and info button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-takeover-header-alignment"
+    ],
     "ownerApproval": "approved"
   }
 ]

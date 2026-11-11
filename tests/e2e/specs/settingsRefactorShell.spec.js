@@ -155,7 +155,7 @@ test('FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved edi
 });
 
 test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing', { tag: '@area:settings' }, async ({
-  page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
+  page, freshBrowserSession, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
   const keys = ['problematic-files', 'rules', 'loops', 'log-history', 'integrations', 'appearance'];
@@ -185,6 +185,88 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   await expect(shell.tab('appearance')).toHaveAttribute('aria-selected', 'true');
   await shell.close.click();
   await expect(shell.dialog).toBeHidden();
+  // Owner (11-08 evening, UI-MOBILE-SETTINGS): opening Settings on a phone made the "Settings" page header flash.
+  const phone = (await freshBrowserSession.create({ phone: true })).page;
+  await phone.goto('/');
+  await expect(phone.locator('#mobile-library-button')).toBeVisible();
+  // Owner (11-09): the phone Gallery header keeps its count right under the title, as on web, and every Settings
+  // page header lines up with it: Back where the Gallery hamburger is, then the hamburger, then the title on the
+  // same line and size.
+  // parity-check: allow-read-only-measurement-evaluate -- header geometry of the real phone pages
+  const readHeader = (pg) => pg.evaluate(() => {
+    const box = (selector) => { const node = document.querySelector(selector); if (!node || !node.getClientRects().length) return null;
+      const bounds = node.getBoundingClientRect(); return { x: Math.round(bounds.x), y: Math.round(bounds.y), height: Math.round(bounds.height), bottom: Math.round(bounds.bottom), fontSize: getComputedStyle(node).fontSize }; };
+    return { hamburger: box('#mobile-library-button'), title: box('[data-gallery-bar-instance="gallery"] .gallery-bar__title'),
+      summary: box('[data-gallery-bar-instance="gallery"] .gallery-bar__summary'), back: box('#mobile-back-button'),
+      pageHamburger: box('#mobile-settings-button'), pageTitle: box('#mobile-page-title'), picker: box('#mobile-settings-section-button') };
+  });
+  await phone.goto('/?surface=albums&artist=Mastodon');
+  await expect(phone.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]')).toHaveText('Mastodon');
+  const gallery = await readHeader(phone);
+  expect(gallery.summary.y - gallery.title.bottom).toBeLessThanOrEqual(3);
+  await phone.goto('/');
+  await expect(phone.locator('#mobile-library-button')).toBeVisible();
+  await phone.locator('#app-shell [data-account-menu-trigger]').click();
+  // parity-check: allow-read-only-measurement-evaluate -- record the phone page header on every frame while Settings opens
+  await phone.evaluate(() => {
+    const frames = [];
+    window.__settingsHeaderFrames = frames;
+    window.__settingsHeaderUntil = performance.now() + 2500;
+    const read = () => {
+      const header = document.getElementById('mobile-page-header');
+      const box = header?.getBoundingClientRect();
+      const style = header && getComputedStyle(header);
+      const shown = Boolean(header && !header.hidden && box.height > 0 && style.visibility !== 'hidden' && Number(style.opacity) > 0.05);
+      const title = shown ? String(document.getElementById('mobile-page-title')?.textContent || '').trim() : '';
+      const entry = shown ? `shown|${title}|${Math.round(box.top)}:${Math.round(box.height)}` : 'hidden';
+      if (frames.at(-1) !== entry) frames.push(entry);
+      // UI-MOBILE-SETTINGS (11-09): the device selector and the section's controls never change look while it loads.
+      const selector = document.querySelector('#mobile-page-outlet .appearance-device-selector');
+      if (selector?.getClientRects().length) {
+        const devices = [...selector.querySelectorAll('button')].map((button) => `${button.textContent.trim()}:${button.disabled ? 'locked' : 'open'}:${button.getAttribute('aria-pressed')}:${getComputedStyle(button).opacity}`).join(',');
+        const control = document.querySelector('#mobile-page-outlet .appearance-device-fields button');
+        const look = `${devices}|${control ? getComputedStyle(control).opacity : 'none'}`;
+        const looks = (window.__appearanceLooks ||= []);
+        if (looks.at(-1) !== look) looks.push(look);
+      }
+      if (frames.length < 200 && performance.now() < window.__settingsHeaderUntil) requestAnimationFrame(read);
+    };
+    requestAnimationFrame(read);
+  });
+  await phone.locator('#app-shell [data-open-utilities]').click();
+  await expect(phone.locator('#mobile-page-outlet #utility-modal')).toBeVisible();
+  // Settings opens on Appearance, titled with that section from the first frame.
+  await expect(phone.locator('#mobile-page-title')).toHaveText('Appearance');
+  await expect.poll(async () => (await readHeader(phone)).back?.y).toBe(gallery.hamburger.y);
+  const settings = await readHeader(phone);
+  expect({ x: settings.back.x, y: settings.back.y }).toEqual({ x: gallery.hamburger.x, y: gallery.hamburger.y });
+  expect(settings.pageHamburger.y).toBe(gallery.hamburger.y);
+  expect(settings.pageHamburger.x).toBeGreaterThan(settings.back.x);
+  expect(settings.pageTitle.x).toBeGreaterThan(settings.pageHamburger.x);
+  expect({ y: settings.pageTitle.y, height: settings.pageTitle.height, fontSize: settings.pageTitle.fontSize })
+    .toEqual({ y: gallery.title.y, height: gallery.title.height, fontSize: gallery.title.fontSize });
+  expect(Math.abs((settings.picker.y + settings.picker.height / 2) - (gallery.hamburger.y + gallery.hamburger.height / 2))).toBeLessThanOrEqual(1);
+  // The hamburger is bare and the section picker is the shared Button.
+  await expect(phone.locator('#mobile-settings-button')).toHaveClass(/action-button--bare/);
+  await expect(phone.locator('#mobile-settings-section-button')).toHaveClass(/\bui-button\b/);
+  // Owner (11-09): the phone shows the web device selector, with only Mobile unlocked.
+  const devices = phone.locator('#mobile-page-outlet .appearance-device-selector button');
+  await expect(devices).toHaveText(['Web / Desktop', 'Mobile', 'TV']);
+  await expect(devices.nth(0)).toBeDisabled();
+  await expect(devices.nth(1)).toBeEnabled();
+  await expect(devices.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(devices.nth(2)).toBeDisabled();
+  const [webBox, mobileBox] = await Promise.all([devices.nth(0).boundingBox(), devices.nth(1).boundingBox()]);
+  expect(Math.abs(webBox.y - mobileBox.y)).toBeLessThanOrEqual(1);
+  expect(mobileBox.x - (webBox.x + webBox.width)).toBeLessThanOrEqual(0);
+  await phone.waitForFunction(() => performance.now() > window.__settingsHeaderUntil);
+  const frames = await phone.evaluate(() => window.__settingsHeaderFrames);
+  // Hidden on the gallery, then one stable header that never disappears, moves or retitles.
+  expect(frames, JSON.stringify(frames)).toHaveLength(2);
+  expect(frames[0]).toBe('hidden');
+  expect(frames[1]).toMatch(/^shown\|Appearance\|/);
+  const looks = await phone.evaluate(() => window.__appearanceLooks || []);
+  expect(looks, JSON.stringify(looks)).toHaveLength(1);
 });
 
 test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard anchor focus', { tag: '@area:settings' }, async ({

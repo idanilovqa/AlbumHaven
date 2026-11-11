@@ -116,6 +116,17 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
     expect(summary.title).toContain(`${ORDINARY_ALBUM_ARTIST} • ${ORDINARY_ALBUM}`);
     const credits = await trackModalActions.readTrackCredits(ORDINARY_TRACK_CREDITS.length);
     expect(credits).toEqual(ORDINARY_TRACK_CREDITS);
+    const semicolonCredit = await trackModalActions.readTrackCreditAt(3);
+    await expect(trackModalActions.trackModal.trackTitleAt(3)).toBeVisible();
+    await expect(trackModalActions.trackModal.secondaryArtistAt(3)).toBeVisible();
+    expect(semicolonCredit).toEqual({
+      title: 'Semicolon Feature Signal',
+      secondaryArtist: 'feat. Guest One, Guest Two',
+    });
+    expect(await trackModalActions.readTrackAt(3)).toMatchObject({
+      title: 'Semicolon Feature Signal',
+      artist: `${ORDINARY_ALBUM_ARTIST}; Guest One; Guest Two; Guest One`,
+    });
     await trackModalActions.close();
   });
 
@@ -225,7 +236,16 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       expect(artworkBounds).not.toBeNull();
       expect(pathBounds).not.toBeNull();
       expect(pathBounds.x).toBeGreaterThanOrEqual(artworkBounds.x + artworkBounds.width);
-      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('');
+      // UI-6 (owner, 11-08 evening): the open-folder button sits at the right edge of the path row.
+      await expect(tagEditorActions.tagEditor.folderOpenButton).toBeVisible();
+      // parity-check: allow-read-only-measurement-evaluate -- right edge of the button against the row's content box
+      const folderRowRightGap = await tagEditorActions.tagEditor.folderOpenButton.evaluate((button) => {
+        const row = button.closest('#tag-editor-artwork');
+        const rowRight = row.getBoundingClientRect().right - parseFloat(getComputedStyle(row).paddingRight || '0');
+        return rowRight - button.getBoundingClientRect().right;
+      });
+      expect(Math.abs(folderRowRightGap)).toBeLessThanOrEqual(1);
+      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('Load all tracks from the folder');
 
       const pendingTitle = 'Pending folder expansion title';
       await tagEditorActions.setTrackName(pendingTitle);
@@ -379,12 +399,16 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
 
   await stepLogger.step('Show the exact main-album and bonus-disc durations', async () => {
     const groups = await trackModalActions.readDiscGroupPresentation();
-    expect(groups.headers).toEqual(['Bonus Disc']);
+    expect(groups.headers).toEqual(['CD 1', 'Bonus Disc']);
     expect(groups.totals).toEqual([
-      'Total Length: 25m 30s',
       'Total Main Album Length: 3:00',
       'Bonus Disc Length: 22:30',
+      'Total Length: 25m 30s',
     ]);
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotalDisc.locator('.album-track-table__disc-heading'))
+      .toHaveCount(0);
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveCount(1);
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveCSS('white-space', 'nowrap');
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 25m 30s');
     await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');

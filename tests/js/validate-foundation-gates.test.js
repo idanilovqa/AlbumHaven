@@ -71,7 +71,7 @@ test('performance CI isolates application, trusted workflow, and pinned generato
   assert.match(job, /name:\s*Checkout pull request[\s\S]*?ref:\s*\$\{\{\s*github\.sha\s*\}\}[\s\S]*?path:\s*album-haven-app/);
   assert.match(job, /name:\s*Checkout trusted fixture downloader[\s\S]*?path:\s*album-haven-trusted-ci/);
   assert.match(job, /repository:\s*idanilovqa\/album-haven-test-data/);
-  assert.match(job, /ref:\s*b7ffc6b586fd5b25a049617c5e95fbdcccfddc11/);
+  assert.match(job, /ref:\s*38aa02ef034c6235362950946fdf15a4a9a65dc4/);
   assert.match(job, /path:\s*album-haven-test-data/);
   assert.doesNotMatch(job, /path:\s*album-haven-app[\\/]album-haven-test-data/);
   assert.match(job, /working-directory:\s*\$\{\{\s*github\.workspace\s*\}\}\\album-haven-app/);
@@ -134,7 +134,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 229);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 294);
 
   assert.deepEqual(
     validator.validatePytestCollection(

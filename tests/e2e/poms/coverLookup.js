@@ -7,10 +7,18 @@ export class CoverLookup extends BasePage {
     this.mobilePage = page.locator('#cover-lookup-modal.is-mobile-page');
     this.mobileSheet = page.locator('#cover-lookup-modal.is-mobile-sheet');
     this.mobileBackButton = page.locator('#mobile-back-button');
+    this.splitReleaseChooser = page.getByRole('dialog', { name: 'Choose the current release' });
+    this.splitReleaseChoices = this.splitReleaseChooser.locator('[data-cover-lookup-split-release]');
+    this.splitReleaseOpenButton = this.splitReleaseChooser.getByRole('button', { name: 'Open Cover Look Up', exact: true });
     this.modalDialog = page.locator(this.modalDialogSelector);
     this.modalHeader = this.modal.locator('.cover-lookup-modal-header');
     this.modalBody = page.locator(this.modalBodySelector);
     this.modalSubtitle = page.locator(this.modalSubtitleSelector);
+    this.albumDetailsLink = this.modalSubtitle.locator("[data-open-cover-lookup-album-details]");
+    // A split notification asks for its current release in the shared app-form dialog (NavigationTree wide items).
+    this.splitChoiceDialog = this.page.locator('#app-form-modal');
+    this.currentReleaseChoices = this.splitChoiceDialog.locator('[data-cover-lookup-split-release]');
+    this.openChosenReleaseButton = this.splitChoiceDialog.getByRole('button', { name: 'Open Cover Look Up', exact: true });
     this.modalStatus = page.locator(this.modalStatusSelector);
     this.modalStatusTitle = this.modalStatus.locator('.on-page-alert__title');
     this.modalStatusMessage = this.modalStatus.locator('.on-page-alert__message');
@@ -40,6 +48,7 @@ export class CoverLookup extends BasePage {
     this.inactiveLocalCoverCards = this.modalBody
       .locator('[data-select-local-cover]:not([data-cover-lookup-local-active])');
     this.remoteCoverCards = this.modalBody.locator('[data-select-remote-cover]');
+    this.suggestedCoverCards = this.modalBody.locator('.is-suggested');
     this.firstRemoteCoverCard = this.remoteCoverCards.first();
     this.savedRemoteCoverCards = this.modalBody.locator('[data-cover-lookup-saved-remote]');
     this.savedRemoteCoverCard = this.savedRemoteCoverCards.first();
@@ -543,6 +552,47 @@ export class CoverLookup extends BasePage {
     ).first();
   }
 
+  async startLocalInventoryObservation(expectedCount) {
+    // parity-check: allow-read-only-measurement-evaluate -- Observe rendered inventory, never application state.
+    return this.modalBody.evaluateHandle((body, expected) => {
+      const observation = { samples: [], sawKnownCards: false };
+      const sample = () => {
+        if (!body.getClientRects().length) return;
+        const count = body.querySelectorAll('[data-select-local-cover]').length;
+        const placeholders = body.querySelectorAll('[data-cover-lookup-loading-section="local"]').length;
+        const empty = Array.from(body.querySelectorAll('.cover-lookup-empty'))
+          .some((element) => element.textContent.includes('No local cover art'));
+        observation.samples.push({
+          empty,
+          // INT-028: while LOCAL lists, only covers already known (the album's own) show as placeholders.
+          wrongPlaceholderCount: placeholders > expected,
+          lostKnownCards: observation.sawKnownCards && count !== expected,
+        });
+        if (count === expected) observation.sawKnownCards = true;
+      };
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(body, { childList: true, subtree: true });
+      sample();
+      return observation;
+    }, expectedCount);
+  }
+
+  remotePreviewById(candidateId) {
+    return this.remoteCoverCardById(candidateId).locator('.cover-lookup-art-preview');
+  }
+
+  async finishLocalInventoryObservation(handle) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- Read and stop the rendered inventory observer.
+      return await handle.evaluate((observation) => {
+        observation.observer.disconnect();
+        return { sawKnownCards: observation.sawKnownCards, samples: observation.samples };
+      });
+    } finally {
+      await handle.dispose();
+    }
+  }
+
   async startRemoteCandidateContinuityObservation(expectedIds) {
     // parity-check: allow-read-only-measurement-evaluate -- Cover Lookup owns candidate-card continuity evidence
     return this.modalBody.evaluateHandle((body, expectedCandidateIds) => {
@@ -689,6 +739,10 @@ export class CoverLookup extends BasePage {
     return this.taskCardById(taskId).locator(this.taskStatusWithinCardSelector).first();
   }
 
+  taskProgressWithin(card) {
+    return card.locator('.cover-lookup-task-progress > span');
+  }
+
   taskBylineByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-byline');
   }
@@ -703,5 +757,11 @@ export class CoverLookup extends BasePage {
 
   taskOpenButtonByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).locator(this.taskOpenButtonWithinCardSelector).first();
+  }
+
+  splitReleaseChoiceByTitle(albumName) {
+    return this.splitReleaseChoices.filter({
+      has: this.page.locator('.utility-list-item-title', { hasText: albumName }),
+    });
   }
 }

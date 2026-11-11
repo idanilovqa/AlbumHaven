@@ -24,6 +24,38 @@ test.beforeEach(async () => {
   expect(response.ok).toBeTruthy();
 });
 
+test('mobile Home and empty Search restore the unfiltered artist tree', async ({ page }) => {
+  const app = new MobileLayoutPage(page);
+  await page.goto('/');
+  await login(app);
+  await app.libraryButton.click();
+  await expect(app.artistTreeEntries.first()).toBeVisible();
+  const rootArtists = await app.artistTreeEntries.allTextContents();
+  expect(rootArtists.length).toBeGreaterThan(1);
+  await app.allArtists.click();
+  await app.searchButton.click();
+  await app.searchInput.fill('Northlight');
+  await app.searchInput.press('Enter');
+  await expect(app.galleryCards.first()).toBeVisible();
+  await app.revealHeaderActions();
+  await app.libraryButton.click();
+  await expect(app.artist('Northlight')).toBeVisible();
+  await expect.poll(() => app.artistTreeEntries.allTextContents()).not.toEqual(rootArtists);
+  await app.homeLink.click();
+  await expect(app.home).toBeVisible();
+  await app.libraryButton.click();
+  await expect.poll(() => app.artistTreeEntries.allTextContents()).toEqual(rootArtists);
+  await app.libraryButton.click();
+  await app.searchButton.click();
+  await expect(app.searchInput).toHaveValue('');
+  await app.searchInput.press('Enter');
+  await app.revealHeaderActions();
+  await app.libraryButton.click();
+  await expect(app.artistHeading).toHaveText('Artists');
+  await expect.poll(() => app.artistTreeEntries.allTextContents()).toEqual(rootArtists);
+  await expect(page).not.toHaveURL(/[?&]q=[^&]+/);
+});
+
 test('mobile login, Home rows, artist drawer, search and right-side family panel', async ({ page }) => {
   const app = new MobileLayoutPage(page);
   const errors = [];

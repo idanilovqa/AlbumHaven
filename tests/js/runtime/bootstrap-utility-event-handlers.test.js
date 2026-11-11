@@ -60,11 +60,8 @@ test('dismissing an interrupted cover lookup notice clears and rerenders it', ()
   );
 });
 
-test('split release choices use the shared Cover Lookup rebind action', () => {
-  assert.match(
-    helperSource,
-    /closest\('\[data-cover-lookup-current-release\]'\)[\s\S]*?chooseCoverLookupCurrentRelease\([\s\S]*?getAttribute\('data-cover-lookup-current-release'\)/,
-  );
+test('split release choices are no longer rendered inside Cover Lookup', () => {
+  assert.doesNotMatch(helperSource, /data-cover-lookup-current-release|chooseCoverLookupCurrentRelease/);
 });
 
 test('Album Details split choices use the current-release selector action', () => {
@@ -173,6 +170,7 @@ function createContext(stateOverrides = {}) {
     problemFilterButton: {
       classList: { toggle() {} },
       setAttribute() {},
+      focus() { this.focused = true; },
     },
   };
   const context = {
@@ -319,21 +317,21 @@ test('clicking the filter search input dismisses only the dropdown without consu
   assert.equal(context.state.utility.selectedProblemFilters, selected);
 });
 
-test('Cover Lookup hydrates the clicked album before opening its gallery', async () => {
+test('Cover Lookup opens from the current album without waiting for hydration', async () => {
   const { context } = createContext();
-  const hydratedAlbum = {
+  const compactAlbum = {
     key: 'revelations-of-divine-love',
-    tracks: [{ path: 'C:\\Music\\Revelations of Divine Love\\01 Track.mp3' }],
+    preview_only: true,
   };
   const button = createElement({ 'data-open-track-modal-cover-lookup': '1' });
   const click = createEvent({ '[data-open-track-modal-cover-lookup="1"]': button });
   let openedAlbum = null;
-  context.resolveTrackModalActionAlbum = () => {
-    assert.fail('Cover Lookup must not use the compact synchronous resolver');
-  };
-  context.resolveHydratedTrackModalActionAlbum = async (candidate) => {
+  context.resolveTrackModalActionAlbum = (candidate) => {
     assert.equal(candidate, button);
-    return hydratedAlbum;
+    return compactAlbum;
+  };
+  context.resolveHydratedTrackModalActionAlbum = async () => {
+    assert.fail('the modal shell must not wait for Album Details hydration');
   };
   context.openCoverLookupModal = (album) => {
     openedAlbum = album;
@@ -342,7 +340,7 @@ test('Cover Lookup hydrates the clicked album before opening its gallery', async
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.strictEqual(openedAlbum, hydratedAlbum);
+  assert.strictEqual(openedAlbum, compactAlbum);
 });
 
 test('Fast Cover Search hydrates its album and passes its clicked control to immediate busy feedback', async () => {
@@ -373,7 +371,7 @@ test('Fast Cover Search hydrates its album and passes its clicked control to imm
   assert.equal(startCall.options.triggerButton, button);
 });
 
-for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-chips', '.utility-problem-filter-button']) {
+for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-button']) {
   test(`clicking within ${ancestor} preserves its normal dropdown behavior`, async () => {
     const { context, calls } = createContext();
     const element = createElement();
@@ -452,6 +450,28 @@ test('switching Settings tabs paints selected navigation before loading panel co
   assert.deepEqual(events, ['select:rules', 'shell', 'load', 'render']);
 });
 
+test('switching from Rules clears its tree before Problematic Files data arrives', () => {
+  const list = { dataset: { utilityNavigationOwner: 'rules' }, innerHTML: 'Rules tree', scrollTop: 120 };
+  const detail = { innerHTML: 'Rule detail', classList: { remove() {} }, setAttribute() {} };
+  const count = { textContent: '7' };
+  const sidebarLabel = { textContent: 'Rules' };
+  const tab = { textContent: 'Problematic Files', getAttribute: () => 'problematic-files',
+    classList: { toggle() {} }, setAttribute() {} };
+  const context = vm.createContext({
+    state: { utility: { activeTab: 'problematic-files' } },
+    getUtilityModalElements: () => ({ list, detail, count, sidebarLabel, tabs: [tab] }),
+  });
+  vm.runInContext(utilityRenderersSource, context);
+  context.syncUtilityTabAlignment = () => {};
+  context.renderUtilityModalContent({ shellOnly: true });
+  assert.doesNotMatch(list.innerHTML, /Rules tree/);
+  assert.match(list.innerHTML, /Loading/);
+  assert.match(detail.innerHTML, /Loading/);
+  assert.equal(sidebarLabel.textContent, 'Problematic Files');
+  assert.equal(count.textContent, '');
+  assert.equal(list.scrollTop, 0);
+});
+
 test('Settings shell-only render stops before active panel rendering', () => {
   const shellReturn = utilityRenderersSource.indexOf('if (options.shellOnly === true) {');
   const problematicRender = utilityRenderersSource.indexOf('renderProblematicFiles(options);');
@@ -501,14 +521,15 @@ test('applying a problem filter preserves the selected album in the live bootstr
       { key: 'album-2', problem_reasons: ['Missing cover art'] },
     ],
     selectedProblematicKey: 'album-1',
+    problemDropdownOpen: true,
   });
   const filterContainer = createElement();
   const { event, wasPrevented } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
-  });
+  }, { detail: 0 });
 
   context.handleUtilityBootstrapClick(event);
 
@@ -519,6 +540,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
   assert.equal(context.state.utility.problemDropdownOpen, false);
   assert.equal(context.state.utility.showRepairedDisplay, true);
   assert.equal(calls.renders, 1);
+  assert.equal(context.getUtilityModalElements().problemFilterButton.focused, true);
 });
 
 test('applying a problem filter clears the selected album in the live bootstrap handler when it no longer matches', () => {
@@ -528,10 +550,11 @@ test('applying a problem filter clears the selected album in the live bootstrap 
       { key: 'album-2', problem_reasons: ['Poor art quality'] },
     ],
     selectedProblematicKey: 'album-1',
+    problemDropdownOpen: true,
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -559,7 +582,7 @@ test('applying a problem filter responds before the complete Problematic Files s
   };
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -621,29 +644,22 @@ for (const initiallySelected of [false, true]) {
   });
 }
 
-test('removing a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
-  const { context } = createContext({
-    problematicFiles: [
-      { key: 'album-1', problem_reasons: ['Poor art quality', 'Missing year'] },
-      { key: 'album-2', problem_reasons: ['Missing year'] },
-    ],
-    selectedProblematicKey: 'album-1',
-    selectedProblemFilters: ['Poor art quality', 'Missing year'],
-  });
-  const filterContainer = createElement();
-  const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
-    '[data-remove-problem-filter]': createElement({
-      'data-remove-problem-filter': 'Poor art quality',
-    }),
+test('clicking the Problematic Files album name opens its Album Details above Settings', () => {
+  const album = { key: 'album-1', name: 'Ремиксы', tracks: [] };
+  const { context } = createContext({ problematicFiles: [album], selectedProblematicKey: 'album-1' });
+  const opened = [];
+  context.getSelectedProblematicAlbum = () => album;
+  context.openTrackModal = (...args) => opened.push(args);
+  const { event, wasPrevented } = createEvent({
+    '[data-open-problematic-album-details="1"]': createElement(),
   });
 
   context.handleUtilityBootstrapClick(event);
 
-  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Missing year']);
-  assert.equal(context.state.utility.deferProblematicAutoSelection, true);
-  assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(wasPrevented(), true);
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][0], album);
+  assert.deepEqual(JSON.parse(JSON.stringify(opened[0][1])), { foreground: true });
 });
 
 test('clicking a problematic album row clears deferred auto-selection in the live bootstrap handler', async () => {
@@ -1057,7 +1073,7 @@ test('applying the base incomplete-order filter preserves a selection after deta
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Incomplete track order',
     }),
@@ -1101,7 +1117,7 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 1 });
 
@@ -1115,6 +1131,24 @@ test('opening a cover lookup task keeps the drawer open behind the task modal', 
   ]);
 });
 
+for (const descendant of ['#tag-editor-modal', '#tag-edit-confirm-modal']) {
+  test(`${descendant} clicks preserve the notification drawer and its scroll anchor`, async () => {
+    const { context } = createContext();
+    context.state.coverLookup.drawerOpen = true;
+    context.state.coverLookup.drawerScrollTop = 71;
+    let renders = 0;
+    context.renderCoverLookupDrawer = () => { renders += 1; };
+    const tagEditor = createElement();
+    const { event } = createEvent();
+    event.target.closest = selector => selector.split(',').some(item => item.trim() === descendant)
+      ? tagEditor : null;
+    await context.handleUtilityBootstrapClick(event);
+    assert.equal(context.state.coverLookup.drawerOpen, true);
+    assert.equal(context.state.coverLookup.drawerScrollTop, 71);
+    assert.equal(renders, 0);
+  });
+}
+
 test('Album Details interactions do not close Notifications behind it', async () => {
   const { context } = createContext();
   context.state.coverLookup.drawerOpen = true;
@@ -1122,7 +1156,7 @@ test('Album Details interactions do not close Notifications behind it', async ()
   context.renderCoverLookupDrawer = () => { renders += 1; };
   const trackModal = createElement();
   const { event } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': trackModal,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': trackModal,
   });
 
   await context.handleUtilityBootstrapClick(event);
@@ -1211,7 +1245,7 @@ test('drag-selecting cover lookup task text suppresses only its immediate click 
   });
   taskButton.contains = (node) => node === selectedTextNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1278,7 +1312,7 @@ test('an ordinary click opens a cover lookup task when its preexisting text sele
   });
   taskButton.contains = (node) => node === anchorNode || node === focusNode;
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1331,7 +1365,7 @@ test('a moved notification-title drag suppresses its immediate card click when m
     'data-open-cover-lookup-task': 'cover-task-drag',
   });
   const gestureSelectors = {
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   };
 
@@ -1381,7 +1415,7 @@ test('keyboard activation opens a cover lookup task while unrelated page text re
     'data-open-cover-lookup-task': 'cover-task-12',
   });
   const { event, wasPrevented } = createEvent({
-    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal': taskButton,
+    '#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal': taskButton,
     '[data-open-cover-lookup-task]': taskButton,
   }, { detail: 0 });
 
@@ -1500,4 +1534,50 @@ test('confirming local cover deletion forwards the retained path exactly once', 
 
   assert.equal(wasPrevented(), true);
   assert.deepEqual(paths, ['C:\\Music\\Artist\\Album\\Front.jpg']);
+});
+
+test('a click inside the shared app-form dialog (split-release chooser) keeps the Cover Look Up drawer open', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'bootstrap-utility-event-handlers.js'), 'utf8');
+  assert.match(source, /closest\('#cover-lookup-drawer, [^']*#app-form-modal'\)[\s\S]{0,80}state\.coverLookup\.drawerOpen/);
+});
+
+test('returning to Problematic Files from Rules reuses the loaded list without another summary request', async () => {
+  // Owner regression: PF -> Rules -> PF must never pay for the summary again.
+  const { context } = createContext({ activeTab: 'problematic-files', loaded: false, rulesLoaded: true });
+  vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
+  const requests = [];
+  const summary = (complete) => ({
+    ok: true, complete, items: [{ key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: false }],
+    initial_detail: { key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: true, tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [] }, operational_items: [],
+  });
+  context.fetch = async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => summary(!String(url).includes('limit=')) };
+  };
+  context.scheduleBrowserAnimationFrame = callback => { callback(); return 1; };
+  context.renderUtilityModalContent = () => {};
+  context.showToast = () => {};
+  context.loadUtilityRules = () => {};
+  context.setUtilityActiveTab = nextTab => { context.state.utility.activeTab = nextTab; return nextTab; };
+  context.getTagEditorElements = () => ({});
+  context.waitForUtilityTabPaint = async () => {};
+  context.document.getElementById = () => null;
+  const clickTab = tab => context.handleUtilityBootstrapClick(createEvent({
+    '[data-utility-tab]': createElement({ 'data-utility-tab': tab }),
+  }).event);
+
+  const errors = [];
+  context.console = { ...console, error: (...args) => errors.push(args.map(String).join(' ')) };
+  await context.loadProblematicFiles(true, { render: false });
+  assert.deepEqual(errors, []);
+  const summaryRequests = () => requests.filter(url => url.startsWith('/utilities/problematic-files') && !url.includes('/detail'));
+  assert.equal(context.state.utility.loaded, true);
+  assert.equal(context.state.utility.problematicFilesComplete, true);
+  const loadedCount = summaryRequests().length;
+
+  await clickTab('rules');
+  await clickTab('problematic-files');
+
+  assert.equal(context.state.utility.activeTab, 'problematic-files');
+  assert.equal(summaryRequests().length, loadedCount, `unexpected reload: ${requests.join(', ')}`);
 });

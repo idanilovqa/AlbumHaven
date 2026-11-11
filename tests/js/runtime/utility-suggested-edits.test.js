@@ -530,3 +530,15 @@ for (const allowed of [true, false]) {
     assert.equal(/\bdisabled(?:\s|=|>)/u.test(selected), !allowed);
   });
 }
+
+test('Problematic Files detail uses the shared cover preview cache', () => {
+  const { context, album } = detailContext();
+  album.cover_path = 'family-preview';
+  context.buildAlbumDisplayCoverUrl = () => '/cover?path=family-preview';
+  context.buildAlbumLightboxCoverUrl = () => '/cover?path=family-full';
+
+  const html = context.buildProblematicAlbumDetail(album);
+
+  assert.match(html, /data-gallery-cover-src="\/cover\?path=family-preview"/);
+  assert.doesNotMatch(html, /<img[^>]+\ssrc=/);
+});

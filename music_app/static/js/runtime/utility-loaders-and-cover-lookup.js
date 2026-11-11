@@ -1,10 +1,12 @@
 async function loadProblematicFiles(force = false, options = {}) {
-  const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
+  // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
+  const renderRequested = () => (options.render === 'when-open'
+    ? isUtilityModalOpen()
+    : options.render !== false);
+  const shouldRender = () => renderRequested() && state.utility.activeTab === 'problematic-files';
   const shouldRenderInitialPage = () => (
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
-    && !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
   );
   const canRenderBoundedPage = () => (
     !String(state.utility.searchQuery || '').trim()
@@ -29,6 +31,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     && pendingCompleteLoad.problematicSummaryRequestToken
       === Number(state.utility.problematicSummaryRequestToken || 0)
   ) {
+    // Returning to the tab while the complete list loads shows the first page
+    // it already has, not the tab shell's "Loading..." until the list completes.
+    if (state.utility.loaded && shouldRenderInitialPage()) renderUtilityModalContent();
     return pendingCompleteLoad;
   }
   if (state.utility.loaded && !force) {
@@ -98,13 +103,21 @@ async function loadProblematicFiles(force = false, options = {}) {
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
+        // A track-opened album stays listed until the complete list can confirm it.
+        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedAlbum = pinnedKey && data.complete === false
+          && !summaryItems.some((item) => item.key === pinnedKey)
+          ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
+          : null;
+        if (data.complete !== false) state.utility.pinnedProblematicKey = '';
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
-        });
+          // Visible problem controls stay usable until the forced refresh replaces them.
+          return item === selectedSummary ? selectedDetail : item;
+        }).concat(pinnedAlbum ? [pinnedAlbum] : []);
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
@@ -124,14 +137,15 @@ async function loadProblematicFiles(force = false, options = {}) {
       settleInitialSummary(state.utility.problematicFiles);
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
+        scheduleProblematicServerSearch();
         const completePayloadPromise = fetchSummary('/utilities/problematic-files');
         if (state.utility.loadPromise === requestPromise) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
         }
-        if (canRenderBoundedPage()
-            && ((shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
-              || shouldRenderInitialPage())) {
+        if ((canRenderBoundedPage()
+            && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
+            || shouldRenderInitialPage()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -217,6 +231,46 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.loadPromise = requestPromise;
   state.utility.completeLoadPromise = requestPromise;
   return requestPromise;
+}
+
+let problematicServerSearchTimer = 0;
+
+// Until the complete list arrives, a search also asks the server, which searches
+// every album, so matches beyond the first page appear without waiting.
+function scheduleProblematicServerSearch() {
+  if (problematicServerSearchTimer) clearBrowserTimeout(problematicServerSearchTimer);
+  problematicServerSearchTimer = 0;
+  const query = String(state.utility.searchQuery || '').trim();
+  // One character matches most of a library; the loaded rows answer it.
+  if (query.length < 2 || state.utility.problematicFilesComplete !== false) return;
+  problematicServerSearchTimer = scheduleBrowserTimeout(() => {
+    problematicServerSearchTimer = 0;
+    void searchProblematicFilesOnServer(query);
+  }, 250);
+}
+
+async function searchProblematicFilesOnServer(query) {
+  const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  let data;
+  try {
+    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return;
+    data = await response.json();
+  } catch (error) {
+    console.warn('[AlbumHaven][Utilities] Problematic Files search failed.', error);
+    return;
+  }
+  // The complete list, a newer query or a reload supersedes this answer.
+  if (String(state.utility.searchQuery || '').trim() !== query
+    || state.utility.problematicFilesComplete !== false
+    || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken) return;
+  const known = new Set((state.utility.problematicFiles || []).map((item) => item?.key));
+  const found = (Array.isArray(data?.items) ? data.items : []).filter((item) => item?.key && !known.has(item.key));
+  if (!found.length) return;
+  state.utility.problematicFiles = [...state.utility.problematicFiles, ...found];
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
 }
 
 async function waitForProblematicFilesComplete() {
@@ -425,6 +479,24 @@ function validateProblematicSummaryPayload(payload) {
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
     operationalItems,
   };
+}
+
+// Album Details opens a track's album directly: waiting for the complete list
+// took tens of seconds on a large library whenever the album was off page one.
+async function loadProblematicAlbumDetailForTrackPath(trackPath) {
+  const path = String(trackPath || '').trim();
+  if (!path) return null;
+  try {
+    const response = await fetch(`/utilities/problematic-files/detail?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return validateProblematicDetailPayload(data, String(data?.key || '').trim());
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to load the problematic album for a track.', error);
+    return null;
+  }
 }
 
 function validateProblematicDetailPayload(payload, requestedKey) {
@@ -883,6 +955,8 @@ function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
   owner.summary = null;
+  owner.rememberedTotal = null;
+  owner.refreshingTotal = false;
   owner.loading = false;
   owner.loadPromise = null;
   return owner;
@@ -913,6 +987,54 @@ function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
   };
 }
 
+const LASTFM_TOTAL_STORAGE_PREFIX = 'albumHaven.lastfmTotal.';
+
+function readRememberedLastfmTotal(username) {
+  try {
+    const stored = localStorage.getItem(LASTFM_TOTAL_STORAGE_PREFIX + username);
+    const total = stored === null ? NaN : Number(stored);
+    return Number.isInteger(total) && total >= 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberLastfmTotal(username, total) {
+  if (total == null) return;
+  try {
+    localStorage.setItem(LASTFM_TOTAL_STORAGE_PREFIX + username, String(total));
+  } catch {
+    // Remembering is a convenience; the next refresh shows the total anyway.
+  }
+}
+
+function paintLastfmTotal(owner) {
+  const node = document.querySelector('#utility-modal [data-lastfm-total]');
+  if (node) node.textContent = `LastFM Total: ${formatLastfmTotal(owner)}`;
+}
+
+// Asking Last.fm takes seconds: the page shows the last known total at once
+// and this replaces only that number when the fresh one arrives.
+async function refreshLastfmTotal(owner, requestGeneration, username) {
+  const isCurrent = () => state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration;
+  owner.refreshingTotal = true;
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles?refresh_total=1', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    const total = data.lastfm_total == null ? NaN : Number(data.lastfm_total);
+    if (!response.ok || !data.ok || !Number.isInteger(total) || total < 0 || !isCurrent() || !owner.summary) return;
+    owner.summary = { ...owner.summary, lastfm_total: total };
+    rememberLastfmTotal(username, total);
+  } catch (error) {
+    console.warn('[AlbumHaven][Integrations] Failed to refresh the Last.fm total.', error);
+  } finally {
+    if (isCurrent()) {
+      owner.refreshingTotal = false;
+      paintLastfmTotal(owner);
+    }
+  }
+}
+
 async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
   const owner = ensureLastfmScrobbleState();
   if (!lastfm?.connected) {
@@ -921,6 +1043,9 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
   }
   if (owner.loading && !replace) return owner.loadPromise;
   const requestGeneration = ++owner.requestGeneration;
+  const username = String(lastfm.username || '');
+  owner.rememberedTotal = readRememberedLastfmTotal(username);
+  owner.refreshingTotal = false;
   owner.loading = true;
   renderUtilityModalContent();
   const loadPromise = (async () => {
@@ -929,7 +1054,11 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
-        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        const summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        if (summary.lastfm_total == null) summary.lastfm_total = owner.summary?.lastfm_total ?? owner.rememberedTotal;
+        else rememberLastfmTotal(username, summary.lastfm_total);
+        owner.summary = summary;
+        if (data.lastfm_total_current === false) void refreshLastfmTotal(owner, requestGeneration, username);
       }
       return owner.summary;
     } catch (error) {
@@ -1144,6 +1273,27 @@ async function runLocalPlaylistImportAnalysis() {
   }
 }
 
+// A prefetch this recent is as fresh as a forced reload; inventory changes
+// still refresh an open list through the status poll.
+const PROBLEMATIC_PREFETCH_FRESH_MS = 5000;
+
+function isUtilityModalOpen() {
+  const overlay = getUtilityModalElements().overlay;
+  return Boolean(overlay && !overlay.hidden);
+}
+
+// Opening the account menu signals Settings: when Settings would open on
+// Problematic Files, overlap its cold first page with the menu interaction.
+function prefetchProblematicFilesForSettingsIntent() {
+  if (isUtilityModalOpen() || state.utility.activeTab !== 'problematic-files') return;
+  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allowsUtilityTab('problematic-files')) return;
+  if (state.utility.loading || state.utility.completeLoadPromise) return;
+  state.utility.problematicPrefetchedAt = Date.now();
+  void loadProblematicFiles(true, { render: 'when-open' });
+}
+
 function loadActiveUtilityTab(force = false) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
@@ -1166,7 +1316,9 @@ function loadActiveUtilityTab(force = false) {
     renderUtilityModalContent();
     return null;
   }
-  return loadProblematicFiles(force);
+  const freshPrefetch = state.utility.loaded
+    && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
+  return loadProblematicFiles(force && !freshPrefetch);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {
@@ -1320,6 +1472,9 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
     utilityCoverLoadSuspensionToken = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
   }
   deferActiveStartupViewForUtilityModal();
+  // Owner (11-08): Settings never flashes another section (mobile showed Problematic Files before Appearance).
+  // The shell still paints first; its body stays hidden until the requested section renders.
+  els.overlay.toggleAttribute?.('data-utility-tab-pending', els.overlay.getAttribute?.('data-active-tab') !== state.utility.activeTab);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (state.utility.activeTab === 'loops') {
@@ -2133,6 +2288,39 @@ function inferOptimisticBlankAlbumMembership(target, tracks) {
     : '';
 }
 
+// Tracks moved into an album that already exists join it, so the optimistic
+// album is the merged one. Only a destination whose track list is fully known
+// can be joined; otherwise the server's answer completes it.
+function joinCompleteDestinationAlbum(bucket, sourceKey, sourceTrackPaths) {
+  const key = String(bucket?.key || '').trim().toLowerCase();
+  if (!key || key === sourceKey) return;
+  const candidates = [
+    typeof getCachedHydratedTrackModalAlbum === 'function' ? getCachedHydratedTrackModalAlbum(key) : null,
+    typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null,
+  ];
+  const destination = candidates.find((candidate) => (
+    candidate
+    && Array.isArray(candidate.tracks)
+    && candidate.tracks.length
+    && !(typeof albumRequiresHydration === 'function' && albumRequiresHydration(candidate))
+  ));
+  if (!destination) return;
+  const movedPaths = new Set(bucket.tracks.map((track) => String(track?.path || '')));
+  const destinationTracks = destination.tracks.filter((track) => {
+    const path = String(track?.path || '');
+    return !movedPaths.has(path) && !sourceTrackPaths.has(path);
+  });
+  if (!destinationTracks.length) return;
+  bucket.tracks = [...deepCloneJson(destinationTracks), ...bucket.tracks];
+  bucket.total_duration_seconds += destinationTracks.reduce((total, track) => total + Number(track?.duration_seconds || 0), 0);
+  if (destination.album_id != null) bucket.album_id = destination.album_id;
+  ['cover_path', 'cover_preview_url'].forEach((field) => {
+    if (destination[field]) bucket[field] = destination[field];
+  });
+  // Server track rows cover only part of the merged list; the tracks describe it.
+  delete bucket.track_rows;
+}
+
 function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
   const sourceTracks = deepCloneJson(Array.isArray(album?.tracks) ? album.tracks : []) || [];
   if (!sourceTracks.length) return [];
@@ -2256,6 +2444,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         key: canonicalKeyParts.join('::'),
         name: albumName,
         album_artist: albumArtist,
+        root_provenance: deepCloneJson(album?.root_provenance || visibleSourceAlbum?.root_provenance || null),
+        library_root_category: album?.library_root_category || visibleSourceAlbum?.library_root_category,
+        source: album?.source || visibleSourceAlbum?.source,
         cover_path: track?.cover_path || album?.cover_path || coverSourceAlbum?.cover_path || null,
         cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
         remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,
@@ -2320,6 +2511,7 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       groupedAlbum.key = `${baseKey}::year::${year}`;
     }
   });
+  groupedAlbums.forEach((groupedAlbum) => joinCompleteDestinationAlbum(groupedAlbum, sourceKey, sourceTrackPaths));
 
   return groupedAlbums
     .map((bucket) => {
@@ -2471,7 +2663,65 @@ function renderTagEditorArtwork(selectedPaths) {
   const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
     : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
-  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+  const canOpenFolder = Boolean(folderPath) && !(typeof window !== 'undefined' && window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.files.open_location'));
+  // Same ActionButton and open-location route as the Album Details folder action.
+  // UI-6 (owner, 11-08 evening): right-aligned, and not shown at all when this client cannot open folders.
+  const openFolderButton = canOpenFolder ? ButtonComponent.renderActionButton({
+    ariaLabel: 'Open this folder in File Explorer',
+    title: 'Open this folder in File Explorer',
+    // UI-6 (owner): no outline; the bare action, like the Album Details header folder button.
+    presentation: 'bare',
+    className: 'tag-editor-open-folder',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
+    attributes: { 'data-open-tag-editor-folder': focusedPath },
+  }) : '';
+  const loadFolderButton = state.tagEditor?.folderHasUnloadedTracks === true ? ButtonComponent.renderButton({
+    label: 'Load all tracks from the folder',
+    variant: 'secondary',
+    size: 'small',
+    className: 'tag-editor-folder-load',
+    disabled: Boolean(state.tagEditor.folderLoading),
+    attributes: { 'data-load-tag-editor-folder': '1', ...(state.tagEditor.folderLoading ? { 'aria-busy': 'true' } : {}) },
+  }) : '';
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-location"><div class="tag-editor-folder-copy"><div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>${loadFolderButton}</div>${openFolderButton}</div>`;
+}
+
+function tagEditorFolderRequestBody(tagEditor, sourcePath, extra = {}) {
+  return JSON.stringify({
+    source_path: sourcePath,
+    album: {
+      key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
+      tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+    },
+    ...extra,
+  });
+}
+
+// Shows "Load all tracks from the folder" only when the album folder (every disc) has files not in the editor.
+async function refreshTagEditorFolderCompleteness(tagEditor) {
+  const sourcePath = String(tagEditor?.tracks?.[0]?.path || '');
+  if (!sourcePath) return;
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath, { paths_only: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.tagEditor !== tagEditor || !response.ok || !data.ok) return;
+    const loaded = new Set((tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)));
+    tagEditor.folderHasUnloadedTracks = (Array.isArray(data.paths) ? data.paths : [])
+      .some((path) => !loaded.has(normalizeTagEditorPathKey(path)));
+    if (getTagEditorElements().overlay?.hidden !== true) renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
+  } catch {
+    // Without a folder listing the action stays hidden; editing the loaded tracks is unaffected.
+  }
+}
+
+function getTagEditorTrackFolderName(path) {
+  const parts = String(path || '').split(/[\\/]/);
+  return parts.length > 1 ? parts[parts.length - 2] : '';
 }
 
 function getTagEditorFocusedPath() {
@@ -2492,25 +2742,15 @@ function normalizeTagEditorPathKey(path) {
 async function loadTagEditorFolderFiles() {
   const tagEditor = state.tagEditor;
   const sourcePath = getTagEditorFocusedPath();
-  const button = document.getElementById('tag-editor-folder-load');
   if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
 
   tagEditor.folderLoading = true;
-  if (button) {
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-  }
+  renderTagEditorArtwork(getSelectedTagEditorPaths(tagEditor.tracks || []));
   try {
     const response = await fetch('/utilities/tag-editor/folder-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        source_path: sourcePath,
-        album: {
-          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
-          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
-        },
-      }),
+      body: tagEditorFolderRequestBody(tagEditor, sourcePath),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
@@ -2529,21 +2769,25 @@ async function loadTagEditorFolderFiles() {
       tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
     });
 
+    tagEditor.folderHasUnloadedTracks = false;
     if (!addedTracks.length) {
       showRepairAlert('All supported files from this folder are already loaded.', 'success');
       return;
     }
-    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
-    renderTagEditor();
+    // The folder listing is in disc order (CD1 files, then CD2, ...): keep the editor in that order.
+    const folderOrder = new Map((Array.isArray(data.tracks) ? data.tracks : [])
+      .map((track, index) => [normalizeTagEditorPathKey(track?.path), index]));
+    const position = (track) => folderOrder.get(normalizeTagEditorPathKey(track.path)) ?? Number.MAX_SAFE_INTEGER;
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks]
+      .map((track, index) => ({ track, index }))
+      .sort((a, b) => (position(a.track) - position(b.track)) || (a.index - b.index))
+      .map(({ track }) => track);
   } catch (error) {
     showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
   } finally {
     if (state.tagEditor === tagEditor) {
       tagEditor.folderLoading = false;
-    }
-    if (button && state.tagEditor === tagEditor) {
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
+      renderTagEditor();
     }
   }
 }
@@ -2634,16 +2878,20 @@ function renderTagEditor(options = {}) {
         ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
+    const showFolderNames = new Set(tracks.map((track) => getTagEditorTrackFolderName(track.path))).size > 1;
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
+      // Multi-disc albums print the disc under the file name ("CD 2"); other multi-folder sets print the folder.
+      const discNumber = showFolderNames ? getAlbumTrackDiscNumber(track) : null;
+      const folderName = showFolderNames ? (discNumber ? `CD ${discNumber}` : getTagEditorTrackFolderName(path)) : '';
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>
           <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
           <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">
-            <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
+            <span class="tag-editor-track-name"><span class="tag-editor-track-title">${escapeHtml(filename)}</span>${folderName ? `<span class="tag-editor-track-folder">${escapeHtml(folderName)}</span>` : ''}</span>
             ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
           </button>
         </div>

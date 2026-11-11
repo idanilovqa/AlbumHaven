@@ -101,9 +101,9 @@ export class TrackModal extends BasePage {
     });
   }
 
-  async readExactAlbumDetailsSnapshot() {
+  async readExactAlbumDetailsSnapshot(options = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- one atomic rendered album-details observation
-    return this.dialog.evaluate((dialog) => {
+    return this.dialog.evaluate((dialog, selectors) => {
       const header = dialog.querySelector('.album-details-header');
       const primary = header?.querySelector('.album-details-header__primary')?.textContent.trim() || '';
       const values = Array.from(
@@ -117,7 +117,7 @@ export class TrackModal extends BasePage {
           ? [primary, values[0]].filter(Boolean).join(' • ')
           : primary);
       const rows = Array.from(dialog.querySelectorAll('[data-track-row-path]'));
-      return {
+      const snapshot = {
         title,
         trackRowCount: rows.length,
         trackTitles: rows.map((row) => String(
@@ -130,7 +130,45 @@ export class TrackModal extends BasePage {
           return Number.parseInt(text.replace(/\.$/u, ''), 10);
         }),
       };
-    });
+      if (!selectors) return snapshot;
+      const visible = (element) => Boolean(element && !element.hidden
+        && element.getBoundingClientRect().width > 0
+        && element.getBoundingClientRect().height > 0
+        && getComputedStyle(element).visibility !== 'hidden');
+      const text = (selector) => String(document.querySelector(selector)?.textContent || '').trim();
+      const coverLoaded = Array.from(document.querySelectorAll(selectors.coverImage)).some(
+        (image) => image instanceof HTMLImageElement && visible(image)
+          && image.complete && image.naturalWidth > 0,
+      );
+      const coverPlaceholderVisible = visible(document.querySelector(selectors.coverPlaceholder))
+        || visible(document.querySelector(selectors.missingArtbox));
+      return {
+        ...snapshot,
+        visible: visible(dialog),
+        loading: Boolean(dialog.querySelector('.track-modal-loading-row')),
+        summary: {
+          title: text(selectors.title),
+          subtitle: dialog.classList.contains('is-mobile-page')
+            ? String(dialog.closest('.shell-main-surface')?.querySelector('#mobile-page-summary')?.textContent || '').trim()
+            : text(selectors.subtitle),
+          footer: text(selectors.footer),
+          total: String(dialog.querySelector('.album-track-table__total')?.textContent || '').trim(),
+          playButtons: document.querySelectorAll(selectors.playButtons).length,
+          trackRows: rows.length,
+          coverLoaded,
+          coverPlaceholderVisible,
+          coverReady: coverLoaded || coverPlaceholderVisible,
+        },
+      };
+    }, options.includeSummary ? {
+      title: this.titleSelector,
+      subtitle: this.subtitleSelector,
+      footer: this.footerSelector,
+      playButtons: this.playButtonSelector,
+      coverImage: this.detailedCoverImageSelector,
+      coverPlaceholder: this.coverPlaceholderSelector,
+      missingArtbox: this.missingArtboxSelector,
+    } : null);
   }
 
   async startVisibleContentObservation() {
@@ -140,6 +178,7 @@ export class TrackModal extends BasePage {
         if (dialog.hidden || getComputedStyle(dialog).display === 'none') return;
         samples.push({
           phase,
+          observedAt: Date.now(),
           title: String(dialog.querySelector('#track-modal-title')?.textContent || '').trim(),
           subtitle: String(dialog.querySelector('#track-modal-subtitle')?.textContent || '').trim(),
           loading: Boolean(dialog.querySelector('.track-modal-loading-row')),
@@ -309,7 +348,7 @@ export class TrackModal extends BasePage {
       .filter(Boolean);
     return {
       headers: normalize(await this.discHeaders.allTextContents()),
-      totals: normalize(await this.albumTrackTable.total.locator(':scope > *').allTextContents()),
+      totals: normalize(await this.albumTrackTable.summaryLines.allTextContents()),
     };
   }
 

@@ -20,7 +20,7 @@ const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest
 
 const FIXTURE_RELEASE = 'fixtures-v1.0.30';
 const FIXTURE_MANIFEST_SHA256 = '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752';
-const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
+const ARTWORK_GENERATOR_COMMIT = '38aa02ef034c6235362950946fdf15a4a9a65dc4';
 const EXPECTED_SHARDS = [
   { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,notification-history,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },

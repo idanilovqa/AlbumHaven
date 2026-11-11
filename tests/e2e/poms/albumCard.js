@@ -87,7 +87,7 @@ export class AlbumCard extends BasePage {
   }
 
   get yearWithinCardSelector() {
-    return '.album-year, .album-subtitle';
+    return '.gallery-card__year, .album-year, .album-subtitle:not(.gallery-card__metadata)';
   }
 
   get ratingRowWithinCardSelector() {
@@ -222,7 +222,7 @@ export class AlbumCard extends BasePage {
   cardByIdentity(artistName, albumName, year, options = {}) {
     return this.cardsByArtistAndAlbum(artistName, albumName, options).filter({
       has: this.page.locator(this.yearWithinCardSelector).filter({
-        hasText: new RegExp(`(?:^| · )${String(year).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
+        hasText: new RegExp(`(?:^|·\\s*)${String(year).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
       }),
     });
   }
@@ -394,6 +394,15 @@ export class AlbumCard extends BasePage {
   }
 
   async readVisibleMetadata(card) {
+    const currentMetadata = card.locator('.gallery-card__metadata');
+    if (await currentMetadata.count()) {
+      const artist = currentMetadata.locator('.gallery-card__artist');
+      const year = currentMetadata.locator('.gallery-card__year');
+      return parseVisibleAlbumMetadata(
+        await artist.count() ? await artist.textContent() : '',
+        await year.count() ? await year.textContent() : '',
+      );
+    }
     const subtitle = await card.locator(this.subtitleWithinCardSelector).first().textContent();
     const separateYear = card.locator('.album-year');
     return parseVisibleAlbumMetadata(subtitle,
@@ -409,7 +418,7 @@ export class AlbumCard extends BasePage {
   }
 
   async readMetadataByAlbumName(albumName) {
-    return parseVisibleAlbumMetadata(await this.subtitleByAlbumName(albumName).textContent());
+    return this.readVisibleMetadata(this.cardByAlbumName(albumName));
   }
 
   trackCountByAlbumName(albumName) {

@@ -44,7 +44,6 @@ def test_unique_reversible_encoding_preserves_casing_and_never_mutates_source(su
     [
         'Jos�',
         'Jos??',
-        '?',
         'plain lower case',
         'Moyen-Âge',
         "Les Voyages De L'Âme",
@@ -61,6 +60,23 @@ def test_unique_reversible_encoding_preserves_casing_and_never_mutates_source(su
 )
 def test_lossy_or_valid_text_is_not_an_encoding_proposal(suggestions, text):
     assert not any(item['field'] == 'artist' for item in generate(suggestions, entry(artist=text)))
+
+
+def test_an_unreadable_track_artist_proposes_the_album_artist_as_a_display_correction(suggestions):
+    # A stored entry shows the album artist and remembers the "??" tag; a fresh
+    # read of the unchanged file says "??". Both propose the same edit.
+    stored = entry(artist='天門', album_artist='天門', text_corrections={
+        'artist': {'original': '??', 'corrected': '天門', 'kind': 'lost_characters'}})
+    physical = entry(artist='??', album_artist='天門')
+    [proposal] = [item for item in generate(suggestions, stored) if item['field'] == 'artist']
+    assert proposal['original'] == '??'
+    assert proposal['updates'] == {'artist': '天門'}
+    assert proposal['reason'] == 'Track artist unreadable — using album artist'
+    assert proposal['display_correction'] is True
+    assert [item['id'] for item in generate(suggestions, physical) if item['field'] == 'artist'] == [proposal['id']]
+    assert suggestions.validate_problem_suggestions(
+        [proposal['id']], {stored['path']: stored}, read_metadata=lambda path: physical,
+    ) == {stored['path']: {'artist': '天門'}}
 
 
 def test_explicit_canonical_alias_is_used_without_generic_title_casing(suggestions):
@@ -205,7 +221,9 @@ def test_multiple_reversible_plausible_candidates_are_not_resolved_by_enumeratio
     monkeypatch.setattr(suggestions, '_repair_text_candidates', lambda text: candidates)
     monkeypatch.setattr(suggestions, 'looks_like_mojibake', lambda text, **_options: text == original)
     monkeypatch.setattr(suggestions, '_text_readability_score', lambda text: 0 if text == original else 20)
-    assert not any(item['field'] == 'artist' for item in generate(suggestions, entry(artist=original)))
+    # Titles have only the candidate repair; credits also have the reader's
+    # deterministic UTF-8 decode, covered by the display-correction tests.
+    assert not any(item['field'] == 'title' for item in generate(suggestions, entry(title=original)))
 
 
 @pytest.mark.parametrize('reason', [

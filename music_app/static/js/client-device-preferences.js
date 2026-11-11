@@ -17,9 +17,13 @@
 
   function classifyProfile(options = {}) {
     if (options.clientSurfaceClass === 'tv') return 'tv';
-    const nativeMobile = options.clientSurfaceClass === 'mobile'
+    // A browser with no touch input is never a phone or tablet, whatever its user agent claims: Chrome's
+    // device toolbar keeps reporting the phone user agent after switching back to the web layout.
+    const touchless = options.maxTouchPoints !== undefined && options.maxTouchPoints !== null
+      && Number(options.maxTouchPoints) === 0;
+    const nativeMobile = !touchless && (options.clientSurfaceClass === 'mobile'
       || /Android|iPhone|iPad|iPod/i.test(String(options.userAgent || ''))
-      || (options.platform === 'MacIntel' && Number(options.maxTouchPoints) > 1);
+      || (options.platform === 'MacIntel' && Number(options.maxTouchPoints) > 1));
     return nativeMobile || Number(options.viewportWidth) <= 900 ? 'mobile' : 'web_desktop';
   }
 

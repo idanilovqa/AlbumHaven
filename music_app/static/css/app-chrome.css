@@ -133,7 +133,7 @@
 }
 .app-bar .button:not(.action-button) { padding: 0 12px; font-size: 12px; }
 .app-bar .cover-lookup-drawer-glyph { width: 20px; height: 20px; }
-.app-bar #settings-button .settings-button__icon {
+.app-bar [data-account-menu-trigger] .settings-button__icon {
   width: 20px;
   height: 20px;
   transform: translateY(-1px);
@@ -162,6 +162,16 @@
   border: 0;
 }
 .shell-navigation-rail { height: 100%; padding: 20px 14px; }
+/* The navigation-tree header stays visible while the tree scrolls: it sticks to the rail's top edge over the
+   rail padding, on the rail's own surface. Its margins become padding, so the tree does not move. The mobile
+   drawer already keeps its header fixed above a scrolling list. */
+@media (min-width: 901px) {
+  #artist-tree-expanded > .shell-navigation-rail-header {
+    position: sticky; top: -20px; z-index: 3;
+    margin: -20px -14px 0; padding: 20px 14px 12px;
+    background: var(--app-chrome);
+  }
+}
 .shell-navigation-rail.is-transitioning { overflow-y: hidden; }
 .shell-navigation-rail.is-expanding { position: relative; }
 .shell-navigation-rail.is-expanding #artist-tree-expanded {
@@ -188,7 +198,9 @@
 .shell-navigation-rail-toggle { flex: 0 0 auto; margin-left: 1px; }
 .shell-navigation-rail:not(.is-folded) .shell-navigation-rail-toggle { order: -1; }
 .shell-navigation-rail.is-folded { padding: 16px 10px; }
-.shell-navigation-compact { display: flex; justify-content: center; }
+/* NEW-005: a running search hides the stale tree until its results render. */
+.shell-navigation-rail[data-search-pending] .navigation-tree { visibility: hidden; }
+.shell-navigation-compact { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .shell-navigation-compact[hidden],
 #artist-tree-expanded[hidden] { display: none; }
 .shell-navigation-compact-action svg,
@@ -331,3 +343,7 @@
 :root .settings-host .settings-nav :is(.settings-nav-item, .settings-nav-item span, .settings-nav-heading) {
   color: var(--appearance-panel-ink, var(--app-ink));
 }
+/* One tree per side-panel mode: Loose Tracks never shows inside the artist tree, and Custom Collections
+   never shows artists (owner, 11-08). */
+#shell-navigation-rail[data-library-navigation-mode="collections"] #sidebar-list,
+#shell-navigation-rail:not([data-library-navigation-mode="collections"]) #sidebar-collections { display: none !important; }

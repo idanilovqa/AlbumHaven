@@ -447,13 +447,23 @@ function hydrateArtistNonAlbumAvailability() {
     state.view.non_album_track_count = Number(payload?.non_album_track_count) || 0;
     if (payload?.non_album_tracks_deferred) {
       delete state.view.non_album_track_count_scope;
+      request.deferred = true;
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_track_count;
   }).finally(() => {
-    if (artistNonAlbumAvailabilityRequest === request) artistNonAlbumAvailabilityRequest = null;
+    if (artistNonAlbumAvailabilityRequest !== request) return;
+    artistNonAlbumAvailabilityRequest = null;
+    if (request.deferred) {
+      scheduleBrowserTimeout(() => {
+        if (getDeferredNonAlbumScopeKey(buildArtistNonAlbumRequestUrl(state.view || {}, { availability: true })) !== scopeKey) return;
+        return hydrateArtistNonAlbumAvailability().catch((error) => {
+          if (typeof warn === 'function') warn(error);
+        });
+      }, 250);
+    }
   });
   artistNonAlbumAvailabilityRequest = request;
   return request.promise;

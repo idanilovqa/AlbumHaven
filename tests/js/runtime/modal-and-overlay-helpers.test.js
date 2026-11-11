@@ -333,15 +333,21 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   assert.equal(controlSyncs, 1);
 });
 
-test('artist loose-track availability retries a deferred snapshot and follows inventory revision', async () => {
+test('artist loose-track availability automatically retries a deferred snapshot and follows inventory revision', async () => {
   const { context } = loadHelper();
   const requested = [];
+  const timers = [];
+  let controlSyncs = 0;
   const responses = [
     { non_album_track_count: 0, non_album_tracks_deferred: true },
     { non_album_track_count: 2 },
   ];
   context.URL = URL;
-  context.updateGalleryMainControls = () => {};
+  context.updateGalleryMainControls = () => { controlSyncs += 1; };
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return timers.length;
+  };
   context.state.status = { inventory_mutation_revision: 7 };
   context.state.view = {
     selected_artist: 'Agalloch',
@@ -356,7 +362,13 @@ test('artist loose-track availability retries a deferred snapshot and follows in
 
   assert.equal(await context.hydrateArtistNonAlbumAvailability(), 0);
   assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
-  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 2);
+  assert.equal(requested.length, 1);
+  assert.equal(timers.length, 1);
+  assert.ok(timers[0].delay > 0);
+  await timers[0].callback();
+  assert.equal(requested.length, 2);
+  assert.equal(context.state.view.non_album_track_count, 2);
+  assert.equal(controlSyncs, 1);
 
   const url = new URL(requested[0], 'http://localhost');
   assert.equal(url.pathname, '/library/loose-tracks');

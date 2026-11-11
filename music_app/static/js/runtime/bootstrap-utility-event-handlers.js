@@ -33,6 +33,20 @@ async function handleUtilityBootstrapClick(event) {
   if (exceptionInput) openTagEditorExceptionMenu();
   else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
 
+  const keepMissingAlbumButton = event.target.closest('#utility-modal [data-keep-missing-album="1"]');
+  if (keepMissingAlbumButton) {
+    event.preventDefault();
+    void keepMissingAlbum(getSelectedProblematicAlbum());
+    return;
+  }
+  const rescanMissingAlbumButton = event.target.closest('#utility-modal [data-rescan-missing-album="1"]');
+  if (rescanMissingAlbumButton) {
+    event.preventDefault();
+    if (!rescanMissingAlbumButton.disabled) {
+      void rescanMissingAlbum(getSelectedProblematicAlbum(), rescanMissingAlbumButton);
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();

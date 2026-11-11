@@ -409,11 +409,7 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      <div class="utility-detected-actions utility-missing-album-actions">
-        ${canRemove
-          ? '<button class="button confirm-modal-danger" type="button" data-remove-missing-album="1">Remove from Album Haven</button>'
-          : '<p>Ask an owner or administrator to remove it.</p>'}
-      </div>
+      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));

@@ -158,6 +158,8 @@ function createContext(stateOverrides = {}) {
     pendingSyncs: 0,
     renders: 0,
     filterRenders: 0,
+    keptMissingAlbums: [],
+    rescannedMissingAlbums: [],
     missingAlbumRemovalConfirms: [],
   };
   const filterMenu = {
@@ -251,6 +253,14 @@ function createContext(stateOverrides = {}) {
     },
     openAlbumInExplorer() {},
     openAlbumOnDiscogs() {},
+    keepMissingAlbum(album) {
+      calls.keptMissingAlbums.push(album);
+      return Promise.resolve(true);
+    },
+    rescanMissingAlbum(album, button) {
+      calls.rescannedMissingAlbums.push({ album, button });
+      return Promise.resolve(true);
+    },
     confirmMissingAlbumRemoval(album, runtimeOptions) {
       calls.missingAlbumRemovalConfirms.push({ album, runtimeOptions });
       return Promise.resolve(true);
@@ -704,6 +714,32 @@ test('Problematic Files uses the shared missing-album removal confirmation', () 
     album,
     runtimeOptions: { source: 'problematic-files' },
   }]);
+});
+
+test('Problematic Files uses the selected missing album for shared recovery actions', async () => {
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    inventory_status: 'missing',
+  };
+  const { context, calls } = createContext({
+    problematicFiles: [album],
+    selectedProblematicKey: album.key,
+  });
+  context.getSelectedProblematicAlbum = () => album;
+  const rescanButton = createElement({ 'data-rescan-missing-album': '1' });
+  const rescanClick = createEvent({
+    '#utility-modal [data-rescan-missing-album="1"]': rescanButton,
+  });
+  await context.handleUtilityBootstrapClick(rescanClick.event);
+  assert.equal(rescanClick.wasPrevented(), true);
+  assert.deepEqual(calls.rescannedMissingAlbums, [{ album, button: rescanButton }]);
+
+  const keepClick = createEvent({
+    '#utility-modal [data-keep-missing-album="1"]': createElement({ 'data-keep-missing-album': '1' }),
+  });
+  await context.handleUtilityBootstrapClick(keepClick.event);
+  assert.equal(keepClick.wasPrevented(), true);
+  assert.deepEqual(calls.keptMissingAlbums, [album]);
 });
 
 test('Problematic Files handler leaves Album Details missing-album actions to the gallery handler', async () => {

@@ -23713,11 +23713,7 @@ function buildDetectedProblemsHtml(album) {
           ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
-      <div class="utility-detected-actions utility-missing-album-actions">
-        ${canRemove
-          ? '<button class="button confirm-modal-danger" type="button" data-remove-missing-album="1">Remove from Album Haven</button>'
-          : '<p>Ask an owner or administrator to remove it.</p>'}
-      </div>
+      ${buildMissingAlbumDetailsHtml({ canRemove, albumKey: album.key, reason: album.missing_reason })}
     `;
   }
   const rows = (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).map(row => ({ ...row }));
@@ -48983,6 +48979,20 @@ async function handleUtilityBootstrapClick(event) {
   if (exceptionInput) openTagEditorExceptionMenu();
   else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
 
+  const keepMissingAlbumButton = event.target.closest('#utility-modal [data-keep-missing-album="1"]');
+  if (keepMissingAlbumButton) {
+    event.preventDefault();
+    void keepMissingAlbum(getSelectedProblematicAlbum());
+    return;
+  }
+  const rescanMissingAlbumButton = event.target.closest('#utility-modal [data-rescan-missing-album="1"]');
+  if (rescanMissingAlbumButton) {
+    event.preventDefault();
+    if (!rescanMissingAlbumButton.disabled) {
+      void rescanMissingAlbum(getSelectedProblematicAlbum(), rescanMissingAlbumButton);
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();

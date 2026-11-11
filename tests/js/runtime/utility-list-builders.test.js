@@ -100,6 +100,18 @@ const alertComponentsPath = path.join(
   'alert-components.js',
 );
 const alertComponentsSource = fs.readFileSync(alertComponentsPath, 'utf8');
+const albumDetailsComponentsPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'album-details-components.js',
+);
+const albumDetailsComponentsSource = fs.readFileSync(albumDetailsComponentsPath, 'utf8');
 const tagEditorHelperPath = path.join(
   __dirname,
   '..',
@@ -662,6 +674,7 @@ function loadProblematicTrackNavigationHelpers() {
   vm.runInContext(alertComponentsSource, context, { filename: alertComponentsPath });
   context.window = context;
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
+  vm.runInContext(albumDetailsComponentsSource, context, { filename: albumDetailsComponentsPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { album, context, trackPath };
 }
@@ -7548,13 +7561,14 @@ test('missing-album reason uses a static error AlertLabel without becoming exclu
   assert.doesNotMatch(html, /data-problem-exclusion-reason="Album not found"/);
 });
 
-test('missing album is an album-level non-excludable problem with the shared removal action', () => {
+test('missing album is an album-level non-excludable problem with shared recovery actions', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   const album = {
     key: 'transatlantic-roine-stolt-mixes',
     name: 'SMPTe - The Roine Stolt Mixes',
     album_artist: 'Transatlantic',
     inventory_status: 'missing',
+    missing_reason: 'deleted',
     missing_since: '2026-09-03T12:00:00Z',
     problem_reasons: ['Album not found'],
     album_problem_rows: [{ reason: 'Album not found', display_reason: 'Album not found', row_key: '' }],
@@ -7565,7 +7579,10 @@ test('missing album is an album-level non-excludable problem with the shared rem
   const html = context.buildDetectedProblemsHtml(album);
 
   assert.match(html, /ALBUM-LEVEL PROBLEMS[^]*Album not found/);
-  assert.match(html, /data-remove-missing-album="1"[^]*>Remove from Album Haven</);
+  assert.match(html, /The files of this album were deleted from disk\./);
+  assert.match(html, /data-rescan-missing-album="1"[^>]*data-album-key="transatlantic-roine-stolt-mixes"[^]*Re-scan/);
+  assert.match(html, /data-remove-missing-album="1"[^>]*data-album-key="transatlantic-roine-stolt-mixes"[^]*Remove from library/);
+  assert.match(html, /data-keep-missing-album="1"[^]*Keep as missing/);
   assert.doesNotMatch(html, /data-problem-exclusion-reason="Album not found"/);
   assert.doesNotMatch(html, /Exclude the problem/);
   assert.doesNotMatch(html, /data-problematic-track-path|TRACK-LEVEL PROBLEMS/);
@@ -7576,6 +7593,7 @@ test('missing album Problematic Files detail gives read-only reviewers explanato
   const html = context.buildDetectedProblemsHtml({
     key: 'transatlantic-roine-stolt-mixes',
     inventory_status: 'missing',
+    missing_reason: 'unreachable',
     missing_since: '2026-09-03T12:00:00Z',
     problem_reasons: ['Album not found'],
     album_problem_rows: [{ reason: 'Album not found', display_reason: 'Album not found', row_key: '' }],
@@ -7583,8 +7601,9 @@ test('missing album Problematic Files detail gives read-only reviewers explanato
     allowed_actions: { 'library.inventory.manage': false },
   });
 
+  assert.match(html, /The drive or network share holding this album cannot be reached\./);
   assert.match(html, /Ask an owner or administrator to remove it\./);
-  assert.doesNotMatch(html, /data-remove-missing-album|Exclude the problem/);
+  assert.doesNotMatch(html, /data-rescan-missing-album|data-remove-missing-album|Exclude the problem/);
 });
 
 test('Problematic Files accepts a path-free targeted reconciliation failure warning', () => {

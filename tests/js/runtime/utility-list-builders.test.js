@@ -8083,9 +8083,10 @@ test('Problematic Files names tagged tracks with their number and untagged track
   assert.equal(context.formatProblematicTrackLabel({}, { filename: '07 - Untitled.mp3' }), '07 - Untitled.mp3');
 });
 
-test('every Problematic Files problem label shares one width', () => {
+test('track problem labels align while album problem labels stay content-sized', () => {
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
-  assert.match(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill,\s*\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
+  assert.match(css, /\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
+  assert.doesNotMatch(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill[^}]*inline-size:/);
 });
 
 test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {

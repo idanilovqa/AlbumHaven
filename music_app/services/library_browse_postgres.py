@@ -4557,7 +4557,7 @@ def _non_album_entries_from_inventory_candidates(
         canonical_to_aliases,
     )
     # Loose tracks follow the Gallery search rule (_search_preview_sql): the whole
-    # query inside an artist (accents folded), album, title, file name or CD name.
+    # query inside an artist (accents folded), album, title, folder/file or CD name.
     query_text = str(query or "")
     folded_query = fold_search_accents(query_text)
     normalized_alias_to_canonical = {
@@ -4610,6 +4610,7 @@ def _non_album_entries_from_inventory_candidates(
                 for value in (
                     entry.get("album"), entry.get("title"), file_name,
                     Path(file_name).stem, entry.get("disc_subtitle"),
+                    *relative_path.replace("\\", "/").split("/")[:-1],
                 )
             )
             if not (artist_match or text_match):
@@ -10626,7 +10627,12 @@ def _search_preview_sql(
               library.local_track_files.scan_cache_stale
             from library.local_track_files
             where ({file_path_prefilter_sql}(
-                lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
+                lower(btrim(coalesce(
+                  nullif(library.local_track_files.relative_path, ''),
+                  library.local_track_files.private_path,
+                  ''
+                ))) like lower(%(query_like)s) escape ''
+                or lower(btrim(regexp_replace(coalesce(library.local_track_files.private_path, ''), '^.*[\\\\/]', ''))) like lower(%(query_like)s)
                   escape ''
                 or lower(btrim(
                   regexp_replace(

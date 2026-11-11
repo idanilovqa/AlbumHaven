@@ -1543,6 +1543,35 @@ def test_non_album_candidate_uses_private_path_when_relative_path_is_missing():
     assert [entry["path"] for entry in entries] == [path]
 
 
+def test_non_album_search_matches_a_folder_name_without_inventing_tags():
+    from music_app.services import library_browse_postgres as browse
+
+    path = r"D:\Music\Classic\Richard Wagner\Der Ring des Nibelungen\01-Das Rheingold\01.flac"
+    row = _inventory_non_album_candidate(
+        track_id=1,
+        title="",
+        private_path=path,
+        track_number=1,
+        raw_artist="",
+        raw_album_artist="",
+        exception_type="",
+    )
+    row.update(
+        relative_path=r"Richard Wagner\Der Ring des Nibelungen\01-Das Rheingold\01.flac",
+        raw_file_album="",
+    )
+
+    entries = browse._non_album_entries_from_inventory_candidates(
+        [row],
+        visible_library_categories=[],
+        alias_to_canonical={},
+        canonical_to_aliases={},
+        query="Der Ring des Nibelungen",
+    )
+
+    assert [entry["path"] for entry in entries] == [path]
+
+
 def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,
@@ -5941,6 +5970,18 @@ def test_search_preview_sql_matches_disc_subtitles_through_their_own_index():
         ) in subtitle_clause
         assert "like lower(%(query_like)s)" in subtitle_clause
         assert ("search_utf8_hex" in subtitle_clause) is use_utf8_prefilter
+
+
+def test_search_preview_sql_matches_folder_names_without_exposing_paths():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    sql = " ".join(_search_preview_sql().split()).lower()
+    file_matches = sql.split("file_name_matches as materialized (", 1)[1].split(
+        "matched_track_album_ids as materialized (", 1
+    )[0]
+
+    assert "library.local_track_files.relative_path" in file_matches
+    assert "like lower(%(query_like)s)" in file_matches
 
 
 def test_search_preview_sql_separates_active_and_stale_filename_matches():

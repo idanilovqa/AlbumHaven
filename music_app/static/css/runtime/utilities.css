@@ -1938,8 +1938,7 @@
   gap: 8px;
 }
 .utility-album-problem-labels { margin: 12px 0 20px; margin-inline-start: calc(88px + 16px); }
-/* Every Problematic Files problem label shares one width, whatever its text. */
-.utility-album-problem-labels > .utility-problem-exclusion-pill,
+/* Track-table problem labels align; album-level labels stay content-sized. */
 .utility-track-problem-labels > .utility-problem-exclusion-pill {
   box-sizing: border-box;
   flex: 0 0 auto;

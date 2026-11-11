@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from datetime import datetime, timezone
+import hashlib
+import json
 import logging
 from pathlib import Path
 from time import perf_counter
@@ -20,6 +22,7 @@ from music_app.services.cover_mutation import (
     CoverMutationEffect, CoverMutationFinalizationError, CoverMutationCommitUncertainError,
     cover_source_keys, assert_ordered_sources_untouched, PreparedCoverTarget,
 )
+from music_app.services.cue_program import CueProgram
 from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
@@ -125,6 +128,47 @@ _ORDERED_COVER_IDENTITY_EDIT_FIELDS = frozenset(
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
     {"title", "genre", "track_number", "disc_number", "total_discs", "disc_subtitle"}
 )
+
+
+def _cue_track_rows(program: CueProgram) -> list[dict[str, object]]:
+    """Build stable logical identities without physical paths or positions."""
+    rows: list[dict[str, object]] = []
+    duplicate_counts: dict[tuple[object, ...], int] = {}
+    for program_ordinal, track in enumerate(program.tracks):
+        if track.mode != "AUDIO":
+            continue
+        if track.start_frame is None or track.end_frame is None:
+            raise ValueError("CUE tracks must have a resolved timeline before persistence.")
+        evidence = (
+            " ".join(str(program.album_title or "").split()).casefold(),
+            " ".join(str(track.performer or program.performer or "").split()).casefold(),
+            " ".join(str(track.title or "").split()).casefold(),
+            track.end_frame - track.start_frame,
+        )
+        duplicate_ordinal = duplicate_counts.get(evidence, 0)
+        duplicate_counts[evidence] = duplicate_ordinal + 1
+        identity = json.dumps([*evidence, duplicate_ordinal], ensure_ascii=False, separators=(",", ":"))
+        rows.append({
+            "track_key": f"cue:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}",
+            "title": str(track.title or f"Track {track.number:02d}"),
+            "artist": str(track.performer or program.performer or "Unknown Artist"),
+            "track_number": track.number,
+            "duration_frames": track.end_frame - track.start_frame,
+            "program_ordinal": program_ordinal,
+            "source_ref": track.source_ref,
+            "start_frame": track.start_frame,
+            "end_frame": track.end_frame,
+            "pregap_frames": track.pregap_frames or 0,
+            "postgap_frames": track.postgap_frames or 0,
+            "internal_indexes": [
+                {"number": index.number, "frame": index.frame}
+                for index in track.indexes
+                if index.number >= 2
+            ],
+        })
+    return rows
+
+
 class ScanCachePublicationSuperseded(RuntimeError):
     """Raised when a newer inventory mutation makes a prepared scan stale."""
 

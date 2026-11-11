@@ -467,11 +467,11 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     # Numbers stay contiguous, except migrations reserved past numbers that
     # unmerged branches and the production ledger already use.
-    reserved = {112, 116, 171, 172, 173, 174, 175, 176, 177, 179, 180}
+    reserved = {112, 116, 171, 172, 173, 174, 175, 176, 177, 179, 180, 181}
     contiguous = [number for number in migration_numbers if number not in reserved]
     assert contiguous == list(range(1, len(contiguous) + 1))
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-78:] == [
+    assert migration_names[-79:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -550,6 +550,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0177_create_local_album_artist_identities.sql",
         "0179_add_ordered_cover_metadata_constraint.sql",
         "0180_add_confirmed_copy_retirement.sql",
+        "0181_add_cue_virtual_tracks.sql",
     ]
 
 

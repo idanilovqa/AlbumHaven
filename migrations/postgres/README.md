@@ -475,3 +475,18 @@ relationships; existing waveform-cache cascades and gallery-invalidation
 triggers remain in effect. Roll back the caller before revoking execution and
 dropping the function in a subsequent migration. Previously retired physical
 rows are not restored by rollback. No standalone HTTP deletion action is added.
+
+`0181_add_cue_virtual_tracks.sql` adds the hidden CUE ingestion foundation:
+immutable external or embedded program revisions, contained physical media
+sources, ordinary-track segment relations, and reversible database correction
+rows. `0178` is already recorded by the retained sandbox6 ledger, while fetched
+branch history and the retained production/sandbox ledgers contain no `0181`;
+the identity was allocated only after those read-only checks.
+
+The schema is additive and does not activate CUE rows in browse or playback.
+Program/source private identities remain backend-only. Runtime reconciliation
+may insert and update programs and media sources, replace segment relations,
+and insert or restore corrections; it receives no broad table privileges or
+program/source/correction delete grant. Roll back application readers and
+writers first. Retaining these tables is harmless; a later contraction may drop
+them only after preserving any correction and revision history still required.

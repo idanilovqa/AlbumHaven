@@ -130,6 +130,51 @@ def _normalized_sql(sql):
     return " ".join(sql.casefold().split())
 
 
+def test_cue_track_rows_preserve_source_independent_identity_across_reorder():
+    from music_app.services.cue_program import CueProgram, CueTrack
+    from music_app.services.scan_cache_persistence import _cue_track_rows
+
+    def program(tracks):
+        return CueProgram(
+            album_title="Album",
+            performer="Artist",
+            files=("image.flac",),
+            tracks=tuple(tracks),
+            revision_sha256="a" * 64,
+            problems=(),
+        )
+
+    first = CueTrack(1, "AUDIO", "First", "Artist", "image.flac", (), start_frame=0, end_frame=75)
+    second = CueTrack(2, "AUDIO", "Second", "Artist", "image.flac", (), start_frame=75, end_frame=225)
+
+    original = _cue_track_rows(program((first, second)))
+    reordered = _cue_track_rows(program((second, first)))
+
+    assert {row["title"]: row["track_key"] for row in original} == {
+        row["title"]: row["track_key"] for row in reordered
+    }
+    assert [row["program_ordinal"] for row in reordered] == [0, 1]
+
+
+def test_cue_track_rows_disambiguate_duplicate_evidence_and_reject_unresolved_tracks():
+    from music_app.services.cue_program import CueProgram, CueTrack
+    from music_app.services.scan_cache_persistence import _cue_track_rows
+
+    duplicate = CueTrack(1, "AUDIO", "Same", "Artist", "image.flac", (), start_frame=0, end_frame=75)
+    program = CueProgram("Album", "Artist", ("image.flac",), (duplicate, duplicate), "b" * 64, ())
+
+    rows = _cue_track_rows(program)
+
+    assert len({row["track_key"] for row in rows}) == 2
+    unresolved = CueProgram(
+        "Album", "Artist", ("image.flac",),
+        (CueTrack(1, "AUDIO", "Same", "Artist", "image.flac", (), start_frame=0),),
+        "c" * 64, (),
+    )
+    with pytest.raises(ValueError, match="resolved"):
+        _cue_track_rows(unresolved)
+
+
 def test_structural_album_tag_edit_promotes_renamed_file_path_to_private_path():
     from music_app.services import scan_cache_persistence
 

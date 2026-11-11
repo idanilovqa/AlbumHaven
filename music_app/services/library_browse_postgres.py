@@ -6772,6 +6772,8 @@ def _track_order_issue_reason(issue: Mapping[str, object]) -> str:
 
 
 def _track_order_issues(album: Mapping[str, object]) -> list[dict[str, object]]:
+    if str(album.get("key") or "") == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+        return []
     cached_issues = album.get("_track_order_issues")
     if isinstance(cached_issues, list):
         return cached_issues
@@ -7203,7 +7205,7 @@ def _problematic_search_album_ids_sql() -> str:
 
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
 _PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
-_PROBLEMATIC_SNAPSHOT_VERSION = 2
+_PROBLEMATIC_SNAPSHOT_VERSION = 3
 
 
 def _problematic_inventory_fingerprint(connection: Any) -> str:

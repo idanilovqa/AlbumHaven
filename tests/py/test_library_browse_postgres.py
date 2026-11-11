@@ -11695,6 +11695,18 @@ def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypa
     assert requested_paths == [{"Main/Loose/one.flac", "Downloads/Loose/two.flac"}]
 
 
+def test_problematic_loose_tracks_do_not_infer_album_track_order_gaps():
+    from music_app.services import library_browse_postgres as browse
+
+    assert browse._track_order_issues({
+        "key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY,
+        "tracks": [
+            {"path": "Main/Loose/one.flac", "track_number": 1},
+            {"path": "Main/Loose/three.flac", "track_number": 3},
+        ],
+    }) == []
+
+
 def test_problematic_loose_tracks_detail_reuses_cached_projection(monkeypatch):
     from music_app.services import library_browse_postgres as browse
 

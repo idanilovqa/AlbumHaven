@@ -107,6 +107,7 @@ _UTILITY_PROJECTION_CACHE_LOCK = Lock()
 # Built Problematic Files first pages, by limit, until the complete list is cached.
 _PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
 _PROBLEMATIC_LOOSE_TRACKS_KEY = "loose-source::all"
+_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY = "_loose_tracks_detail"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
 _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
@@ -2934,6 +2935,7 @@ class PostgresLibraryBrowseRepository:
         def cached() -> dict[str, object] | None:
             payload = self._get_cached_utility_projection(kind)
             if payload is not None:
+                payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
                 payload["projection_cache_status"] = "hit"
             return payload
 
@@ -2941,6 +2943,7 @@ class PostgresLibraryBrowseRepository:
             payload = self._build_problematic_files_payload_uncached()
             fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
             self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+            payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
             cache_key = self._utility_projection_cache_key(kind)
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 current = cache_key is None or _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
@@ -3175,7 +3178,7 @@ class PostgresLibraryBrowseRepository:
                     "Problematic Files summary/detail snapshot invariant failed for "
                     f"album {first_key!r}."
                 )
-        return {
+        payload = {
             "items": items,
             "initial_detail": initial_detail,
             "count": len(items),
@@ -3183,6 +3186,23 @@ class PostgresLibraryBrowseRepository:
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
         }
+        if limit is None and include_initial_detail:
+            loose_tracks_album = next((
+                album
+                for item, album in projected_items
+                if item.get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY
+            ), None)
+            if loose_tracks_album is not None:
+                if (initial_detail or {}).get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+                    payload[_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] = initial_detail
+                else:
+                    loose_tracks_album["_suggestion_aliases"] = self._load_relation_alias_maps(
+                        connection=connection
+                    ).get("alias_to_canonical", {})
+                    payload[_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] = (
+                        _problematic_album_detail_payload(loose_tracks_album)
+                    )
+        return payload
 
     def build_problematic_album_payload_by_track_paths(
         self,
@@ -3259,10 +3279,16 @@ class PostgresLibraryBrowseRepository:
         return None
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
+        normalized_album_key = str(album_key or "")
+        if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+            cached = self._get_cached_utility_projection("problematic-files", copy_payload=False)
+            cached_detail = (cached or {}).get(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY)
+            if isinstance(cached_detail, Mapping):
+                return deepcopy(cached_detail)
         albums = _problematic_album_projection_payloads(
-            self._load_problematic_file_rows(album_key=str(album_key or ""))
+            self._load_problematic_file_rows(album_key=normalized_album_key)
         )
-        requested_keys = set(_problematic_album_key_candidates(str(album_key or "")))
+        requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
         for album in albums:
             if str(album.get("key") or "") not in requested_keys:
                 continue

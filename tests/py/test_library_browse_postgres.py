@@ -11695,6 +11695,42 @@ def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypa
     assert requested_paths == [{"Main/Loose/one.flac", "Downloads/Loose/two.flac"}]
 
 
+def test_problematic_loose_tracks_detail_reuses_cached_projection(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: None,
+    )
+    cache_key = repository._utility_projection_cache_key("problematic-files")
+    detail = {
+        "key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY,
+        "detail_loaded": True,
+        "tracks": [{"path": "Main/Loose/one.flac"}],
+    }
+    with browse._UTILITY_PROJECTION_CACHE_LOCK:
+        browse._UTILITY_PROJECTION_CACHE[cache_key] = {
+            "items": [{"key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY}],
+            browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY: detail,
+        }
+    monkeypatch.setattr(
+        repository,
+        "_load_problematic_file_rows",
+        lambda **_options: pytest.fail("cached Loose Tracks detail must avoid a database reload"),
+    )
+
+    try:
+        assert repository.build_problematic_file_detail_payload(
+            browse._PROBLEMATIC_LOOSE_TRACKS_KEY
+        ) == detail
+        assert browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY not in (
+            repository.build_problematic_files_payload()
+        )
+    finally:
+        with browse._UTILITY_PROJECTION_CACHE_LOCK:
+            browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 

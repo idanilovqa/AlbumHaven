@@ -51,6 +51,7 @@ class PcmOpenCommand:
     start_frame: int
     sample_rate: int
     provisional_duration_seconds: float
+    end_frame: int | None = None
 
     def __post_init__(self) -> None:
         _validate_nonnegative_integer("generation", self.generation)
@@ -63,6 +64,10 @@ class PcmOpenCommand:
             raise ValueError("role must be current or continuity")
         object.__setattr__(self, "path", Path(self.path))
         _validate_nonnegative_integer("start_frame", self.start_frame)
+        if self.end_frame is not None:
+            _validate_nonnegative_integer("end_frame", self.end_frame)
+            if self.end_frame <= self.start_frame:
+                raise ValueError("end_frame must be greater than start_frame")
         _validate_nonnegative_integer("sample_rate", self.sample_rate)
         if self.sample_rate == 0:
             raise ValueError("sample_rate must be positive")
@@ -289,6 +294,10 @@ class PcmDecoderProcess:
             output_seek = ()
             audio_filter = ("-af", filters)
             command = replace(command, provisional_duration_seconds=gapless.duration_seconds)
+        frame_limit = (
+            ("-frames:a", str(command.end_frame - command.start_frame))
+            if command.end_frame is not None else ()
+        )
         process = await process_factory(
             executable,
             "-hide_banner",
@@ -306,6 +315,7 @@ class PcmDecoderProcess:
             "pcm_f32le",
             "-ac",
             "2",
+            *frame_limit,
             "pipe:1",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

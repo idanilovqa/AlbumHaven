@@ -109,6 +109,11 @@ def test_pcm_open_command_rejects_invalid_values(changes, message):
         open_command(**changes)
 
 
+def test_pcm_open_command_requires_segment_end_after_start():
+    with pytest.raises(ValueError, match="end_frame"):
+        open_command(start_frame=75, end_frame=75)
+
+
 def test_pcm_open_command_normalizes_path_and_is_immutable(tmp_path):
     command = open_command(tmp_path / "song.wav")
     assert isinstance(command.path, Path)
@@ -199,6 +204,24 @@ def test_decoder_uses_bounded_preroll_and_residual_seek_for_encoded_input(tmp_pa
         assert input_seek_seconds > 0
         assert residual_seek_seconds == pytest.approx(0.25)
         assert 0 < residual_seek_seconds <= 0.25
+
+    asyncio.run(scenario())
+
+
+def test_decoder_limits_output_to_exclusive_segment_end(tmp_path):
+    async def scenario() -> None:
+        calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        process = FakeProcess()
+        decoder = await PcmDecoderProcess.start(
+            open_command(tmp_path / "image.flac", start_frame=75, end_frame=225),
+            ffmpeg_executable="ffmpeg-test",
+            process_factory=factory_for(process, calls),
+        )
+        await decoder.finish()
+
+        args, _kwargs = calls[0]
+        assert args[args.index("-frames:a") + 1] == "150"
+        assert args.index("-frames:a") < args.index("pipe:1")
 
     asyncio.run(scenario())
 

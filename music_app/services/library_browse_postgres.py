@@ -7983,6 +7983,8 @@ def _selected_artist_album_payloads(
             track_payload = {
                 "key": track_key,
                 "track_ref": track_key,
+                "cue_segment_ref": row_payload.get("cue_segment_ref"),
+                "source_kind": row_payload.get("cue_source_kind"),
                 "title": str(row_payload.get("track_title") or "").strip(),
                 "artist": str(
                     file_entry.get("artist")

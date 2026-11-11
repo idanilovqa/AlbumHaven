@@ -729,6 +729,28 @@ def test_postgres_featured_track_artist_remains_featured_with_member_relation():
     )[0]["artist_relationship"] == "featured"
 
 
+def test_selected_artist_album_payload_projects_pathless_cue_track():
+    from music_app.services import library_browse_postgres as browse
+
+    row = _browse_album_row(
+        artist="Artist", album_id=86, album_key="artist-cue", title="CUE Album",
+    )
+    row.update(
+        file_private_path=None,
+        file_entry={},
+        cue_segment_ref="cue:logical",
+        cue_source_kind="external",
+        duration_seconds=2,
+    )
+
+    track = browse._selected_artist_album_payloads([row], "Artist")[0]["tracks"][0]
+
+    assert track["path"] is None
+    assert track["cue_segment_ref"] == "cue:logical"
+    assert track["source_kind"] == "external"
+    assert track["duration_seconds"] == 2
+
+
 def test_selected_artist_browse_preserves_split_albums_in_one_folder():
     from music_app.services import library_browse_postgres as browse
 

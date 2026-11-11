@@ -598,6 +598,20 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
             _PREPARATIONS.pop(identity, None)
 
 
+def _refresh_all_stray_duplicate_ownership(connection):
+    from music_app.services.scoped_relation_projection import _refresh_stray_duplicate_ownership
+
+    context = gallery_projection_context(connection)
+    if not context:
+        return
+    album_ids = connection.execute(
+        "select id from library.local_albums where library_id=%s", (context["library_id"],)
+    ).fetchall()
+    _refresh_stray_duplicate_ownership(
+        connection, context["library_id"], (row["id"] for row in album_ids)
+    )
+
+
 def initialize_gallery_membership(config, *, connect=None):
     """Seed migrated membership once before a writer starts serving requests."""
     from music_app.services.library_browse_postgres import _connect, _root_sidebar_view_state
@@ -606,6 +620,8 @@ def initialize_gallery_membership(config, *, connect=None):
     with connector(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
         if not _membership_installed(connection):
             raise RuntimeError("Incremental gallery membership migration is not installed.")
+        if not config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+            _refresh_all_stray_duplicate_ownership(connection)
     result = _ensure_gallery_projection_ready(config, connect=connect, allow_shared_seed=True)
     with connector(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
         context = gallery_projection_context(connection)
@@ -620,17 +636,11 @@ def initialize_gallery_membership(config, *, connect=None):
 def finish_full_relation_publication(connection, config, relation_views):
     """Refresh existing gallery scopes before clearing a full writer's journal."""
     from music_app.services import library_browse_postgres as browse
-    from music_app.services.scoped_relation_projection import _refresh_stray_duplicate_ownership
 
     context = gallery_projection_context(connection)
     if not context or not _membership_installed(connection):
         return
-    album_ids = connection.execute(
-        "select id from library.local_albums where library_id=%s", (context["library_id"],)
-    ).fetchall()
-    _refresh_stray_duplicate_ownership(
-        connection, context["library_id"], (row["id"] for row in album_ids)
-    )
+    _refresh_all_stray_duplicate_ownership(connection)
     headers = connection.execute("""select scope_key,view_state,source_generation
         from library.gallery_membership_headers where library_id=%s""",
         (context['library_id'],)).fetchall()

@@ -2984,6 +2984,15 @@ class PostgresLibraryBrowseRepository:
         if cached_payload is None:
             complete, status = False, "stale"
             cached_payload = self._get_stale_utility_projection("problematic-files")
+        if cached_payload is None:
+            cache_key = self._utility_projection_cache_key("problematic-files")
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                flight = _UTILITY_PROJECTION_SINGLEFLIGHT.get(cache_key)
+            if flight is not None:
+                flight.wait()
+            cached_payload = self._get_cached_utility_projection("problematic-files")
+            if cached_payload is not None:
+                complete, status = True, "hit"
         if cached_payload is not None:
             items = [
                 item for item in cached_payload.get("items") or []

@@ -9350,6 +9350,24 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "SMALL-SOUNDTRACK-GUEST a guest copy stays off the gallery and beside its soundtrack source in Problematic Files",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "mutationOwnership": {
+      "databaseIdentity": "case:small-soundtrack-guest",
+      "filesystemCopy": "media/cases/small-soundtrack-guest"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
     "case": "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
     "profile": "functional-core",
     "setupScope": "isolated",

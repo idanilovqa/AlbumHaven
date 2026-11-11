@@ -231,6 +231,28 @@ def test_shared_browse_initialization_is_explicit_and_requires_migration(monkeyp
         gallery.initialize_gallery_membership(config, connect=lambda _: Connection())
 
 
+def test_writer_startup_refreshes_stray_duplicate_ownership_for_every_album(monkeypatch):
+    from music_app.services import scoped_relation_projection as relations
+
+    class Connection:
+        def execute(self, sql, params):
+            assert "from library.local_albums" in sql
+            assert params == (7,)
+            return type("Cursor", (), {"fetchall": lambda _: [{"id": 2}, {"id": 4}]})()
+
+    refreshed = []
+    monkeypatch.setattr(gallery, "gallery_projection_context", lambda _: {"library_id": 7})
+    monkeypatch.setattr(
+        relations,
+        "_refresh_stray_duplicate_ownership",
+        lambda _connection, library_id, album_ids: refreshed.append((library_id, list(album_ids))),
+    )
+
+    gallery._refresh_all_stray_duplicate_ownership(Connection())
+
+    assert refreshed == [(7, [2, 4])]
+
+
 @pytest.mark.parametrize("shared", [True, False])
 def test_shared_gallery_refresh_replays_dirty_keys_without_a_full_build(monkeypatch, shared):
     from music_app.services import scoped_relation_projection as relations

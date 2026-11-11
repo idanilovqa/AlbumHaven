@@ -15363,6 +15363,69 @@ def test_problematic_files_search_answers_from_the_last_list_while_a_fresh_one_r
     assert payload["projection_cache_status"] == "stale"
 
 
+def test_problematic_files_search_waits_for_the_inflight_complete_list():
+    from music_app.services import library_browse_postgres as browse
+
+    database_url = "postgresql://album_haven_app@localhost/search-singleflight"
+    cache_key = (database_url, "problematic-files")
+    waiting = Event()
+    release = Event()
+
+    class RecordingFlight:
+        def wait(self):
+            waiting.set()
+            assert release.wait(1)
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("the completed list must answer without a narrower query")
+        ),
+    )
+    repository._get_stale_utility_projection = lambda _kind: None
+    try:
+        browse._UTILITY_PROJECTION_SINGLEFLIGHT[cache_key] = RecordingFlight()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(repository.build_problematic_files_search, "prince")
+            assert waiting.wait(1)
+            browse._UTILITY_PROJECTION_CACHE[cache_key] = {
+                "items": [
+                    {"key": "various::prince", "name": "The Prince Of Egypt"},
+                    {"key": "other", "name": "Other"},
+                ],
+            }
+            browse._UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
+            release.set()
+            payload = result.result(timeout=1)
+        assert [item["key"] for item in payload["items"]] == ["various::prince"]
+        assert payload["complete"] is True
+        assert payload["projection_cache_status"] == "hit"
+    finally:
+        release.set()
+        browse._UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
+        browse._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+
+def test_problematic_files_search_rereads_a_list_published_after_its_first_cache_miss():
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/search-published"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("the newly published list must answer without a narrower query")
+        ),
+    )
+    reads = iter((None, {"items": [{"key": "prince", "name": "The Prince Of Egypt"}]}))
+    repository._get_cached_utility_projection = lambda _kind: next(reads)
+    repository._get_stale_utility_projection = lambda _kind: None
+
+    payload = repository.build_problematic_files_search("prince")
+
+    assert [item["key"] for item in payload["items"]] == ["prince"]
+    assert payload["complete"] is True
+    assert payload["projection_cache_status"] == "hit"
+
+
 def test_problematic_files_search_marks_a_truncated_narrowing():
     from music_app.services import library_browse_postgres as browse
 

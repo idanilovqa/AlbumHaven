@@ -5761,3 +5761,394 @@ def test_edit_tag_reservation_releases_intent_and_structural_owners_even_on_fail
         reservation.release()
     reservation.release()
     assert releases == ["intent", "structural"]
+
+
+def test_collection_tag_edit_resolves_opaque_track_refs_before_existing_workflow(
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    actor = SimpleNamespace(account_id=8, current_library_id=23)
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=actor),
+        app=SimpleNamespace(state=SimpleNamespace(
+            config={"database": "app"},
+            auth_policy_config={"hmac": {"secret": "x" * 32, "key_version": 1}},
+        )),
+    )
+    album = {
+        "tag_editor_collection": True,
+        "tracks": [{"media_ref": "opaque-resume-token", "title": "Song"}],
+    }
+    updates = {"opaque-resume-token": {"custom_collection_name": "Night"}}
+    calls = []
+
+    class FakePlaybackReferences:
+        def __init__(self, config):
+            calls.append(("config", config))
+
+        def resolve_resume_library_paths(self, resolved_actor, refs):
+            calls.append(("resolve", resolved_actor, refs))
+            return {"opaque-resume-token": r"C:\Music\Artist\Loose\song.flac"}
+
+    monkeypatch.setattr(
+        routes,
+        "PlaybackReferenceService",
+        FakePlaybackReferences,
+        raising=False,
+    )
+
+    resolved_album, resolved_updates = routes._resolve_collection_tag_edit_refs(
+        request, album, updates,
+    )
+
+    assert calls == [
+        ("config", {
+            "database": "app",
+            "hmac": {"secret": "x" * 32, "key_version": 1},
+        }),
+        ("resolve", actor, ["opaque-resume-token"]),
+    ]
+    assert resolved_album == {
+        "tag_editor_collection": True,
+        "tracks": [{
+            "path": r"C:\Music\Artist\Loose\song.flac",
+            "title": "Song",
+        }],
+    }
+    assert resolved_updates == {
+        r"C:\Music\Artist\Loose\song.flac": {"custom_collection_name": "Night"},
+    }
+
+
+def test_collection_tag_edit_resolves_more_than_one_reference_batch(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    refs = [f"opaque-{index}" for index in range(101)]
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=SimpleNamespace()),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, auth_policy_config={})),
+    )
+    album = {
+        "tag_editor_collection": True,
+        "tracks": [{"media_ref": ref} for ref in refs],
+    }
+    batches = []
+
+    class FakePlaybackReferences:
+        def __init__(self, _config):
+            pass
+
+        def resolve_resume_library_paths(self, _actor, batch):
+            assert len(batch) <= 100
+            batches.append(list(batch))
+            return {ref: f"path-{ref}" for ref in batch}
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences)
+
+    resolved_album, _updates = routes._resolve_collection_tag_edit_refs(
+        request, album, {refs[-1]: {"custom_collection_name": "Night"}},
+    )
+
+    assert [len(batch) for batch in batches] == [100, 1]
+    assert resolved_album["tracks"][-1]["path"] == "path-opaque-100"
+
+
+def test_collection_tag_edit_rejects_raw_update_identity_when_album_uses_opaque_refs(
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    actor = SimpleNamespace(account_id=8, current_library_id=23)
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=actor),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, auth_policy_config={})),
+    )
+
+    class FakePlaybackReferences:
+        def __init__(self, _config):
+            pass
+
+        def resolve_resume_library_paths(self, _actor, refs):
+            return {refs[0]: r"C:\Music\Artist\Loose\song.flac"}
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences)
+
+    with pytest.raises(routes.PlaybackContractError) as exc_info:
+        routes._resolve_collection_tag_edit_refs(
+            request,
+            {
+                "tag_editor_collection": True,
+                "tracks": [{"media_ref": "opaque-resume-token", "title": "Song"}],
+            },
+            {r"C:\Music\forged.flac": {"custom_collection_name": "Night"}},
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_collection_tag_edit_rejects_mixed_raw_album_identity(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=SimpleNamespace()),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, auth_policy_config={})),
+    )
+    monkeypatch.setattr(
+        routes,
+        "PlaybackReferenceService",
+        lambda _config: pytest.fail("mixed identities must fail before resolution"),
+    )
+
+    with pytest.raises(routes.PlaybackContractError) as exc_info:
+        routes._resolve_collection_tag_edit_refs(
+            request,
+            {
+                "tracks": [
+                    {"media_ref": "opaque-resume-token", "path": "opaque-resume-token"},
+                    {"path": r"C:\Music\forged.flac"},
+                ],
+            },
+            {"opaque-resume-token": {"title": "Corrected"}},
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_collection_tag_edit_resolves_media_ref_when_client_omits_collection_marker(
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    actor = SimpleNamespace(account_id=8, current_library_id=23)
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=actor),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, auth_policy_config={})),
+    )
+
+    class FakePlaybackReferences:
+        def __init__(self, _config):
+            pass
+
+        def resolve_resume_library_paths(self, _actor, refs):
+            return {refs[0]: r"C:\Music\Artist\Loose\song.flac"}
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences)
+
+    resolved_album, resolved_updates = routes._resolve_collection_tag_edit_refs(
+        request,
+        {"tracks": [{"media_ref": "opaque-resume-token", "title": "Song"}]},
+        {"opaque-resume-token": {"custom_collection_name": "Night"}},
+    )
+
+    assert resolved_album["tracks"] == [{
+        "path": r"C:\Music\Artist\Loose\song.flac",
+        "title": "Song",
+    }]
+    assert resolved_updates == {
+        r"C:\Music\Artist\Loose\song.flac": {"custom_collection_name": "Night"},
+    }
+
+
+def test_collection_tag_edit_member_result_uses_opaque_refs_and_omits_album_paths():
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    assert hasattr(routes, "_project_collection_tag_edit_result")
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+    projected = routes._project_collection_tag_edit_result(
+        {
+            "ok": True,
+            "changed_files": [raw_path],
+            "committed_values": {raw_path: {"custom_collection_name": "Night"}},
+            "skipped_files": [raw_path],
+            "updated_album": {
+                "cover_path": r"C:\Music\Artist\cover.jpg",
+                "tracks": [{"path": raw_path, "display_path": r"Artist\Loose\song.flac"}],
+            },
+            "updated_albums": [{"tracks": [{"path": raw_path}]}],
+            "updated_problematic_album": {"tracks": [{"path": raw_path}]},
+            "changed_count": 1,
+            "requires_view_refresh": True,
+        },
+        {raw_path: "opaque-resume-token"},
+    )
+
+    assert projected == {
+        "ok": True,
+        "changed_files": ["opaque-resume-token"],
+        "committed_values": {
+            "opaque-resume-token": {"custom_collection_name": "Night"},
+        },
+        "skipped_files": ["opaque-resume-token"],
+        "changed_count": 1,
+        "requires_view_refresh": True,
+    }
+    assert raw_path not in repr(projected)
+
+
+def test_collection_tag_edit_member_error_replaces_resolved_path():
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    assert hasattr(routes, "_project_collection_tag_edit_result")
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+    projected = routes._project_collection_tag_edit_result(
+        ({"ok": False, "error": f"Unable to edit {raw_path}."}, 400),
+        {raw_path: "opaque-resume-token"},
+    )
+
+    assert projected == (
+        {"ok": False, "error": "Unable to edit opaque-resume-token."},
+        400,
+    )
+    assert raw_path not in repr(projected)
+
+
+def test_member_save_task_poll_is_scoped_and_path_free(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    assert hasattr(routes, "_save_task_result_for_request")
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=SimpleNamespace(
+            account_id=8,
+            current_library_id=23,
+        )),
+    )
+    monkeypatch.setattr(
+        routes,
+        "save_task_result",
+        lambda task_id: {
+            "id": task_id,
+            "status": "completed",
+            "changed_files": [raw_path],
+            "committed_values": {raw_path: {"title": "Corrected"}},
+            "updated_album": {"tracks": [{"path": raw_path}]},
+        },
+    )
+    monkeypatch.setattr(
+        routes,
+        "save_task_projection_context",
+        lambda _task_id: {
+            "account_id": 8,
+            "library_id": 23,
+            "path_refs": {raw_path: "opaque-resume-token"},
+        },
+        raising=False,
+    )
+
+    projected = routes._save_task_result_for_request(request, "task-1")
+
+    assert projected == {
+        "id": "task-1",
+        "status": "completed",
+        "changed_files": ["opaque-resume-token"],
+        "committed_values": {"opaque-resume-token": {"title": "Corrected"}},
+    }
+    assert raw_path not in repr(projected)
+
+
+def test_member_save_task_poll_rejects_another_actor(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    assert hasattr(routes, "_save_task_result_for_request")
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=SimpleNamespace(
+            account_id=9,
+            current_library_id=23,
+        )),
+    )
+    monkeypatch.setattr(routes, "save_task_result", lambda _task_id: {"status": "pending"})
+    monkeypatch.setattr(
+        routes,
+        "save_task_projection_context",
+        lambda _task_id: {
+            "account_id": 8,
+            "library_id": 23,
+            "path_refs": {r"C:\Music\song.flac": "opaque-resume-token"},
+        },
+        raising=False,
+    )
+
+    with pytest.raises(routes.PlaybackContractError) as exc_info:
+        routes._save_task_result_for_request(request, "task-1")
+
+    assert exc_info.value.status_code == 403
+
+
+def test_opaque_edit_task_route_binds_scoped_path_free_poll(asgi_app, monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.save_tasks import (
+        create_save_task,
+        save_task_projection_context,
+        update_save_task,
+    )
+
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+    media_ref = "opaque-resume-token"
+
+    class FakePlaybackReferences:
+        def __init__(self, _config):
+            pass
+
+        def resolve_resume_library_paths(self, _actor, refs):
+            assert refs == [media_ref]
+            return {media_ref: raw_path}
+
+    def fake_handle_edit_tags_request(**kwargs):
+        assert kwargs["album"]["tracks"][0]["path"] == raw_path
+        assert kwargs["updates"] == {raw_path: {"title": "Corrected"}}
+        task_id = create_save_task("edit-tags")
+        update_save_task(
+            task_id,
+            status="completed",
+            changed_files=[raw_path],
+            committed_values={raw_path: {"title": "Corrected"}},
+            updated_album={"tracks": [{"path": raw_path}]},
+        )
+        kwargs["structural_tag_edit_reservation"].release()
+        return {"ok": True, "save_task_id": task_id}
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences)
+    monkeypatch.setattr(routes, "handle_edit_tags_request", fake_handle_edit_tags_request)
+    monkeypatch.setattr(
+        routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: SimpleNamespace(
+            seam_id=seam_id,
+            effective_backend="file",
+        ),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/edit-tags",
+        json_body={
+            "confirmed": True,
+            "album": {"tracks": [{"media_ref": media_ref, "title": "Song"}]},
+            "updates": {media_ref: {"title": "Corrected"}},
+        },
+    )
+    immediate = _decode_json(body)
+
+    assert status == 200
+    assert raw_path not in repr(immediate)
+    task_id = immediate["save_task_id"]
+    assert save_task_projection_context(task_id) == {
+        "account_id": 1,
+        "library_id": 1,
+        "path_refs": {raw_path: media_ref},
+    }
+
+    poll_status, _poll_headers, poll_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        f"/utilities/save-task/{task_id}",
+    )
+    poll = _decode_json(poll_body)
+
+    assert poll_status == 200
+    assert poll["changed_files"] == [media_ref]
+    assert poll["committed_values"] == {media_ref: {"title": "Corrected"}}
+    assert "updated_album" not in poll
+    assert raw_path not in repr(poll)

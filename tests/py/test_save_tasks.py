@@ -72,6 +72,32 @@ def test_structural_completion_lookup_is_private_and_time_scoped():
     assert not any(key.startswith("_") for key in save_task_result(task_id))
 
 
+def test_save_task_member_projection_context_is_private_and_scoped():
+    task_id = create_save_task("edit-tags")
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+
+    assert hasattr(save_tasks_module, "bind_save_task_projection")
+    assert hasattr(save_tasks_module, "save_task_projection_context")
+    save_tasks_module.bind_save_task_projection(
+        task_id,
+        account_id=8,
+        library_id=23,
+        path_refs={raw_path: "opaque-resume-token"},
+    )
+
+    context = save_tasks_module.save_task_projection_context(task_id)
+    assert context == {
+        "account_id": 8,
+        "library_id": 23,
+        "path_refs": {raw_path: "opaque-resume-token"},
+    }
+    context["path_refs"].clear()
+    assert save_tasks_module.save_task_projection_context(task_id)["path_refs"] == {
+        raw_path: "opaque-resume-token",
+    }
+    assert not any(key.startswith("_") for key in save_task_result(task_id))
+
+
 def _durable_save_finalize_kwargs(
     tmp_path: Path,
     *,

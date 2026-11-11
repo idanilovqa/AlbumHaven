@@ -22,6 +22,71 @@ function loadTrackTable() {
   return context;
 }
 
+function createSelectionHarness(context) {
+  const listeners = new Map();
+  const scrollListeners = new Map();
+  const timers = new Map();
+  let nextTimer = 1;
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    const id = nextTimer++;
+    timers.set(id, { callback, delay });
+    return id;
+  };
+  context.clearBrowserTimeout = (id) => timers.delete(id);
+  const classList = () => {
+    const values = new Set();
+    return {
+      add: value => values.add(value),
+      remove: value => values.delete(value),
+      contains: value => values.has(value),
+    };
+  };
+  const rows = ['one', 'two', 'three', 'four'].map((path) => ({
+    dataset: { trackRowPath: path },
+    classList: classList(),
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    removeAttribute(name) { delete this.attributes[name]; },
+    closest(selector) {
+      return selector === '[data-track-row-path]' ? this : null;
+    },
+  }));
+  const scrollTarget = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    addEventListener(type, handler) { scrollListeners.set(type, handler); },
+    removeEventListener(type) { scrollListeners.delete(type); },
+  };
+  const root = {
+    addEventListener(type, handler) { listeners.set(type, handler); },
+    removeEventListener(type) { listeners.delete(type); },
+    querySelectorAll() { return rows; },
+    closest() { return scrollTarget; },
+  };
+  const dispatch = (type, row, overrides = {}) => listeners.get(type)?.({
+    target: row,
+    pointerId: 1,
+    pointerType: 'mouse',
+    button: 0,
+    clientX: 0,
+    clientY: 0,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    preventDefault() {},
+    stopImmediatePropagation() {},
+    ...overrides,
+  });
+  const runTimers = (delay) => {
+    [...timers].forEach(([id, timer]) => {
+      if (timer.delay !== delay) return;
+      timers.delete(id);
+      timer.callback();
+    });
+  };
+  return { root, rows, scrollTarget, scrollListeners, listeners, dispatch, runTimers };
+}
+
 test('AlbumTrackTable changes only the inner Play and Pause glyphs to centered shared SVGs', () => {
   const context = loadTrackTable();
   const idle = context.buildAlbumTrackPlayButtonHtml({ path: 'idle.flac', title: 'Idle' });
@@ -60,6 +125,25 @@ test('AlbumTrackTable composes CompactDataTable compact rows and preserves playb
   assert.doesNotMatch(html, />Tracks</);
   assert.doesNotMatch(html, /album-track-table__disc-heading/);
   assert.match(html, /class="album-track-table__total"/);
+});
+
+test('AlbumTrackTable uses an opaque member identity without inventing another table', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ tracks: [{
+      media_ref: 'opaque-resume-token',
+      playback_ref: 'opaque-playback-ref',
+      playback_ref_expires_at: '2099-01-01T00:00:00Z',
+      title: 'Path-free song',
+    }] }],
+  });
+
+  assert.match(html, /data-track-row-path="opaque-resume-token"/);
+  assert.match(html, /data-media-ref="opaque-resume-token"/);
+  assert.match(html, /data-playback-ref="opaque-playback-ref"/);
+  assert.match(html, /data-playback-ref-expires-at="2099-01-01T00:00:00Z"/);
+  assert.match(html, /data-src="\/track\?ref=opaque-resume-token"/);
+  assert.doesNotMatch(html, /data-cdt-column="path"/);
 });
 
 test('AlbumTrackTable reserves a headerless problem column immediately before Length', () => {
@@ -110,6 +194,115 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
   assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
   assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
   assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);
+});
+
+test('AlbumTrackTable composes caller-owned optional columns and a narrow title supplement', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ tracks: [{ path: 'track.flac', title: 'Track', rating: 4, plays: 23 }] }],
+    optionalColumns: [
+      {
+        key: 'rating', label: 'Rating', width: '72px', visibility: 'desktop',
+        cell: track => `<span class="test-rating">${track.rating}/5</span>`,
+      },
+      {
+        key: 'plays', label: 'Plays', width: '48px',
+        cell: track => `<span class="test-plays">${track.plays}</span>`,
+      },
+    ],
+    mobile: 'grouped',
+    mobileColumns: '36px minmax(0, 1fr) 48px minmax(54px, auto)',
+    mobileTitleSupplement: track => `<span class="test-mobile-meta">${track.rating}/5</span>`,
+  });
+
+  assert.match(html, /--cdt-columns: 36px minmax\(0, 1fr\) 72px 48px 20px minmax\(54px, auto\)/);
+  assert.match(html, /--cdt-mobile-columns: 36px minmax\(0, 1fr\) 48px minmax\(54px, auto\)/);
+  assert.match(html, /data-cdt-mobile="grouped"/);
+  assert.match(html, /data-cdt-column="rating" data-cdt-visibility="desktop"/);
+  assert.match(html, /class="test-rating">4\/5/);
+  assert.match(html, /class="test-plays">23/);
+  assert.match(html, /album-track-table__mobile-meta[^>]*><span class="test-mobile-meta">4\/5/);
+});
+
+test('TrackSelectionController supports desktop range drag and additive taps', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  const changes = [];
+  const controller = new context.TrackSelectionController(harness.root, {
+    onChange: paths => changes.push([...paths]),
+  });
+
+  harness.dispatch('pointerdown', harness.rows[0]);
+  harness.dispatch('pointermove', harness.rows[2], { clientY: 40 });
+  harness.dispatch('pointerup', harness.rows[2], { clientY: 40 });
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two', 'three']);
+
+  harness.dispatch('pointerdown', harness.rows[3], { ctrlKey: true });
+  harness.dispatch('pointerup', harness.rows[3], { ctrlKey: true });
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two', 'three', 'four']);
+  assert.deepEqual(changes.at(-1), ['one', 'two', 'three', 'four']);
+  let doubleClickPrevented = false;
+  let doubleClickStopped = false;
+  harness.dispatch('dblclick', harness.rows[1], {
+    preventDefault: () => { doubleClickPrevented = true; },
+    stopImmediatePropagation: () => { doubleClickStopped = true; },
+  });
+  assert.equal(doubleClickPrevented, true);
+  assert.equal(doubleClickStopped, true);
+  for (const row of harness.rows) {
+    assert.equal(row.classList.contains('album-track-table__row--selected'), true);
+    assert.equal(row.attributes['aria-selected'], 'true');
+  }
+});
+
+test('TrackSelectionController requires a stationary 550 ms touch hold and cleans up', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  const changes = [];
+  const controller = new context.TrackSelectionController(harness.root, {
+    onChange: paths => changes.push([...paths]),
+  });
+
+  harness.dispatch('pointerdown', harness.rows[0], { pointerType: 'touch' });
+  harness.scrollTarget.scrollTop = 12;
+  harness.scrollListeners.get('scroll')();
+  harness.runTimers(550);
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), []);
+
+  harness.scrollTarget.scrollTop = 0;
+  harness.dispatch('pointerdown', harness.rows[0], { pointerType: 'touch' });
+  harness.runTimers(550);
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one']);
+
+  harness.dispatch('pointermove', harness.rows[2], {
+    pointerType: 'touch', clientX: 0, clientY: 40,
+  });
+  harness.dispatch('pointerup', harness.rows[2], {
+    pointerType: 'touch', clientX: 0, clientY: 40,
+  });
+  assert.deepEqual(
+    Array.from(controller.getSelectedPaths()),
+    ['one', 'two', 'three'],
+    'dragging after the hold extends the touch selection range',
+  );
+
+  harness.dispatch('pointerdown', harness.rows[3], { pointerType: 'touch' });
+  harness.dispatch('pointerup', harness.rows[3], { pointerType: 'touch' });
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two', 'three', 'four']);
+
+  harness.dispatch('pointerdown', harness.rows[1], { pointerType: 'touch' });
+  harness.dispatch('pointercancel', harness.rows[1], { pointerType: 'touch' });
+  harness.runTimers(550);
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two', 'three', 'four']);
+
+  controller.destroy();
+  assert.deepEqual(changes.at(-1), []);
+  assert.equal(harness.listeners.size, 0);
+  assert.equal(harness.scrollListeners.size, 0);
+  for (const row of harness.rows) {
+    assert.equal(row.classList.contains('album-track-table__row--selected'), false);
+    assert.equal(row.attributes['aria-selected'], undefined);
+  }
 });
 
 test('AlbumTrackTable splits a main disc and bonus disc into separate tables without a CD 1 label', () => {

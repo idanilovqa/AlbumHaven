@@ -14,6 +14,7 @@
         availableTabs: Object.freeze(Array.isArray(payload.available_tabs)
           ? payload.available_tabs.filter(tab => typeof tab === 'string') : []),
         clientSurface: String(payload.client_surface || 'private_web'),
+        currentLibraryOwner: payload.current_library_owner === true,
         coverProviderGroups: Object.freeze(Array.isArray(payload.cover_provider_groups)
           ? payload.cover_provider_groups.filter(group => typeof group === 'string') : []),
       });
@@ -39,6 +40,7 @@
       ? preferred : policy?.availableTabs[0] || null;
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
       || policy.coverProviderGroups.includes(candidate?.lookup_group)));
+    const isCurrentLibraryOwner = () => Boolean(policy?.currentLibraryOwner);
     // The Android app's offline copy (app-copy.js) hides permitted writes the same way as denied
     // ones until the server answers.
     const readOnlySelectors = policy ? policy.readOnlySelectors.join(',\n') : '';
@@ -56,6 +58,7 @@
       document.head.append(readOnlyStyle);
     };
     const result = Object.freeze({ allows, allowsUtilityTab, resolveUtilityTab, allowsCoverCandidate, isAndroidShell,
+      isCurrentLibraryOwner,
       setReadOnly, clientSurface: policy?.clientSurface || 'private_web' });
     root.AlbumHavenCapabilities = result;
     if (!policy) return result;

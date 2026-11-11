@@ -68,6 +68,24 @@ test('GalleryCardInfo keeps artist and year together with ten-point rating, trac
   assert.equal((infoHtml.match(/<span class="star(?: filled)?">/g) || []).length, 10);
 });
 
+test('shared rating renderer optionally exposes accessible star buttons', () => {
+  const context = loadGalleryCard();
+  const html = context.buildGalleryRatingHtml({
+    value: 2,
+    maximum: 5,
+    label: 'Track rating',
+    interactive: true,
+    dataAttributes: { 'track-ref': 'C:/Music/a&b.flac' },
+  });
+
+  assert.match(html, /class="stars" role="group" aria-label="Track rating"/);
+  assert.equal((html.match(/<button class="star-button star/g) || []).length, 5);
+  assert.equal((html.match(/aria-pressed="true"/g) || []).length, 2);
+  assert.equal((html.match(/aria-pressed="false"/g) || []).length, 3);
+  assert.match(html, /data-rating-choice="3" aria-label="Rate 3 out of 5"/);
+  assert.match(html, /data-track-ref="C:\/Music\/a&amp;b\.flac"/);
+});
+
 test('GalleryCard keeps a complete accessible name while clamping long card titles', () => {
   const context = loadGalleryCard();
   const title = 'And the Glass Handed Kites: A Very Long Album Title';

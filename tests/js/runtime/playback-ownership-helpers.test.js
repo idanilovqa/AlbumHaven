@@ -571,6 +571,73 @@ test('server claim acquisition uses protocol v1 and keeps paths out of ownership
   );
 });
 
+test('path-free browse tracks reuse their bounded reference and resume it only after expiry', async () => {
+  const requests = [];
+  const { context } = loadHelper({
+    fetch: async (url, options = {}) => {
+      const body = JSON.parse(options.body);
+      requests.push({ url, body });
+      return jsonResponse({
+        protocol: 1,
+        expiresAt: '2099-01-02T00:00:00Z',
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'refreshed-ref' }],
+      });
+    },
+  });
+  const track = {
+    path: 'opaque-resume-token',
+    mediaRef: 'opaque-resume-token',
+    playbackRef: 'issued-ref',
+    playbackRefExpiresAt: '2099-01-01T00:00:00Z',
+    title: 'Path-free song',
+  };
+
+  const issued = await context.playbackOwnershipTrack(track);
+
+  assert.equal(issued.track.playbackRef, 'issued-ref');
+  assert.equal(requests.length, 0);
+
+  track.playbackRefExpiresAt = '2000-01-01T00:00:00Z';
+  const refreshed = await context.playbackOwnershipTrack(track);
+
+  assert.equal(refreshed.track.playbackRef, 'refreshed-ref');
+  assert.deepEqual(requests, [{
+    url: '/playback/refs/resume',
+    body: {
+      protocol: 1,
+      tracks: [{ clientKey: 'local-tab', resumeToken: 'opaque-resume-token' }],
+    },
+  }]);
+});
+
+test('path-free playback prefers a newly issued row reference over an expired previous reference', async () => {
+  const requests = [];
+  const { context } = loadHelper({
+    fetch: async (...args) => {
+      requests.push(args);
+      return jsonResponse({});
+    },
+  });
+  const track = {
+    path: 'opaque-resume-token',
+    mediaRef: 'opaque-resume-token',
+    playbackRef: 'new-issued-ref',
+    playbackRefExpiresAt: '2099-01-01T00:00:00Z',
+    title: 'Path-free song',
+  };
+  const previous = {
+    path: track.path,
+    referenceExpiresAt: '2000-01-01T00:00:00Z',
+    track: { playbackRef: 'expired-ref' },
+  };
+
+  const result = await context.playbackOwnershipTrack(track, previous);
+
+  assert.equal(result.track.playbackRef, 'new-issued-ref');
+  assert.equal(result.referenceExpiresAt, '2099-01-01T00:00:00Z');
+  assert.equal(requests.length, 0);
+});
+
 test('each claim answer says afresh whether listen writes can reach Last.fm', async () => {
   const answers = [{ available: false }, { available: true }, undefined];
   const { context } = loadHelper({

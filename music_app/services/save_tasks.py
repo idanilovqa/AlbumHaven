@@ -370,6 +370,34 @@ def save_task_result(task_id: str) -> JsonDict:
     return {key: value for key, value in result.items() if not key.startswith("_")}
 
 
+def bind_save_task_projection(
+    task_id: str,
+    *,
+    account_id: int,
+    library_id: int,
+    path_refs: dict[str, str],
+) -> None:
+    update_save_task(
+        task_id,
+        _projection_context={
+            "account_id": account_id,
+            "library_id": library_id,
+            "path_refs": dict(path_refs),
+        },
+    )
+
+
+def save_task_projection_context(task_id: str) -> JsonDict | None:
+    with _SAVE_TASKS_LOCK:
+        context = _SAVE_TASKS.get(task_id, {}).get("_projection_context")
+        if not isinstance(context, dict):
+            return None
+        return {
+            **context,
+            "path_refs": dict(context.get("path_refs") or {}),
+        }
+
+
 def latest_structural_tag_edit_destination(
     resource_keys: set[str] | frozenset[str],
     *,

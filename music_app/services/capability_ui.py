@@ -80,10 +80,27 @@ def project_capability_ui(request) -> dict[str, object]:
     allowed = allowed_actions_for_request(
         request, UI_ACTIONS, target_account_id=actor.account_id,
     ).as_payload()
-    return build_capability_ui(allowed, client_surface_from_request(request))
+    return build_capability_ui(
+        allowed,
+        client_surface_from_request(request),
+        current_library_owner=is_current_library_owner(actor),
+    )
 
 
-def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[str, object]:
+def is_current_library_owner(actor: object) -> bool:
+    library_id = getattr(actor, "current_library_id", None)
+    return library_id is not None and any(
+        relationship.library_id == library_id and relationship.is_primary_owner
+        for relationship in getattr(actor, "library_relationships", ())
+    )
+
+
+def build_capability_ui(
+    allowed: dict[str, bool],
+    client_surface: str,
+    *,
+    current_library_owner: bool = False,
+) -> dict[str, object]:
     """Build presentation from exact policy decisions, never from role labels."""
     denied_selectors = [
         selector
@@ -116,6 +133,7 @@ def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[s
     return {
         "allowed_actions": allowed,
         "client_surface": client_surface,
+        "current_library_owner": current_library_owner is True,
         "cover_provider_groups": list(PROVIDER_LOOKUP_GROUPS),
         "denied_selectors": denied_selectors,
         "read_only_selectors": read_only_selectors,

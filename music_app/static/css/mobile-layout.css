@@ -116,7 +116,35 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #artist-tree-expanded[hidden] { display: none; }
   .shell-navigation-rail .sidebar-top { padding: 18px 12px 14px; gap: 8px; flex: 0 0 auto; }
   .shell-navigation-rail .sidebar-top h2 { margin: 0; }
-  #sidebar-list { flex: 1; min-height: 0; overflow-y: auto; }
+  .library-navigation-body { flex: 1; grid-template-columns: 51px minmax(0, 1fr); padding: 0 10px 12px 6px; }
+  .library-navigation-mode-rail { padding-right: 8px; border-right: 1px solid color-mix(in srgb, var(--app-muted) 24%, transparent); }
+  .shell-navigation-rail.is-mobile-mode-rail-hidden { min-width: min(190px, calc(100vw - 56px)); }
+  .shell-navigation-rail.is-mobile-mode-rail-hidden .library-navigation-body { grid-template-columns: minmax(0, 1fr); padding-left: 2px; }
+  .shell-navigation-rail.is-mobile-mode-rail-hidden .library-navigation-mode-rail { display: none; }
+  :root .mobile-tree-edge-anchor {
+    position: absolute;
+    z-index: 2;
+    left: 0;
+    top: 50%;
+    width: 12px;
+    min-width: 12px;
+    height: 72px;
+    min-height: 72px;
+    padding: 0;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 0 8px 8px 0;
+    background: color-mix(in srgb, var(--app-muted) 38%, transparent);
+    box-shadow: none;
+  }
+  :root .mobile-tree-edge-anchor:not([hidden]) { display: grid; place-items: center; }
+  :root .mobile-tree-edge-anchor:is(:hover, :active, :focus-visible) {
+    background: color-mix(in srgb, var(--app-muted) 38%, transparent);
+    border: 0;
+    box-shadow: none;
+  }
+  :root .mobile-tree-edge-anchor:focus-visible { outline: 2px solid var(--app-muted); outline-offset: 1px; }
+  #sidebar-list { min-height: 0; overflow-y: auto; }
   .artist-family-panel { width: min(320px, 75vw) !important; max-width: 75vw; right: 0 !important; border-radius: 12px 0 0 12px; clip-path: inset(0 -80px -80px -80px) !important; transform: translateX(100%); transition: transform 200ms ease !important; }
   .artist-family-panel.is-open { transform: translateX(0); }
   .artist-family-panel__title-row { flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -415,7 +443,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 }
 
 /* 2026-09-27 owner feedback: mobile composition at existing component boundaries. */
-.mobile-artists-mode, .mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
+.mobile-artist-info-close, .mobile-artist-info-backdrop { display: none; }
 @keyframes gallery-card-text-pan {
   0%, 15% { transform: translateX(0); }
   85%, 100% { transform: translateX(calc(-1 * var(--card-text-distance, 0px))); }
@@ -443,16 +471,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
   .shell-navigation-rail .sidebar-top { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; }
   .shell-navigation-rail .sidebar-top > [data-close-artists-drawer] { order: -1; }
-  .shell-navigation-rail .desktop-artists-heading { display: none; }
-  .shell-navigation-rail .mobile-artists-mode { display: block; }
-  .mobile-artists-mode-button { width: auto; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--appearance-panel-line, var(--border)); border-radius: 9px; color: inherit; background: transparent; }
-  .shell-navigation-rail .mobile-artists-mode { flex: 0 1 auto; min-width: 0; }
-  .shell-navigation-rail .mobile-artists-mode-button { display: inline-flex; width: max-content; max-width: 100%; flex: none; aspect-ratio: auto; }
-  .mobile-artists-mode-button .action-button__content { display: flex; align-items: center; gap: 8px; width: auto; height: auto; }
   .shell-navigation-rail .sidebar-top .mobile-bar-action { display: inline-grid; width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
   .shell-navigation-rail .sidebar-top .mobile-bar-action svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-  .mobile-artists-mode-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; }
-  .mobile-artists-mode-button span { font-size: 14px; font-weight: 600; }
  #mobile-library-button[data-search-results='true'] { animation: mobile-artists-search-pulse 2.4s ease-in-out infinite; border-color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
  @keyframes mobile-artists-search-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 0%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 22%, transparent); } }
  @media (prefers-reduced-motion: reduce) { #mobile-library-button[data-search-results='true'] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 18%, transparent); } }
@@ -523,7 +543,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
 @media (max-width: 900px) {
   :root .in-page-tabs > [role="tab"] { background: transparent !important; box-shadow: none !important; }
-  :root .mobile-artists-mode-button[aria-pressed="true"] { background: transparent !important; color: inherit; box-shadow: none !important; }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport { filter: saturate(1.35) contrast(1.08); }
 
 }

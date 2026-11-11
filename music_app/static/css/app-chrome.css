@@ -188,7 +188,7 @@
 .shell-navigation-rail-toggle { flex: 0 0 auto; margin-left: 1px; }
 .shell-navigation-rail:not(.is-folded) .shell-navigation-rail-toggle { order: -1; }
 .shell-navigation-rail.is-folded { padding: 16px 10px; }
-.shell-navigation-compact { display: flex; justify-content: center; }
+.shell-navigation-compact { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .shell-navigation-compact[hidden],
 #artist-tree-expanded[hidden] { display: none; }
 .shell-navigation-compact-action svg,
@@ -201,6 +201,16 @@
   stroke-linejoin: round;
 }
 .shell-navigation-rail h2 { margin-left: 12px; }
+.library-navigation-body { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; min-height: 0; }
+.library-navigation-mode-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+:root .library-navigation-mode-action,
+:root .shell-navigation-compact-action { width: 40px; height: 40px; min-width: 40px; min-height: 40px; flex-basis: 40px; padding: 0; }
+.library-navigation-mode-action svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.library-navigation-mode-action.is-active { background: var(--app-active); }
+:root .library-navigation-mode-action:hover:not(:disabled):not(.is-active) { background: color-mix(in srgb, var(--app-muted) 8%, transparent) !important; box-shadow: none; }
+:root .library-navigation-mode-action:focus-visible { outline-color: var(--app-muted); box-shadow: none; }
+.library-navigation-body #sidebar-list { min-width: 0; }
+.mobile-tree-edge-anchor { display: none; }
 .shell-navigation-rail .artist-link { border-color: transparent; }
 .shell-navigation-rail .artist-link:hover { background: #ffffff07; }
 .shell-navigation-rail .artist-link.active { background: var(--app-active); }

@@ -72,6 +72,42 @@ test('loadWaveformPeaks requests 280 compact bins by raw path and generation', a
   assert.ok(requests[0].options.signal instanceof AbortSignal);
 });
 
+test('loadWaveformPeaks uses a bounded reference instead of an opaque member identity', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(String(url));
+    return { ok: true, json: async () => peakPayload(0.25) };
+  });
+
+  const peaks = await context.loadWaveformPeaks(
+    'opaque-resume-token',
+    280,
+    7,
+    'opaque-playback-ref',
+  );
+
+  assert.equal(peaks.sampleCount, 280);
+  const query = new URL(`http://album-haven.test${requests[0]}`).searchParams;
+  assert.equal(query.get('playbackRef'), 'opaque-playback-ref');
+  assert.equal(query.has('path'), false);
+});
+
+test('probeCachedWaveformPeaks uses a bounded reference instead of an opaque member identity', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(String(url));
+    return { ok: true, status: 200, json: async () => peakPayload(0.25, 720) };
+  });
+  context.state.player.current = { path: 'opaque-resume-token' };
+
+  await context.probeCachedWaveformPeaks('opaque-resume-token', 7, 'opaque-playback-ref');
+
+  const query = new URL(`http://album-haven.test${requests[0]}`).searchParams;
+  assert.equal(query.get('playbackRef'), 'opaque-playback-ref');
+  assert.equal(query.get('cachedOnly'), '1');
+  assert.equal(query.has('path'), false);
+});
+
 test('loadSavedLoopWaveformPeaks requests bounded server peaks by loop id without fetching media', async () => {
   const requests = [];
   const context = loadPeaksRuntime(async (url, options) => {
@@ -217,6 +253,26 @@ test('foreground view work suspends optional peaks and resumes the current wavef
 
   assert.equal((await resumed).left[0], 0.75);
   assert.equal(context.state.player.waveform.compactPeaks.path, 'C:/Music/current.flac');
+});
+
+test('foreground waveform resume keeps an opaque member identity behind its bounded reference', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(String(url));
+    return { ok: true, json: async () => peakPayload(0.75, 720) };
+  });
+  context.state.player.current = {
+    path: 'opaque-resume-token',
+    playbackRef: 'opaque-playback-ref',
+  };
+  context.updateWaveformAppearance = async () => {};
+
+  const suspension = context.suspendPlayerWaveformPeakLoadsForForegroundView();
+  await context.resumePlayerWaveformPeakLoadsAfterForegroundView(suspension);
+
+  const query = new URL(`http://album-haven.test${requests[0]}`).searchParams;
+  assert.equal(query.get('playbackRef'), 'opaque-playback-ref');
+  assert.equal(query.has('path'), false);
 });
 
 test('foreground suspension prevents a new optional waveform request until navigation resumes', async () => {

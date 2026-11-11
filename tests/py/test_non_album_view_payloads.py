@@ -29,6 +29,29 @@ def test_custom_collection_loose_payload_retains_name_and_library_scope():
     assert tracks[0]["disc_subtitle"] == "Bonus"
 
 
+def test_non_album_track_list_preserves_shared_preference_stats_and_popularity_payloads():
+    tracks = build_non_album_track_list([{
+        "path": "C:/Music/Random/song.mp3",
+        "track_ref": "logical-track-key",
+        "album": "Unknown Album",
+        "artist": "Guest",
+        "title": "Song",
+        "exception_type": "Custom Collection",
+        "custom_collection_name": "Road trip",
+        "track_preference_overlay": {"rating": 4, "love_tier": "loved"},
+        "track_scrobble_count": 23,
+        "track_popularity": {"is_visible": True, "scrobble_count": 4200},
+    }])
+
+    assert tracks[0]["track_preference"] == {"rating": 4, "love_tier": "loved"}
+    assert tracks[0]["track_stats"] == {"scrobble_count": 23}
+    assert tracks[0]["track_popularity"] == {
+        "is_visible": True,
+        "scrobble_count": 4200,
+    }
+    assert tracks[0]["track_ref"] == "logical-track-key"
+
+
 def test_blank_album_membership_requires_numbered_sibling_consensus_adjacent_number_and_folder():
     target_path = r"C:\Music\Mono\Hymn to the Immortal Wind\02 - Burial at Sea.flac"
     entries = {

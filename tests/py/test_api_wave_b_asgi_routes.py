@@ -209,7 +209,7 @@ def track_preferences_postgres_runtime(app, monkeypatch):
         def load_store(self):
             return deepcopy(type(self).payload)
 
-        def load_track_preferences(self, track_refs):
+        def load_track_preferences(self, track_refs, **_scope):
             store = self.load_store()
             actor_payload = (
                 (store.get("actors") or {}).get("local")
@@ -226,6 +226,17 @@ def track_preferences_postgres_runtime(app, monkeypatch):
                 for track_ref in track_refs
                 if track_ref in track_preferences
             }
+
+        def save_track_preference(self, track_ref, overlay, **_scope):
+            store = self.load_store()
+            actors = store.setdefault("actors", {})
+            actor = actors.setdefault("local", {"track_preferences": {}})
+            preferences = actor.setdefault("track_preferences", {})
+            if overlay.get("rating") is None and overlay.get("love_tier") == "off":
+                preferences.pop(track_ref, None)
+            else:
+                preferences[track_ref] = dict(overlay)
+            self.save_store(store)
 
         def save_store(self, raw_payload):
             type(self).payload = normalize_track_preferences_store(raw_payload)
@@ -252,7 +263,8 @@ def _post_track_preference(
     asgi_app,
     app,
     *,
-    track_ref: str,
+    track_ref: str = "",
+    media_ref: str = "",
     track_preference: dict[str, object],
     query: dict[str, object] | None = None,
     headers: dict[str, str] | None = None,
@@ -268,7 +280,7 @@ def _post_track_preference(
         query=query,
         headers=headers,
         json_body={
-            "track_ref": track_ref,
+            **({"track_ref": track_ref} if track_ref else {"media_ref": media_ref}),
             "track_preference": track_preference,
         },
     )
@@ -2028,7 +2040,7 @@ def test_asgi_track_preferences_write_persists_in_selected_postgres_store_withou
     assert status == 200
     assert _decode_json(body) == {
         "ok": True,
-        "actor_id": "local",
+        "actor_id": "1",
         "track_ref": track_ref,
         "track_preference": {
             "rating": 5,
@@ -2054,6 +2066,103 @@ def test_asgi_track_preferences_write_persists_in_selected_postgres_store_withou
         },
     }
     assert not (Path(app.config["DATA_DIR"]) / "track_preferences.json").exists()
+
+
+def test_track_preference_media_ref_resolves_inside_authorized_server_boundary(monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    actor = SimpleNamespace(account_id=8, current_library_id=23)
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=actor),
+        app=SimpleNamespace(state=SimpleNamespace(
+            config={"database": "app"},
+            auth_policy_config={"hmac": {"secret": "x" * 32, "key_version": 1}},
+        )),
+    )
+    calls = []
+
+    class FakePlaybackReferences:
+        def __init__(self, config):
+            calls.append(("config", config))
+
+        def resolve_resume_library_paths(self, resolved_actor, refs):
+            calls.append(("resolve", resolved_actor, refs))
+            return {"opaque-media-ref": r"C:\Music\Artist\Loose\song.flac"}
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences, raising=False)
+
+    assert routes._resolve_track_preference_ref(
+        request, {"media_ref": "opaque-media-ref"},
+    ) == r"C:\Music\Artist\Loose\song.flac"
+    assert calls == [
+        ("config", {
+            "database": "app",
+            "hmac": {"secret": "x" * 32, "key_version": 1},
+        }),
+        ("resolve", actor, ["opaque-media-ref"]),
+    ]
+
+
+def test_track_preference_raw_ref_requires_current_library_owner_even_with_path_grant(monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    actor = SimpleNamespace(
+        current_library_id=23,
+        library_relationships=(SimpleNamespace(library_id=23, is_primary_owner=False),),
+    )
+    request = SimpleNamespace(state=SimpleNamespace(current_actor=actor))
+    monkeypatch.setattr(
+        routes,
+        "allowed_actions_for_request",
+        lambda *_args, **_kwargs: SimpleNamespace(as_payload=lambda: {"library.paths.read": True}),
+    )
+
+    with pytest.raises(routes.PlaybackContractError) as exc_info:
+        routes._resolve_track_preference_ref(request, {"track_ref": r"C:\Music\private.flac"})
+
+    assert exc_info.value.status_code == 403
+
+
+def test_asgi_track_preference_media_ref_response_does_not_return_resolved_path(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+    asgi_app = _make_asgi_app()
+
+    class FakePlaybackReferences:
+        def __init__(self, _config):
+            pass
+
+        def resolve_resume_library_paths(self, _actor, refs):
+            return {refs[0]: raw_path}
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences)
+    monkeypatch.setattr(
+        routes,
+        "save_track_preference",
+        lambda *_args, **_kwargs: {
+            "actor_id": "1",
+            "track_ref": raw_path,
+            "track_preference": {
+                "rating": 5,
+                "love_tier": "off",
+                "allowed_actions": {"can_rate": True, "can_set_love_tier": True},
+            },
+        },
+    )
+
+    status, _headers, body = _post_track_preference(
+        asgi_app,
+        app,
+        media_ref="opaque-media-ref",
+        track_preference={"rating": 5},
+    )
+
+    payload = _decode_json(body)
+    assert status == 200
+    assert payload["media_ref"] == "opaque-media-ref"
+    assert "track_ref" not in payload
+    assert raw_path not in body.decode("utf-8")
 
 
 def test_asgi_track_preferences_write_ignores_stale_json_when_postgres_selected(

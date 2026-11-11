@@ -79,6 +79,7 @@ const state = {
     pendingSidebarAllArtistsActive: false,
     artistsDrawerOpen: false,
     artistTreeFolded: null,
+    libraryNavigationMode: 'artists',
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,
@@ -544,6 +545,7 @@ function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
+  if (state.ui.libraryNavigationMode === 'custom-collections') return;
   const sidebarOverride = Array.isArray(state.gallery.sidebarArtistsOverride) ? state.gallery.sidebarArtistsOverride : null;
   const sidebarShowAllArtistsOverride = Object.prototype.hasOwnProperty.call(state.gallery, 'sidebarShowAllArtistsOverride')
     ? state.gallery.sidebarShowAllArtistsOverride

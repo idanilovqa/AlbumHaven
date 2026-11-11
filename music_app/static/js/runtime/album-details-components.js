@@ -179,13 +179,21 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 }
 
 function buildLooseTracksHeaderActionsHtml() {
+  const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
+  const canEditTags = typeof capabilities?.allows !== 'function'
+    || capabilities.allows('library.files.edit_tags');
+  const editLabel = canEditTags ? 'Edit tags' : 'Edit tags unavailable for your account';
+  const editAttributes = { id: 'non-album-modal-edit-tags' };
+  if (canEditTags) editAttributes['data-open-non-album-tag-editor'] = '1';
   return [
+    '<span class="album-details-header__selection-count" data-non-album-selection-count role="status" aria-live="polite" hidden></span>',
     ButtonComponent.renderActionButton({
-      ariaLabel: 'Edit tags',
-      title: 'Edit tags',
+      ariaLabel: editLabel,
+      title: editLabel,
+      disabled: !canEditTags,
       className: 'track-modal-edit-tags album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
-      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+      attributes: editAttributes,
     }),
     ButtonComponent.renderActionButton({
       ariaLabel: 'Close loose tracks',

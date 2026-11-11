@@ -55,6 +55,7 @@ from music_app.services.missing_album_removal_postgres import (
     PostgresMissingAlbumRemovalService,
 )
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
+from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
@@ -77,10 +78,12 @@ from music_app.services.problem_exclusions import (
 )
 from music_app.services.save_tasks import (
     acquire_structural_tag_edit_reservation_async,
+    bind_save_task_projection,
     create_save_task,
     queue_finalize_save_task,
     queue_finalize_structural_tag_edit_save_task,
     save_task_result,
+    save_task_projection_context,
     save_task_timing_recorder,
     structural_tag_edit_resource_keys,
     update_save_task,
@@ -285,6 +288,113 @@ def _album_track_paths(album: Mapping[str, object] | None) -> set[str]:
         for track in tracks
         if isinstance(track, Mapping) and str(track.get("path") or "")
     }
+
+
+def _resolve_collection_tag_edit_refs(
+    request: Request,
+    album: dict[str, object],
+    updates: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    tracks = album.get("tracks")
+    if not isinstance(tracks, list):
+        return album, updates
+    refs = list(dict.fromkeys(
+        str(track.get("media_ref") or "")
+        for track in tracks
+        if isinstance(track, Mapping) and str(track.get("media_ref") or "")
+    ))
+    if not refs:
+        return album, updates
+    if any(
+        not isinstance(track, Mapping)
+        or not str(track.get("media_ref") or "")
+        or (
+            str(track.get("path") or "")
+            and str(track.get("path")) != str(track.get("media_ref"))
+        )
+        for track in tracks
+    ):
+        raise PlaybackContractError(403)
+    if not {str(identity) for identity in updates}.issubset(refs):
+        raise PlaybackContractError(403)
+    service = PlaybackReferenceService({
+        **request.app.state.config,
+        **request.app.state.auth_policy_config,
+    })
+    resolved = {}
+    for start in range(0, len(refs), 100):
+        resolved.update(service.resolve_resume_library_paths(
+            request.state.current_actor,
+            refs[start:start + 100],
+        ))
+    if set(resolved) != set(refs):
+        raise PlaybackContractError(403)
+    projected_tracks = []
+    for track in tracks:
+        if not isinstance(track, Mapping):
+            projected_tracks.append(track)
+            continue
+        ref = str(track.get("media_ref") or "")
+        projected_track = {
+            key: value for key, value in track.items()
+            if key not in {"media_ref", "playback_ref", "playback_ref_expires_at"}
+        }
+        if ref:
+            projected_track["path"] = resolved[ref]
+        projected_tracks.append(projected_track)
+    resolved_updates = {
+        resolved.get(str(identity), str(identity)): edits
+        for identity, edits in updates.items()
+    }
+    return {**album, "tracks": projected_tracks}, resolved_updates
+
+
+def _project_collection_tag_edit_result(
+    result: object,
+    path_refs: Mapping[str, str],
+) -> object:
+    status_code = None
+    payload = result
+    if isinstance(result, tuple):
+        payload, status_code = result
+    if not isinstance(payload, Mapping):
+        return result
+
+    def replace_paths(value: object) -> object:
+        if isinstance(value, str):
+            for raw_path, media_ref in path_refs.items():
+                value = value.replace(raw_path, media_ref)
+            return value
+        if isinstance(value, list):
+            return [replace_paths(item) for item in value]
+        if isinstance(value, Mapping):
+            return {
+                path_refs.get(str(key), key): replace_paths(item)
+                for key, item in value.items()
+            }
+        return value
+
+    projected = dict(replace_paths(payload))
+    for key in ("updated_album", "updated_albums", "updated_problematic_album"):
+        projected.pop(key, None)
+    return (projected, status_code) if status_code is not None else projected
+
+
+def _save_task_result_for_request(request: Request, task_id: str) -> JsonDict:
+    payload = save_task_result(task_id)
+    context = save_task_projection_context(task_id)
+    if context is None:
+        return payload
+    actor = request.state.current_actor
+    if (
+        actor.account_id != context.get("account_id")
+        or actor.current_library_id != context.get("library_id")
+    ):
+        raise PlaybackContractError(403)
+    return _project_collection_tag_edit_result(
+        payload,
+        dict(context.get("path_refs") or {}),
+    )
 
 
 def _require_album_payload(payload: Mapping[str, object] | None) -> tuple[JsonDict | None, tuple[JsonDict, int] | None]:
@@ -1711,8 +1821,14 @@ async def utilities_move_album(request: Request) -> JSONResponse:
 
 
 @router.get("/utilities/save-task/{task_id}")
-async def utilities_save_task(task_id: str) -> JSONResponse:
-    payload = save_task_result(str(task_id or "").strip())
+async def utilities_save_task(request: Request, task_id: str) -> JSONResponse:
+    try:
+        payload = _save_task_result_for_request(
+            request,
+            str(task_id or "").strip(),
+        )
+    except PlaybackContractError as error:
+        return _json_response(({"ok": False, "error": str(error)}, error.status_code))
     if not payload:
         return _json_response(_task_not_found_response("Save task"))
     return JSONResponse({"ok": True, **payload})
@@ -1820,6 +1936,28 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         return _json_response(album_error)
     if not isinstance(updates, dict) or not updates:
         return _json_response(({"ok": False, "error": "No tag edits were provided"}, 400))
+
+    submitted_tracks = list(album.get("tracks") or [])
+    try:
+        album, updates = await run_in_threadpool(
+            _resolve_collection_tag_edit_refs,
+            request,
+            album,
+            updates,
+        )
+    except PlaybackContractError as error:
+        return _json_response(({"ok": False, "error": str(error)}, error.status_code))
+    path_refs = {
+        str(resolved_track.get("path")): str(submitted_track.get("media_ref"))
+        for submitted_track, resolved_track in zip(
+            submitted_tracks,
+            list(album.get("tracks") or []),
+        )
+        if isinstance(submitted_track, Mapping)
+        and isinstance(resolved_track, Mapping)
+        and submitted_track.get("media_ref")
+        and resolved_track.get("path")
+    }
 
     album_track_path_set, _track_error = _require_album_track_paths(album)
     requested_track_paths = (album_track_path_set or set()) | {str(path) for path in updates.keys() if str(path)}
@@ -1980,6 +2118,19 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         handler_options,
         _EditTagsReservation(intent_lease, structural_tag_edit_reservation),
     )
+    result_payload = result[0] if isinstance(result, tuple) else result
+    save_task_id = (
+        str(result_payload.get("save_task_id") or "").strip()
+        if isinstance(result_payload, Mapping)
+        else ""
+    )
+    if path_refs and save_task_id:
+        bind_save_task_projection(
+            save_task_id,
+            account_id=request.state.current_actor.account_id,
+            library_id=request.state.current_actor.current_library_id,
+            path_refs=path_refs,
+        )
     result = _authoritative_edit_tags_response(
         result,
         total_ms=(perf_counter() - request_started) * 1000.0,
@@ -1988,4 +2139,6 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         result = _selected_postgres_media_write_response(result)
     if isinstance(payload.get("proposal_ids"), list):
         result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
+    if path_refs:
+        result = _project_collection_tag_edit_result(result, path_refs)
     return _json_response(result)

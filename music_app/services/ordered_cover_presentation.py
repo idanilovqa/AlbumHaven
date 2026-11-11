@@ -78,7 +78,11 @@ def project_ordered_covers_for_request(request, payload: object) -> object:
                 slots.append(slot)
             copied["selected_covers"] = slots
             changed = True
-        elif "album_artist" in value and "key" in value:
+        elif (
+            "album_artist" in value
+            and "key" in value
+            and value.get("preview_only") is not True
+        ):
             # Transient/older projections are not evidence of a legacy singleton.
             copied["selected_covers_loaded"] = False
             changed = True

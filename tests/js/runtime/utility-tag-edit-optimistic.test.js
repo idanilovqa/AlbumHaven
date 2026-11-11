@@ -78,6 +78,34 @@ test('non-album tag-editor collections preserve blank track-owned identity field
   assert.equal(values.album, '');
 });
 
+test('shared tag-editor list shows a title instead of an opaque member identity', () => {
+  const context = loadHelpers();
+
+  assert.equal(typeof context.getTagEditorTrackDisplayName, 'function');
+  assert.equal(context.getTagEditorTrackDisplayName({
+    path: 'opaque-resume-token',
+    media_ref: 'opaque-resume-token',
+    title: 'Loose Song',
+  }), 'Loose Song');
+  assert.equal(context.getTagEditorTrackDisplayName({
+    path: 'C:/Music/Artist/01 Track.flac',
+    title: 'Track',
+  }), '01 Track.flac');
+});
+
+test('selected track mode filters the shared Edit Tags input without reordering it', () => {
+  const context = loadHelpers();
+  const album = {
+    tracks: [{ path: 'one' }, { path: 'two' }, { path: 'three' }],
+    selected_track_paths: ['three', 'one'],
+  };
+
+  assert.deepEqual(
+    Array.from(context.getTagEditorTracks(album, 'selected'), track => track.path),
+    ['one', 'three'],
+  );
+});
+
 test('collection names roundtrip through initial values and name-only edit payloads', () => {
   const context = loadHelpers();
   const track = { path: 'C:/Music/Random/song.mp3', exception_type: 'Custom Collection', custom_collection_name: 'Old name' };

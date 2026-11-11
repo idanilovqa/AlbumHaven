@@ -360,6 +360,51 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
     assert int(headers["content-length"]) == len(body)
 
 
+def test_waveform_route_resolves_a_bounded_playback_reference(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    resolved = []
+
+    class ReferenceServiceDouble:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, actor, token):
+            resolved.append((actor, token))
+            return media_path
+
+    class RegistryDouble:
+        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+            assert path == media_path
+            return WaveformPeaks(
+                left=(0.25,) * bins,
+                right=(0.5,) * bins,
+                sample_count=bins,
+            )
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "PlaybackReferenceService",
+        ReferenceServiceDouble,
+    )
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"playbackRef": "opaque-playback-ref"},
+    )
+
+    assert status == 200
+    assert resolved[0][1] == "opaque-playback-ref"
+    assert decode_json(body)["sampleCount"] == 280
+
+
 def test_waveform_route_allows_the_bounded_higher_detail_player_density(
     playback_app,
     media_path,

@@ -204,22 +204,28 @@ def build_track_preference_overlay_lookup(
     config: dict[str, object],
     *,
     actor_id: str = _LOCAL_TRACK_PREFERENCES_ACTOR_ID,
+    account_id: int | None = None,
+    library_id: int | None = None,
     client_surface_class: object = None,
     track_refs: Iterable[object] | None = None,
 ) -> dict[str, dict[str, object]]:
+    if (account_id is None) != (library_id is None):
+        raise ValueError("Scoped track preferences require account_id and library_id.")
     normalized_track_refs = [
         normalize_track_ref(track_ref)
         for track_ref in (track_refs or [])
         if normalize_track_ref(track_ref)
     ]
     track_preferences: dict[str, object]
-    if (
-        actor_id == _LOCAL_TRACK_PREFERENCES_ACTOR_ID
-        and normalized_track_refs
-        and is_track_preferences_postgres_available(config)
-    ):
+    if normalized_track_refs and is_track_preferences_postgres_available(config):
+        lookup_options = (
+            {"account_id": account_id, "library_id": library_id}
+            if account_id is not None and library_id is not None
+            else {}
+        )
         track_preferences = PostgresTrackPreferencesStore(config).load_track_preferences(
-            normalized_track_refs
+            normalized_track_refs,
+            **lookup_options,
         )
     else:
         store = load_track_preferences_store(config)
@@ -253,6 +259,8 @@ def save_track_preference(
     track_preference: object,
     *,
     actor_id: str = _LOCAL_TRACK_PREFERENCES_ACTOR_ID,
+    account_id: int | None = None,
+    library_id: int | None = None,
     client_surface_class: object = None,
 ) -> dict[str, object]:
     normalized_track_ref = normalize_track_ref(track_ref)
@@ -262,19 +270,32 @@ def save_track_preference(
     if not isinstance(track_preference, dict):
         raise ValueError("Track preference payload must include a track_preference object.")
 
-    store = load_track_preferences_store(config)
-    actors = store["actors"]
-    if not isinstance(actors, dict):
-        actors = {}
-        store["actors"] = actors
-    actor_payload = actors.get(actor_id)
-    if not isinstance(actor_payload, dict):
-        actor_payload = {"track_preferences": {}}
-        actors[actor_id] = actor_payload
-    actor_track_preferences = actor_payload.get("track_preferences")
-    if not isinstance(actor_track_preferences, dict):
-        actor_track_preferences = {}
-        actor_payload["track_preferences"] = actor_track_preferences
+    scoped_write = account_id is not None or library_id is not None
+    if scoped_write and (account_id is None or library_id is None):
+        raise ValueError("Scoped track preferences require account_id and library_id.")
+
+    if scoped_write:
+        postgres_store = PostgresTrackPreferencesStore(config)
+        actor_track_preferences = postgres_store.load_track_preferences(
+            [normalized_track_ref],
+            account_id=account_id,
+            library_id=library_id,
+        )
+        store = None
+    else:
+        store = load_track_preferences_store(config)
+        actors = store["actors"]
+        if not isinstance(actors, dict):
+            actors = {}
+            store["actors"] = actors
+        actor_payload = actors.get(actor_id)
+        if not isinstance(actor_payload, dict):
+            actor_payload = {"track_preferences": {}}
+            actors[actor_id] = actor_payload
+        actor_track_preferences = actor_payload.get("track_preferences")
+        if not isinstance(actor_track_preferences, dict):
+            actor_track_preferences = {}
+            actor_payload["track_preferences"] = actor_track_preferences
 
     existing_overlay = normalize_track_preference_overlay(
         actor_track_preferences.get(normalized_track_ref),
@@ -303,15 +324,24 @@ def save_track_preference(
         client_surface_class=client_surface_class,
     )
 
-    if normalized_overlay["rating"] is None and normalized_overlay["love_tier"] == "off":
+    stored_overlay = {
+        "rating": normalized_overlay["rating"],
+        "love_tier": normalized_overlay["love_tier"],
+    }
+    if scoped_write:
+        postgres_store.save_track_preference(
+            normalized_track_ref,
+            stored_overlay,
+            account_id=account_id,
+            library_id=library_id,
+        )
+    elif normalized_overlay["rating"] is None and normalized_overlay["love_tier"] == "off":
         actor_track_preferences.pop(normalized_track_ref, None)
     else:
-        actor_track_preferences[normalized_track_ref] = {
-            "rating": normalized_overlay["rating"],
-            "love_tier": normalized_overlay["love_tier"],
-        }
+        actor_track_preferences[normalized_track_ref] = stored_overlay
 
-    save_track_preferences_store(config, store)
+    if store is not None:
+        save_track_preferences_store(config, store)
     return {
         "actor_id": actor_id,
         "track_ref": normalized_track_ref,

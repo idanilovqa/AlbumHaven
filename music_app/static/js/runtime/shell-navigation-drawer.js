@@ -1,7 +1,134 @@
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
 const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
+const MOBILE_LIBRARY_MODE_RAIL_HIDE_DELAY_MS = 3500;
 let cancelPendingArtistTreeResize = null;
+let mobileLibraryModeRailHideTimer = null;
+
+function setMobileLibraryModeRailVisible(visible) {
+  const rail = document.getElementById('shell-navigation-rail');
+  const anchor = document.getElementById('mobile-tree-edge-anchor');
+  const show = !isArtistsDrawerMobileViewport() || visible;
+  state.ui.mobileLibraryModeRailVisible = show;
+  rail?.classList?.toggle('is-mobile-mode-rail-hidden', !show);
+  if (anchor) anchor.hidden = show || !isArtistsDrawerMobileViewport();
+  if (mobileLibraryModeRailHideTimer !== null) clearTimeout(mobileLibraryModeRailHideTimer);
+  mobileLibraryModeRailHideTimer = null;
+  if (show && isArtistsDrawerMobileViewport() && state.ui.artistsDrawerOpen) {
+    mobileLibraryModeRailHideTimer = setTimeout(() => {
+      const modeRail = document.querySelector?.('.library-navigation-mode-rail');
+      setMobileLibraryModeRailVisible(Boolean(modeRail?.contains?.(document.activeElement)));
+    }, MOBILE_LIBRARY_MODE_RAIL_HIDE_DELAY_MS);
+  }
+  return show;
+}
+
+function installMobileLibraryModeRailGestures() {
+  const rail = document.getElementById('shell-navigation-rail');
+  if (!rail || rail.dataset.mobileModeRailGestures === 'true') return;
+  rail.dataset.mobileModeRailGestures = 'true';
+  let gesture = null;
+  rail.addEventListener('pointerdown', (event) => {
+    if (
+      event.pointerType !== 'touch'
+      || state.ui.mobileLibraryModeRailVisible !== false
+      || Number(event.clientX || 0) > 28
+    ) return;
+    gesture = { pointerId: event.pointerId, x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
+  });
+  rail.addEventListener('pointermove', (event) => {
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const deltaX = Number(event.clientX || 0) - gesture.x;
+    const deltaY = Math.abs(Number(event.clientY || 0) - gesture.y);
+    if (deltaY > 32) {
+      gesture = null;
+      return;
+    }
+    if (deltaX < 36) return;
+    gesture = null;
+    event.preventDefault?.();
+    setMobileLibraryModeRailVisible(true);
+  });
+  const clearGesture = () => { gesture = null; };
+  rail.addEventListener('pointerup', clearGesture);
+  rail.addEventListener('pointercancel', clearGesture);
+}
+
+function syncLibraryNavigationModePresentation(mode) {
+  const normalized = mode === 'custom-collections' ? mode : 'artists';
+  const heading = document.getElementById('library-navigation-heading');
+  if (heading) heading.textContent = normalized === 'custom-collections' ? 'Custom Collections' : 'Artists';
+  document.querySelectorAll?.('[data-library-navigation-mode]').forEach((button) => {
+    const selected = button.getAttribute('data-library-navigation-mode') === normalized;
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    button.classList?.toggle?.('is-active', selected);
+  });
+}
+
+function renderCustomCollectionNavigation(collections) {
+  const list = document.getElementById('sidebar-list');
+  if (!list) return;
+  list.dataset.navigationTree = 'custom-collections';
+  list.dataset.sidebarVirtualized = 'false';
+  delete list.dataset.sidebarStructureSignature;
+  list.innerHTML = collections.length
+    ? collections.map(({ name, count }) => window.NavigationTree.renderItem({
+      action: true,
+      label: name,
+      count,
+      attributes: { 'data-open-custom-collection': name },
+    })).join('')
+    : '<p class="utility-empty-state compact">No Custom Collections yet.</p>';
+}
+
+async function setLibraryNavigationMode(mode) {
+  if (mode === 'loose-tracks') {
+    openNonAlbumModal({ libraryWide: true });
+    if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
+    return 'loose-tracks';
+  }
+  const normalized = mode === 'custom-collections' ? mode : 'artists';
+  state.ui.libraryNavigationMode = normalized;
+  syncLibraryNavigationModePresentation(normalized);
+  if (normalized === 'artists') {
+    const list = document.getElementById('sidebar-list');
+    if (list) list.dataset.navigationTree = 'artists';
+    renderSidebar();
+    return normalized;
+  }
+  const list = document.getElementById('sidebar-list');
+  if (list) list.innerHTML = '<p class="utility-empty-state compact">Loading Custom Collections…</p>';
+  try {
+    await hydrateDeferredNonAlbumTracks({ libraryWide: true });
+    if (state.ui.libraryNavigationMode !== normalized) return normalized;
+    renderCustomCollectionNavigation(buildCustomCollectionIndex(
+      state.view?.library_non_album_tracks || state.view?.non_album_tracks || [],
+    ));
+  } catch (error) {
+    if (state.ui.libraryNavigationMode === normalized && list) {
+      list.innerHTML = `<p class="utility-empty-state compact">${escapeHtml(error?.message || 'Unable to load Custom Collections.')}</p>`;
+    }
+  }
+  return normalized;
+}
+
+function handleLibraryNavigationClick(event) {
+  const modeButton = event.target.closest?.('[data-library-navigation-mode]');
+  if (modeButton) {
+    event.preventDefault();
+    if (isArtistsDrawerMobileViewport()) setMobileLibraryModeRailVisible(true);
+    void setLibraryNavigationMode(modeButton.getAttribute('data-library-navigation-mode'));
+    return true;
+  }
+  const collectionButton = event.target.closest?.('[data-open-custom-collection]');
+  if (!collectionButton) return false;
+  event.preventDefault();
+  const collectionName = String(collectionButton.getAttribute('data-open-custom-collection') || '').trim();
+  if (!collectionName) return true;
+  openNonAlbumModal({ libraryWide: true, collectionName });
+  if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
+  return true;
+}
 
 function isArtistsDrawerElement(value) {
   return Boolean(
@@ -82,6 +209,11 @@ function syncArtistsDrawerVisibility() {
   }
 
   document.body?.classList?.toggle('artists-drawer-open', isOpen);
+  installMobileLibraryModeRailGestures();
+  if (!isOpen && mobileLibraryModeRailHideTimer !== null) {
+    clearTimeout(mobileLibraryModeRailHideTimer);
+    mobileLibraryModeRailHideTimer = null;
+  }
   syncArtistTreeFoldVisibility();
 }
 
@@ -205,6 +337,7 @@ function openArtistsDrawer() {
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button') });
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
+  setMobileLibraryModeRailVisible(true);
   document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
   return true;
 }
@@ -228,9 +361,18 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const modeRailAnchor = event.target.closest('[data-reveal-library-mode-rail="1"]');
+  if (modeRailAnchor) {
+    event.preventDefault();
+    setMobileLibraryModeRailVisible(true);
+    document.querySelector?.('.library-navigation-mode-action.is-active')?.focus?.({ preventScroll: true });
+    return true;
+  }
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
+    const mode = foldButton.getAttribute?.('data-library-navigation-mode');
+    if (mode && typeof setLibraryNavigationMode === 'function') void setLibraryNavigationMode(mode);
     toggleArtistTreeFold();
     return true;
   }

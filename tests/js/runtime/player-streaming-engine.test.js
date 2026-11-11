@@ -1112,6 +1112,35 @@ test('opens the raw track path while retaining the browser src in snapshots', as
   assert.equal(harness.api.snapshot().src, track.src);
 });
 
+test('probes and opens an opaque member track with its playback reference instead of a path', async () => {
+  const waveformProbes = [];
+  const harness = createEngineHarness({
+    trackSampleRates: new Map(),
+    probeCachedWaveformPeaks: (identity, generation, playbackRef) => {
+      waveformProbes.push({ identity, generation, playbackRef });
+    },
+  });
+  const track = {
+    ...makeTrack('02.flac'),
+    path: 'opaque-resume-token',
+    playbackRef: 'opaque-playback-ref',
+  };
+
+  await harness.api.start(track);
+
+  const probe = harness.sockets[0].probes[0];
+  assert.equal(probe.playbackRef, track.playbackRef);
+  assert.equal(probe.path, undefined);
+  const open = harness.sent('open')[0];
+  assert.equal(open.playbackRef, track.playbackRef);
+  assert.equal(open.path, undefined);
+  assert.deepEqual(waveformProbes, [{
+    identity: track.path,
+    generation: open.generation,
+    playbackRef: track.playbackRef,
+  }]);
+});
+
 test('accepts required metadata and parses the 24-byte big-endian AHPC header with little-endian f32 PCM', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack(), { startSeconds: 0.5 });

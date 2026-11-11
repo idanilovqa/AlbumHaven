@@ -1737,6 +1737,14 @@ function hideRepairProgressOverlay() {
 function getTagEditorTracks(album, mode = 'problematic') {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   if (mode === 'all') return tracks;
+  if (mode === 'selected') {
+    const selectedPaths = new Set(
+      (Array.isArray(album?.selected_track_paths) ? album.selected_track_paths : [])
+        .map(path => String(path || ''))
+        .filter(Boolean),
+    );
+    return tracks.filter(track => selectedPaths.has(String(track?.path || '')));
+  }
   const problemPaths = new Set((Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [])
     .map((row) => String(row.path || ''))
     .filter(Boolean));
@@ -2391,6 +2399,13 @@ function getSelectedTagEditorPaths(tracks) {
   return selectedPaths;
 }
 
+function getTagEditorTrackDisplayName(track) {
+  const path = String(track?.path || '');
+  const title = String(track?.title || '').trim();
+  if (String(track?.media_ref || track?.mediaRef || '').trim()) return title || 'Track';
+  return path.split(/[\\/]/).pop() || title || path;
+}
+
 function getTagEditorTrackPathAt(index) {
   const track = (state.tagEditor.tracks || [])[index];
   return String(track?.path || '');
@@ -2465,7 +2480,7 @@ function renderTagEditorArtwork(selectedPaths) {
     : (selectedPaths[0] || '');
   const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
   const coverPath = track?.cover_path || state.tagEditor.album?.cover_path || '';
-  const label = getFilenameFromPath(focusedPath) || track?.title || 'selected track';
+  const label = getTagEditorTrackDisplayName(track) || 'selected track';
   const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
   const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
   const artwork = coverPath
@@ -2637,9 +2652,9 @@ function renderTagEditor(options = {}) {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
-      const filename = getFilenameFromPath(path) || track.title || path;
+      const filename = getTagEditorTrackDisplayName(track);
       return `
-        <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(path)}">
+        <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(filename)}">
           <span class="tag-editor-track-accent" aria-hidden="true"></span>
           <button class="tag-editor-reorder-grip" type="button" draggable="true" data-tag-editor-reorder-grip="${escapeHtml(path)}" aria-label="Reorder ${escapeHtml(filename)}; use Arrow Up or Arrow Down"><span aria-hidden="true">⋮⋮</span></button>
           <button class="tag-editor-track-select" type="button" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}">

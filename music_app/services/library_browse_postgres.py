@@ -4011,6 +4011,10 @@ def _non_album_entry_from_inventory_candidate(row: object) -> dict[str, object]:
     entry = dict(file_entry)
     entry.update({
         "album_id": payload.get("album_id"),
+        "track_ref": str(payload.get("track_key") or ""),
+        "track_preference_overlay": payload.get("track_preference_overlay"),
+        "track_scrobble_count": payload.get("track_scrobble_count"),
+        "track_popularity": payload.get("track_popularity"),
         "path": str(
             _first_inventory_value(
                 payload.get("private_path"),
@@ -8091,12 +8095,21 @@ def _root_album_browse_album_payloads(
         if not isinstance(artists, list):
             artists = [album_artist] if album_artist else []
         duration_seconds = _coerce_duration_seconds(row_payload.get("total_duration_seconds"))
+        ordered_covers = (
+            project_ordered_covers_for_browse(
+                metadata,
+                album_id=album_id,
+                library_id=row_payload.get("album_library_id"),
+            )
+            if "selected_covers" in metadata
+            else {}
+        )
+        cover_candidate_snapshot = _cover_candidate_snapshot_summary(
+            row_payload.get("cover_candidate_snapshot")
+        )
         album_payload = {
             "album_id": album_id,
-            **project_ordered_covers_for_browse(
-                metadata, album_id=album_id,
-                library_id=row_payload.get("album_library_id"),
-            ),
+            **ordered_covers,
             "key": album_key,
             "name": str(row_payload.get("album_title") or "").strip(),
             "album_artist": album_artist,
@@ -8106,9 +8119,6 @@ def _root_album_browse_album_payloads(
                 stored_cover_selection_origin
                 if stored_cover_selection_origin in {"user", "automatic"}
                 else None
-            ),
-            "cover_candidate_snapshot": _cover_candidate_snapshot_summary(
-                row_payload.get("cover_candidate_snapshot")
             ),
             "year": row_payload.get("album_release_year"),
             "edition": metadata.get("edition"),
@@ -8120,6 +8130,8 @@ def _root_album_browse_album_payloads(
             "preview_only": True,
             "artist_relationship": _album_artist_relationship([row_payload]),
         }
+        if cover_candidate_snapshot is not None:
+            album_payload["cover_candidate_snapshot"] = cover_candidate_snapshot
         if include_total_duration_seconds:
             album_payload["total_duration_seconds"] = duration_seconds
         if include_artist_members:

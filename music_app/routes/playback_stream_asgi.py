@@ -91,6 +91,7 @@ def _observe_cancelled_task(task: asyncio.Task[Any]) -> None:
 async def playback_waveform(
     request: Request,
     path: str = "",
+    playbackRef: str = "",
     loop_id: str = "",
     cachedOnly: str = "",
     bins: int = 280,
@@ -98,22 +99,40 @@ async def playback_waveform(
     if bins not in {280, 720}:
         return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
     requested_path = str(path or "").strip()
+    requested_reference = str(playbackRef or "").strip()
     requested_loop_id = str(loop_id or "").strip()
     if requested_path and requested_loop_id:
         return JSONResponse(
             {"error": "Provide either path or loop_id, not both"},
             status_code=400,
         )
+    if requested_reference and (requested_path or requested_loop_id):
+        return JSONResponse(
+            {"error": "Provide only one waveform identity"},
+            status_code=400,
+        )
     loop_scope = await saved_loop_scope(request) if requested_loop_id else None
-    resolved_path = (
-        resolve_loop_media_path(
+    if loop_scope is not None:
+        resolved_path = resolve_loop_media_path(
             request.app.state.config,
             requested_loop_id,
             **loop_scope,
         )
-        if loop_scope is not None
-        else resolve_configured_media_path(request.app.state.config, requested_path)
-    )
+    elif requested_reference:
+        try:
+            service = PlaybackReferenceService(playback_config(request))
+            resolved_path = await run_playback_io(
+                service.resolve,
+                request.state.current_actor,
+                requested_reference,
+            )
+        except PlaybackContractError:
+            resolved_path = None
+    else:
+        resolved_path = resolve_configured_media_path(
+            request.app.state.config,
+            requested_path,
+        )
     if resolved_path is None:
         return JSONResponse({"error": "Media file not found"}, status_code=404)
 
@@ -660,19 +679,34 @@ class _PlaybackPcmConnection:
         request_id = _bounded_integer(
             control.get("requestId"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
         )
-        raw_path = control.get("path")
-        if (
-            request_id is None
-            or not isinstance(raw_path, str)
-            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
-        ):
+        has_path = "path" in control
+        has_reference = "playbackRef" in control
+        if request_id is None or has_path == has_reference:
             await self.reject(CLOSE_INVALID_CONTROL)
             return False
-        resolved_path = (
-            resolve_configured_media_path(self._websocket.app.state.config, raw_path)
-            if raw_path
-            else None
-        )
+        if has_reference:
+            try:
+                service = PlaybackReferenceService(playback_config(self._websocket))
+                resolved_path = await run_playback_io(
+                    service.resolve,
+                    self._websocket.state.current_actor,
+                    control["playbackRef"],
+                )
+            except PlaybackContractError:
+                await self.reject(CLOSE_MEDIA_NOT_FOUND)
+                return False
+        else:
+            raw_path = control.get("path")
+            if not isinstance(raw_path, str) or not raw_path:
+                await self.reject(CLOSE_MEDIA_NOT_FOUND)
+                return False
+            if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+                await self.reject(CLOSE_INVALID_CONTROL)
+                return False
+            resolved_path = resolve_configured_media_path(
+                self._websocket.app.state.config,
+                raw_path,
+            )
         if resolved_path is None:
             await self.reject(CLOSE_MEDIA_NOT_FOUND)
             return False

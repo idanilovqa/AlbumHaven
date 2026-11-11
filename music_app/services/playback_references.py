@@ -156,6 +156,20 @@ class PlaybackReferenceService:
                 results.append({"clientKey": track["clientKey"], "playbackRef": reference})
         return {"protocol": 1, "expiresAt": expires.isoformat(), "tracks": results}
 
+    def resolve_resume_library_paths(self, actor, resume_tokens):
+        """Resolve a bounded opaque edit batch to current inventory identities."""
+        if not isinstance(resume_tokens, list) or not 1 <= len(resume_tokens) <= 100:
+            raise PlaybackContractError()
+        if any(not isinstance(token, str) or not token or len(token) > 512 for token in resume_tokens):
+            raise PlaybackContractError()
+        file_ids = [self._resume_file_id(actor, token) for token in resume_tokens]
+        with self._connect(self._database_url) as connection:
+            _, library_id = require_playback_membership(connection, actor)
+            return {
+                token: self._file(connection, library_id, file_id=file_id)["private_path"]
+                for token, file_id in zip(resume_tokens, file_ids)
+            }
+
     def resolve_artwork(self, actor, resume_token):
         """The cover image the web's browse payload names for a resume token's track, rechecked like a reference."""
         file_id = self._resume_file_id(actor, resume_token)

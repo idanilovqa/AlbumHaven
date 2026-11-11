@@ -63,7 +63,12 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   const path = String(state.player?.current?.path || '');
   if (!path || generation !== Number(suspension.generation || 0)) return null;
 
-  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
+  const peaks = await loadWaveformPeaks(
+    path,
+    PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
+    generation,
+    String(state.player?.current?.playbackRef || ''),
+  );
   if (!peaks || playerWaveformForegroundSuspensionDepth > 0
       || Number(state.player?.streaming?.generation) !== generation
       || String(state.player?.current?.path || '') !== path) return null;
@@ -138,7 +143,7 @@ async function loadSavedLoopWaveformPeaks(loopId) {
   return entry.promise;
 }
 
-async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT, generation = 0) {
+async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT, generation = 0, playbackRef = '') {
   const rawPath = String(path || '');
   if (!rawPath || ![PLAYER_WAVEFORM_PEAK_COUNT, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT].includes(sampleCount)) return null;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
@@ -174,7 +179,10 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
   request = (async () => {
     let retained = false;
     try {
-      const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
+      const query = new URLSearchParams({
+        ...(playbackRef ? { playbackRef } : { path: rawPath }),
+        bins: String(sampleCount),
+      });
       for (let attempt = 0; ; attempt += 1) {
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
         if (response.status === 429 && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length) {
@@ -204,7 +212,7 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
   return request;
 }
 
-async function probeCachedWaveformPeaks(path, generation = 0) {
+async function probeCachedWaveformPeaks(path, generation = 0, playbackRef = '') {
   const rawPath = String(path || '');
   if (!rawPath) return null;
   if (playerWaveformPeakGeneration !== generation) {
@@ -238,7 +246,7 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
     try {
       probe = (async () => {
         const query = new URLSearchParams({
-          path: rawPath,
+          ...(playbackRef ? { playbackRef } : { path: rawPath }),
           bins: String(PLAYER_WAVEFORM_DETAIL_PEAK_COUNT),
           cachedOnly: '1',
         });

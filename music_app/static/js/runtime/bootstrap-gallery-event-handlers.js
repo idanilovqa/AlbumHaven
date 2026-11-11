@@ -1,5 +1,17 @@
 function handleGalleryBootstrapClick(event) {
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
+  if (typeof handleLibraryNavigationClick === 'function' && handleLibraryNavigationClick(event)) return;
+  const nonAlbumRatingButton = event.target.closest('#non-album-modal [data-rating-choice]');
+  if (nonAlbumRatingButton) {
+    event.preventDefault();
+    void saveNonAlbumTrackRating({
+      trackRef: nonAlbumRatingButton.dataset.trackRef,
+      mediaRef: nonAlbumRatingButton.dataset.mediaRef,
+      rating: nonAlbumRatingButton.dataset.ratingChoice,
+      host: nonAlbumRatingButton.closest('.rating-row'),
+    });
+    return;
+  }
   const artistTreeAction = event.target.closest('[data-artist-tree-action="scroll-to-artist"]');
   if (artistTreeAction) {
     event.preventDefault();

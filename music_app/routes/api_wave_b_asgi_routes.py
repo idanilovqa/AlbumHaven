@@ -37,6 +37,7 @@ from music_app.routes.api_integration_helpers import (
 from music_app.routes.web_asgi import _etag_matches, _not_modified_response, _not_modified_since_matches
 from music_app.services.app_logging import log_app_event
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.capability_ui import is_current_library_owner
 from music_app.services.foobar_integrations import build_foobar_help_payload, build_foobar_integration_payload
 from music_app.services.lastfm import (
     LastfmError,
@@ -87,6 +88,7 @@ from music_app.services.loops import (
     resolve_loop_media_path,
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
+from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.track_preferences import save_track_preference
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
@@ -126,6 +128,32 @@ def _client_surface_class_from_asgi(request: Request) -> str:
         or request.headers.get("X-Album-Haven-Client-Surface-Class")
     )
     return resolve_client_surface_class(requested_value)
+
+
+def _resolve_track_preference_ref(request: Request, payload: dict[str, object]) -> str:
+    media_ref = str(payload.get("media_ref") or "").strip()
+    if media_ref:
+        service = PlaybackReferenceService({
+            **request.app.state.config,
+            **request.app.state.auth_policy_config,
+        })
+        resolved = service.resolve_resume_library_paths(
+            request.state.current_actor,
+            [media_ref],
+        )
+        track_ref = str(resolved.get(media_ref) or "").strip()
+        if not track_ref:
+            raise PlaybackContractError(403)
+        return track_ref
+
+    track_ref = str(payload.get("track_ref") or "").strip()
+    if track_ref and is_current_library_owner(request.state.current_actor) and allowed_actions_for_request(
+        request, ("library.paths.read",),
+    ).as_payload().get("library.paths.read") is True:
+        return track_ref
+    if track_ref:
+        raise PlaybackContractError(403)
+    return ""
 
 
 async def _json_payload(request: Request) -> JsonDict | None:
@@ -1099,9 +1127,12 @@ async def track_preferences_write(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
-    track_ref = str(payload.get("track_ref") or "").strip()
+    try:
+        track_ref = _resolve_track_preference_ref(request, payload)
+    except PlaybackContractError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, exc.status_code))
     if not track_ref:
-        return _json_response(({"ok": False, "error": "Track preference payload must include a track_ref."}, 400))
+        return _json_response(({"ok": False, "error": "Track preference payload must include a track_ref or media_ref."}, 400))
 
     track_preference_payload = payload.get("track_preference")
     if not isinstance(track_preference_payload, dict):
@@ -1114,9 +1145,17 @@ async def track_preferences_write(request: Request) -> JSONResponse:
             config,
             track_ref,
             track_preference_payload,
+            actor_id=str(request.state.current_actor.account_id),
+            account_id=request.state.current_actor.account_id,
+            library_id=request.state.current_actor.current_library_id,
             client_surface_class=_client_surface_class_from_asgi(request),
         )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
 
-    return JSONResponse({"ok": True, **result})
+    response_result = dict(result)
+    media_ref = str(payload.get("media_ref") or "").strip()
+    if media_ref:
+        response_result.pop("track_ref", None)
+        response_result["media_ref"] = media_ref
+    return JSONResponse({"ok": True, **response_result})

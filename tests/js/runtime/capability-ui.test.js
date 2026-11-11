@@ -32,6 +32,13 @@ test('only true server decisions authorize a visible action', () => {
   assert.equal(ui.allows('library.future_feature.write'), false);
 });
 
+test('current-library owner presentation fact fails closed', () => {
+  assert.equal(install(documentFor({ allowed_actions: {}, current_library_owner: true })).isCurrentLibraryOwner(), true);
+  for (const value of [false, undefined, 'true', 1]) {
+    assert.equal(install(documentFor({ allowed_actions: {}, current_library_owner: value })).isCurrentLibraryOwner(), false);
+  }
+});
+
 test('denied dynamic controls reject activation without interfering with permitted controls', () => {
   const document = documentFor({ allowed_actions: {}, denied_selectors: ['.play-track-button'], denied_tabs: [] });
   install(document);

@@ -264,7 +264,12 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
   const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
+  const currentPeaks = await loadWaveformPeaks(
+    currentPath,
+    PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
+    generation,
+    String(state.player.current?.playbackRef || ''),
+  );
   const playback = getPlayerPlaybackSnapshot();
   if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
       || String(state.player.current?.path || '') !== currentPath) return;

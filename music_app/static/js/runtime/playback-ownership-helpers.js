@@ -228,17 +228,28 @@ function recoverPlaybackOwnership(callback) {
 
 async function playbackOwnershipTrack(track, previous = null) {
   if (!track?.path) throw new Error('Playback track is unavailable.');
-  let playbackRef = previous?.path === track.path ? previous.track.playbackRef : null;
-  if (!playbackRef || Date.parse(previous?.referenceExpiresAt || '') <= Date.now()) {
-    const refs = await playbackOwnershipRequest('POST', '/playback/refs', { protocol: 1,
-      tracks: [{ clientKey: getPlaybackOwnershipTabId(), path: track.path }] });
+  const previousReferenceIsCurrent = previous?.path === track.path
+    && Date.parse(previous.referenceExpiresAt || '') > Date.now();
+  let playbackRef = previousReferenceIsCurrent ? previous.track.playbackRef : null;
+  let referenceExpiresAt = previousReferenceIsCurrent ? previous.referenceExpiresAt : '';
+  if (!playbackRef && track.playbackRef && Date.parse(track.playbackRefExpiresAt || '') > Date.now()) {
+    playbackRef = track.playbackRef;
+    referenceExpiresAt = track.playbackRefExpiresAt;
+  }
+  if (!playbackRef) {
+    const opaque = Boolean(track.mediaRef);
+    const refs = await playbackOwnershipRequest('POST', opaque ? '/playback/refs/resume' : '/playback/refs', {
+      protocol: 1,
+      tracks: [{ clientKey: getPlaybackOwnershipTabId(),
+        ...(opaque ? { resumeToken: track.mediaRef } : { path: track.path }) }],
+    });
     if (refs.protocol !== 1 || refs.tracks?.length !== 1 || !refs.tracks[0].playbackRef) {
       throw new Error('Playback reference is unavailable.');
     }
     playbackRef = refs.tracks[0].playbackRef;
-    previous = { referenceExpiresAt: refs.expiresAt };
+    referenceExpiresAt = refs.expiresAt;
   }
-  return { path: track.path, referenceExpiresAt: previous.referenceExpiresAt,
+  return { path: track.path, referenceExpiresAt,
     track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
 }
 

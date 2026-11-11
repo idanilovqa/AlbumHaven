@@ -251,6 +251,7 @@ function setCurrentPlayerTrack(track, options = {}) {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
       Number(state.player.streaming?.generation) || 0,
+      String(track?.playbackRef || ''),
     );
     if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
       void cachedWaveformProbe.catch(() => {});
@@ -352,6 +353,16 @@ async function playTrackFromPayload(track, options = {}) {
     ? canStartPlaybackInThisTab(track)
     : true;
   if (pendingClaim === false) return false;
+  let streamTrack = track;
+  if (shouldAutoplay
+    && String(track?.mediaRef || track?.media_ref || '')
+    && !(track.playbackRef && Date.parse(track.playbackRefExpiresAt || '') > Date.now())) {
+    if (pendingClaim !== true && !await pendingClaim) return false;
+    if (selectionToken !== playerTrackSelectionToken) return false;
+    const playbackRef = String(getPlaybackOwnershipState?.().activeClaim?.track?.playbackRef || '');
+    if (!playbackRef) return false;
+    streamTrack = { ...track, playbackRef };
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
@@ -364,10 +375,10 @@ async function playTrackFromPayload(track, options = {}) {
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  showSelectedTrackImmediately(track, shouldAutoplay);
+  showSelectedTrackImmediately(streamTrack, shouldAutoplay);
   let startedRole;
   try {
-    startedRole = await startStreamingTrack(track, {
+    startedRole = await startStreamingTrack(streamTrack, {
       startSeconds,
       autoplay: shouldAutoplay,
       allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
@@ -383,10 +394,10 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback did not start');
   }
   const startedTrackPath = String(startedRole?.track?.path || '');
-  if (startedTrackPath && startedTrackPath !== String(track.path)) {
+  if (startedTrackPath && startedTrackPath !== String(streamTrack.path)) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
-  setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  setCurrentPlayerTrack(streamTrack, { previousPlaybackSnapshot });
   if (pendingClaim !== true && !await pendingClaim) {
     if (selectionToken === playerTrackSelectionToken) {
       pauseStreamingPlayback();
@@ -1149,6 +1160,9 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
   const playbackStart = playTrackFromPayload({
     src,
     path: trackPath,
+    mediaRef: btn.getAttribute('data-media-ref') || '',
+    playbackRef: btn.getAttribute('data-playback-ref') || '',
+    playbackRefExpiresAt: btn.getAttribute('data-playback-ref-expires-at') || '',
     title: btn.getAttribute('data-track-title') || 'Track',
     artist: btn.getAttribute('data-track-artist') || '',
     albumArtist: btn.getAttribute('data-track-album-artist') || '',

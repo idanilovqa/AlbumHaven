@@ -19,6 +19,7 @@ const helperSource = fs.readFileSync(helperPath, 'utf8');
 const buttonComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'button-component.js');
 const galleryMainComponentsPath = path.join(path.dirname(helperPath), 'gallery-main-components.js');
 const galleryMainComponentsSource = fs.readFileSync(galleryMainComponentsPath, 'utf8');
+const albumArtboxSource = fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8');
 const bootstrapGalleryHandlersSource = fs.readFileSync(
   path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js'),
   'utf8',
@@ -150,6 +151,9 @@ function loadHelper() {
         return new FakeElement(tagName);
       },
     },
+    window: {
+      AlbumHavenCapabilities: { isCurrentLibraryOwner: () => true },
+    },
     state: {
       gallery: {
         focusedAlbumGlowCard: null,
@@ -199,6 +203,9 @@ function loadHelper() {
     formatAlbumDuration(value) {
       const seconds = Math.max(0, Math.floor(Number(value) || 0));
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    },
+    buildGalleryRatingHtml(config = {}) {
+      return `<div class="rating-row ${config.className || ''}" aria-label="${config.label || ''}">${config.value}/${config.maximum}</div>`;
     },
     getPlayerPlaybackSnapshot() {
       return { paused: true, ended: true, currentTime: 0, duration: 0 };
@@ -253,6 +260,9 @@ function loadHelper() {
   vm.runInContext(albumTrackTableSource, context, {
     filename: path.join(path.dirname(helperPath), 'album-track-table.js'),
   });
+  vm.runInContext(albumArtboxSource, context, {
+    filename: path.join(path.dirname(helperPath), 'album-artbox.js'),
+  });
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.__preloaders = preloaders;
   return {
@@ -282,6 +292,48 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
   context.state.view.non_album_tracks = [tracks[2]];
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('custom collection index derives only named custom assignments in stable order', () => {
+  const { context } = loadHelper();
+  const index = context.buildCustomCollectionIndex([
+    { exception_type: 'Custom Collection', custom_collection_name: 'Road', path: '4' },
+    { exception_type: 'Custom Collection', custom_collection_name: 'Night', path: '2' },
+    { exception_type: 'Interview', custom_collection_name: 'Ignore', path: '3' },
+    { exception_type: 'Custom Collection', custom_collection_name: 'Night', path: '1' },
+    { exception_type: 'Custom Collection', custom_collection_name: '   ', path: '5' },
+  ]);
+  assert.deepEqual(Array.from(index, ({ name, count, tracks }) => ({
+    name,
+    count,
+    paths: Array.from(tracks, track => track.path),
+  })), [
+    { name: 'Night', count: 2, paths: ['1', '2'] },
+    { name: 'Road', count: 1, paths: ['4'] },
+  ]);
+});
+
+test('library-wide Loose Tracks hydrates when only the selected-artist projection is current', () => {
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.buildApiUrl = view => `/view-data?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    non_album_tracks: [{ path: '/music/neal/loose.flac' }],
+    non_album_tracks_deferred: false,
+  };
+
+  assert.equal(context.needsNonAlbumHydration({ libraryWide: true }), true);
+  assert.equal(context.needsNonAlbumHydration(), false);
+});
+
+test('stale non-album hydration cannot reclaim a newer collection modal request', () => {
+  const { context } = loadHelper();
+  context.state.ui.nonAlbumLibraryWide = true;
+  context.state.ui.nonAlbumCollectionName = 'Road';
+
+  assert.equal(context.isCurrentNonAlbumModalRequest({ libraryWide: true, collectionName: 'Night' }), false);
+  assert.equal(context.isCurrentNonAlbumModalRequest({ libraryWide: true, collectionName: 'Road' }), true);
 });
 
 test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
@@ -614,6 +666,15 @@ test('an older deferred hydration cannot overwrite a newer scope for the same ar
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
+test('non-album metrics render missing values as unavailable', () => {
+  const { context } = loadHelper();
+
+  for (const value of [null, undefined, '', '   ']) {
+    assert.equal(context.formatNonAlbumTrackMetric(value), '—');
+  }
+  assert.equal(context.formatNonAlbumTrackMetric(0), '0');
+});
+
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
   const { context } = loadHelper();
   for (const filename of ['gallery-main-state.js', 'gallery-main-interactions.js']) {
@@ -664,6 +725,27 @@ test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', 
   assert.ok(requests.length > 0, 'payloads without category provenance need an authoritative scoped refresh');
 });
 
+test('non-album Edit Tags supports narrow private web and rejects denied mutation', () => {
+  const { context } = loadHelper();
+  context.state.view = { non_album_tracks: [{ path: '/fixture/song.flac' }] };
+  context.isMobileClient = () => true;
+  context.closeNonAlbumModal = () => {};
+  context.showRepairAlert = () => {};
+  const edited = [];
+  context.openTagEditor = album => edited.push(album);
+  context.window.AlbumHavenCapabilities = {
+    clientSurface: 'private_web',
+    allows: action => action === 'library.files.edit_tags',
+  };
+
+  context.openNonAlbumTagEditor();
+  assert.equal(edited.length, 1);
+
+  context.window.AlbumHavenCapabilities.allows = () => false;
+  context.openNonAlbumTagEditor();
+  assert.equal(edited.length, 1);
+});
+
 test('backend-scoped non-album search matches survive an empty album gallery', () => {
   const { context } = loadHelper();
   const tracks = [
@@ -706,6 +788,11 @@ test('library-wide Loose Tracks bypasses selected artist while artist menu retai
  };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+  tracks[0].custom_collection_name = 'Night';
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({
+    libraryWide: true,
+    collectionName: 'Night',
+  })), [tracks[0]]);
 });
 
 test('custom exceptions and named collections render collapsible subsections in the shared track table', () => {
@@ -725,6 +812,168 @@ test('custom exceptions and named collections render collapsible subsections in 
   assert.match(markup, /data-cdt-column="problem"/);
   assert.match(markup, /aria-label="Open this track in Problematic Files"/);
   assert.doesNotMatch(markup, /collection-pill|collection-panel/);
+});
+
+test('collection detail filters exact assignments and shows paths only to the library owner', () => {
+  const { context } = loadHelper();
+  const items = [
+    { path: 'C:/Music/Night/a.flac', display_path: 'Night/a.flac', title: 'A', exception_type: 'Custom Collection', custom_collection_name: 'Night' },
+    { path: 'C:/Music/Road/b.flac', display_path: 'Road/b.flac', title: 'B', exception_type: 'Custom Collection', custom_collection_name: 'Road' },
+  ];
+  context.window = { AlbumHavenCapabilities: { isCurrentLibraryOwner: () => false } };
+  const member = context.buildNonAlbumTrackSectionsMarkup(items, { collectionName: 'Night' });
+  assert.match(member, />A</);
+  assert.doesNotMatch(member, />B</);
+  assert.doesNotMatch(member, /data-cdt-column="path"|class="album-track-table__path"|title="Night\/a\.flac"/);
+  assert.doesNotMatch(member, />Custom Collection/);
+
+  context.window.AlbumHavenCapabilities.isCurrentLibraryOwner = () => true;
+  const owner = context.buildNonAlbumTrackSectionsMarkup(items, { collectionName: 'Night' });
+  assert.match(owner, /data-cdt-column="path"/);
+  assert.match(owner, /Night\/a\.flac/);
+  const detail = context.buildCustomCollectionDetailMarkup(items, 'Night');
+  assert.match(detail, /custom-collection-detail__art/);
+  assert.match(detail, /album-artbox album-artbox--empty/);
+  assert.match(detail, /custom-collection-detail__plus[^>]*>\+</);
+  const emptyDetail = context.buildCustomCollectionDetailMarkup([], 'Night');
+  assert.match(emptyDetail, /custom-collection-detail__plus[^>]*>\+</);
+  assert.match(emptyDetail, /No tracks are assigned to this collection\./);
+});
+
+test('collection detail reuses the rich track columns and compact narrow metadata', () => {
+  const { context } = loadHelper();
+  context.window.AlbumHavenCapabilities = { isCurrentLibraryOwner: () => true };
+  const markup = context.buildNonAlbumTrackSectionsMarkup([{
+    path: 'C:/Music/Night/a.flac',
+    display_path: 'Night/a.flac',
+    title: 'A',
+    artist: 'Artist',
+    year: 2001,
+    duration_seconds: 125,
+    exception_type: 'Custom Collection',
+    custom_collection_name: 'Night',
+    track_preference: { rating: 4, love_tier: 'loved' },
+    track_stats: { scrobble_count: 23 },
+    track_popularity: { is_visible: true, scrobble_count: 4200 },
+  }], { collectionName: 'Night' });
+
+  for (const label of ['Rating', 'Popularity', 'Plays', 'Year', 'Length']) {
+    assert.match(markup, new RegExp(`>${label}<`));
+  }
+  assert.doesNotMatch(markup, />Availability</);
+  assert.match(markup, /aria-label="Loved"[^>]*>\u2665<\/span>/);
+  assert.match(markup, /data-cdt-column="popularity"[^>]*>[\s\S]*4,200/);
+  assert.match(markup, /data-cdt-column="plays"[^>]*>[\s\S]*23/);
+  assert.match(markup, /data-cdt-column="year"[^>]*>[\s\S]*2001/);
+  assert.match(markup, /album-track-table__mobile-meta[^>]*>[\s\S]*2001[\s\S]*4,200/);
+  assert.doesNotMatch(markup, /Lastfm plays/i);
+});
+
+test('non-album rating reuses the shared interactive renderer only when mutation is allowed', () => {
+  const { context } = loadHelper();
+  const calls = [];
+  context.buildGalleryRatingHtml = config => {
+    calls.push(config);
+    return '<div data-shared-rating></div>';
+  };
+  context.window.AlbumHavenCapabilities = {
+    allows: action => action === 'library.track_preferences.manage',
+  };
+  const ownerTrack = {
+    path: 'C:/Music/Night/a.flac',
+    track_preference: {
+      rating: 4,
+      allowed_actions: { can_rate: true },
+    },
+  };
+
+  assert.equal(context.buildNonAlbumTrackRatingHtml(ownerTrack), '<div data-shared-rating></div>');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), {
+    value: 4,
+    maximum: 5,
+    label: 'Track rating 4/5',
+    className: 'album-track-table__track-rating',
+    interactive: true,
+    dataAttributes: { 'track-ref': 'C:/Music/Night/a.flac' },
+  });
+
+  calls.length = 0;
+  context.buildNonAlbumTrackRatingHtml({
+    media_ref: 'opaque-media-ref',
+    track_preference: { rating: null, allowed_actions: { can_rate: true } },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].dataAttributes)), {
+    'media-ref': 'opaque-media-ref',
+  });
+
+  context.window.AlbumHavenCapabilities.allows = () => false;
+  context.buildNonAlbumTrackRatingHtml(ownerTrack);
+  assert.equal(calls.at(-1).interactive, undefined);
+});
+
+test('non-album rating saves an opaque member identity and updates shared browse state after success', async () => {
+  const { context } = loadHelper();
+  const localTrack = {
+    media_ref: 'opaque-media-ref',
+    track_preference: { rating: 2, love_tier: 'off', allowed_actions: { can_rate: true } },
+  };
+  const libraryTrack = JSON.parse(JSON.stringify(localTrack));
+  context.state.view.non_album_tracks = [localTrack];
+  context.state.view.library_non_album_tracks = [libraryTrack];
+  context.window.AlbumHavenCapabilities = { allows: () => true };
+  const requests = [];
+  context.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return {
+          ok: true,
+          track_preference: {
+            rating: 5,
+            love_tier: 'off',
+            allowed_actions: { can_rate: true },
+          },
+        };
+      },
+    };
+  };
+  context.buildNonAlbumTrackRatingHtml = track => `<div data-updated-rating="${track.track_preference.rating}"></div>`;
+  const host = { outerHTML: '' };
+
+  assert.equal(await context.saveNonAlbumTrackRating({ mediaRef: 'opaque-media-ref', rating: 5, host }), true);
+
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    media_ref: 'opaque-media-ref',
+    track_preference: { rating: 5 },
+  });
+  assert.equal(localTrack.track_preference.rating, 5);
+  assert.equal(libraryTrack.track_preference.rating, 5);
+  assert.equal(host.outerHTML, '<div data-updated-rating="5"></div>');
+});
+
+test('non-album rating keeps the prior value and uses the shared alert on failure', async () => {
+  const { context } = loadHelper();
+  const track = {
+    path: 'C:/Music/Night/a.flac',
+    track_preference: { rating: 2, love_tier: 'off', allowed_actions: { can_rate: true } },
+  };
+  context.state.view.non_album_tracks = [track];
+  context.window.AlbumHavenCapabilities = { allows: () => true };
+  context.fetch = async () => ({
+    ok: false,
+    async json() { return { ok: false, error: 'Rating could not be saved.' }; },
+  });
+  const alerts = [];
+  context.showRepairAlert = (...args) => alerts.push(args);
+
+  assert.equal(await context.saveNonAlbumTrackRating({
+    trackRef: track.path,
+    rating: 5,
+    host: { outerHTML: '' },
+  }), false);
+  assert.equal(track.track_preference.rating, 2);
+  assert.deepEqual(alerts, [['Rating could not be saved.', 'error']]);
 });
 
 test('non-album artist scope expands only aliases of the displayed family', () => {
@@ -748,6 +997,30 @@ test('non-album artist scope expands only aliases of the displayed family', () =
   context.state.view.related_artists = [];
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [],
     'retained aliases must not authorize tracks after the displayed artist changes');
+});
+
+test('non-album row adapter preserves opaque member playback references', () => {
+  const { context } = loadHelper();
+  context.window.AlbumHavenCapabilities = {
+    isCurrentLibraryOwner: () => false,
+    allows: () => true,
+  };
+
+  const markup = context.buildNonAlbumTrackSectionsMarkup([{
+    title: 'Path-free song',
+    artist: 'Member Artist',
+    exception_type: 'Custom Collection',
+    custom_collection_name: 'Night',
+    media_ref: 'opaque-resume-token',
+    playback_ref: 'opaque-playback-ref',
+    playback_ref_expires_at: '2099-01-01T00:00:00Z',
+  }], { collectionName: 'Night' });
+
+  assert.match(markup, /data-track-row-path="opaque-resume-token"/);
+  assert.match(markup, /data-media-ref="opaque-resume-token"/);
+  assert.match(markup, /data-playback-ref="opaque-playback-ref"/);
+  assert.match(markup, /data-playback-ref-expires-at="2099-01-01T00:00:00Z"/);
+  assert.doesNotMatch(markup, /data-cdt-column="path"/);
 });
 
 test('non-album modal adapts ordered exception groups into one shared AlbumTrackTable', () => {
@@ -777,7 +1050,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) 104px 30px 76px 54px 48px minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
@@ -786,7 +1059,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="rating"[^>]*>Rating<\/div><div role="columnheader" data-cdt-column="love"[^>]*>♥<\/div><div role="columnheader" data-cdt-column="popularity"[^>]*>Popularity<\/div><div role="columnheader" data-cdt-column="plays"[^>]*>Plays<\/div><div role="columnheader" data-cdt-column="year"[^>]*>Year<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
   assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);

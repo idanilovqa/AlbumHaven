@@ -1360,6 +1360,7 @@ def test_compact_non_album_metadata_projection_preserves_shaper_fallbacks():
     entry = _non_album_entry_from_inventory_candidate(
         {
             "track_id": 41,
+            "track_key": "logical-track-key",
             "track_title": "Loose Track",
             "raw_track_artist": "Raw Track Artist",
             "raw_track_year": 2004,
@@ -1374,6 +1375,7 @@ def test_compact_non_album_metadata_projection_preserves_shaper_fallbacks():
     )
 
     assert entry["artist"] == "Raw Track Artist"
+    assert entry["track_ref"] == "logical-track-key"
     assert entry["year"] == 2004
     assert entry["edition"] == "Deluxe"
     assert entry["cover_revision"] == 7
@@ -1585,6 +1587,43 @@ def test_selected_artist_non_album_candidates_keep_raw_metadata_and_path_matchin
     assert params["query_terms"] == ["morse", "neal"]
     assert sql == "caller-owned snapshot"
     assert [entry["title"] for entry in entries] == ["Alias Path Rarity"]
+
+
+def test_non_album_candidate_sql_batches_shared_track_overlays():
+    from music_app.services.library_inventory_postgres import _non_album_candidates_sql
+
+    sql = " ".join(_non_album_candidates_sql().split()).lower()
+
+    assert "app.bootstrap_owners.account_id as account_id" in sql
+    assert "active_track_keys as" in sql
+    assert "legacy_scrobble_counts as" in sql
+    assert "measured_scrobble_counts as" in sql
+    assert "track_scrobble_counts as" in sql
+    assert "select distinct track_id from active_track_files" in sql
+    assert "union all" in sql
+    assert "or ( integration.listen_history.source_family" not in sql
+    assert "left join track_scrobble_counts" in sql
+    assert "left join app.track_preferences" in sql
+    assert "track_scrobble_count" in sql
+    assert "track_preference_overlay" in sql
+
+
+def test_non_album_candidate_projects_shared_track_overlays_into_the_entry():
+    from music_app.services.library_browse_postgres import (
+        _non_album_entry_from_inventory_candidate,
+    )
+
+    entry = _non_album_entry_from_inventory_candidate({
+        "private_path": r"D:\Music\Guest\Loose\song.flac",
+        "file_entry": {"title": "Song", "artist": "Guest"},
+        "track_preference_overlay": {"rating": 4, "love_tier": "loved"},
+        "track_scrobble_count": 23,
+        "track_popularity": {"is_visible": True, "scrobble_count": 4200},
+    })
+
+    assert entry["track_preference_overlay"] == {"rating": 4, "love_tier": "loved"}
+    assert entry["track_scrobble_count"] == 23
+    assert entry["track_popularity"] == {"is_visible": True, "scrobble_count": 4200}
 
 
 def test_non_album_tracks_are_deferred_until_explicitly_requested():
@@ -10871,6 +10910,8 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
     assert "scan_cache,file_entry" in str(executed[0])
     assert payload == [
         {
+            "album_id": 501,
+            "selected_covers_loaded": False,
             "key": "split artist::split album::year::1999",
             "album_ref": "split artist::split album::year::1999",
             "_persisted_album_key": "split artist::split album",
@@ -11039,6 +11080,8 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
 
     assert payload == [
         {
+            "album_id": 601,
+            "selected_covers_loaded": False,
             "key": "exception-artist-exception-album",
             "album_ref": "exception-artist-exception-album",
             "_persisted_album_key": "exception-artist-exception-album",

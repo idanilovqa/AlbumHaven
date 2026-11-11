@@ -270,11 +270,23 @@ function buildFamilyArtistHeaderHtml(config = {}) {
 function buildGalleryRatingHtml(config = {}) {
   const maximum = Math.max(1, Number(config.maximum || 10));
   const value = Math.max(0, Math.min(maximum, Number(config.value || 0)));
-  const points = Array.from({ length: maximum }, (_unused, index) => (index < value
-    ? '<span class="star filled">&#9733;</span>'
-    : '<span class="star">&#9734;</span>')).join('');
+  const dataAttributes = Object.entries(config.dataAttributes || {})
+    .filter(([name]) => /^[a-z0-9-]+$/.test(name))
+    .map(([name, attributeValue]) => ` data-${name}="${escapeHtml(attributeValue)}"`)
+    .join('');
+  const points = Array.from({ length: maximum }, (_unused, index) => {
+    const rating = index + 1;
+    const filled = index < value;
+    if (config.interactive) {
+      return `<button class="star-button star${filled ? ' filled' : ''}" type="button" data-rating-choice="${rating}" aria-label="Rate ${rating} out of ${maximum}" aria-pressed="${filled ? 'true' : 'false'}"${dataAttributes}>${filled ? '&#9733;' : '&#9734;'}</button>`;
+    }
+    return filled
+      ? '<span class="star filled">&#9733;</span>'
+      : '<span class="star">&#9734;</span>';
+  }).join('');
   const className = ['rating-row', config.className].filter(Boolean).join(' ');
-  return `<div class="${escapeHtml(className)}" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const ratingRole = config.interactive ? 'group' : 'img';
+  return `<div class="${escapeHtml(className)}" data-rating-value="${value}" data-rating-maximum="${maximum}"><div class="stars" role="${ratingRole}" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {

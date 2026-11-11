@@ -53,7 +53,12 @@ class PostgresTrackPreferencesStore:
     def load_track_preferences(
         self,
         track_refs: list[str] | tuple[str, ...],
+        *,
+        account_id: int | None = None,
+        library_id: int | None = None,
     ) -> dict[str, dict[str, object]]:
+        if (account_id is None) != (library_id is None):
+            raise ValueError("Scoped track preferences require account_id and library_id.")
         normalized_track_refs = [
             str(track_ref or "").strip()
             for track_ref in track_refs
@@ -63,9 +68,13 @@ class PostgresTrackPreferencesStore:
             return {}
         rows: dict[str, dict[str, object]] = {}
         with self._connect_to_database() as connection:
+            scoped = account_id is not None and library_id is not None
             cursor = connection.execute(
-                _load_track_preferences_by_track_refs_sql(),
-                {"track_refs": normalized_track_refs},
+                _load_scoped_track_preferences_sql() if scoped else _load_track_preferences_by_track_refs_sql(),
+                {
+                    **({"account_id": account_id, "library_id": library_id} if scoped else {}),
+                    "track_refs": normalized_track_refs,
+                },
             )
             for row in cursor.fetchall():
                 row_payload = _row_mapping(row)
@@ -77,6 +86,28 @@ class PostgresTrackPreferencesStore:
                     "love_tier": row_payload.get("love_tier"),
                 }
         return rows
+
+    def save_track_preference(
+        self,
+        track_ref: str,
+        overlay: Mapping[str, object],
+        *,
+        account_id: int,
+        library_id: int,
+    ) -> None:
+        with self._connect_to_database() as connection:
+            cursor = connection.execute(
+                _upsert_scoped_track_preference_sql(),
+                {
+                    "account_id": account_id,
+                    "library_id": library_id,
+                    "track_ref": track_ref,
+                    "rating": overlay.get("rating"),
+                    "love_tier": overlay.get("love_tier"),
+                },
+            )
+            if cursor.fetchone() is None:
+                raise RuntimeError("Postgres track preference write did not write the requested row.")
 
     def save_store(self, raw_payload: object) -> dict[str, object]:
         from music_app.services.track_preferences import normalize_track_preferences_store
@@ -200,6 +231,16 @@ def _load_track_preferences_by_track_refs_sql() -> str:
     )
 
 
+def _load_scoped_track_preferences_sql() -> str:
+    return """
+        select track_key, rating, love_tier
+        from app.track_preferences
+        where account_id = %(account_id)s
+          and track_key = any(%(track_refs)s)
+        order by track_key;
+    """
+
+
 def _neutralize_local_track_preferences_sql() -> str:
     return (
         _bootstrap_context_sql()
@@ -240,9 +281,34 @@ def _upsert_local_track_preference_sql() -> str:
         on conflict (account_id, track_key) do update
           set rating = excluded.rating,
               love_tier = excluded.love_tier,
-              library_id = excluded.library_id,
               updated_at = now(),
               metadata = (app.track_preferences.metadata - 'cleared') || excluded.metadata
         returning 1 as saved;
     """
     )
+
+
+def _upsert_scoped_track_preference_sql() -> str:
+    return """
+        insert into app.track_preferences (
+          account_id,
+          library_id,
+          track_key,
+          rating,
+          love_tier,
+          metadata
+        ) values (
+          %(account_id)s,
+          %(library_id)s,
+          %(track_ref)s,
+          %(rating)s,
+          %(love_tier)s,
+          '{"source":"runtime_track_preferences_adapter"}'::jsonb
+        )
+        on conflict (account_id, track_key) do update
+          set rating = excluded.rating,
+              love_tier = excluded.love_tier,
+              updated_at = now(),
+              metadata = (app.track_preferences.metadata - 'cleared') || excluded.metadata
+        returning 1 as saved;
+    """

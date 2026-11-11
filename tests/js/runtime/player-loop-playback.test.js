@@ -1382,6 +1382,37 @@ test('streaming start rejection stays inspectable and never falls back to native
   assert.deepEqual(nativeSrcAssignments, []);
 });
 
+test('an expired opaque track waits for its refreshed playback reference before streaming', async () => {
+  const ownership = { activeClaim: null };
+  const streamed = [];
+  const track = {
+    path: 'opaque-resume-token',
+    mediaRef: 'opaque-resume-token',
+    playbackRef: 'expired-playback-ref',
+    playbackRefExpiresAt: '2000-01-01T00:00:00Z',
+    src: '/playback/artwork/opaque-resume-token',
+    title: 'Member track',
+  };
+  const { context } = loadHelper({
+    getPlaybackOwnershipState: () => ownership,
+    async canStartPlaybackInThisTab() {
+      ownership.activeClaim = {
+        track: { playbackRef: 'refreshed-playback-ref' },
+      };
+      return true;
+    },
+    async startStreamingTrack(streamTrack) {
+      streamed.push(streamTrack);
+      return { role: 'current', streamId: 1, generation: 1, track: streamTrack };
+    },
+  });
+
+  assert.equal(await context.playTrackFromPayload(track), true);
+  assert.equal(streamed.length, 1);
+  assert.equal(streamed[0].playbackRef, 'refreshed-playback-ref');
+  assert.equal(track.playbackRef, 'expired-playback-ref');
+});
+
 test('a stale rapid-selection start completion cannot replace the newer streaming track', async () => {
   const createDeferred = () => {
     let resolve;
@@ -1539,6 +1570,30 @@ test('changing tracks clears an outgoing timeline drag preview', () => {
   context.setCurrentPlayerTrack({ path: 'next.flac', durationSeconds: 300 });
   assert.equal(context.state.player.timelineDragging, false);
   assert.equal(context.state.player.timelineDragPreviewSeconds, null);
+});
+
+test('changing to an opaque member track probes its waveform by bounded reference', () => {
+  const probes = [];
+  const { context } = loadHelper({
+    probeCachedWaveformPeaks: (identity, generation, playbackRef) => {
+      probes.push({ identity, generation, playbackRef });
+    },
+  });
+  context.state.player.streaming = { generation: 7 };
+  const track = {
+    path: 'opaque-resume-token',
+    mediaRef: 'opaque-resume-token',
+    playbackRef: 'opaque-playback-ref',
+    durationSeconds: 300,
+  };
+
+  context.setCurrentPlayerTrack(track, { persist: false });
+
+  assert.deepEqual(probes, [{
+    identity: track.path,
+    generation: 7,
+    playbackRef: track.playbackRef,
+  }]);
 });
 
 test('streaming boundary consumes the queued track exactly once', async () => {
@@ -2161,6 +2216,40 @@ test('server ownership denial pauses the instant resume and reports the block', 
   assert.equal(audio.currentTime, 57, 'streaming loop setup does not seek the legacy audio element');
   assert.equal(context.state.player.loopEnd, 60);
 }
+
+test('shared player activation carries path-free reference attributes into playback ownership', async () => {
+  const button = new FakeElement({
+    tagName: 'BUTTON',
+    attributes: {
+      'data-src': '/track?ref=opaque-resume-token',
+      'data-track-path': 'opaque-resume-token',
+      'data-media-ref': 'opaque-resume-token',
+      'data-playback-ref': 'opaque-playback-ref',
+      'data-playback-ref-expires-at': '2099-01-01T00:00:00Z',
+      'data-track-title': 'Path-free song',
+      'data-track-artist': 'Artist',
+    },
+  });
+  const document = {
+    getElementById(id) { return id === 'track-modal' ? { hidden: true } : null; },
+  };
+  const { context } = loadHelper({
+    document,
+    state: {
+      player: { current: null, playbackQueue: null },
+      utility: {},
+    },
+  });
+  let observed = null;
+  context.playTrackFromPayload = async (track) => { observed = track; };
+
+  context.activateSharedTrackButton(button);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(observed.mediaRef, 'opaque-resume-token');
+  assert.equal(observed.playbackRef, 'opaque-playback-ref');
+  assert.equal(observed.playbackRefExpiresAt, '2099-01-01T00:00:00Z');
+});
 
 test('shared player click awaits accepted streaming-start command before current-track and now-playing effects', async () => {
   const rawTitle = 'Track Two (feat. Guest Singer)';

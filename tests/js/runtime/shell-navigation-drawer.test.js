@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const test = require('node:test');
 const vm = require('node:vm');
 
 const helperPath = path.join(
@@ -84,12 +85,14 @@ function createElement() {
 
 function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTreeFolded = null } = {}) {
   const drawerRail = createElement();
+  const modeRailAnchor = createElement();
   const drawerBackdrop = createElement();
   const foldButton = createElement();
   const navigationButton = createElement();
   const expandedTree = createElement();
   const compactNavigation = createElement();
   const artistList = createElement();
+  const navigationHeading = createElement();
   const appShell = createElement();
   const documentElement = createElement();
   documentElement.style = { setProperty() {} };
@@ -102,14 +105,17 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
       return {
         'app-shell': appShell,
         'shell-navigation-rail': drawerRail,
+        'mobile-tree-edge-anchor': modeRailAnchor,
         'shell-navigation-rail-backdrop': drawerBackdrop,
         'artist-tree-fold-button': foldButton,
         'artist-tree-navigation-button': navigationButton,
         'artist-tree-expanded': expandedTree,
         'shell-navigation-compact': compactNavigation,
         'sidebar-list': artistList,
+        'library-navigation-heading': navigationHeading,
       }[id] || null;
     },
+    querySelectorAll() { return []; },
   };
   const pendingTimers = new Map();
   let nextTimerId = 0;
@@ -181,12 +187,14 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   return {
     context,
     drawerRail,
+    modeRailAnchor,
     drawerBackdrop,
     foldButton,
     navigationButton,
     expandedTree,
     compactNavigation,
     artistList,
+    navigationHeading,
     appShell,
     body,
     documentElement,
@@ -196,6 +204,99 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
     settledEvents,
   };
 }
+
+test('custom collections mode hydrates the library scope and reuses NavigationTree rows', async () => {
+  const { context, artistList, navigationHeading } = loadHelper();
+  artistList.dataset.sidebarStructureSignature = 'cached-artists';
+  context.renderSidebar = () => { throw new Error('Artists must not render in collection mode'); };
+  context.hydrateDeferredNonAlbumTracks = async ({ libraryWide }) => {
+    assert.equal(libraryWide, true);
+    context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
+  };
+  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
+  context.window.NavigationTree = {
+    renderItem: ({ label, count, attributes }) => (
+      `<button data-open-custom-collection="${attributes['data-open-custom-collection']}">${label}:${count}</button>`
+    ),
+  };
+
+  await context.setLibraryNavigationMode('custom-collections');
+
+  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
+  assert.equal(navigationHeading.textContent, 'Custom Collections');
+  assert.equal(artistList.innerHTML, '<button data-open-custom-collection="Night">Night:2</button>');
+  assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
+});
+
+test('library navigation delegates modes and exact collection detail without per-row listeners', () => {
+  const { context } = loadHelper();
+  const calls = [];
+  context.setLibraryNavigationMode = mode => { calls.push(['mode', mode]); };
+  context.openNonAlbumModal = options => { calls.push(['collection', options]); };
+  context.closeArtistsDrawer = options => { calls.push(['close', options]); };
+  context.isArtistsDrawerMobileViewport = () => true;
+  let prevented = 0;
+  const event = target => ({ target, preventDefault() { prevented += 1; } });
+  const mode = { getAttribute: () => 'custom-collections' };
+  assert.equal(context.handleLibraryNavigationClick(event({
+    closest: selector => selector === '[data-library-navigation-mode]' ? mode : null,
+  })), true);
+  const collection = { getAttribute: () => 'Night' };
+  assert.equal(context.handleLibraryNavigationClick(event({
+    closest: selector => selector === '[data-open-custom-collection]' ? collection : null,
+  })), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['mode', 'custom-collections'],
+    ['collection', { libraryWide: true, collectionName: 'Night' }],
+    ['close', { restoreFocus: false }],
+  ]);
+  assert.equal(prevented, 2);
+});
+
+test('compact Artists and Custom Collections actions restore the selected expanded view', () => {
+  for (const mode of ['artists', 'custom-collections']) {
+    const { context } = loadHelper({ artistTreeFolded: true });
+    const calls = [];
+    context.setLibraryNavigationMode = selectedMode => { calls.push(selectedMode); };
+    context.toggleArtistTreeFold = () => { calls.push('expand'); };
+    const button = {
+      getAttribute: name => name === 'data-library-navigation-mode' ? mode : '',
+    };
+
+    const handled = context.handleArtistsDrawerClick({
+      target: { closest: selector => selector === '[data-toggle-artist-tree-fold="1"]' ? button : null },
+      preventDefault() {},
+    });
+
+    assert.equal(handled, true);
+    assert.deepEqual(calls, [mode, 'expand']);
+  }
+});
+
+test('compact Artists and Custom Collections template actions route and expand together', () => {
+  const template = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'), 'utf8');
+  const compactNavigation = template.slice(
+    template.indexOf('<nav class="shell-navigation-compact"'),
+    template.indexOf('</nav>', template.indexOf('<nav class="shell-navigation-compact"')),
+  );
+
+  assert.match(compactNavigation, /Artist Tree[\s\S]*data-toggle-artist-tree-fold[\s\S]*data-library-navigation-mode[^}]*artists/);
+  assert.match(compactNavigation, /Custom Collections[\s\S]*data-toggle-artist-tree-fold[\s\S]*data-library-navigation-mode[^}]*custom-collections/);
+});
+
+test('library navigation uses the approved collection glyph and generic mobile close label', () => {
+  const template = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'), 'utf8');
+  const collectionActions = template.match(/action_button\('Custom Collections'[\s\S]*?<\/svg>\{% endcall %\}/g) || [];
+
+  assert.equal(collectionActions.length, 2);
+  for (const action of collectionActions) {
+    assert.match(action, /M16 16l4 4M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z/);
+    assert.match(action, /M9 13V7l5-1v5/);
+    assert.doesNotMatch(action, /M4 5h6l2 2h8v12H4z/);
+  }
+  assert.match(template, /action_button\('Close library navigation'/);
+  assert.doesNotMatch(template, /Back from Artists/);
+});
 
 {
   const { context, drawerRail } = loadHelper({
@@ -222,6 +323,23 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   assert.equal(drawerRail.classList.contains('is-mobile-drawer-open'), true);
   assert.equal(body.classList.contains('artists-drawer-open'), true);
 }
+
+test('mobile mode rail hides to a tappable anchor and reveals from an intentional edge swipe', () => {
+  const { context, drawerRail, modeRailAnchor } = loadHelper({ isMobile: true });
+  context.state.ui.artistsDrawerOpen = true;
+  context.setMobileLibraryModeRailVisible(false);
+
+  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), true);
+  assert.equal(modeRailAnchor.hidden, false);
+
+  context.installMobileLibraryModeRailGestures();
+  drawerRail.dispatchEvent({ type: 'pointerdown', pointerType: 'touch', pointerId: 7, clientX: 4, clientY: 80 });
+  drawerRail.dispatchEvent({ type: 'pointermove', pointerType: 'touch', pointerId: 7, clientX: 42, clientY: 84, preventDefault() {} });
+
+  assert.equal(context.state.ui.mobileLibraryModeRailVisible, true);
+  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), false);
+  assert.equal(modeRailAnchor.hidden, true);
+});
 
 {
   const {

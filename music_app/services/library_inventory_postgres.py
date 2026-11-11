@@ -173,7 +173,9 @@ def _non_album_value_predicate_sql(value_expression: str) -> str:
 
 def _bootstrap_context_sql() -> str:
     return """
-        select library.libraries.id as library_id
+        select
+          library.libraries.id as library_id,
+          app.bootstrap_owners.account_id as account_id
         from app.bootstrap_owners
         join library.libraries
           on library.libraries.owner_account_id = app.bootstrap_owners.account_id
@@ -334,6 +336,62 @@ def _non_album_candidates_sql(
               or library.local_track_files.private_path = any(%(private_paths)s::text[])
             )
         ),
+        active_tracks as (
+          select distinct track_id from active_track_files
+        ),
+        active_track_keys as (
+          select distinct library.local_tracks.track_key
+          from active_tracks
+          join bootstrap_context on true
+          join library.local_tracks
+            on library.local_tracks.id = active_tracks.track_id
+           and library.local_tracks.library_id = bootstrap_context.library_id
+        ),
+        legacy_scrobble_counts as (
+          select
+            active_track_keys.track_key,
+            count(*)::int as scrobble_count
+          from active_track_keys
+          join bootstrap_context on true
+          join integration.listen_history
+            on integration.listen_history.library_id = bootstrap_context.library_id
+           and integration.listen_history.account_id = bootstrap_context.account_id
+           and integration.listen_history.track_key = active_track_keys.track_key
+          where integration.listen_history.scrobble_status = 'scrobbled'
+            and integration.listen_history.source_family in (
+              'runtime_listen_history_adapter',
+              'phase_6_json_file_backfill'
+            )
+          group by active_track_keys.track_key
+        ),
+        measured_scrobble_counts as (
+          select
+            library.local_tracks.track_key,
+            count(*)::int as scrobble_count
+          from active_tracks
+          join bootstrap_context on true
+          join library.local_tracks
+            on library.local_tracks.id = active_tracks.track_id
+           and library.local_tracks.library_id = bootstrap_context.library_id
+          join integration.listen_history
+            on integration.listen_history.library_id = bootstrap_context.library_id
+           and integration.listen_history.account_id = bootstrap_context.account_id
+           and integration.listen_history.track_id = library.local_tracks.id
+          where integration.listen_history.scrobble_status = 'scrobbled'
+            and integration.listen_history.source_family = 'rendered_local_listen_session'
+          group by library.local_tracks.track_key
+        ),
+        track_scrobble_counts as (
+          select
+            source_counts.track_key,
+            sum(source_counts.scrobble_count)::int as scrobble_count
+          from (
+            select track_key, scrobble_count from legacy_scrobble_counts
+            union all
+            select track_key, scrobble_count from measured_scrobble_counts
+          ) source_counts
+          group by source_counts.track_key
+        ),
         exception_candidates as (
           select
             active_track_files.id as track_file_id,
@@ -388,6 +446,7 @@ def _non_album_candidates_sql(
           library.local_tracks.disc_number,
           library.local_tracks.track_number,
           library.local_tracks.duration_seconds,
+          library.local_tracks.metadata as track_metadata,
           library.local_tracks.metadata -> 'artist' as raw_track_artist,
           library.local_tracks.metadata -> 'year' as raw_track_year,
           library.local_tracks.metadata ->> 'album' as raw_track_album,
@@ -436,6 +495,15 @@ def _non_album_candidates_sql(
           exception_override.exception_type,
             exception_override.override_payload ->> 'custom_collection_name'
                 as custom_collection_name,
+          coalesce(track_scrobble_counts.scrobble_count, 0) as track_scrobble_count,
+          case
+            when app.track_preferences.track_key is null then null
+            else jsonb_build_object(
+              'rating', app.track_preferences.rating,
+              'love_tier', app.track_preferences.love_tier
+            )
+          end as track_preference_overlay,
+          library.local_tracks.metadata -> 'track_popularity' as track_popularity,
           coalesce(
             exception_override.override_payload ? 'exception_type',
             false
@@ -457,6 +525,12 @@ def _non_album_candidates_sql(
           on library.library_roots.id = active_track_files.library_root_id
          and library.library_roots.library_id = library.local_tracks.library_id
          and library.library_roots.is_active is true
+        left join track_scrobble_counts
+          on track_scrobble_counts.track_key = library.local_tracks.track_key
+        left join app.track_preferences
+          on app.track_preferences.library_id = bootstrap_context.library_id
+         and app.track_preferences.account_id = bootstrap_context.account_id
+         and app.track_preferences.track_key = library.local_tracks.track_key
         left join (
           select
             ranked_exception_overrides.track_file_id,

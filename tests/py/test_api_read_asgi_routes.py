@@ -5729,3 +5729,149 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert _decode_json(body)["code"] == "gallery_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
+
+
+def test_non_owner_non_album_projection_omits_raw_paths_and_reuses_playback_references(
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    raw_path = r"C:\Music\Artist\Loose\song.flac"
+    display_path = r"Artist\Loose\song.flac"
+    actor = SimpleNamespace(
+        account_id=8,
+        current_library_id=23,
+        library_relationships=(
+            SimpleNamespace(library_id=23, is_primary_owner=False),
+        ),
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_actor=actor),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config={"database": "app"},
+                auth_policy_config={"hmac": {"secret": "x" * 32, "key_version": 1}},
+            )
+        ),
+    )
+    payload = {
+        "non_album_tracks": [{
+            "path": raw_path,
+            "track_ref": raw_path,
+            "display_path": display_path,
+            "title": "Song",
+        }],
+        "library_non_album_tracks": [{
+            "path": raw_path,
+            "track_ref": raw_path,
+            "display_path": display_path,
+            "title": "Song",
+        }],
+    }
+    calls = []
+
+    class FakePlaybackReferences:
+        def __init__(self, config):
+            assert config == {
+                "database": "app",
+                "hmac": {"secret": "x" * 32, "key_version": 1},
+            }
+
+        def issue_batch(self, issued_actor, tracks):
+            calls.append((issued_actor, tracks))
+            return {
+                "protocol": 1,
+                "expiresAt": "2026-11-12T12:00:00+00:00",
+                "tracks": [{
+                    "clientKey": tracks[0]["clientKey"],
+                    "playbackRef": "opaque-playback-ref",
+                    "resumeToken": "opaque-resume-token",
+                }],
+            }
+
+    monkeypatch.setattr(routes, "PlaybackReferenceService", FakePlaybackReferences)
+    preference_calls = []
+
+    def fake_preference_lookup(config, **kwargs):
+        preference_calls.append((config, kwargs))
+        return {raw_path: {
+            "rating": 4,
+            "love_tier": "loved",
+            "allowed_actions": {
+                "client_surface_class": "private_web",
+                "can_rate": True,
+                "can_set_love_tier": True,
+            },
+        }}
+
+    monkeypatch.setattr(
+        routes,
+        "build_track_preference_overlay_lookup",
+        fake_preference_lookup,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        routes,
+        "allowed_actions_for_request",
+        lambda _request, _actions: SimpleNamespace(as_payload=lambda: {
+            "library.track_preferences.manage": True,
+        }),
+    )
+
+    projected = routes._project_non_album_tracks_for_request(request, payload)
+
+    assert calls == [(actor, [{"clientKey": "0", "path": raw_path}])]
+    assert preference_calls == [(({
+        "database": "app",
+        "hmac": {"secret": "x" * 32, "key_version": 1},
+    }), {
+        "actor_id": "8",
+        "account_id": 8,
+        "library_id": 23,
+        "track_refs": [raw_path],
+    })]
+    assert raw_path not in json.dumps(projected)
+    assert display_path not in json.dumps(projected)
+    for key in ("non_album_tracks", "library_non_album_tracks"):
+        assert projected[key] == [{
+            "title": "Song",
+            "media_ref": "opaque-resume-token",
+            "playback_ref": "opaque-playback-ref",
+            "playback_ref_expires_at": "2026-11-12T12:00:00+00:00",
+            "track_preference": {
+                "rating": 4,
+                "love_tier": "loved",
+                "allowed_actions": {
+                    "client_surface_class": "private_web",
+                    "can_rate": True,
+                    "can_set_love_tier": True,
+                },
+            },
+        }]
+    assert payload["non_album_tracks"][0]["path"] == raw_path
+
+
+def test_current_library_owner_non_album_projection_retains_paths(monkeypatch):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    actor = SimpleNamespace(
+        account_id=7,
+        current_library_id=23,
+        library_relationships=(
+            SimpleNamespace(library_id=23, is_primary_owner=True),
+        ),
+    )
+    request = SimpleNamespace(state=SimpleNamespace(current_actor=actor))
+    payload = {"non_album_tracks": [{
+        "path": r"C:\Music\Artist\song.flac",
+        "track_ref": r"C:\Music\Artist\song.flac",
+        "display_path": r"Artist\song.flac",
+    }]}
+
+    monkeypatch.setattr(
+        routes,
+        "PlaybackReferenceService",
+        lambda _config: pytest.fail("owner projection must not issue references"),
+    )
+
+    assert routes._project_non_album_tracks_for_request(request, payload) is payload

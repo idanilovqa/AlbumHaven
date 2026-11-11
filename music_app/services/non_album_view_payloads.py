@@ -295,8 +295,28 @@ def build_non_album_track_list(
             continue
         year = _normalized_year(entry.get("year"))
         path = str(entry.get("path") or "")
+        track_preference = (
+            entry.get("track_preference")
+            if isinstance(entry.get("track_preference"), dict)
+            else entry.get("track_preference_overlay")
+            if isinstance(entry.get("track_preference_overlay"), dict)
+            else None
+        )
+        track_stats = (
+            entry.get("track_stats")
+            if isinstance(entry.get("track_stats"), dict)
+            else {"scrobble_count": entry.get("track_scrobble_count")}
+            if entry.get("track_scrobble_count") is not None
+            else None
+        )
+        track_popularity = (
+            entry.get("track_popularity")
+            if isinstance(entry.get("track_popularity"), dict)
+            else None
+        )
         tracks.append({
             "path": path,
+            **({"track_ref": str(entry.get("track_ref"))} if entry.get("track_ref") else {}),
             "artist": _normalized_artist(entry),
             "tag_artist": str(entry.get("artist") or ""),
             "album_artist": str(entry.get("album_artist") or ""),
@@ -335,6 +355,9 @@ def build_non_album_track_list(
                if entry.get("local_album_membership_problem") else {}),
             "display_path": _display_path(path, root_paths),
             "duration_seconds": entry.get("duration_seconds"),
+            **({"track_preference": dict(track_preference)} if track_preference else {}),
+            **({"track_stats": dict(track_stats)} if track_stats else {}),
+            **({"track_popularity": dict(track_popularity)} if track_popularity else {}),
         })
     return sorted(
         tracks,

@@ -681,6 +681,50 @@ test('openNonAlbumTagEditor hands every displayed loose track to Edit Tags', () 
   assert.deepEqual({ ...calls[1].options }, { tracksMode: 'all' });
 });
 
+test('openNonAlbumTagEditor keeps member paths private while reusing the existing editor', () => {
+  const { context } = createContext();
+  const track = {
+    media_ref: 'opaque-resume-token',
+    playback_ref: 'opaque-playback-ref',
+    title: 'Path-free song',
+    album_artist: 'A',
+  };
+  const calls = [];
+  context.state.view.non_album_tracks = [track];
+  context.state.view.selected_artist = 'A';
+  vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
+  context.closeNonAlbumModal = () => {};
+  context.openTagEditor = (album, options) => calls.push({ album, options });
+
+  context.openNonAlbumTagEditor();
+
+  assert.equal(calls[0].album.tracks[0].path, 'opaque-resume-token');
+  assert.equal(calls[0].album.tracks[0].media_ref, 'opaque-resume-token');
+  assert.equal(JSON.stringify(calls[0]).includes('C:/'), false);
+});
+
+test('openNonAlbumTagEditor hands only selected loose tracks to the existing editor', () => {
+  const { context } = createContext();
+  const tracks = [
+    { path: 'C:/Music/A/one.mp3', title: 'One', album_artist: 'A' },
+    { path: 'C:/Music/A/two.mp3', title: 'Two', album_artist: 'A' },
+  ];
+  const calls = [];
+  context.state.view.non_album_tracks = tracks;
+  context.state.view.selected_artist = 'A';
+  vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
+  context.nonAlbumTrackSelectionController = {
+    getSelectedPaths: () => ['C:/Music/A/two.mp3'],
+  };
+  context.closeNonAlbumModal = () => {};
+  context.openTagEditor = (album, options) => calls.push({ album, options });
+
+  context.openNonAlbumTagEditor();
+
+  assert.deepEqual(Array.from(calls[0].album.selected_track_paths), ['C:/Music/A/two.mp3']);
+  assert.deepEqual({ ...calls[0].options }, { tracksMode: 'selected' });
+});
+
 function submitSearch(context, query) {
   context.document.getElementById('search-input').value = query;
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });

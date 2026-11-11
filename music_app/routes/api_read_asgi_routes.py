@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable, Mapping
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -55,7 +55,9 @@ from music_app.routes.musicbrainz_enrichment_asgi import (
     project_artist_problems_into_problematic_files,
 )
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
+from music_app.services.capability_ui import is_current_library_owner
 from music_app.services.ordered_cover_presentation import project_ordered_covers_for_request
+from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.duplicate_copy_review import project_duplicate_copy_review
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
@@ -71,6 +73,10 @@ from music_app.services.view_payloads import (
     project_missing_album_actions,
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.track_preferences import (
+    build_track_preference_overlay_lookup,
+    default_track_preference_overlay,
+)
 from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
@@ -152,9 +158,122 @@ def _project_album_payload_for_request(
     request: Request, payload: object, *, include_duplicate_copy_review: bool = False,
 ) -> object:
     payload = project_ordered_covers_for_request(request, payload)
+    payload = _project_non_album_tracks_for_request(request, payload)
     return _project_missing_album_actions_for_request(
         request, payload, include_duplicate_copy_review=include_duplicate_copy_review,
     )
+
+
+def _project_non_album_tracks_for_request(request: Request, payload: object) -> object:
+    actor = request.state.current_actor
+    if is_current_library_owner(actor):
+        return payload
+
+    track_list_keys = frozenset({"non_album_tracks", "library_non_album_tracks"})
+    paths: list[str] = []
+    seen_paths: set[str] = set()
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key in track_list_keys and isinstance(nested, list):
+                    for track in nested:
+                        if isinstance(track, dict):
+                            path = str(track.get("path") or "")
+                            if path and path not in seen_paths:
+                                seen_paths.add(path)
+                                paths.append(path)
+                else:
+                    collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(payload)
+    references: dict[str, dict[str, object]] = {}
+    track_preferences: dict[str, dict[str, object]] = {}
+    default_track_preference = default_track_preference_overlay()
+    if paths:
+        config = {
+            **request.app.state.config,
+            **request.app.state.auth_policy_config,
+        }
+        can_manage_preferences = allowed_actions_for_request(
+            request, ("library.track_preferences.manage",),
+        ).as_payload().get("library.track_preferences.manage") is True
+        if can_manage_preferences:
+            default_track_preference["allowed_actions"] = {
+                "client_surface_class": resolve_client_surface_class(None),
+                "can_rate": True,
+                "can_set_love_tier": True,
+            }
+            track_preferences = build_track_preference_overlay_lookup(
+                config,
+                actor_id=str(actor.account_id),
+                account_id=actor.account_id,
+                library_id=actor.current_library_id,
+                track_refs=paths,
+            )
+        service = PlaybackReferenceService(config)
+        try:
+            for start in range(0, len(paths), 100):
+                batch_paths = paths[start:start + 100]
+                issued = service.issue_batch(actor, [
+                    {"clientKey": str(start + index), "path": path}
+                    for index, path in enumerate(batch_paths)
+                ])
+                expires_at = issued.get("expiresAt") if isinstance(issued, dict) else None
+                issued_tracks = issued.get("tracks") if isinstance(issued, dict) else None
+                if not isinstance(expires_at, str) or not isinstance(issued_tracks, list) or len(issued_tracks) != len(batch_paths):
+                    raise PlaybackContractError(503)
+                for path, item in zip(batch_paths, issued_tracks):
+                    if (
+                        not isinstance(item, dict)
+                        or not isinstance(item.get("playbackRef"), str)
+                        or not isinstance(item.get("resumeToken"), str)
+                    ):
+                        raise PlaybackContractError(503)
+                    references[path] = {
+                        "media_ref": item["resumeToken"],
+                        "playback_ref": item["playbackRef"],
+                        "playback_ref_expires_at": expires_at,
+                    }
+        except PlaybackContractError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+
+    def project(value: object) -> object:
+        if isinstance(value, list):
+            nested = [project(item) for item in value]
+            return nested if any(a is not b for a, b in zip(nested, value)) else value
+        if not isinstance(value, dict):
+            return value
+        copied = {key: project(item) for key, item in value.items()}
+        changed = any(copied[key] is not item for key, item in value.items())
+        for key in track_list_keys:
+            tracks = value.get(key)
+            if not isinstance(tracks, list):
+                continue
+            projected_tracks = []
+            for track in tracks:
+                if not isinstance(track, dict):
+                    projected_tracks.append(track)
+                    continue
+                path = str(track.get("path") or "")
+                projected_track = {
+                    field: nested for field, nested in track.items()
+                    if field not in {"path", "display_path", "track_ref"}
+                }
+                projected_track["track_preference"] = track_preferences.get(
+                    path,
+                    default_track_preference,
+                )
+                projected_track.update(references.get(path, {}))
+                projected_tracks.append(projected_track)
+            copied[key] = projected_tracks
+            changed = True
+        return copied if changed else value
+
+    return project(payload)
 
 
 def _project_library_watch_health_for_request(

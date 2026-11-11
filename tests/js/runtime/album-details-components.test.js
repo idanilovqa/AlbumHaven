@@ -341,6 +341,8 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.match(html, /id="non-album-modal-title">Loose Tracks</);
   assert.match(html, /id="non-album-modal-subtitle">Non-album tracks found in Folkstone and family artist folders\.<\/div>/);
   assert.match(html, /id="non-album-modal-edit-tags"/);
+  assert.match(html, /data-non-album-selection-count[^>]*role="status"[^>]*hidden><\/span>/);
+  assert.doesNotMatch(html, /0 selected/);
   assert.match(html, /data-open-non-album-tag-editor="1"/);
   assert.match(html, /album-details-header__action-icon--edit/);
   assert.match(html, /id="non-album-modal-close"/);
@@ -348,6 +350,18 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.match(html, /album-details-header__action-icon--close/);
   assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
+});
+
+test('Loose Tracks disables Edit Tags when the capability bootstrap denies it', () => {
+  const context = loadComponents();
+  context.AlbumHavenCapabilities = { allows: () => false };
+
+  const html = context.buildLooseTracksHeaderActionsHtml();
+  const editButton = html.match(/<button[^>]*id="non-album-modal-edit-tags"[^>]*>/)?.[0] || '';
+
+  assert.match(editButton, /\sdisabled(?:\s|>)/);
+  assert.match(editButton, /aria-disabled="true"/);
+  assert.doesNotMatch(editButton, /data-open-non-album-tag-editor/);
 });
 
 test('Loose Tracks template delegates its header contents to AlbumDetailsHeader', () => {

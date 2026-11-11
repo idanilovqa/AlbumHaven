@@ -737,6 +737,40 @@ def test_pcm_reference_opens_current_file_without_returning_path(playback_invent
     assert str(decoder_factory.instances[0].command.path) == fixture.paths[1]
 
 
+def test_pcm_reference_probes_current_file_without_a_raw_path(
+    playback_inventory,
+    playback_app,
+    monkeypatch,
+):
+    fixture = playback_inventory
+    playback_app.state.config.update(fixture.config)
+    playback_app.state.auth_policy_config = {"hmac": fixture.config["hmac"]}
+    playback_app.state.media_host_library_id = fixture.actor.current_library_id
+    playback_app.state.current_actor_resolver = SimpleNamespace(
+        resolve=lambda _token: fixture.actor
+    )
+    token = issue(
+        reference_service(fixture, lambda: datetime.now(timezone.utc)), fixture
+    )["tracks"][0]["playbackRef"]
+    expected_path = Path(fixture.paths[1])
+    monkeypatch.setattr(
+        "music_app.routes.playback_stream_asgi.read_native_sample_rate",
+        lambda path: 44_100 if path == expected_path else 0,
+    )
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 7, "playbackRef": token}
+            )
+            result = await socket.receive_json()
+            assert result["type"] == "probe-result"
+            assert result["requestId"] == 7
+            assert result["sampleRate"] == 44_100
+
+    asyncio.run(scenario())
+
+
 def test_shared_protocol_fixtures_match_live_reference_and_claim_contracts(playback_inventory):
     fixture = playback_inventory
     contract = json.loads((Path(__file__).parents[1] / "fixtures" / "playback-protocol-v1.json").read_text())
@@ -1894,6 +1928,10 @@ def test_resume_tokens_are_account_bound_path_free_and_outlive_references(playba
         fields = decoded_token_fields(token)
         assert fields[:4] == [1, 1, fixture.actor.account_id, fixture.actor.current_library_id]
         assert all(path not in token and Path(path).stem not in token for path in fixture.paths)
+    assert service.resolve_resume_library_paths(fixture.actor, tokens) == {
+        tokens[0]: fixture.paths[1],
+        tokens[1]: fixture.paths[0],
+    }
 
     now += timedelta(days=30)
     with pytest.raises(ValueError):

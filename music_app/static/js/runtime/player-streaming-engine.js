@@ -2086,7 +2086,11 @@ function requestStreamingSampleRate(track) {
   const requestId = engine.nextSampleRateProbeId;
   return new Promise((resolve) => {
     engine.sampleRateProbes.set(requestId, { path: String(track?.path || ''), resolve });
-    if (!sendStreamingControl({ type: 'probe', requestId, path: track.path })) {
+    if (!sendStreamingControl({
+      type: 'probe',
+      requestId,
+      ...(track.playbackRef ? { playbackRef: track.playbackRef } : { path: track.path }),
+    })) {
       settleStreamingSampleRateProbe(requestId, 0);
     }
   });
@@ -2282,7 +2286,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     generation: roleState.generation,
     streamId: roleState.streamId,
     role,
-    path: track.path,
+    ...(track.playbackRef ? { playbackRef: track.playbackRef } : { path: track.path }),
     startFrame,
     sampleRate: engine.sampleRate,
     durationSeconds: Number(track.durationSeconds) || 0,
@@ -2478,6 +2482,7 @@ function probeStreamingTrackWaveform(track) {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
       streamingEngineState().generation,
+      String(track?.playbackRef || ''),
     );
     if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
       void cachedWaveformProbe.catch(() => {});

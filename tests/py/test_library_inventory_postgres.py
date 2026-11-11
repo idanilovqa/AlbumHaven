@@ -320,7 +320,7 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_requi
 def test_candidate_query_projects_only_json_fields_consumed_by_non_album_shaper():
     sql = inventory_module._non_album_candidates_sql().lower()
 
-    assert "library.local_tracks.metadata as track_metadata" not in sql
+    assert "library.local_tracks.metadata as track_metadata" in sql
     assert "library.local_tracks.metadata -> 'artist' as raw_track_artist" in sql
     assert "library.local_tracks.metadata -> 'year' as raw_track_year" in sql
     assert "library.local_artists.metadata as artist_metadata" not in sql
@@ -422,7 +422,7 @@ def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
         )
     ).lower()
 
-    for forbidden in ("mbid", "musicbrainz", "lastfm", "last.fm", "integration."):
+    for forbidden in ("mbid", "musicbrainz", "lastfm", "last.fm"):
         assert forbidden not in sql
 
 

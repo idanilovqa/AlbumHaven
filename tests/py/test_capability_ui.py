@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from music_app.services.capabilities import capability_keys_for_roles
-from music_app.services.capability_ui import UI_ACTIONS, build_capability_ui
-from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor
+from music_app.services.capability_ui import UI_ACTIONS, build_capability_ui, is_current_library_owner
+from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
 from music_app.services.policy import PolicyContext, RequestOrigin
 from music_app.services.policy_evaluator import PolicyEvaluator
 
@@ -95,6 +95,29 @@ def test_unknown_and_false_decisions_are_not_exposed_as_permissions():
     value = build_capability_ui({"library.media.read": False}, "private_web")
     assert ".play-track-button" in value["denied_selectors"]
     assert "appearance" in value["denied_tabs"]
+
+
+def test_current_library_owner_fact_matches_only_the_active_library():
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        current_library_id=23,
+        library_relationships=(
+            LibraryRelationship(22, "owner", True),
+            LibraryRelationship(23, "member", False),
+        ),
+    )
+    assert is_current_library_owner(actor) is False
+    owner = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        current_library_id=23,
+        library_relationships=(LibraryRelationship(23, "owner", True),),
+    )
+    assert is_current_library_owner(owner) is True
+    assert build_capability_ui({}, "private_web", current_library_owner=True)[
+        "current_library_owner"
+    ] is True
 
 
 def test_tv_projects_provider_only_cover_controls_without_hiding_lookup():

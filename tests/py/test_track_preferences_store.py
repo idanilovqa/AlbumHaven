@@ -351,6 +351,7 @@ def test_postgres_track_preferences_store_replaces_local_store_rows():
     assert len(insert_operations) == 1
     assert insert_operations[0]["params"] == ("C:/Music/one.mp3", 5, "loved")
     assert "metadata - 'cleared'" in insert_operations[0]["sql"]
+    assert "library_id = excluded.library_id" not in insert_operations[0]["sql"].lower()
     assert connection.closed
 
 
@@ -504,3 +505,93 @@ def test_track_preference_overlay_lookup_uses_scoped_postgres_lookup_when_track_
             },
         },
     }
+
+
+def test_track_preference_service_uses_account_identity_with_library_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    calls = []
+
+    class FakePostgresStore:
+        def __init__(self, config):
+            assert config["ALBUM_HAVEN_APP_DATABASE_URL"] == "postgresql://album_haven_app@localhost/app"
+
+        def load_track_preferences(self, track_refs, *, account_id, library_id):
+            calls.append(("load", list(track_refs), account_id, library_id))
+            return {"C:/Music/song.mp3": {"rating": 2, "love_tier": "loved"}}
+
+        def save_track_preference(self, track_ref, overlay, *, account_id, library_id):
+            calls.append(("save", track_ref, dict(overlay), account_id, library_id))
+
+    monkeypatch.setattr(
+        "music_app.services.track_preferences.PostgresTrackPreferencesStore",
+        FakePostgresStore,
+    )
+    config = {
+        "DATA_DIR": tmp_path,
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+        "PERSISTENCE_BACKENDS": {"track_preferences": "postgres"},
+    }
+
+    result = save_track_preference(
+        config,
+        "C:/Music/song.mp3",
+        {"rating": 4},
+        account_id=8,
+        library_id=23,
+    )
+
+    assert calls == [
+        ("load", ["C:/Music/song.mp3"], 8, 23),
+        ("save", "C:/Music/song.mp3", {"rating": 4, "love_tier": "loved"}, 8, 23),
+    ]
+    assert result["track_preference"]["rating"] == 4
+    assert result["track_preference"]["love_tier"] == "loved"
+
+
+def test_postgres_track_preferences_store_keeps_account_track_identity_across_libraries():
+    connection = _FakeConnection(
+        rows=[{"track_key": "C:/Music/song.mp3", "rating": 3, "love_tier": "off"}],
+    )
+    store = PostgresTrackPreferencesStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: connection,
+    )
+
+    loaded = store.load_track_preferences(
+        ["C:/Music/song.mp3"], account_id=8, library_id=23,
+    )
+    store.save_track_preference(
+        "C:/Music/song.mp3",
+        {"rating": 5, "love_tier": "obsessed"},
+        account_id=8,
+        library_id=23,
+    )
+
+    assert loaded == {
+        "C:/Music/song.mp3": {"rating": 3, "love_tier": "off"},
+    }
+    scoped_load = next(
+        operation for operation in connection.operations
+        if "from app.track_preferences" in operation["sql"].lower()
+    )
+    assert scoped_load["params"] == {
+        "account_id": 8,
+        "library_id": 23,
+        "track_refs": ["C:/Music/song.mp3"],
+    }
+    assert "and library_id = %(library_id)s" not in scoped_load["sql"].lower()
+    upsert = next(
+        operation for operation in connection.operations
+        if "insert into app.track_preferences" in operation["sql"].lower()
+    )
+    assert upsert["params"] == {
+        "account_id": 8,
+        "library_id": 23,
+        "track_ref": "C:/Music/song.mp3",
+        "rating": 5,
+        "love_tier": "obsessed",
+    }
+    assert "on conflict (account_id, track_key) do update" in upsert["sql"].lower()
+    assert "library_id = excluded.library_id" not in upsert["sql"].lower()

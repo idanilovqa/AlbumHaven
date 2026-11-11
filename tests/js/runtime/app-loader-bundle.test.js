@@ -118,6 +118,14 @@ const expectedRuntimeOrder = [
   'bootstrap-init.js',
 ];
 
+test('app entry owns the 50 percent startup milestone', () => {
+  const appJs = fs.readFileSync(appJsPath, 'utf8');
+  assert.match(
+    appJs,
+    /pushStartupMark\('app_entry_started',[\s\S]*?AlbumHavenStartupProgress\?\.show\(50\)/,
+  );
+});
+
 test('app loader fetches one generated runtime bundle instead of individual runtime modules', () => {
   const appJs = fs.readFileSync(appJsPath, 'utf8');
   const bundleJs = fs.readFileSync(runtimeBundlePath, 'utf8');

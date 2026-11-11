@@ -766,7 +766,7 @@ def test_index_selected_artist_defers_gallery_until_runtime_hydration(asgi_app, 
     status, _headers, body = run_asgi_request(asgi_app, "GET", "/", query={"artist": "Broadcast"})
 
     assert status == 200
-    assert b'data-startup-progress="50"' in body
+    assert b'data-startup-progress="25"' in body
     assert b"data-startup-preview-card" not in body
     payload = _extract_bootstrap_payload_from_shell(body)
     assert payload["bootstrap"]["startupPreview"]["mode"] == "empty_shell"

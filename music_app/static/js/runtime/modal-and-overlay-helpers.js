@@ -711,7 +711,9 @@ function openNonAlbumModal(options = {}) {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
-  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
+  if (typeof presentMobilePage === 'function') {
+    presentMobilePage(mobilePageDescriptor('non-album', null, { libraryWide }));
+  }
   els.table.innerHTML = hydrationPending
     ? '<div class="utility-empty-state">Loading loose tracks…</div>'
     : looseTracks.length

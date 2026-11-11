@@ -825,6 +825,71 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
     { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
 });
 
+test('desktop Loose Tracks uses existing page history for Back and Forward', () => {
+  const location = { href: 'https://example.test/?surface=albums' };
+  let pushedUrl = '';
+  const history = {
+    state: {},
+    pushState(snapshot, _title, url) {
+      this.state = snapshot;
+      pushedUrl = String(url);
+      location.href = new URL(url, location.href).href;
+    },
+  };
+  const nonAlbum = {};
+  const restored = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: { innerWidth: 1180, location, history },
+    document: { getElementById: id => id === 'non-album-modal' ? nonAlbum : null },
+    state: { view: { surface: { active: 'albums' } }, ui: {}, status: {} },
+    buildUrl: () => '/?surface=albums',
+    mobileGalleryParentIsSettled: () => false,
+    captureMobileParentGalleryAnchorArtist: () => '',
+    closeArtistsDrawer() {},
+    closeGalleryMainSurface() {},
+  });
+  context.syncMobilePageShell = () => {};
+  context.cleanupMobilePage = descriptor => restored.push(`closed:${descriptor.kind}`);
+  context.restoreMobileGalleryParent = () => {};
+  context.openNonAlbumModal = options => {
+    restored.push(`non-album:${options.libraryWide}`);
+    context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: options.libraryWide });
+  };
+
+  assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: true }), true);
+  assert.equal(new URL(pushedUrl).searchParams.get('mobile_page'), 'non-album');
+  assert.equal(new URL(pushedUrl).searchParams.get('loose_tracks'), 'library');
+  assert.equal(new URL(pushedUrl).pathname, '/');
+  const forwardState = history.state;
+
+  history.state = {};
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(restored, ['closed:non-album']);
+
+  history.state = forwardState;
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(restored, ['closed:non-album', 'non-album:true']);
+});
+
+test('desktop copied Loose Tracks URL restores through the existing page route', () => {
+  const restored = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: {
+      innerWidth: 1180,
+      location: { href: 'https://example.test/?surface=albums&mobile_page=non-album&loose_tracks=library' },
+    },
+    openNonAlbumModal: options => restored.push(`non-album:${options.libraryWide}`),
+    getMobileLoopPage: () => null,
+  });
+  context.writeMobilePageHistory = mode => restored.push(mode);
+
+  context.restoreMobilePageFromUrl();
+
+  assert.deepEqual(restored, ['non-album:true', 'replace']);
+});
+
 test('mobile parent restoration retains the transient root gallery anchor outside the canonical URL', () => {
   const descriptor = { kind: 'album', albumKey: 'doombound' };
   const context = load('mobile-navigation.js');

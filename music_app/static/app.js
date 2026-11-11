@@ -21,6 +21,7 @@
   pushStartupMark('app_entry_started', {
     inlinePreviewVisible: Boolean(document.querySelector('#sidebar-list .artist-link, #artist-groups .artist-section')),
   });
+  window.AlbumHavenStartupProgress?.show(50);
 
   const defaultInitialView = {
     artist_groups: [],

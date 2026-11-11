@@ -750,6 +750,10 @@ function markStartupFollowup(name, requestOptions = {}, detail = {}) {
   };
   startupMetrics.markOnce(`startup_followup_${name}`, markDetail);
   startupMetrics.markOnce(`startup_followup_${hydrationTier}_${name}`, markDetail);
+  const progress = ({ fetch_started: 75, payload_received: 85, apply_complete: 90, render_complete: 95 })[name];
+  if (progress && typeof startupMetrics.advanceInitialRefresh === 'function') {
+    startupMetrics.advanceInitialRefresh(progress);
+  }
 }
 
 function scheduleStartupFollowupPaintMark(name, requestOptions = {}, readDetail) {

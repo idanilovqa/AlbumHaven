@@ -10,7 +10,7 @@
   let percent = 0;
   let targetPercent = 0;
   let animationFrame = 0;
-  let animationStartedAt = 0;
+  let animationStartedAt = null;
   let animationStartPercent = 0;
   const animationDurationMs = 700;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
@@ -43,8 +43,8 @@
     animationFrame = 0;
     const frameTime = Number.isFinite(timestamp)
       ? timestamp
-      : (animationStartedAt || 0) + animationDurationMs;
-    if (!animationStartedAt) animationStartedAt = frameTime;
+      : (animationStartedAt ?? 0) + animationDurationMs;
+    if (animationStartedAt === null) animationStartedAt = frameTime;
     if (percent < targetPercent) {
       const elapsed = Math.min(1, (frameTime - animationStartedAt) / animationDurationMs);
       const eased = 1 - ((1 - elapsed) ** 3);
@@ -58,7 +58,7 @@
     if (completed || next < targetPercent) return;
     targetPercent = next;
     animationStartPercent = percent;
-    animationStartedAt = 0;
+    animationStartedAt = null;
     root.hidden = false;
     markFirstVisibleFeedback();
     for (const element of document.body.children) {
@@ -78,10 +78,14 @@
       if (completed) return;
       completed = true;
       targetPercent = 100;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
-      render(100);
-      finishHide();
+      animationStartPercent = percent;
+      animationStartedAt = null;
+      if (reducedMotion) {
+        render(100);
+        finishHide();
+      } else if (!animationFrame) {
+        animationFrame = window.requestAnimationFrame(animate);
+      }
     },
     fail() {
       if (completed || root.hidden) return;
@@ -94,7 +98,7 @@
       completed = false; targetPercent = 0;
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       animationFrame = 0;
-      animationStartedAt = 0;
+      animationStartedAt = null;
       animationStartPercent = 0;
       render(0); error.hidden = true; meter.hidden = false; hide();
     },
@@ -106,7 +110,7 @@
     }
   }, true);
   window.addEventListener('error', () => window.AlbumHavenStartupProgress.fail());
-  // The server paints the document's starting stage (sign-in 0, app 50), so the
+  // The server paints the document's starting stage (sign-in 0, app 25), so the
   // first frame already shows it and progress only moves forward from there.
   const initialPercent = Number(root.dataset.startupProgress) || 0;
   if (initialPercent > 0) {

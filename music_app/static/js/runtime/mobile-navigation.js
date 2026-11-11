@@ -9,10 +9,11 @@ function isMobileClient() {
       platform: window.navigator?.platform, maxTouchPoints: window.navigator?.maxTouchPoints }) === 'mobile';
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
-function mobilePageDescriptor(kind, album = null) {
+function mobilePageDescriptor(kind, album = null, options = {}) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
+    libraryWide: kind === 'non-album' && options.libraryWide === true,
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
@@ -77,10 +78,11 @@ function setMobilePagePresentation(kind, mobile) {
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
   const active = mobilePageState.pages.at(-1);
-  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail'].forEach(key => url.searchParams.delete(key));
+  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail', 'loose_tracks'].forEach(key => url.searchParams.delete(key));
   if (active) {
     url.searchParams.set('mobile_page', active.kind);
     if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
+    if (active.kind === 'non-album' && active.libraryWide) url.searchParams.set('loose_tracks', 'library');
     if (active.kind === 'utilities') {
       url.searchParams.set('utility_tab', active.tab || 'appearance');
       if (active.utilityDetail) url.searchParams.set('utility_detail', active.utilityDetail);
@@ -268,10 +270,11 @@ function restoreMobileGalleryParent(descriptor) {
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {
-  if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
+  const historyOnly = descriptor.kind === 'non-album' && !usesMobilePageLayout();
+  if (!usesMobilePageLayout() && !mobilePageState.pages.length && !historyOnly) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
-  if (!outlet || !element) return false;
+  if ((!outlet && !historyOnly) || !element) return false;
   const previous = mobilePageState.pages.find(page => page.kind === descriptor.kind);
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
@@ -302,18 +305,29 @@ function presentMobilePage(descriptor) {
       view: state.view, groups: state.view?.artist_groups, revision: state.status.inventory_mutation_revision,
     });
   }
-  if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
+  const needsNonAlbumMobilePromotion = active?.kind === 'non-album'
+    && descriptor.kind === 'non-album'
+    && active.albumKey === descriptor.albumKey
+    && !historyOnly
+    && !mobilePageState.originals.has(descriptor.kind);
+  if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey
+    && !needsNonAlbumMobilePromotion) {
     Object.assign(active, descriptor);
     syncMobilePageShell();
     return true;
   }
-  delete outlet.dataset.pageInteracted;
-  if (!mobilePageState.originals.has(descriptor.kind)) {
+  if (!historyOnly) delete outlet.dataset.pageInteracted;
+  if (!historyOnly && !mobilePageState.originals.has(descriptor.kind)) {
     const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
     element.before(placeholder);
     const dialog = element.querySelector('[role="dialog"]') || element;
     mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
       modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'), returnFocus: document.activeElement });
+  }
+  if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
+    Object.assign(active, descriptor);
+    syncMobilePageShell();
+    return true;
   }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
   const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
@@ -329,7 +343,7 @@ function presentMobilePage(descriptor) {
   closeGalleryMainSurface?.(false);
   syncMobilePageShell();
   if (!mobilePageState.restoring) writeMobilePageHistory();
-  requestAnimationFrame(() => {
+  if (!historyOnly) requestAnimationFrame(() => {
     const inBody = document.getElementById('mobile-page-header')?.dataset.albumIdentityInBody === 'true';
     const title = document.getElementById(inBody ? 'mobile-album-identity-title' : 'mobile-page-title');
     if (title) { title.tabIndex = -1; title.focus({ preventScroll: true }); }
@@ -404,7 +418,7 @@ function navigateMobileBack() {
 function restoreMobilePage(descriptor) {
   if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
   const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey) || { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true }) : null;
-  if (descriptor.kind === 'non-album') openNonAlbumModal();
+  if (descriptor.kind === 'non-album') openNonAlbumModal({ libraryWide: descriptor.libraryWide === true });
   else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
     setUtilityActiveTab(mobileUtilityTabAllowed(descriptor.tab) ? descriptor.tab : 'appearance');
@@ -425,6 +439,23 @@ function restoreMobilePage(descriptor) {
       renderUtilityModalContent();
     }
   } else if (descriptor.kind === 'cover-lookup' && album) void openCoverLookupModal(album);
+}
+
+function restoreMobilePageFromUrl() {
+  const url = new URL(window.location.href);
+  const kind = url.searchParams.get('mobile_page');
+  if (!kind || (!usesMobilePageLayout() && kind !== 'non-album')) return;
+  mobilePageState.restoring = true;
+  try { restoreMobilePage({ kind, albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', libraryWide: url.searchParams.get('loose_tracks') === 'library', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
+  finally { mobilePageState.restoring = false; }
+  // A directly loaded page has no guaranteed in-app previous entry.
+  const loopPage = getMobileLoopPage();
+  if (loopPage) {
+    loopPage.parentPosition = null;
+    loopPage.loopListPosition = null;
+  }
+  // Keep the restored page as a parent for any child opened after reload.
+  writeMobilePageHistory('replace');
 }
 function handleMobilePagePopState() {
   const requested = Array.isArray(window.history.state?.mobilePages) ? window.history.state.mobilePages : [];
@@ -751,20 +782,7 @@ function initMobileNavigation() {
     status.hidden = !['unsaved', 'unavailable'].includes(event.detail.state);
     status.textContent = 'Settings have not synced. They will retry when you reconnect.';
   });
-  const url = new URL(window.location.href);
-  if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
-    mobilePageState.restoring = true;
-    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
-    finally { mobilePageState.restoring = false; }
-    // A directly loaded page has no guaranteed in-app previous entry.
-    const loopPage = getMobileLoopPage();
-    if (loopPage) {
-      loopPage.parentPosition = null;
-      loopPage.loopListPosition = null;
-    }
-    // Keep the restored page as a parent for any child opened after reload.
-    writeMobilePageHistory('replace');
-  }
+  restoreMobilePageFromUrl();
 }
 
 

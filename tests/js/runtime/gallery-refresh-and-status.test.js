@@ -618,8 +618,12 @@ function createContext() {
     },
     startupMetrics: {
       completed: 0,
+      progress: [],
       visibleCompleted: 0,
       visibleCompletions: [],
+      advanceInitialRefresh(value) {
+        this.progress.push(value);
+      },
       markOnce(name, detail) {
         calls.startupMarks.push({ name, detail });
       },
@@ -1214,6 +1218,7 @@ test('initial startup readiness waits for its successful full render', async () 
   pendingRequests[0].resolveWith({ artist_groups: [], initial_view_partial: false });
   assert.equal(await startup, true);
   assert.equal(context.startupMetrics.completed, 1);
+  assert.deepEqual(context.startupMetrics.progress, [75, 85, 90, 95]);
 });
 
 test('current canonical navigation completes startup readiness and a late superseded response cannot repeat it', async () => {

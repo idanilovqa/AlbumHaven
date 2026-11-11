@@ -7,7 +7,7 @@ import { UtilityIntegrationsTab } from '../poms/utilityIntegrationsTab.js';
 test('Artist Tree album Back keeps the restored mobile gallery position stable', async ({ page, app }) => {
   await app.libraryButton.click();
   await app.artist('Northlight').click();
-  await expect(app.galleryContextName).toHaveText(/^Northlight(?: family)?$/);
+  await expect(app.galleryContextName).toHaveText('Northlight family');
   await expect(app.galleryCards.first()).toBeVisible();
   await app.scrollRegion('gallery', 700);
 

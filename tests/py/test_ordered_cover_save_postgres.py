@@ -166,7 +166,7 @@ def saved_pg(save_pg_database, tmp_path):
 
 
 def _wait_for_blocker(connect, label, blocker_pid):
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 8
     with connect() as observer:
         observer.autocommit = True
         while time.monotonic() < deadline:

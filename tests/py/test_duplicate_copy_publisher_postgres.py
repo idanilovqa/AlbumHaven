@@ -37,12 +37,12 @@ def publisher_schema(retirement_database):
           grant select on library.separate_releases to album_haven_app;
         """)
         db.execute("create table app.accounts(id bigint primary key)")
-        baseline = next(MIGRATIONS.glob("0001_*.sql")).read_text()
+        baseline = next(MIGRATIONS.glob("0001_*.sql")).read_text(encoding="utf-8")
         for table in ("track_preferences", "saved_loops"):
             definition = re.search(r"create table if not exists app\." + table + r" \(.*?\n\);", baseline, re.S).group()
             db.execute(definition)
         for prefix in ("0015", "0016", "0021", "0023", "0025", "0026", "0084", "0086", "0104"):
-            db.execute(next(MIGRATIONS.glob(prefix + "_*.sql")).read_text())
+            db.execute(next(MIGRATIONS.glob(prefix + "_*.sql")).read_text(encoding="utf-8"))
     return retirement_database
 
 @pytest.fixture

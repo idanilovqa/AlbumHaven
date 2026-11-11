@@ -24,6 +24,7 @@ export class MobileLayoutPage {
     this.artistRail = page.locator('#shell-navigation-rail');
     this.artistBackdrop = page.getByRole('button', { name: 'Close artists drawer', exact: true });
     this.artistList = page.locator('#sidebar-list');
+    this.artistTreeEntries = this.artistList.locator('[data-sidebar-artist]');
     this.closeArtistRail = this.artistRail.locator('[data-close-artists-drawer]');
     this.artistPlaceholderTabs = page.locator('[data-mobile-library-mode]');
     this.galleryCards = page.locator('#artist-groups .album-card');

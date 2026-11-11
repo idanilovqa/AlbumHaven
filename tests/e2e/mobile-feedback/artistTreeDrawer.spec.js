@@ -51,7 +51,7 @@ test('selecting an artist closes the drawer and reopening reveals the selected a
   await app.libraryButton.click();
   await app.artist('Northlight').click();
   await expect(app.artistRail).not.toHaveClass(/is-mobile-drawer-open/);
-  await expect(app.galleryContextName).toHaveText(/^Northlight(?: family)?$/);
+  await expect(app.galleryContextName).toHaveText('Northlight family');
 
   await app.libraryButton.click();
   const selected = app.artist('Northlight');

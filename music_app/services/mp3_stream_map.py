@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from array import array
 from dataclasses import dataclass
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -130,9 +131,24 @@ def _cached_stream_map(path: str, _size: int, _mtime_ns: int) -> Mp3StreamMap | 
     return read_mp3_stream_map(Path(path))
 
 
+# One scan per file at a time: a stream open waits for the scan the queue's preparation already
+# started (`/playback/refs`) instead of reading the whole file a second time beside it.
+_scans: dict[tuple[str, int, int], threading.Lock] = {}
+_scans_guard = threading.Lock()
+
+
 def mp3_stream_map(path: Path) -> Mp3StreamMap | None:
     try:
         stat = path.stat()
     except OSError:
         return None
-    return _cached_stream_map(str(path), stat.st_size, stat.st_mtime_ns)
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    with _scans_guard:
+        scan = _scans.setdefault(key, threading.Lock())
+    try:
+        with scan:
+            return _cached_stream_map(*key)
+    finally:
+        with _scans_guard:
+            if _scans.get(key) is scan and not scan.locked():
+                del _scans[key]

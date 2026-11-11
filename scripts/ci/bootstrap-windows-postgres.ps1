@@ -250,8 +250,6 @@ function Clear-AdminAuthentication {
 }
 
 function Assert-ProvisionPreflight([object]$Contract) {
-    $service = Get-Service -Name $ServiceName -ErrorAction Stop
-    if ($service.Name -cne $ServiceName) { throw 'Unexpected PostgreSQL service.' }
     foreach ($name in $requiredExecutables) {
         if (-not (Test-Path -LiteralPath (Join-Path $Pgbin $name) -PathType Leaf)) {
             throw "PGBIN executable is missing: $name"
@@ -261,8 +259,11 @@ function Assert-ProvisionPreflight([object]$Contract) {
     & $ready -h $HostName -p $Port -q
     $alreadyReady = $LASTEXITCODE -eq 0
     if (-not $alreadyReady) {
+        $service = Get-Service -Name $ServiceName -ErrorAction Stop
+        if ($service.Name -cne $ServiceName) { throw 'Unexpected PostgreSQL service.' }
         if ($service.StartType -ne 'Automatic') { Set-Service -Name $ServiceName -StartupType Automatic }
         if ($service.Status -ne 'Running') { Start-Service -Name $ServiceName }
+
         $deadline = [DateTime]::UtcNow.AddSeconds($Contract.preflight.readinessTimeoutSeconds)
         do {
             & $ready -h $HostName -p $Port -q

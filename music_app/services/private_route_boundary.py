@@ -58,6 +58,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
+    ("GET", "/app-copy/account"): "app.shell.read",
+    ("GET", "/app-copy-worker.js"): "app.shell.read",
     ("GET", "/status"): "app.status.read",
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
@@ -68,6 +70,25 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/problematic-files"): "library.problems.read",
     ("GET", "/utilities/problematic-files/detail"): "library.problems.read",
     ("GET", "/utilities/problematic-files/{album_key:path}"): "library.problems.read",
+    ("GET", "/api/musicbrainz/artists/review"): "library.problems.read",
+    ("GET", "/api/musicbrainz/artists/status"): "library.problems.read",
+    ("GET", "/api/musicbrainz/artists/{local_artist_id}"): "library.problems.read",
+    (
+        "POST",
+        "/api/musicbrainz/artists/sync",
+    ): "catalogue.enrichment.request",
+    (
+        "POST",
+        "/api/musicbrainz/artists/{local_artist_id}/retry",
+    ): "catalogue.enrichment.request",
+    (
+        "POST",
+        "/api/musicbrainz/artists/{local_artist_id}/validate",
+    ): "library.metadata_matches.review",
+    (
+        "PUT",
+        "/api/musicbrainz/artists/{local_artist_id}/match",
+    ): "library.metadata_matches.review",
     ("GET", "/utilities/rules"): "library.rules.read",
     ("GET", "/utilities/log-history"): "library.logs.read",
     ("POST", "/utilities/log-history/export"): "library.logs.export",
@@ -97,6 +118,22 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/loops/pitch-preview/{preview_id}"): "library.loops.media.read",
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
     ("GET", "/playback/waveform"): "library.media.read",
+    ("POST", "/playback/refs"): "library.media.read",
+    ("POST", "/playback/refs/resume"): "library.media.read",
+    ("GET", "/playback/artwork/{resume_token}"): "library.artwork.read",
+    ("GET", "/playback/state"): "library.media.read",
+    ("PUT", "/playback/state"): "library.media.read",
+    ("DELETE", "/playback/state"): "library.media.read",
+    ("POST", "/playback/state/handoff"): "app.access",
+    # Self-service for any active account (no capability); the manifest and APK exchange
+    # also need an attested device key.
+    ("POST", "/artifacts/android/challenge"): "account.self.android_updates",
+    ("POST", "/artifacts/android/attest"): "account.self.android_updates",
+    ("GET", "/artifacts/android/{channel}/manifest.json"): "account.self.android_updates",
+    ("POST", "/artifacts/android/{channel}/{name}"): "account.self.android_updates",
+    # Self-service for any active account (no capability); the route also runs the linked
+    # download route's own authorization, then and whenever the link is fetched.
+    ("POST", "/downloads/links"): "account.self.downloads",
     ("POST", "/refresh-api"): "library.refresh",
     (
         "POST",
@@ -336,6 +373,16 @@ def _is_public(method: str, path: str) -> bool:
         return normalized_method in _READ_METHODS
     if path == "/static" or path.startswith("/static/"):
         return normalized_method in _READ_METHODS
+    # A five-minute HMAC link for one APK, fetched by Android's DownloadManager without cookies.
+    # The route itself refuses any link that is not genuine, current and still backed by an
+    # attested device of an active account.
+    if path.startswith("/artifacts/android/download/"):
+        return normalized_method in _READ_METHODS
+    # A five-minute HMAC link for one allowlisted download, fetched by Android's DownloadManager
+    # without cookies. The route re-runs that download's own authorization for the account it
+    # names, which must still be active.
+    if path.startswith("/downloads/"):
+        return normalized_method in _READ_METHODS
     return False
 
 
@@ -351,6 +398,7 @@ def csrf_mode_for_route(method: str, route_path: str) -> str:
         "/logout",
         "/account/password",
         "/account/password-suggestion/dismiss",
+        "/playback/state/handoff",
     }:
         return "route_form"
     return "session_header"

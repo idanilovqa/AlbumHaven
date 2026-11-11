@@ -6,6 +6,7 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -108,7 +109,7 @@ async function handleUtilityBootstrapClick(event) {
       if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
-    } else if (state.utility.activeTab !== 'appearance') {
+    } else if (!['appearance', 'android'].includes(state.utility.activeTab)) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;
       try {
@@ -185,6 +186,20 @@ async function handleUtilityBootstrapClick(event) {
           .find((option) => option.getAttribute('data-problem-filter-value') === value)?.focus();
       }
     }
+    return;
+  }
+
+  const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
+  if (removeProblemFilter) {
+    event.preventDefault();
+    const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
+    const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
+    state.utility.selectedProblemFilters = nextSelectedFilters;
+    state.utility.deferProblematicAutoSelection = true;
+    reconcileProblematicSelectionForFilters(nextSelectedFilters);
+    state.utility.problemDropdownOpen = false;
+    state.utility.showRepairedDisplay = true;
+    renderUtilityModalContent();
     return;
   }
 
@@ -994,6 +1009,7 @@ function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
 }
 
 function handleUtilityBootstrapInput(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const localPlaylistFileInput = event.target.closest('[data-local-playlist-import-file]');
   if (localPlaylistFileInput) {
     const file = Array.isArray(localPlaylistFileInput.files)
@@ -1182,6 +1198,7 @@ function bindCoverLookupFileInput(coverLookupFiles) {
 }
 
 function handleUtilityBootstrapChange(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
     void stageCoverLookupFiles(coverLookupFiles);

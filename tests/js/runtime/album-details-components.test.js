@@ -291,22 +291,6 @@ test('Editorial Album Details aligns the track table with its title and metadata
   );
 });
 
-test('Editorial Album Details wraps long titles without covering header actions', () => {
-  const css = fs.readFileSync(
-    path.join(repoRoot, 'music_app/static/css/runtime/album-details-components.css'),
-    'utf8',
-  );
-
-  assert.match(
-    css,
-    /data-album-details-layout="editorial_canvas"\] \.album-details-header__primary\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s,
-  );
-  assert.match(
-    css,
-    /data-album-details-layout="editorial_canvas"\] \.album-details-header__actions\s*\{[^}]*grid-column:\s*2;/s,
-  );
-});
-
 test('Editorial mobile stacking wins the same-selector cascade after desktop layout rules', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/track-modal-and-lightbox.css'), 'utf8');
   const dialog = '.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"])';
@@ -327,6 +311,74 @@ test('missing Album Details host does not draw a second alert surface', () => {
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*padding:\s*0\s*;/s);
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*border:\s*0\s*;/s);
   assert.match(css, /\.track-modal-missing-warning\s*\{[^}]*background:\s*transparent\s*;/s);
+});
+
+test('an album whose tag names another artist shows its MusicBrainz artist, display only', () => {
+  const context = loadComponents();
+  const greyAlbum = {
+    album_artist: 'Jay-Z',
+    musicbrainz_artist: { canonical_name: 'Danger Mouse', tag_differs: true },
+  };
+
+  assert.equal(context.albumDisplayArtist(greyAlbum), 'Danger Mouse');
+  assert.equal(context.albumTaggedArtistNote(greyAlbum), 'Tagged as Jay-Z');
+  // An identity that agrees with the tag, or none, keeps the tag and adds no note.
+  // A split artist's album names its own MusicBrainz artist.
+  assert.equal(context.albumTaggedArtistNote({ album_artist: 'Amarok', musicbrainz_artist: {
+    canonical_name: 'Amarok', disambiguation: 'Spanish fusion band', tag_differs: false, split: true } }),
+  'MusicBrainz: Amarok (Spanish fusion band)');
+  for (const album of [{ album_artist: 'Amarok', musicbrainz_artist: { canonical_name: 'Amarok', tag_differs: false } },
+    { album_artist: 'Amarok' }]) {
+    assert.equal(context.albumDisplayArtist(album), 'Amarok');
+    assert.equal(context.albumTaggedArtistNote(album), '');
+  }
+});
+
+test('an artist matched under another name is titled with its MusicBrainz name, display only', () => {
+  const context = loadComponents();
+  const credited = { canonical_name: 'Danger Mouse', credited_as: 'Jay-Z' };
+
+  assert.equal(context.galleryArtistDisplayName('Jay-Z', credited), 'Danger Mouse');
+  assert.equal(context.galleryArtistDisplayName('Amarok', { canonical_name: 'Amarok' }), 'Amarok');
+  assert.equal(context.galleryArtistDisplayName('Amarok', { identities: [] }), 'Amarok');
+  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Jay-Z', albumCount: 1, artist_musicbrainz: credited }),
+    /data-gallery-context-name>Danger Mouse<\/span>.*data-artist="Jay-Z"/s, 'the info trigger still names the tag');
+});
+
+test('a split artist\'s panel lists each MusicBrainz artist with its albums and link', () => {
+  const context = loadComponents();
+  context.document = { querySelector: () => null, getElementById: () => null, addEventListener() {} };
+  vm.runInContext(
+    fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js'), 'utf8'),
+    context,
+  );
+  const html = context.buildGalleryArtistIdentitiesHtml({ identities: [
+    { artist_mbid: '75d43a2e-ba60-427c-b2c7-bb666053d2f1', musicbrainz_url: 'https://musicbrainz.org/artist/75d43a2e-ba60-427c-b2c7-bb666053d2f1', canonical_name: 'Amarok',
+      disambiguation: 'Polish progressive rock band', album_count: 4 },
+    { artist_mbid: 'b42d111d-5932-4c00-8562-8bbf7203f850', musicbrainz_url: 'https://musicbrainz.org/artist/b42d111d-5932-4c00-8562-8bbf7203f850', canonical_name: 'Amarok',
+      disambiguation: 'Spanish fusion band', album_count: 1 },
+  ] });
+
+  assert.match(html, /Your albums belong to 2 MusicBrainz artists:/);
+  assert.match(html, /Amarok \(Polish progressive rock band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/75d43a2e-ba60-427c-b2c7-bb666053d2f1"/s);
+  assert.match(html, /Amarok \(Spanish fusion band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/b42d111d-5932-4c00-8562-8bbf7203f850"/s);
+  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Amarok' }), '');
+});
+
+test('Editorial Album Details wraps long titles without covering header actions', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/css/runtime/album-details-components.css'),
+    'utf8',
+  );
+
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__primary\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s,
+  );
+  assert.match(
+    css,
+    /data-album-details-layout="editorial_canvas"\] \.album-details-header__actions\s*\{[^}]*grid-column:\s*2;/s,
+  );
 });
 
 test('Album Details callers use presentation-only title and year values', () => {

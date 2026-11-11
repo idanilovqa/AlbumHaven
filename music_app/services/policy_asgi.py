@@ -134,6 +134,7 @@ def _library_scope(actor, action: str, explicit_library_id: int | None) -> int |
         return explicit_library_id
     if not (
         action.startswith("library.")
+        or action == "catalogue.enrichment.request"
         or action in LIBRARY_SHELL_ACTIONS
         or action.startswith("integration.")
         or action.startswith("accounts.")

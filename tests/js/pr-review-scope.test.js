@@ -1,11 +1,16 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
 
 const classifierPath = path.resolve(__dirname, '..', '..', 'scripts', 'ci', 'classify-pr-review-scope.cjs');
 const {
   classifyPipelineLabels,
   classifyReviewScope,
+  changesAndroidJobs,
+  isAndroidPath,
   isUsableBaseline,
   isDocumentationPath,
   parseFocusedE2eRequest,
@@ -387,3 +392,101 @@ for (const forceFull of [false, true]) {
     } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
   });
 }
+
+test('Android paths cover the shell, native modules, shared contract fixtures, Android-only tests and release bumps only', () => {
+  for (const filePath of [
+    'version.py', 'apps/android-shell/app/build.gradle.kts', 'apps/android-shell/gradle/libs.versions.toml',
+    'apps\\android-shell\\app\\src\\main\\java\\Shell.kt', 'packages/native/native-media/android/Engine.kt',
+    'tests/fixtures/android-bridge/v1.json', 'tests/fixtures/android-bridge/stable-shells.json',
+    'tests/fixtures/listen-sessions-v1.json', 'tests/fixtures/playback-protocol-v1.json',
+    'scripts/ci/android-update-e2e.py', 'tests/py/test_playback_decoder_conformance.py',
+  ]) assert.equal(isAndroidPath(filePath), true, filePath);
+  for (const filePath of [
+    'apps/android-shell/README.md', 'docs/android-update-artifacts.md', 'music_app/static/js/runtime/android-bridge-client.js',
+    'tests/fixtures/android-attestation/akita-tee-ec.pem', 'apps/android-shell-other/x.kt', '.github/workflows/pr-gates.yml',
+    '.github/workflows/android-promote.yml', 'docs/version.py', 'CHANGELOG.md', 'README.md',
+  ]) assert.equal(isAndroidPath(filePath), false, filePath);
+});
+
+const WORKFLOW = [
+  'jobs:', //                                   1
+  '  test_android:', //                         2
+  '    runs-on: ubuntu-latest', //              3
+  '', //                                        4
+  '  test_android_instrumentation:', //         5
+  '    runs-on: ubuntu-latest', //              6
+  '  test_js:', //                              7
+  '    runs-on: ubuntu-latest', //              8
+  '', //                                        9
+].join('\n');
+
+test('editing an Android job definition runs the Android jobs; other pipeline edits do not', () => {
+  const hunk = (header) => `diff --git a/x b/x\n${header}\n`;
+  for (const header of ['@@ -3 +3 @@', '@@ -3,0 +4 @@', '@@ -6,2 +6,0 @@', '@@ -1,2 +1,3 @@', '@@ -5,1 +5,1 @@']) {
+    assert.equal(changesAndroidJobs(hunk(header), WORKFLOW), true, header);
+  }
+  for (const header of ['@@ -1 +1 @@', '@@ -8 +8 @@', '@@ -8,0 +9 @@', '@@ -7,0 +7,0 @@']) {
+    assert.equal(changesAndroidJobs(hunk(header), WORKFLOW), false, header);
+  }
+  assert.equal(changesAndroidJobs('', WORKFLOW), false);
+  assert.equal(changesAndroidJobs(hunk('@@ -3 +3 @@'), WORKFLOW.replace(/\n/g, '\r\n')), true);
+});
+
+function runScopeCli({ labels = [], numstatByBase, focusedBody = '', workflowDiff = '', workflow = WORKFLOW }) {
+  const filename = classifierPath;
+  const localRequire = createRequire(filename);
+  let output = '';
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, __dirname: path.dirname(filename),
+    require(name) {
+      if (name === 'node:fs') return {
+        readFileSync: (file, encoding) => (String(file).endsWith('event.json')
+          ? JSON.stringify({ pull_request: { head: { repo: { full_name: 'owner/app' } } } })
+          : fs.readFileSync(file, encoding)),
+        appendFileSync: (_filename, value) => { output += value; },
+      };
+      if (name === 'node:child_process') return { execFileSync: (_command, args) => {
+        if (args[0] === 'merge-base') return 'a'.repeat(40);
+        if (args[0] === 'diff' && args[1] === '--unified=0') return workflowDiff;
+        if (args[0] === 'show') return workflow;
+        if (args[0] === 'diff') return numstatByBase[args[3]];
+        return '';
+      } };
+      return localRequire(name);
+    },
+    process: { stdout: { write() {} }, stderr: { write() {} } },
+  }, { filename });
+  module.exports.runCli({
+    PR_EVENT_ACTION: 'synchronize', PR_BASE_SHA: 'b'.repeat(40), PR_HEAD_SHA: 'd'.repeat(40),
+    PR_LAST_REVIEWED_SHA: numstatByBase['c'.repeat(40)] === undefined ? '' : 'c'.repeat(40),
+    PR_LABELS_JSON: JSON.stringify(labels), PR_BODY: focusedBody, GITHUB_EVENT_PATH: 'event.json',
+    GITHUB_REPOSITORY: 'owner/app', GITHUB_OUTPUT: 'output',
+  });
+  return Object.fromEntries(output.trim().split('\n').map((line) => {
+    const split = line.indexOf('=');
+    return [line.slice(0, split), line.slice(split + 1)];
+  }));
+}
+
+test('Android jobs follow the whole pull request even when the review is incremental', () => {
+  const mergeBase = 'a'.repeat(40);
+  const reviewed = 'c'.repeat(40);
+  const android = '3\t1\tapps/android-shell/app/build.gradle.kts\n';
+  const web = '2\t0\tmusic_app/app.py\n';
+  const incremental = runScopeCli({ numstatByBase: { [mergeBase]: `${android}${web}`, [reviewed]: web } });
+  assert.equal(incremental.run_android, 'true');
+  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: web } }).run_android, 'false');
+  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: '1\t0\tapps/android-shell/README.md\n' } }).run_android, 'false');
+  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: android } }).run_android, 'true');
+  const releaseBump = '1\t1\tversion.py\n4\t0\tCHANGELOG.md\n1\t1\tpackage.json\n';
+  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: releaseBump } }).run_android, 'true',
+    'a release bump verifies the head stable promotion builds');
+  assert.equal(runScopeCli({ numstatByBase: { [mergeBase]: '4\t0\tCHANGELOG.md\n' } }).run_android, 'false');
+  assert.equal(runScopeCli({
+    labels: ['ci:focused-e2e', 'ci:e2e:metadata-mutations'], numstatByBase: { [mergeBase]: android },
+  }).run_android, 'false', 'focused runs never authorize and skip Android jobs');
+  const pipeline = { [mergeBase]: '2\t1\t.github/workflows/pr-gates.yml\n' };
+  assert.equal(runScopeCli({ numstatByBase: pipeline, workflowDiff: '@@ -3 +3 @@\n' }).run_android, 'true');
+  assert.equal(runScopeCli({ numstatByBase: pipeline, workflowDiff: '@@ -8 +8 @@\n' }).run_android, 'false');
+});

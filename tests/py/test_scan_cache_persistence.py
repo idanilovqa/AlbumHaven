@@ -2733,15 +2733,21 @@ def test_retirement_carries_ratings_then_deletes_only_unowned_empty_albums():
     connection = SimpleNamespace(execute=lambda sql, params: executed.append((sql, params)))
     retirement.retire_vacated_local_albums(connection, [(5, 8)])
 
-    (carry_sql, _), (delete_sql, params) = executed
+    (carry_sql, _), (disc_carry_sql, _), (identity_carry_sql, _), (delete_sql, params) = executed
     assert params == {"album_ids": [5], "successor_ids": [8]}
-    carry, delete = _normalized_sql(carry_sql), _normalized_sql(delete_sql)
-    assert "on conflict (account_id, library_id, album_key) do nothing" in carry
-    assert "rating.provenance" in carry
-    assert "carried.rating is not distinct from rating.rating" in delete
+    carry, disc_carry = _normalized_sql(carry_sql), _normalized_sql(disc_carry_sql)
+    identity_carry, delete = _normalized_sql(identity_carry_sql), _normalized_sql(delete_sql)
+    assert "on conflict (library_id, album_key, account_id) do nothing" in carry
+    assert "on conflict (library_id, album_key, account_id, disc_key) do nothing" in disc_carry
+    assert "on conflict (library_id, album_key) do nothing" in identity_carry
+    assert "state.provenance" in carry and "state.provenance" in disc_carry and "state.tag_differs" in identity_carry
+    assert "carried.rating is not distinct from state.rating" in delete
+    assert "and carried.disc_key = state.disc_key" in delete
+    assert "carried.artist_mbid is not distinct from state.artist_mbid" in delete
+    carried_guards = {"rating", "disc_rating", "artist_identity"}
     for name, clause in retirement.RETIREMENT_GUARDS:
-        assert (_normalized_sql(clause) in delete) is (name != "rating")
-        assert (_normalized_sql(clause) in carry) is (name != "rating")
+        for sql in (delete, carry, disc_carry, identity_carry):
+            assert (_normalized_sql(clause) in sql) is (name not in carried_guards)
 
 
 def test_set_based_track_file_sql_preserves_scoped_upsert_contract():
@@ -4960,27 +4966,57 @@ def test_local_album_inventory_publishes_joint_credit_members_as_owners(monkeypa
     } == {("brian eno", "owner"), ("david byrne", "owner")}
 
 
-def test_postgres_scan_cache_snapshot_does_not_seed_ratings_by_default(monkeypatch):
+def test_postgres_scan_cache_snapshot_seeds_missing_ratings_on_every_publication(monkeypatch):
+    # Owner decision 2026-11-08: a relation-only republication that re-keys
+    # albums must import their tag ratings like a scan does.
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
-    seed_calls = []
-    monkeypatch.setattr(
-        scan_cache_persistence.PostgresAlbumRatingsService,
-        "seed_missing_album_ratings_in_transaction",
-        lambda _self, *args, **kwargs: seed_calls.append((args, kwargs)),
-    )
     connection = FakeConnection()
+    seed_calls = []
+    for method in (
+        "seed_missing_album_ratings_in_transaction",
+        "seed_missing_album_disc_ratings_in_transaction",
+    ):
+        monkeypatch.setattr(
+            scan_cache_persistence.PostgresAlbumRatingsService,
+            method,
+            lambda _self, active_connection, candidates, *, source, method=method: seed_calls.append(
+                (method, active_connection is connection, connection.commit_calls, list(candidates), source)
+            ),
+        )
     adapter = PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: connection,
-        build_albums=lambda _file_cache, _selected_artists: [],
+        build_albums=lambda _file_cache, _selected_artists: [
+            SimpleNamespace(
+                key="big big train::the underfall yard::year::2021",
+                name="The Underfall Yard",
+                album_artist="Big Big Train",
+                artists=["Big Big Train"],
+                year=2021,
+                cover_path=None,
+                edition=None,
+                root_provenance=None,
+                album_rating=8,
+                tracks=[],
+            )
+        ],
     )
 
     adapter.save_snapshot(Path("unused.json"), {}, "root-identity", 5.0)
 
-    assert seed_calls == []
+    assert seed_calls == [
+        (
+            "seed_missing_album_ratings_in_transaction",
+            True,
+            0,
+            [{"album_key": "big big train::the underfall yard::year::2021", "tag_album_rating": 8}],
+            "file_tag_scan",
+        ),
+        ("seed_missing_album_disc_ratings_in_transaction", True, 0, [], "file_tag_scan"),
+    ]
 
 
 def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(monkeypatch):
@@ -5009,16 +5045,29 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
         ]
         assert source == "file_tag_scan"
 
-    def guard(seed_action):
-        events.append("seed_guard_enter")
-        seed_action()
+    def guard(commit_action):
+        events.append("commit_guard_enter")
+        commit_action()
         assert connection.commit_calls == 1
-        events.append("seed_guard_exit")
+        events.append("commit_guard_exit")
 
     monkeypatch.setattr(
         scan_cache_persistence.PostgresAlbumRatingsService,
         "seed_missing_album_ratings_in_transaction",
         lambda _self, *args, **kwargs: seed_missing(*args, **kwargs),
+    )
+
+    def seed_missing_discs(active_connection, candidates, *, source):
+        assert active_connection is connection
+        assert connection.commit_calls == 0
+        events.append("disc_rating_seed")
+        assert candidates == []
+        assert source == "file_tag_scan"
+
+    monkeypatch.setattr(
+        scan_cache_persistence.PostgresAlbumRatingsService,
+        "seed_missing_album_disc_ratings_in_transaction",
+        lambda _self, *args, **kwargs: seed_missing_discs(*args, **kwargs),
     )
     adapter = PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
@@ -5044,16 +5093,16 @@ def test_postgres_scan_cache_snapshot_seeds_after_inventory_and_snapshot_writes(
         {},
         "root-identity",
         5.0,
-        seed_missing_album_ratings=True,
-        album_rating_seed_guard=guard,
+        publication_commit_guard=guard,
     )
 
     assert events == [
         "album_inventory",
         "scan_snapshot",
-        "seed_guard_enter",
         "rating_seed",
-        "seed_guard_exit",
+        "disc_rating_seed",
+        "commit_guard_enter",
+        "commit_guard_exit",
     ]
 
 
@@ -5085,8 +5134,6 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
             {},
             "root-identity",
             5.0,
-            seed_missing_album_ratings=True,
-            album_rating_seed_guard=lambda seed_action: seed_action(),
         )
 
     assert raised.value is seed_error

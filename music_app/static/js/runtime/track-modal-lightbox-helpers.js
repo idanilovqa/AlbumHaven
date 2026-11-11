@@ -607,14 +607,16 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  // The rows stay until fresh details replace them, so an unrelated change shows nothing.
+  // Rows this session edited were rendered optimistically, so they stay until canonical details land.
+  const editedLocally = locallyEditedAlbumKeys.has(albumKey);
+  if (!editedLocally) renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
-      resolveLineage: !locallyEditedAlbumKeys.has(albumKey),
+      resolveLineage: !editedLocally,
     });
   } catch (error) {
     loadError = error;
@@ -674,6 +676,12 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
 }
 
 function cancelTrackModalAlbumDetailsPrewarms() {
+  // Unregister aborted loads now: their rejection can settle a task later, and an
+  // open in between must start its own request instead of joining a doomed one.
+  trackModalAlbumDetailsLoads.forEach((load, alias) => {
+    if (trackModalSpeculativeAlbumDetailsLoadControllers.has(load)) trackModalAlbumDetailsLoads.delete(alias);
+  });
+  trackModalSpeculativeAlbumDetailsLoadControllers.clear();
   trackModalSpeculativePrewarmControllers.forEach((controller) => controller.abort());
   trackModalSpeculativePrewarmControllers.clear();
 }

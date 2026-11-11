@@ -17,6 +17,7 @@ from music_app.services.album_local_cover_integrity import (
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
+from music_app.services.album_ratings_postgres import tag_disc_rating_candidates
 from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
@@ -130,8 +131,6 @@ class ScanCacheAdapter(Protocol):
         relation_views: dict[str, object] | None = None,
         relations_last_built: float | None = None,
         separate_release_keys: set[str] | None = None,
-        seed_missing_album_ratings: bool = False,
-        album_rating_seed_guard: Callable[[Callable[[], object]], object] | None = None,
         publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         expected_cover_mutation_revision: int | None = None,
@@ -785,10 +784,12 @@ class PostgresScanCacheAdapter:
                 synchronized_featured_album_keys = sorted(files_by_album)
                 featured_artist_rows = []
                 aggregate_rows = []
+                published_albums = []
                 for album_key, complete_cache in files_by_album.items():
                     complete_albums = self._build_albums(
                         _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
                     )
+                    published_albums.extend(complete_albums)
                     complete_artists, complete_album_rows, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
                     _execute_pipeline_batches(
                     connection, _upsert_local_artist_sql(preserve_existing_identity=True), complete_artists,
@@ -835,6 +836,7 @@ class PostgresScanCacheAdapter:
                     featured_artist_rows.extend(complete_featured)
                 _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
                 _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
+                _seed_missing_tag_ratings(connection, self._config, published_albums)
             connection.execute(
                 _synchronize_targeted_local_album_featured_artists_sql(),
                 {
@@ -2171,8 +2173,6 @@ class PostgresScanCacheAdapter:
         relation_views: dict[str, object] | None = None,
         relations_last_built: float | None = None,
         separate_release_keys: set[str] | None = None,
-        seed_missing_album_ratings: bool = False,
-        album_rating_seed_guard: Callable[[Callable[[], object]], object] | None = None,
         publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         expected_cover_mutation_revision: int | None = None,
@@ -2490,13 +2490,7 @@ class PostgresScanCacheAdapter:
                         "Scan rating seeding requires a current-generation guard."
                     )
                 def seed_and_commit_publication() -> None:
-                    PostgresAlbumRatingsService(
-                        self._config
-                    ).seed_missing_album_ratings_in_transaction(
-                        connection,
-                        _tag_album_rating_candidates(albums),
-                        source="file_tag_scan",
-                    )
+                    _seed_missing_tag_ratings(connection, self._config, albums)
                     prepare_publication_commit()
                     connection.commit()
 
@@ -3726,6 +3720,22 @@ def _key(value: object) -> str:
 
 def _valid_tag_album_rating(value: object) -> int | None:
     return value if type(value) is int and 1 <= value <= 10 else None
+
+
+def _seed_missing_tag_ratings(
+    connection: Any,
+    config: dict[str, object],
+    albums: list[object],
+) -> None:
+    """Import file-tag ratings the owner has no app record for, in the
+    publication's transaction. App records, cleared ones included, win."""
+    ratings = PostgresAlbumRatingsService(config)
+    ratings.seed_missing_album_ratings_in_transaction(
+        connection, _tag_album_rating_candidates(albums), source="file_tag_scan",
+    )
+    ratings.seed_missing_album_disc_ratings_in_transaction(
+        connection, tag_disc_rating_candidates(albums), source="file_tag_scan",
+    )
 
 
 def _tag_album_rating_candidates(albums: list[object]) -> list[dict[str, object]]:
@@ -5343,6 +5353,48 @@ def _reconcile_semantic_local_albums_sql(
               semantic_album_candidates.library_id
           and app.album_ratings.album_key =
               semantic_album_candidates.redundant_album_key;
+
+        insert into app.album_disc_ratings (
+          account_id,
+          library_id,
+          album_key,
+          disc_key,
+          rating,
+          provenance,
+          created_at,
+          updated_at,
+          metadata
+        )
+        select distinct on (
+          app.album_disc_ratings.account_id,
+          semantic_album_candidates.library_id,
+          semantic_album_candidates.canonical_album_key,
+          app.album_disc_ratings.disc_key
+        )
+          app.album_disc_ratings.account_id,
+          semantic_album_candidates.library_id,
+          semantic_album_candidates.canonical_album_key,
+          app.album_disc_ratings.disc_key,
+          app.album_disc_ratings.rating,
+          app.album_disc_ratings.provenance,
+          app.album_disc_ratings.created_at,
+          app.album_disc_ratings.updated_at,
+          app.album_disc_ratings.metadata
+        from semantic_album_candidates
+        join app.album_disc_ratings
+          on app.album_disc_ratings.library_id =
+             semantic_album_candidates.library_id
+         and app.album_disc_ratings.album_key =
+             semantic_album_candidates.redundant_album_key
+        order by
+          app.album_disc_ratings.account_id,
+          semantic_album_candidates.library_id,
+          semantic_album_candidates.canonical_album_key,
+          app.album_disc_ratings.disc_key,
+          (app.album_disc_ratings.rating is not null) desc,
+          app.album_disc_ratings.updated_at desc,
+          semantic_album_candidates.redundant_album_id
+        on conflict (account_id, library_id, album_key, disc_key) do nothing;
 
         insert into library.local_album_featured_artists (
           library_id,

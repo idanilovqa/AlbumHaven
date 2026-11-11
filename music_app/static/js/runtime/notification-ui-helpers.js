@@ -297,7 +297,7 @@ function buildFloatingNotificationAlertHtml(
   compact = false,
   title = '',
 ) {
-  const severity = normalizeAlertSeverity(variant);
+  const severity = variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
     title: compact

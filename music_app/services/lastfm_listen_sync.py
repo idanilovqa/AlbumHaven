@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 
 from music_app.services.lastfm_postgres import LastfmPostgresAdapter
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.playback_session_payloads import normalize_playback_request_origin
 
-_LONG_TRACK_SCROBBLE_SECONDS = 300.0
-_LONG_TRACK_SCROBBLE_DURATION_SECONDS = 600.0
+# Last.fm counts a listen after half the track or four minutes, whichever comes first.
+_MAX_SCROBBLE_THRESHOLD_SECONDS = 240.0
+# Last.fm never scrobbles a track this short, however much of it was heard.
+_MAX_UNSCROBBLABLE_DURATION_SECONDS = 30.0
 
 
 def _float_payload_value(payload: dict[str, object], key: str) -> float:
@@ -18,26 +21,33 @@ def _float_payload_value(payload: dict[str, object], key: str) -> float:
 
 
 def playback_scrobble_threshold_seconds(duration_seconds: object) -> float:
+    """Seconds heard before a listen may scrobble: 0 for an unknown duration, infinity for a track
+    of 30 s or less."""
     try:
         duration = max(0.0, float(duration_seconds or 0))
     except (TypeError, ValueError):
         return 0.0
     if duration <= 0:
         return 0.0
-    if duration < _LONG_TRACK_SCROBBLE_DURATION_SECONDS:
-        return duration * 0.5
-    return _LONG_TRACK_SCROBBLE_SECONDS
+    if duration <= _MAX_UNSCROBBLABLE_DURATION_SECONDS:
+        return math.inf
+    return min(duration * 0.5, _MAX_SCROBBLE_THRESHOLD_SECONDS)
 
 
-def is_playback_complete_scrobble_eligible(payload: dict[str, object]) -> bool:
+def has_heard_scrobble_threshold(payload: dict[str, object]) -> bool:
+    """Whether an unmeasured listen was heard long enough to scrobble; a listen of unknown duration
+    or of a track of 30 s or less never was."""
     threshold = playback_scrobble_threshold_seconds(payload.get("duration_seconds"))
-    if threshold <= 0:
-        return bool(payload.get("scrobble_eligible"))
     listened = max(
         _float_payload_value(payload, "total_listened_seconds"),
         _float_payload_value(payload, "max_contiguous_seconds"),
     )
-    return listened >= threshold or bool(payload.get("scrobble_eligible"))
+    return 0 < threshold <= listened
+
+
+def is_playback_complete_scrobble_eligible(payload: dict[str, object]) -> bool:
+    threshold = playback_scrobble_threshold_seconds(payload.get("duration_seconds"))
+    return not math.isinf(threshold) and (has_heard_scrobble_threshold(payload) or bool(payload.get("scrobble_eligible")))
 
 
 def _empty_sync_state() -> dict[str, object]:

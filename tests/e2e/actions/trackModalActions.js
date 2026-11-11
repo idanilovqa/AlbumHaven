@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test';
 
 const LASTFM_JOURNEY_PATHS = new Set([
+  '/playback/session/now-playing',
   '/playback/session/scrobble',
   '/playback/session/complete',
 ]);
@@ -16,6 +17,7 @@ function journeyTitles(events) {
 }
 
 export function observeLastfmJourneyRequests(page) {
+  const nowPlaying = [];
   const scrobbles = [];
   const completions = [];
   const inFlightRequests = new Map();
@@ -38,6 +40,8 @@ export function observeLastfmJourneyRequests(page) {
       inFlightRequests.set(request, lifecycle);
       if (pathname === '/playback/session/scrobble') {
         scrobbles.push(event);
+      } else if (pathname === '/playback/session/now-playing') {
+        nowPlaying.push(event);
       } else {
         completions.push(event);
       }
@@ -97,6 +101,7 @@ export function observeLastfmJourneyRequests(page) {
   page.on('requestfailed', onRequestFailed);
 
   return {
+    nowPlaying,
     scrobbles,
     completions,
     async waitForStableExactJourneys({
@@ -597,6 +602,8 @@ export class TrackModalActions {
 
   async playTrackAtAndWaitForConsecutiveLastfmJourneys(index, expectedTitles, options = {}) {
     const titles = [...expectedTitles].map((title) => String(title || '').trim()).filter(Boolean);
+    // Tracks Last.fm never scrobbles still complete; only these titles scrobble.
+    const scrobbleTitles = options.scrobbleTitles ? [...options.scrobbleTitles] : titles;
     if (titles.length < 2) {
       throw new Error('Consecutive Last.fm playback requires at least two expected tracks.');
     }
@@ -620,7 +627,7 @@ export class TrackModalActions {
       await followingTrackButton.click();
       await expect(followingTrackButton).toHaveAttribute('aria-label', 'Play track');
       await journeyObserver.waitForStableExactJourneys({
-        scrobbleTitles: titles,
+        scrobbleTitles,
         completionTitles: titles,
         timeout: options.timeout || 60000,
       });

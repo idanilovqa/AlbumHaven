@@ -22,6 +22,9 @@
     return '';
   };
 
+  const readSessionCsrfCookie = () => readCookie(csrfCookieName);
+  window.readSessionCsrfCookie = readSessionCsrfCookie;
+
   const fetchSameOriginRead = async (input, init) => {
     try {
       return await originalFetch(input, init);
@@ -47,7 +50,7 @@
     }
     if (url.origin !== window.location.origin) return originalFetch(input, init);
     const send = () => {
-      const csrfToken = readCookie(csrfCookieName);
+      const csrfToken = readSessionCsrfCookie();
       if (!csrfToken) return originalFetch(input, init);
       const headers = new Headers(requestInit?.headers || input?.headers || undefined);
       headers.set('X-Album-Haven-CSRF', csrfToken);
@@ -3502,25 +3505,74 @@ function resolveStatusIndicatorTitleText(indicator, data = {}) {
   return nextTitle;
 }
 
+let musicBrainzArtistSyncPromise = null;
+
 function ensureStatusContextMenu() {
-  let menu = document.getElementById('status-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'status-context-menu';
-  menu.className = 'gallery-anchored-menu';
-  menu.hidden = true;
-  menu.setAttribute('role', 'group');
-  menu.setAttribute('aria-label', 'Library actions');
-  menu.innerHTML = [
+  const canRequestMusicBrainzSync = state.status?.allowed_actions?.['catalogue.enrichment.request'] === true;
+  const actions = [
     ['scan-action', 'full-rescan', 'Full Rescan'],
     ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
     ['scan-page', 'go-to-scan-page', 'Open Library Status Page'],
-  ].map(([role, action, label]) => ButtonComponent.renderButton({
-    label, className: 'gallery-menu-action',
-    attributes: { 'data-status-role': role, 'data-status-action': action },
-  })).join('');
-  document.body.appendChild(menu);
+  ];
+  if (canRequestMusicBrainzSync) {
+    actions.splice(2, 0, ['musicbrainz-sync', 'musicbrainz-sync', 'MusicBrainz sync']);
+  }
+  const actionSignature = actions.map(([, action]) => action).join('|');
+  let menu = document.getElementById('status-context-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'status-context-menu';
+    menu.className = 'gallery-anchored-menu';
+    menu.hidden = true;
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', 'Library actions');
+    menu.dataset.statusActionSignature = '';
+    document.body.appendChild(menu);
+  }
+  // An existing unsigned menu already holds the base actions; only a
+  // capability change that adds or removes MusicBrainz sync re-renders it.
+  const renderedSignature = menu.dataset.statusActionSignature ?? 'full-rescan|fetch-covers|go-to-scan-page';
+  if (renderedSignature !== actionSignature) {
+    menu.innerHTML = actions.map(([role, action, label]) => ButtonComponent.renderButton({
+      label, className: 'gallery-menu-action',
+      attributes: { 'data-status-role': role, 'data-status-action': action },
+    })).join('') + (canRequestMusicBrainzSync
+      ? '<span data-status-role="musicbrainz-feedback" role="status" aria-live="polite"></span>'
+      : '');
+    menu.dataset.statusActionSignature = actionSignature;
+  }
   return menu;
+}
+
+function setMusicBrainzSyncFeedback(severity, message) {
+  const menu = ensureStatusContextMenu();
+  const feedback = menu.querySelector('[data-status-role="musicbrainz-feedback"]');
+  if (feedback) feedback.innerHTML = buildSmallAlertHtml({ severity, message });
+}
+
+function triggerMusicBrainzArtistSync() {
+  if (musicBrainzArtistSyncPromise) return musicBrainzArtistSyncPromise;
+  state.status.musicbrainz_sync_in_progress = true;
+  syncStatusContextMenu();
+  musicBrainzArtistSyncPromise = fetch('/api/musicbrainz/artists/sync', { method: 'POST' })
+    .then(async (response) => {
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail || `Request failed (${response.status})`);
+      const count = Math.max(0, Number(payload?.enqueued_count || 0));
+      setMusicBrainzSyncFeedback('info', `MusicBrainz sync queued ${count} ${count === 1 ? 'artist' : 'artists'}.`);
+      if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus({ force: true });
+      return payload;
+    })
+    .catch((error) => {
+      setMusicBrainzSyncFeedback('error', error?.message || 'MusicBrainz sync failed.');
+      return false;
+    })
+    .finally(() => {
+      state.status.musicbrainz_sync_in_progress = false;
+      musicBrainzArtistSyncPromise = null;
+      syncStatusContextMenu();
+    });
+  return musicBrainzArtistSyncPromise;
 }
 
 function resolvePrimaryStatusContextAction(status = {}, options = {}) {
@@ -3564,6 +3616,14 @@ function syncStatusContextMenu() {
   const menu = ensureStatusContextMenu();
   const primaryButton = menu.querySelector('[data-status-role="scan-action"]');
   const fetchOrCancelButton = menu.querySelector('[data-status-role="cover-action"]');
+  const musicBrainzSyncButton = menu.querySelector('[data-status-role="musicbrainz-sync"]');
+  if (musicBrainzSyncButton) {
+    syncStatusContextButtonPresentation(musicBrainzSyncButton, {
+      action: 'musicbrainz-sync',
+      label: 'MusicBrainz sync',
+      disabled: Boolean(state.status?.musicbrainz_sync_in_progress),
+    });
+  }
   if (primaryButton) {
     const scanPageVisible = Boolean(state.ui?.scanPageReturnContext);
     const primaryAction = resolvePrimaryStatusContextAction(state.status || {}, { scanPageVisible });
@@ -3640,6 +3700,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
@@ -4007,7 +4068,7 @@ function buildFloatingNotificationAlertHtml(
   compact = false,
   title = '',
 ) {
-  const severity = normalizeAlertSeverity(variant);
+  const severity = variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
     title: compact
@@ -4390,7 +4451,7 @@ function escapeAlertHtml(value) {
 
 function normalizeAlertSeverity(value) {
   const severity = String(value || '').trim().toLowerCase();
-  return ['error', 'warning', 'info'].includes(severity) ? severity : 'info';
+  return ['error', 'warning', 'info', 'success'].includes(severity) ? severity : 'info';
 }
 
 function buildAlertIconHtml(severity) {
@@ -4398,19 +4459,38 @@ function buildAlertIconHtml(severity) {
   if (normalized === 'info') {
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 10.5v6"></path><path d="M12 7.5h.01"></path></svg>';
   }
+  if (normalized === 'success') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m7 12 3 3 7-7"></path></svg>';
+  }
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
+}
+
+function buildSmallAlertAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.entries(attributes).map(([name, value]) => {
+    const allowed = /^(?:aria-label|data-open-musicbrainz-artist-problem)$/.test(name);
+    if (!allowed || value == null || value === false) return '';
+    return ` ${name}="${escapeAlertHtml(value)}"`;
+  }).join('');
 }
 
 function buildSmallAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
-  const focusable = config.focusable === true ? ' tabindex="0"' : '';
-  // A tone recolors the alert edge for a domain meaning (library source) while keeping the alert shape and behavior.
+  const interactive = config.interactive === true;
+  // A tone recolors the edge for a domain meaning while preserving the shared alert behavior.
   const tone = ['hoard', 'new_arrivals'].includes(String(config.tone || '')) ? String(config.tone) : '';
   const toneClass = `${tone ? ` small-alert--tone-${tone}` : ''}${config.presentation === 'badge' ? ' small-alert--badge' : ''}`;
+  const classes = `small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
+  const attributes = buildSmallAlertAttributes(config.attributes);
   const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
-  return `<span class="small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}><span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span></span>`;
+  const content = `<span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  if (interactive) {
+    return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
+  }
+  const focusable = config.focusable === true ? ' tabindex="0"' : '';
+  return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}>${content}</span>`;
 }
 
 function buildAlertLabelAttributes(attributes = {}) {
@@ -4442,6 +4522,14 @@ function buildAlertLabelHtml(config = {}) {
   return `<button class="${escapeAlertHtml(classes)}" data-alert-label="${severity}" type="button"${attributes} aria-pressed="${pressed ? 'true' : 'false'}"${disabled ? ' aria-disabled="true" disabled' : ''}>${escapeAlertHtml(message)}</button>`;
 }
 
+// Optional determinate progress below the actions: `{ value: 0-100, label }`.
+function buildAlertProgressHtml(progress) {
+  if (!progress) return '';
+  const value = Math.max(0, Math.min(100, Math.round(Number(progress.value) || 0)));
+  const label = escapeAlertHtml(String(progress.label || ''));
+  return `<label class="on-page-alert__progress">${label}<progress max="100" value="${value}" aria-label="${label}"></progress></label>`;
+}
+
 function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
@@ -4451,14 +4539,23 @@ function buildOnPageAlertHtml(config = {}) {
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
-  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}${buildAlertProgressHtml(config.progress)}</div></section>`;
+}
+
+// StatusBadge: short, non-interactive state text. Consumers choose only its label and variant;
+// anything actionable is a Button or FilterPill instead. This file also loads standalone beside
+// the bundle, so it declares functions only.
+function buildStatusBadgeHtml(config = {}) {
+  const variant = config.variant || 'neutral';
+  if (!['neutral', 'info', 'warning'].includes(variant)) throw new TypeError('Unknown StatusBadge variant.');
+  return `<span class="ui-status-badge ui-status-badge--${variant}">${escapeAlertHtml(config.label)}</span>`;
 }
 
 if (typeof window !== 'undefined') {
-  window.AlertComponent = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
+  window.AlertComponent = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml, buildStatusBadgeHtml };
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml };
+  module.exports = { normalizeAlertSeverity, buildSmallAlertHtml, buildAlertLabelHtml, buildOnPageAlertHtml, buildStatusBadgeHtml };
 }
 
 function toggleSmallAlertBadge(event) {
@@ -4932,6 +5029,140 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+// MusicBrainz stores ISO 3166-1 codes; show the full English country name.
+const galleryCountryNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+function galleryCountryName(country) {
+  const value = String(country || '').trim();
+  if (!/^[A-Za-z]{2}$/.test(value) || !galleryCountryNames) return value;
+  try { return galleryCountryNames.of(value.toUpperCase()) || value; } catch { return value; }
+}
+
+// Country and genre pills only; the album count follows the artist name.
+// An artist matched under another name shows its MusicBrainz name. Display only: the
+// tag changes only through an approved tag edit.
+function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
+  const credited = String(artistMusicBrainz?.credited_as || '').trim();
+  const canonical = String(artistMusicBrainz?.canonical_name || '').trim();
+  return credited && canonical ? canonical : String(artist || '');
+}
+
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+  const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
+    ? artistMusicBrainz
+    : {};
+  const country = galleryCountryName(projection.country);
+  const genres = (Array.isArray(projection.genres) ? projection.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const countryHtml = country
+    ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
+    : '';
+  const genreHtml = genres.map((genre) => (
+    genre === 'Genre unavailable'
+      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
+      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+  )).join('');
+  return `${countryHtml}${genreHtml}`;
+}
+
+const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
+const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
+
+function galleryArtistMusicBrainzStatusKey(artist) {
+  return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+// Owner-only repair status from the stored review projection; the shared,
+// cached Gallery payload never carries it.
+function getGalleryArtistMusicBrainzStatus(group = {}) {
+  if (group?.artist_musicbrainz_problem || group?.artist_musicbrainz_state) {
+    return { problem: group.artist_musicbrainz_problem || null, state: group.artist_musicbrainz_state || '' };
+  }
+  return galleryArtistMusicBrainzStatus.byArtist.get(galleryArtistMusicBrainzStatusKey(group?.artist)) || { problem: null, state: '' };
+}
+
+function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
+  if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
+    galleryArtistMusicBrainzStatus.byArtist.clear();
+    galleryArtistMusicBrainzStatus.signature = '[]';
+    return Promise.resolve(false);
+  }
+  if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
+  // Poll quickly only while a first lookup is pending; otherwise back off.
+  const pending = [...galleryArtistMusicBrainzStatus.byArtist.values()].some((value) => value.state === 'pending');
+  const interval = pending ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
+  if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
+    return Promise.resolve(false);
+  }
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload) => {
+      if (!Array.isArray(payload?.artists)) return false;
+      const next = new Map();
+      for (const row of payload.artists) {
+        // Keyed by the canonical Gallery artist, so alias-combined groups match.
+        const key = galleryArtistMusicBrainzStatusKey(row?.gallery_artist || row?.local_artist_name);
+        if (!key || next.get(key)?.problem) continue;
+        if (row.unresolved_reason && row.problem_occurrence_id != null) {
+          next.set(key, { problem: { occurrence_id: String(row.problem_occurrence_id), label: row.unresolved_reason }, state: '' });
+        } else if (row.match_state === 'pending') {
+          next.set(key, { problem: null, state: 'pending' });
+        }
+      }
+      const signature = JSON.stringify([...next]);
+      if (signature === galleryArtistMusicBrainzStatus.signature) return false;
+      const previous = galleryArtistMusicBrainzStatus.byArtist;
+      const changed = galleryArtistMusicBrainzStatus.loadedAt > 0
+        ? new Set([...previous.keys(), ...next.keys()].filter((key) => (
+          JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
+        )))
+        : new Set();
+      galleryArtistMusicBrainzStatus.signature = signature;
+      galleryArtistMusicBrainzStatus.byArtist = next;
+      if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
+      // A finished lookup, re-check or manual match changes the shared Gallery
+      // projection (links, pills). Reload the view when it shows such an artist,
+      // and only then: a library-wide sync changes many artists every poll.
+      const shown = typeof getGalleryMainGroups === 'function' ? getGalleryMainGroups() : [];
+      if (changed.size && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+          && shown.some((group) => changed.has(galleryArtistMusicBrainzStatusKey(group?.artist)))) {
+        void refreshCurrentViewAfterBackgroundCompletion().catch(() => {});
+      }
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      galleryArtistMusicBrainzStatus.loadedAt = Date.now();
+      galleryArtistMusicBrainzStatus.promise = null;
+    });
+  return galleryArtistMusicBrainzStatus.promise;
+}
+
+function buildGalleryArtistStatusHtml(config = {}) {
+  const problem = config.artistMusicBrainzProblem;
+  if (problem?.occurrence_id && problem?.label) {
+    return buildSmallAlertHtml({
+      severity: 'warning',
+      message: problem.label,
+      interactive: true,
+      attributes: {
+        'data-open-musicbrainz-artist-problem': problem.occurrence_id,
+        'aria-label': `Open ${problem.label} for ${config.artist || 'artist'}`,
+      },
+    });
+  }
+  if (String(config.artistMusicBrainzState || '').trim().toLowerCase() === 'pending') {
+    return '<span class="artist-musicbrainz-pending" role="status" aria-label="Metadata pending">Metadata pending<span aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span></span>';
+  }
+  return '';
+}
+
 const LIBRARY_SOURCE_MARKERS = Object.freeze({
   hoard: Object.freeze({
     label: 'Hoard',
@@ -5016,12 +5247,15 @@ function buildGalleryBarHtml(config = {}) {
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
-  const title = isArtist ? config.artist : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
+  const title = isArtist
+    ? galleryArtistDisplayName(config.artist, config.artist_musicbrainz)
+    : (isFamily ? `${config.primaryArtist} family` : 'Gallery');
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
+  const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -5042,20 +5276,14 @@ function buildGalleryEmptySelectionHtml(message = 'Select at least one artist in
   return `<div class="gallery-empty-selection" data-gallery-empty-selection role="status">${escapeHtml(message)}</div>`;
 }
 
-function buildArtistInfoOverlayHtml(config = {}) {
-  const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
-  const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
-  const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
-  return `<aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Information about ${escapeHtml(config.artist || '')}" hidden><header>${image}<div><span>Artist</span><h2>${escapeHtml(config.artist || '')}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p>${escapeHtml(config.summary || '')}</p><div class="artist-info-overlay__links">${readMore}${wikipedia}</div></div></aside>`;
-}
-
 function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
+  const status = buildGalleryArtistStatusHtml(config);
   const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -5064,7 +5292,8 @@ function buildGalleryRatingHtml(config = {}) {
   const points = Array.from({ length: maximum }, (_unused, index) => (index < value
     ? '<span class="star filled">&#9733;</span>'
     : '<span class="star">&#9734;</span>')).join('');
-  return `<div class="rating-row" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const className = ['rating-row', config.className].filter(Boolean).join(' ');
+  return `<div class="${escapeHtml(className)}" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {
@@ -5286,7 +5515,7 @@ function resolveGalleryArtistInfo(group = {}, artist = '') {
     summary: providedSummary || `${artistName} has ${albumCount} album${albumCount === 1 ? '' : 's'} in this Gallery view.`,
     imageUrl,
     wikipediaUrl,
-    canReadMore: providedSummary.length > 280,
+    isLongBiography: providedSummary.length > 280,
   };
 }
 
@@ -5299,7 +5528,7 @@ function reconcileGalleryMain(config = {}) {
 function resolveGalleryBarContext(config = {}) {
   const summaryContext = config.primaryArtist
     ? (config.hasFamily === false
-      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount }
+      ? { kind: 'single-artist', artist: config.primaryArtist, albumCount: config.albumCount, artist_musicbrainz: config.artist_musicbrainz }
       : { kind: 'family', primaryArtist: config.primaryArtist, artistCount: config.artistCount, albumCount: config.albumCount })
     : { kind: 'gallery', artistCount: config.artistCount, albumCount: config.albumCount };
   if (summaryContext.kind === 'single-artist') return summaryContext;
@@ -5309,7 +5538,7 @@ function resolveGalleryBarContext(config = {}) {
   const threshold = Number(config.scrollTop || 0);
   const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
-    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
+    ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount, artist_musicbrainz: current.artist_musicbrainz }
     : summaryContext;
 }
 
@@ -5445,6 +5674,24 @@ function normalizeAlbumDetailsLayout(value) {
   return ['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(layout)
     ? layout
     : 'classic_bar';
+}
+
+// The MusicBrainz artist an album certainly belongs to replaces a tag that names someone
+// else. Display only: the tag itself changes only through an approved tag edit.
+function albumDisplayArtist(album) {
+  const tagged = album?.album_artist || album?.artist || '';
+  const identity = album?.musicbrainz_artist;
+  return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
+}
+
+function albumTaggedArtistNote(album) {
+  const tagged = album?.album_artist || album?.artist || '';
+  if (albumDisplayArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
+  // A name shared by several MusicBrainz artists (Amarok): say which one this album is.
+  const identity = album?.musicbrainz_artist;
+  return identity?.split && identity.canonical_name
+    ? `MusicBrainz: ${[identity.canonical_name, identity.disambiguation ? `(${identity.disambiguation})` : ''].filter(Boolean).join(' ')}`
+    : '';
 }
 
 function buildAlbumDetailsHeaderHtml(config = {}) {
@@ -5666,7 +5913,7 @@ function syncMobileAlbumComposition(album) {
     identity.hidden = !inline;
     if (inline) {
       const centered = layout === 'editorial_canvas';
-      const artist = album.album_artist || album.artist || '';
+      const artist = albumDisplayArtist(album);
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
         title: album.display_name || album.name || 'Album',
@@ -6049,6 +6296,9 @@ const state = {
       blockedReason: '',
       mirroredTrack: null,
       activeClaim: null,
+      requestVersion: 0,
+      renewing: false,
+      expiryTimer: 0,
       channel: null,
       heartbeatTimer: 0,
       initialized: false,
@@ -7249,6 +7499,7 @@ function getGalleryMainContextSections() {
   return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
     artist: galleryMainGroupArtist(section.group),
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+    artist_musicbrainz: section.group?.artist_musicbrainz || null,
     top: Number(section.top || 0),
     labelBottom: labelBottoms.get(galleryMainGroupArtist(section.group))
       ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
@@ -7664,15 +7915,21 @@ function updateGalleryMainChrome() {
     albumCount: summaryTotals.albumCount,
     groups: sections,
     hasFamily,
+    artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
+  const metadata = bar.querySelector('[data-gallery-context-metadata]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
   if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
   summary.hidden = false;
+  if (metadata) {
+    metadata.hidden = true;
+    metadata.innerHTML = '';
+  }
   if (inlineDivider) inlineDivider.hidden = true;
   if (inlineTotal) {
     inlineTotal.hidden = true;
@@ -7689,8 +7946,12 @@ function updateGalleryMainChrome() {
       : `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
-    name.textContent = context.artist;
+    name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
     summary.textContent = galleryMainPlural(context.albumCount, 'album');
+    if (metadata) {
+      metadata.hidden = false;
+      metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+    }
     if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
@@ -7764,6 +8025,35 @@ function transitionGalleryMain(action) {
   }
 }
 
+// Only an accepted MusicBrainz match carries a projection, so unresolved artists show no links.
+const GALLERY_ARTIST_FULL_PAGE_LABEL = 'Open full page';
+
+function buildGalleryArtistExternalLinksHtml(artistMusicBrainz, artist) {
+  if (!artistMusicBrainz || typeof artistMusicBrainz !== 'object') return '';
+  const links = ['musicbrainz', 'discogs'].map((service) => ButtonComponent.renderExternalServiceLink({
+    service,
+    href: service === 'musicbrainz' ? artistMusicBrainz.musicbrainz_url : artistMusicBrainz.discogs_url,
+    subject: artist,
+  })).join('');
+  return links ? `<div class="ui-external-link-list">${links}</div>` : '';
+}
+
+// A local name whose albums belong to several MusicBrainz artists (Amarok) lists each
+// with its albums and its own MusicBrainz link.
+function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
+  const identities = Array.isArray(artistMusicBrainz?.identities) ? artistMusicBrainz.identities : [];
+  if (!identities.length) return '';
+  const items = identities.map((identity) => {
+    const name = [identity.canonical_name, identity.disambiguation ? `(${identity.disambiguation})` : '']
+      .filter(Boolean).join(' ');
+    const link = ButtonComponent.renderExternalServiceLink({
+      service: 'musicbrainz', href: identity.musicbrainz_url, subject: name,
+    });
+    return `<li class="artist-info-overlay__identity"><span>${escapeHtml(name)} · ${escapeHtml(galleryMainPlural(identity.album_count, 'album'))}</span>${link}</li>`;
+  }).join('');
+  return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">Your albums belong to ${escapeHtml(galleryMainPlural(identities.length, 'MusicBrainz artist'))}:</p><ul>${items}</ul></div>`;
+}
+
 function openGalleryArtistInfo(anchor) {
   // Owner (11-08): the header shows the "i" during a search, so it opens there too.
   if (!anchor) return;
@@ -7771,12 +8061,24 @@ function openGalleryArtistInfo(anchor) {
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return;
-  const { summary, imageUrl, wikipediaUrl, canReadMore } = resolveGalleryArtistInfo(group, artist);
-  overlay.classList.remove('is-expanded');
+  const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
+  // The text always ends with the full-page control; it stays disabled until artist pages exist.
+  const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
+  const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
+  // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
+  // title, and the tag is named beside the links (display only).
+  const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);
+  const credit = displayName !== artist
+    ? `<p class="artist-info-overlay__source" data-artist-info-credit>Tagged as ${escapeHtml(artist)} in your files.</p>`
+    : '';
+  const identities = buildGalleryArtistIdentitiesHtml(group.artist_musicbrainz);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(artist)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary>${escapeHtml(summary)}</p><div class="artist-info-overlay__links">${canReadMore ? '<button type="button" data-artist-info-read-more aria-expanded="false">Read more</button>' : ''}<button type="button" data-artist-info-full-page aria-disabled="true" disabled title="Artist pages are not available yet">Full page</button></div>${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(displayName)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${identities}${credit}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
   openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
+  // A long biography that still fits in five lines needs no clamp or fade.
+  const summaryElement = overlay.querySelector('[data-artist-info-long]');
+  if (summaryElement && summaryElement.scrollHeight <= summaryElement.clientHeight + 1) summaryElement.removeAttribute('data-artist-info-long');
 }
 
 // A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
@@ -7800,19 +8102,6 @@ function handleSplitAlbumsSwitchKeydown(event) {
 
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
-  const readMore = event.target.closest?.('[data-artist-info-read-more]');
-  if (readMore) {
-    event.preventDefault();
-    const expanded = readMore.getAttribute('aria-expanded') === 'true';
-    readMore.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-    readMore.textContent = expanded ? 'Read more' : 'Read less';
-    const panel = readMore.closest('.artist-info-overlay');
-    panel?.classList.toggle('is-expanded', !expanded);
-    const active = galleryMainSurfaceController?.current?.();
-    if (active?.surface === panel) positionGalleryAnchoredSurface(panel, active.anchor, 'left');
-    readMore.closest('.artist-info-overlay')?.querySelector('[data-artist-info-summary]')?.classList.toggle('is-expanded', !expanded);
-    return true;
-  }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
@@ -8277,6 +8566,104 @@ function ensureStreamingDecoders() {
 
 // END js/runtime/player-streaming-decoders.js
 
+// BEGIN js/runtime/player-track-cache.js
+
+// Recently played tracks kept in this browser, as Android's DiskTrackCache keeps them: a whole
+// track exactly as the server streamed it encoded from its first frame (the file's own bytes, the
+// server's sample map and its seek table), so it plays and seeks again with no server stream.
+// Entries are named by a digest of their key, never by a path; the browser's own storage
+// quota bounds them, and the oldest-used go first.
+const TRACK_CACHE_NAME = 'album-haven-tracks-v1';
+const TRACK_CACHE_FORMAT = 1;
+// The share of this origin's quota that kept tracks may use.
+const TRACK_CACHE_QUOTA_SHARE = 0.8;
+
+function trackCacheAvailable() {
+  return typeof caches !== 'undefined' && typeof crypto !== 'undefined' && Boolean(crypto.subtle);
+}
+
+// A re-encoded file changes its duration, and with it the key it is kept under.
+function streamingTrackCacheKey(track, quality) {
+  return [String(track?.path || ''), Number(track?.durationSeconds) || 0, quality || 'original'].join('\n');
+}
+
+async function trackCacheUrl(key) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  const hex = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return `/__album-haven-track-cache/${hex}`;
+}
+
+function encodeCachedTrack(entry) {
+  const meta = new TextEncoder().encode(JSON.stringify({
+    format: TRACK_CACHE_FORMAT,
+    codec: entry.codec,
+    sampleRate: entry.sampleRate,
+    skipFrames: entry.skipFrames,
+    totalFrames: entry.totalFrames,
+    authoritativeTotalFrames: entry.authoritativeTotalFrames,
+    table: entry.table || null,
+  }));
+  const body = new Uint8Array(4 + meta.length + entry.bytes.length);
+  new DataView(body.buffer).setUint32(0, meta.length, false);
+  body.set(meta, 4);
+  body.set(entry.bytes, 4 + meta.length);
+  return body;
+}
+
+function decodeCachedTrack(buffer) {
+  if (buffer.byteLength < 4) return null;
+  const metaLength = new DataView(buffer).getUint32(0, false);
+  if (4 + metaLength > buffer.byteLength) return null;
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, metaLength)));
+  const counts = [meta.sampleRate, meta.skipFrames, meta.totalFrames, meta.authoritativeTotalFrames];
+  if (meta.format !== TRACK_CACHE_FORMAT || typeof meta.codec !== 'string'
+      || !counts.every(value => Number.isSafeInteger(value) && value >= 0)) return null;
+  return { ...meta, bytes: new Uint8Array(buffer, 4 + metaLength) };
+}
+
+async function loadStreamingCachedTrack(key) {
+  if (!trackCacheAvailable()) return null;
+  try {
+    const cache = await caches.open(TRACK_CACHE_NAME);
+    const url = await trackCacheUrl(key);
+    const response = await cache.match(url);
+    if (!response) return null;
+    const buffer = await response.arrayBuffer();
+    const entry = decodeCachedTrack(buffer);
+    if (!entry) {
+      void cache.delete(url);
+      return null;
+    }
+    // Written again, it is the most recently used.
+    void cache.put(url, new Response(buffer)).catch(() => {});
+    return entry;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function evictStreamingCachedTracks(cache) {
+  if (typeof navigator === 'undefined' || !navigator.storage?.estimate) return;
+  const keys = await cache.keys();
+  for (const request of keys) {
+    const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+    if (!quota || usage <= quota * TRACK_CACHE_QUOTA_SHARE) return;
+    await cache.delete(request);
+  }
+}
+
+// Fire and forget: a track that cannot be kept streams again next time.
+function keepStreamingCachedTrack(key, entry) {
+  if (!trackCacheAvailable()) return;
+  void (async () => {
+    const cache = await caches.open(TRACK_CACHE_NAME);
+    await cache.put(await trackCacheUrl(key), new Response(encodeCachedTrack(entry)));
+    await evictStreamingCachedTracks(cache);
+  })().catch(() => {});
+}
+
+// END js/runtime/player-track-cache.js
+
 // BEGIN js/runtime/player-streaming-engine.js
 
 const STREAMING_RUNTIME_ASSET_VERSION = encodeURIComponent(
@@ -8304,6 +8691,12 @@ const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
 const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+// The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
+const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
+const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
+const STREAMING_KEEPALIVE_INTERVAL_MS = 25_000;
+// Kept tracks loaded ahead of their open: the next start and the queued next track.
+const STREAMING_PRIMED_TRACKS = 3;
 const STREAMING_RECENT_STALL_MS = 60_000;
 const STREAMING_REQUIRED_HEADROOM = 1.5;
 const STREAMING_TRANSFER_WINDOW_BYTES = 32 * 1024 * 1024;
@@ -8381,7 +8774,53 @@ function streamingRoleForId(streamId) {
   const engine = streamingEngineState();
   if (engine.roles.current?.streamId === streamId) return engine.roles.current;
   if (engine.roles.continuity?.streamId === streamId) return engine.roles.continuity;
+  // A role seeking inside received bytes reads the server stream it was cut from.
+  if (engine.roles.current?.encoded?.wire.streamId === streamId) return engine.roles.current;
   return null;
+}
+
+// Makes `continuity` the current stream. A local role (a seek inside received bytes, or a kept
+// track) has no server stream to promote: it is promoted here, and a server stream it replaces
+// is closed. The server's own current stream stays open when the local role still reads it.
+function promoteStreamingContinuityStream(continuity, outgoing, generation) {
+  if (!continuity.local) {
+    return sendStreamingControl({
+      type: 'promote',
+      generation,
+      streamId: continuity.streamId,
+      fromRole: 'continuity',
+      toRole: 'current',
+    });
+  }
+  const left = outgoing?.encoded?.wire;
+  if (outgoing && !outgoing.cachedTrack && !left?.serverless && left !== continuity.encoded?.wire) {
+    sendStreamingControl({
+      type: 'close',
+      generation: outgoing.generation,
+      streamId: left?.streamId ?? outgoing.streamId,
+      reason: 'replaced-by-cache',
+    });
+  }
+  queueMicrotask(() => handleStreamingControl({
+    type: 'promoted', generation, streamId: continuity.streamId, role: 'current',
+  }));
+  return true;
+}
+
+// Closes the server stream a role reads. A local seek role that is not yet current reads the
+// current role's stream, which stays open; it only stops reading it.
+function closeStreamingRoleStream(roleState, reason) {
+  const wire = roleState.encoded?.wire;
+  if (roleState.cachedTrack || wire?.serverless || (roleState.local && roleState.role === 'continuity')) {
+    wire?.followers.delete(roleState.encoded);
+    return true;
+  }
+  return sendStreamingControl({
+    type: 'close',
+    generation: roleState.generation,
+    streamId: wire?.streamId ?? roleState.streamId,
+    reason,
+  });
 }
 
 function streamingWireRoleAccepted(roleState, wireRole) {
@@ -8613,7 +9052,7 @@ function setStreamingError(source, event) {
   engine.diagnostics.lastError = { source, message: String(detail) };
 }
 
-function failStreamingEngine(source, event, reason) {
+function failBrowserStreaming(source, event, reason) {
   setStreamingError(source, event);
   const cleanup = beginStreamingCleanup(reason, { preserveError: true });
   void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
@@ -8755,13 +9194,7 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   const engine = streamingEngineState();
   const continuity = engine.roles.continuity;
   if (!continuity) return true;
-  const accepted = sendStreamingControl({
-    type: 'close',
-    generation: continuity.generation,
-    streamId: continuity.streamId,
-    reason,
-  });
-  if (!accepted) return false;
+  if (!closeStreamingRoleStream(continuity, reason)) return false;
   const options = continuity.continuityOptions;
   if (releaseWorklet && engine.node) {
     if (options?.kind === 'queued-next') {
@@ -8823,6 +9256,18 @@ function sendStreamingControl(message) {
     'control-send-error',
   );
   return false;
+}
+
+// A quiet socket (a long pause, a full buffer) keeps its proxies and NAT entries, as Android's
+// ping does; the server answers nothing.
+function keepStreamingSocketAlive(socket) {
+  const timer = setInterval(() => {
+    if (streamingEngineState().socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      clearInterval(timer);
+      return;
+    }
+    sendStreamingControl({ type: 'keepalive' });
+  }, STREAMING_KEEPALIVE_INTERVAL_MS);
 }
 
 function flushStreamingControls() {
@@ -9033,6 +9478,16 @@ function handleStreamingControl(message) {
     handleStreamingRateMismatch(roleState, message);
     return;
   }
+  if (message.type === 'seek-table') {
+    const table = parseStreamingSeekTable(message);
+    if (!table) {
+      failStreamingEngine('socket', { message: 'Invalid seek table' }, 'control-protocol-error');
+      return;
+    }
+    if (roleState.encoded?.wire.streamId === message.streamId) roleState.encoded.wire.table = table;
+    else roleState.pendingSeekTable = table;
+    return;
+  }
   if (message.type === 'metadata') {
     if (!validateStreamingMetadata(message, roleState)) {
       failStreamingEngine(
@@ -9108,8 +9563,14 @@ function handleStreamingControl(message) {
     }
     if (roleState.eosReceived) return;
     if (roleState.encoded && !roleState.encoded.delivered) {
-      roleState.encoded.eos = message;
-      void pumpStreamingEncodedRole(roleState);
+      const { wire } = roleState.encoded;
+      wire.eos = message;
+      keepStreamingWire(wire, message);
+      for (const follower of [...wire.followers]) {
+        if (follower.delivered || !streamingRoleIsLive(follower.roleState)) continue;
+        follower.eos = message;
+        void pumpStreamingEncodedRole(follower.roleState);
+      }
       return;
     }
     roleState.eosReceived = true;
@@ -9246,6 +9707,41 @@ function settlePendingStreamingCutover(error = null, roleState = null) {
   else resolve?.(roleState);
 }
 
+function bufferedSeekKey({ generation, requestId, streamId, currentStreamId, timelineFrame, startFrame }) {
+  return [
+    Number(generation),
+    Number(requestId),
+    Number(streamId ?? currentStreamId),
+    Number(timelineFrame ?? startFrame),
+  ].join(':');
+}
+
+function findBufferedSeekForMessage(message) {
+  const engine = streamingEngineState();
+  const pending = engine.pendingBufferedSeek;
+  if (pending && bufferedSeekKey(pending) === bufferedSeekKey(message)) {
+    return { pending, active: true };
+  }
+  const superseded = engine.supersededBufferedSeek;
+  return superseded && bufferedSeekKey(superseded) === bufferedSeekKey(message)
+    ? { pending: superseded, active: false }
+    : null;
+}
+
+function settlePendingBufferedSeek(outcome, { retainForAcknowledgement = false } = {}) {
+  const engine = streamingEngineState();
+  const pending = engine.pendingBufferedSeek;
+  if (!pending) return false;
+  engine.pendingBufferedSeek = null;
+  pending.resolve(outcome);
+  if (retainForAcknowledgement) engine.supersededBufferedSeek = pending;
+  return true;
+}
+
+function discardSupersededBufferedSeek() {
+  streamingEngineState().supersededBufferedSeek = null;
+}
+
 function acceptStreamingPcm(roleState, frameCount, pcm) {
   const engine = streamingEngineState();
   const role = roleState.role;
@@ -9291,21 +9787,101 @@ function sweepStreamingEncodedDecoders() {
   }
 }
 
-function createStreamingEncodedRole(roleState, message) {
+// One server stream's bytes as they arrive, kept so a seek inside them decodes here by the
+// stream's seek table (playback_seek_table.lookup, pinned by tests/fixtures/playback-seek-table-v1.json).
+function createStreamingWire(roleState, message) {
+  return {
+    streamId: roleState.streamId,
+    codec: message.codec,
+    track: roleState.track,
+    quality: roleState.quality,
+    streamStart: roleState.startFrame,
+    initialSkip: message.skipFrames,
+    initialTotal: message.totalFrames,
+    nextSequence: 0,
+    creditedBytes: Number(message.initialCreditBytes) || 0,
+    lastArrivalMs: 0,
+    bytes: new Uint8Array(STREAMING_KEPT_INITIAL_BYTES),
+    size: 0,
+    table: roleState.pendingSeekTable || null,
+    eos: null,
+    followers: new Set(),
+  };
+}
+
+function keepStreamingWireBytes(wire, chunk) {
+  if (!wire.bytes) return;
+  if (wire.size + chunk.length > STREAMING_KEPT_MAX_BYTES) {
+    wire.bytes = null;
+    return;
+  }
+  if (wire.size + chunk.length > wire.bytes.length) {
+    let capacity = wire.bytes.length;
+    while (capacity < wire.size + chunk.length) capacity *= 2;
+    const grown = new Uint8Array(capacity);
+    grown.set(wire.bytes.subarray(0, wire.size));
+    wire.bytes = grown;
+  }
+  wire.bytes.set(chunk, wire.size);
+  wire.size += chunk.length;
+}
+
+function upperBoundStreamingSample(samples, value) {
+  let low = 0;
+  let high = samples.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (samples[middle] <= value) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+// `playback_seek_table.lookup`: where `target` decodes from in the bytes received so far.
+function lookupStreamingSeekTable(table, { initialSkip, initialTotal, streamStart, target, receivedBytes, ended }) {
+  const offsetInStream = target - streamStart;
+  if (offsetInStream < 0 || offsetInStream >= initialTotal) return null;
+  const kept = initialSkip + offsetInStream;
+  const entry = Math.max(0, upperBoundStreamingSample(table.samples, Math.max(0, kept - table.prerollFrames)) - 1);
+  const after = upperBoundStreamingSample(table.samples, kept);
+  if (after >= table.samples.length || (table.offsets[after] > receivedBytes && !ended)) return null;
+  return {
+    prefixBytes: table.prefixBytes,
+    byteOffset: table.offsets[entry],
+    skipFrames: kept - table.samples[entry],
+    totalFrames: initialTotal - offsetInStream,
+  };
+}
+
+function parseStreamingSeekTable(message) {
+  const { prefixBytes, prerollFrames, offsets, samples } = message;
+  const integers = values => Array.isArray(values) && values.length > 0
+    && values.every((value, index) => Number.isSafeInteger(value) && value >= 0
+      && (index === 0 || value >= values[index - 1]));
+  if (!Number.isSafeInteger(prefixBytes) || prefixBytes < 0
+      || !Number.isSafeInteger(prerollFrames) || prerollFrames < 0
+      || !integers(offsets) || !integers(samples) || offsets.length !== samples.length) return null;
+  return { prefixBytes, prerollFrames, offsets, samples };
+}
+
+function createStreamingEncodedRole(
+  roleState,
+  message,
+  wire = roleState.cachedWire || createStreamingWire(roleState, message),
+) {
   const engine = streamingEngineState();
   const decoder = createStreamingDecoder(message.codec);
   const encoded = {
     codec: message.codec,
     decoder,
     ready: false,
+    roleState,
+    wire,
     skipFrames: message.skipFrames,
     remainingFrames: message.totalFrames,
     deliveredFrames: 0,
     queue: [],
     queuedBytes: 0,
-    creditedBytes: Number(message.initialCreditBytes) || 0,
-    nextWireSequence: 0,
-    lastArrivalMs: 0,
     localCreditFrames: 0,
     decodedPcm: [],
     decodedFrames: 0,
@@ -9316,6 +9892,7 @@ function createStreamingEncodedRole(roleState, message) {
   };
   engine.encodedStreams ??= new Set();
   engine.encodedStreams.add(encoded);
+  wire.followers.add(encoded);
   roleState.encoded = encoded;
   sweepStreamingEncodedDecoders();
   decoder.ready.then(() => {
@@ -9345,17 +9922,19 @@ function refillStreamingEncodedBytes(roleState) {
   if (encoded.eos || roleState.closed) return;
   // The stream being left must not compete with the audio the listener just asked for.
   if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
+  const { wire } = encoded;
+  if (wire.eos) return;
   const missingBytes = streamingEncodedBufferBytes(roleState)
-    - encoded.queuedBytes - encoded.creditedBytes;
+    - encoded.queuedBytes - wire.creditedBytes;
   if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
-      || encoded.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
+      || wire.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
   const frames = STREAMING_ENCODED_CREDIT_BYTES;
   if (sendStreamingControl({
     type: 'credit',
     generation: roleState.generation,
-    streamId: roleState.streamId,
+    streamId: wire.streamId,
     frames,
-  })) encoded.creditedBytes += frames;
+  })) wire.creditedBytes += frames;
 }
 
 function appendStreamingDecodedAudio(encoded, decoded) {
@@ -9438,6 +10017,8 @@ function finishStreamingEncodedRole(roleState) {
     - encoded.remainingFrames;
   const eos = {
     ...encoded.eos,
+    streamId: roleState.streamId,
+    role: roleState.role,
     emittedFrames: encoded.deliveredFrames,
     authoritativeTotalFrames: startFrame + encoded.deliveredFrames,
   };
@@ -9485,32 +10066,40 @@ function handleStreamingEncodedBytes(view, buffer, failProtocol) {
     return;
   }
   const roleState = streamingRoleForId(streamId);
-  const encoded = roleState?.encoded;
-  if (!encoded || generation !== engine.generation || generation !== roleState.generation
-      || sequence !== encoded.nextWireSequence) {
+  const wire = roleState?.encoded?.wire;
+  if (!wire || wire.streamId !== streamId || generation !== engine.generation
+      || generation !== roleState.generation || sequence !== wire.nextSequence) {
     engine.diagnostics.staleMessages += 1;
     return;
   }
-  if (byteCount > encoded.creditedBytes) {
+  if (byteCount > wire.creditedBytes) {
     failProtocol('frame exceeds granted byte credit');
     return;
   }
   const now = performance.now();
-  if (encoded.lastArrivalMs) {
+  if (wire.lastArrivalMs) {
     engine.transferBytes = (Number(engine.transferBytes) || 0) + byteCount;
-    engine.transferMs = (Number(engine.transferMs) || 0) + (now - encoded.lastArrivalMs);
+    engine.transferMs = (Number(engine.transferMs) || 0) + (now - wire.lastArrivalMs);
     if (engine.transferBytes > STREAMING_TRANSFER_WINDOW_BYTES) {
       engine.transferBytes /= 2;
       engine.transferMs /= 2;
     }
   }
-  encoded.nextWireSequence += 1;
-  encoded.creditedBytes -= byteCount;
-  encoded.lastArrivalMs = encoded.creditedBytes > 0 ? now : 0;
-  encoded.queue.push(new Uint8Array(buffer, 24, byteCount));
-  encoded.queuedBytes += byteCount;
-  refillStreamingEncodedBytes(roleState);
-  void pumpStreamingEncodedRole(roleState);
+  wire.nextSequence += 1;
+  wire.creditedBytes -= byteCount;
+  wire.lastArrivalMs = wire.creditedBytes > 0 ? now : 0;
+  const chunk = new Uint8Array(buffer, 24, byteCount);
+  keepStreamingWireBytes(wire, chunk);
+  for (const follower of [...wire.followers]) {
+    if (!streamingRoleIsLive(follower.roleState)) {
+      wire.followers.delete(follower);
+      continue;
+    }
+    follower.queue.push(chunk);
+    follower.queuedBytes += byteCount;
+    refillStreamingEncodedBytes(follower.roleState);
+    void pumpStreamingEncodedRole(follower.roleState);
+  }
 }
 
 function handleStreamingPcm(buffer) {
@@ -9617,6 +10206,78 @@ function handleStreamingWorkletMessage(message) {
     );
     return;
   }
+  if (message.type === 'buffered-seek-reserved') {
+    const match = findBufferedSeekForMessage(message);
+    if (!match) {
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    match.pending.reserved = true;
+    return;
+  }
+  if (message.type === 'buffered-seek-rejected') {
+    const match = findBufferedSeekForMessage(message);
+    if (!match) {
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    if (match.active) settlePendingBufferedSeek('rejected');
+    else engine.supersededBufferedSeek = null;
+    return;
+  }
+  if (message.type === 'buffered-seek-boundary') {
+    const match = findBufferedSeekForMessage(message);
+    const pending = match?.pending || null;
+    const current = engine.roles.current;
+    if (!pending || !pending.reserved || !current
+        || pending.generation !== message.generation
+        || pending.requestId !== message.requestId
+        || pending.currentStreamId !== message.streamId
+        || pending.startFrame !== message.timelineFrame
+        || current.streamId !== message.streamId
+        || !Number.isInteger(message.bufferedFrames) || message.bufferedFrames < 0
+        || !Number.isInteger(message.skippedFrames) || message.skippedFrames < 0) {
+      if (match && !match.active) engine.supersededBufferedSeek = null;
+      engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    engine.diagnostics.bufferedFrames.current = Math.min(
+      message.bufferedFrames,
+      streamingRoleCapacityFrames(current),
+    );
+    if (match.active) {
+      engine.diagnostics.seekCapture = message.capture || null;
+      engine.diagnostics.seekSilentFrames = Number(message.silentFrames) || 0;
+      const committedAtMs = performance.now();
+      engine.diagnostics.seekCommittedAtMs = committedAtMs;
+      engine.diagnostics.firstFrameAtMs = Math.max(
+        committedAtMs,
+        (Number(engine.diagnostics.firstFrameAtMs) || 0) + 0.001,
+      );
+    }
+    engine.positionFacadeAtMs = 0;
+    Object.assign(engine.snapshot, {
+      currentTime: message.timelineFrame / engine.sampleRate,
+      requestedStartFrame: message.timelineFrame,
+      renderedFrame: Math.max(0, message.timelineFrame - (Number(current.startFrame) || 0)),
+      ended: false,
+      readyState: 4,
+    });
+    if (!current.eosReceived) {
+      const targetFrames = Number(current.targetBufferFrames)
+        || streamingRoleCommittedCapacityFrames(current);
+      refillStreamingRoleCredit(current, Math.max(
+        0,
+        targetFrames
+          - engine.diagnostics.bufferedFrames.current
+          - engine.diagnostics.inFlightFrames.current,
+      ));
+    }
+    publishStreamingDiagnostics();
+    if (match.active) settlePendingBufferedSeek('committed');
+    else engine.supersededBufferedSeek = null;
+    return;
+  }
   if (message.type === 'seek-boundary') {
     const pendingSeek = engine.pendingSeek;
     const current = engine.roles.current;
@@ -9682,13 +10343,7 @@ function handleStreamingWorkletMessage(message) {
       active: Boolean(engine.pendingContinuityTrack),
     });
     refreshStreamingActiveRoles();
-    const promoted = sendStreamingControl({
-      type: 'promote',
-      generation: message.generation,
-      streamId: continuity.streamId,
-      fromRole: 'continuity',
-      toRole: 'current',
-    });
+    const promoted = promoteStreamingContinuityStream(continuity, current, message.generation);
     if (promoted && !continuity.eosReceived) {
       grantStreamingCredit(continuity, streamingRoleCapacityFrames(continuity));
     }
@@ -9802,13 +10457,7 @@ function handleStreamingWorkletMessage(message) {
         engine.pendingContinuityOptions = { ...promotedLoop };
       }
     }
-    sendStreamingControl({
-      type: 'promote',
-      generation: message.generation,
-      streamId: continuity.streamId,
-      fromRole: 'continuity',
-      toRole: 'current',
-    });
+    promoteStreamingContinuityStream(continuity, current, message.generation);
     if (typeof handleStreamingPlaybackBoundary === 'function') {
       try {
         observeStreamingFacadeCallback(handleStreamingPlaybackBoundary({
@@ -9899,7 +10548,8 @@ function handleStreamingWorkletMessage(message) {
           trackPath: String(current.track?.path || ''),
           timelineFrame,
           currentTime,
-          sampleRateChangeTrackPath: engine.sampleRateChangeNext?.generation === message.generation
+          // A successor at another sample rate cannot continue gaplessly; it starts anew.
+          startNextTrackPath: engine.sampleRateChangeNext?.generation === message.generation
             ? engine.sampleRateChangeNext.path
             : '',
         }), 'ended-facade-error');
@@ -10166,7 +10816,10 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
       socket.binaryType = 'arraybuffer';
-      socket.onopen = flushStreamingControls;
+      socket.onopen = () => {
+        flushStreamingControls();
+        keepStreamingSocketAlive(socket);
+      };
       socket.onerror = (event) => {
         if (engine.socket !== socket) return;
         const detail = event?.error?.message || event?.message || 'Playback socket error';
@@ -10283,6 +10936,15 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
   engine.diagnostics.inFlightFrames[role] = 0;
   refreshStreamingActiveRoles();
   roleState.openedAtMs = performance.now();
+  const cached = takePrimedStreamingTrack(roleState);
+  if (cached) {
+    // A kept track plays with no server stream; its metadata follows as the server's would.
+    roleState.local = true;
+    roleState.cachedTrack = cached;
+    engine.diagnostics.cachedStarts = (Number(engine.diagnostics.cachedStarts) || 0) + 1;
+    queueMicrotask(() => deliverCachedStreamingRole(roleState));
+    return roleState;
+  }
   const accepted = sendStreamingControl({
     type: 'open',
     generation: roleState.generation,
@@ -10292,7 +10954,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     startFrame,
     sampleRate: engine.sampleRate,
     durationSeconds: Number(track.durationSeconds) || 0,
-    ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs } : {}),
+    ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs, seekTable: true } : {}),
     ...(roleState.quality === '320' ? { quality: '320' } : {}),
   });
   if (!accepted) {
@@ -10304,6 +10966,177 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     refreshStreamingActiveRoles();
     return null;
   }
+  return roleState;
+}
+
+// A whole stream from the track's first frame is kept for the next time it plays.
+function keepStreamingWire(wire, eos) {
+  if (wire.serverless || wire.streamStart !== 0 || !wire.bytes
+      || typeof keepStreamingCachedTrack !== 'function') return;
+  keepStreamingCachedTrack(streamingTrackCacheKey(wire.track, wire.quality), {
+    codec: wire.codec,
+    sampleRate: streamingEngineState().sampleRate,
+    skipFrames: wire.initialSkip,
+    totalFrames: wire.initialTotal,
+    authoritativeTotalFrames: eos.authoritativeTotalFrames,
+    table: wire.table,
+    bytes: wire.bytes.slice(0, wire.size),
+  });
+}
+
+// Loads `track` from the cache before a role opens it, so the open itself stays synchronous.
+async function primeStreamingCachedTrack(track) {
+  const engine = streamingEngineState();
+  const key = streamingTrackCacheKey(track, chooseStreamingQuality(track));
+  engine.primedTracks ??= new Map();
+  if (engine.primedTracks.has(key)) return;
+  const entry = await loadStreamingCachedTrack(key);
+  if (!entry) return;
+  engine.primedTracks.set(key, entry);
+  while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
+    engine.primedTracks.delete(engine.primedTracks.keys().next().value);
+  }
+  // Its rate is known, so its start needs no probe.
+  rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
+    fallbackSampleRate: 0,
+    sizeBytes: entry.bytes.length,
+  });
+}
+
+function mayPrimeStreamingCachedTrack() {
+  return typeof loadStreamingCachedTrack === 'function';
+}
+
+// The kept track `roleState` opens and where its start decodes from, or null to stream it.
+function takePrimedStreamingTrack(roleState) {
+  const engine = streamingEngineState();
+  if (!engine.primedTracks?.size || typeof streamingTrackCacheKey !== 'function') return null;
+  const entry = engine.primedTracks.get(streamingTrackCacheKey(roleState.track, roleState.quality));
+  if (!entry || entry.sampleRate !== engine.sampleRate || !engine.encodedCodecs?.includes(entry.codec)) return null;
+  const window = roleState.startFrame === 0
+    ? { prefixBytes: 0, byteOffset: 0, skipFrames: entry.skipFrames, totalFrames: entry.totalFrames }
+    : entry.table && lookupStreamingSeekTable(entry.table, {
+      initialSkip: entry.skipFrames,
+      initialTotal: entry.totalFrames,
+      streamStart: 0,
+      target: roleState.startFrame,
+      receivedBytes: entry.bytes.length,
+      ended: true,
+    });
+  return window ? { entry, window } : null;
+}
+
+function deliverCachedStreamingRole(roleState) {
+  if (!streamingRoleIsLive(roleState)) return;
+  const { entry, window } = roleState.cachedTrack;
+  const eos = {
+    type: 'eos',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    role: roleState.role,
+    emittedFrames: entry.authoritativeTotalFrames,
+    authoritativeTotalFrames: entry.authoritativeTotalFrames,
+  };
+  roleState.cachedWire = {
+    streamId: null,
+    serverless: true,
+    codec: entry.codec,
+    track: roleState.track,
+    quality: roleState.quality,
+    streamStart: 0,
+    initialSkip: entry.skipFrames,
+    initialTotal: entry.totalFrames,
+    nextSequence: 0,
+    creditedBytes: 0,
+    lastArrivalMs: 0,
+    bytes: entry.bytes,
+    size: entry.bytes.length,
+    table: entry.table,
+    eos,
+    followers: new Set(),
+  };
+  handleStreamingControl({
+    type: 'metadata',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    role: roleState.role,
+    sampleRate: entry.sampleRate,
+    channels: 2,
+    codec: entry.codec,
+    skipFrames: window.skipFrames,
+    totalFrames: window.totalFrames,
+    initialCreditBytes: 0,
+    provisionalTotalFrames: entry.authoritativeTotalFrames,
+    requestedStartFrame: roleState.startFrame,
+    timelineStartFrame: roleState.startFrame,
+  });
+  const { encoded } = roleState;
+  if (!encoded || encoded.wire !== roleState.cachedWire) return;
+  if (window.prefixBytes > 0) encoded.queue.push(entry.bytes.subarray(0, window.prefixBytes));
+  encoded.queue.push(entry.bytes.subarray(window.byteOffset));
+  encoded.queuedBytes = encoded.queue.reduce((total, chunk) => total + chunk.length, 0);
+  encoded.eos = eos;
+  void pumpStreamingEncodedRole(roleState);
+}
+
+// A seek inside the bytes the current stream already received decodes here, with no round trip:
+// a continuity role reading the same server stream from the seek table's window.
+function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
+  const engine = streamingEngineState();
+  const wire = current.encoded?.wire;
+  if (!wire?.bytes || !wire.table || engine.pendingSeek) return null;
+  const window = lookupStreamingSeekTable(wire.table, {
+    initialSkip: wire.initialSkip,
+    initialTotal: wire.initialTotal,
+    streamStart: wire.streamStart,
+    target: startFrame,
+    receivedBytes: wire.size,
+    ended: Boolean(wire.eos),
+  });
+  if (!window) return null;
+  const roleState = {
+    role: 'continuity',
+    track: current.track,
+    generation: engine.generation,
+    streamId: engine.nextStreamId,
+    startFrame,
+    renderedFrameBase: null,
+    openedAtMs: performance.now(),
+    nextSequence: 0,
+    metadataAccepted: true,
+    local: true,
+    continuityOptions,
+    quality: current.quality,
+    backingCapacityFrames: ensureStreamingBackingCapacities().continuity,
+    provisionalTotalFrames: current.provisionalTotalFrames,
+    timelineStartFrame: startFrame,
+  };
+  roleState.targetBufferFrames = Math.min(
+    streamingRoleCapacityFrames(roleState),
+    streamingFrames(STREAMING_SEEK_PREPARE_SECONDS),
+    Math.max(0, roleState.provisionalTotalFrames - startFrame),
+  );
+  roleState.continuityIdentity = streamingContinuityIdentity(current.track, continuityOptions);
+  engine.nextStreamId += 1;
+  engine.roles.continuity = roleState;
+  engine.pcmEvidenceByStream ??= new Map();
+  engine.pcmEvidenceByStream.set(roleState.streamId, createStreamingPcmEvidence(roleState));
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  engine.diagnostics.localSeeks = (Number(engine.diagnostics.localSeeks) || 0) + 1;
+  refreshStreamingActiveRoles();
+  createStreamingEncodedRole(roleState, {
+    codec: current.encoded.codec,
+    skipFrames: window.skipFrames,
+    totalFrames: window.totalFrames,
+  }, wire);
+  const { encoded } = roleState;
+  const kept = wire.bytes;
+  if (window.prefixBytes > 0) encoded.queue.push(kept.slice(0, window.prefixBytes));
+  if (wire.size > window.byteOffset) encoded.queue.push(kept.slice(window.byteOffset, wire.size));
+  encoded.queuedBytes = encoded.queue.reduce((total, chunk) => total + chunk.length, 0);
+  if (wire.eos) encoded.eos = wire.eos;
+  grantStreamingInitialCredit(roleState);
   return roleState;
 }
 
@@ -10322,7 +11155,7 @@ function probeStreamingTrackWaveform(track) {
   }
 }
 
-async function startStreamingTrack(track, {
+async function startBrowserStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
@@ -10330,10 +11163,15 @@ async function startStreamingTrack(track, {
   transportRecoveryAttempt = null,
 } = {}) {
   const engine = streamingEngineState();
+  settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
   settleStreamingReplacementCushionWaiter(false);
+  if (mayPrimeStreamingCachedTrack()) {
+    await primeStreamingCachedTrack(track);
+    if (engine.startRequestId !== startRequestId) return null;
+  }
   const canPrepareReplacement = () => {
     const pendingPromotion = engine.pendingPromotion;
     const promotionAllowsReplacement = !pendingPromotion
@@ -10440,13 +11278,7 @@ async function startStreamingTrack(track, {
       || engine.lifecycleEpoch !== lifecycleEpoch) return null;
   const oldRoles = [engine.roles.current, engine.roles.continuity].filter(Boolean);
   for (const roleState of oldRoles) {
-    const accepted = sendStreamingControl({
-      type: 'close',
-      generation: roleState.generation,
-      streamId: roleState.streamId,
-      reason: 'replacement',
-    });
-    if (!accepted) return null;
+    if (!closeStreamingRoleStream(roleState, 'replacement')) return null;
   }
   engine.generation += 1;
   engine.positionFacadeAtMs = 0;
@@ -10579,21 +11411,33 @@ async function startStreamingTrack(track, {
   return current;
 }
 
-async function pauseStreamingPlayback() {
+async function pauseBrowserStreaming() {
   const engine = streamingEngineState();
+  const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
+  settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
+  if (engine.pendingSeek?.kind === 'replacement') {
+    const currentTrack = engine.roles.current?.track;
+    const startSeconds = engine.snapshot.currentTime;
+    settlePendingStreamingCutover();
+    engine.pendingSeek = null;
+    // Reconfigure the clock too: the replacement boundary may already be queued.
+    return startStreamingTrack(currentTrack, { startSeconds, autoplay: false });
+  }
   await engine.context.suspend();
-  if (engine.mode !== 'error') engine.mode = 'paused';
+  if (engine.startRequestId === startRequestId && engine.mode !== 'error') engine.mode = 'paused';
 }
 
-async function resumeStreamingPlayback(
+async function resumeBrowserStreaming(
   expectedStartRequestId = null,
   onPlaybackStarted = null,
   expectedCurrentRole = null,
 ) {
   const engine = streamingEngineState();
+  const startRequestId = expectedStartRequestId
+    ?? (Number(engine.startRequestId) || 0);
   const pendingRecovery = engine.pendingTransportRecovery;
   if (pendingRecovery && !engine.context && !engine.roles.current) {
     engine.pendingTransportRecovery = null;
@@ -10607,6 +11451,7 @@ async function resumeStreamingPlayback(
     return Boolean(recovered && !engine.snapshot.paused);
   }
   if (!engine.context || !engine.node) await prepareStreamingPlaybackEngine();
+  if ((Number(engine.startRequestId) || 0) !== startRequestId) return false;
   const context = engine.context;
   const node = engine.node;
   const lifecycleEpoch = engine.lifecycleEpoch;
@@ -10616,8 +11461,7 @@ async function resumeStreamingPlayback(
   if (engine.context !== context || engine.node !== node
       || engine.lifecycleEpoch !== lifecycleEpoch || engine.generation !== generation
       || context.state !== 'running'
-      || (expectedStartRequestId !== null
-        && engine.startRequestId !== expectedStartRequestId)
+    || (Number(engine.startRequestId) || 0) !== startRequestId
       || (expectedCurrentRole !== null
         && (engine.roles.current !== expectedCurrentRole || engine.mode === 'error'))) {
     return false;
@@ -10639,17 +11483,20 @@ async function resumeStreamingPlayback(
     const grantedFrames = grantStreamingCredit(roleState, deferredFrames);
     engine.deferredCreditFrames[role] = deferredFrames - grantedFrames;
   }
-  if (engine.mode !== 'error' && engine.roles.current) engine.mode = 'starting';
+  if (engine.mode !== 'error' && engine.roles.current) {
+    engine.mode = engine.roles.current.firstFrameNotified ? 'playing' : 'starting';
+  }
   if (typeof onPlaybackStarted === 'function') onPlaybackStarted();
   return true;
 }
-async function seekStreamingPlayback(seconds) {
+async function seekBrowserStreaming(seconds) {
   const engine = streamingEngineState();
   engine.diagnostics.seekRequestedAtMs = performance.now();
   const currentTrack = engine.roles.current?.track;
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
   if (!current) return null;
+  settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (engine.pendingPromotion) {
     const pendingPromotion = engine.pendingPromotion;
     if (pendingPromotion.generation === engine.generation
@@ -10658,6 +11505,54 @@ async function seekStreamingPlayback(seconds) {
       pendingPromotion.requestedSeekSeconds = Math.max(0, Number(seconds) || 0);
     }
     return null;
+  }
+  const startSeconds = Math.max(0, Number(seconds) || 0);
+  const startFrame = streamingFrames(startSeconds);
+  const currentFrame = Math.round(
+    Math.max(0, Number(engine.snapshot.currentTime) || 0) * engine.sampleRate,
+  );
+  const queuedContinuity = engine.roles.continuity;
+  const bufferedSeekEligible = queuedContinuity?.continuityOptions?.kind === 'queued-next'
+    && engine.diagnostics.bufferedFrames.continuity > 0
+    && !engine.snapshot.paused
+    && !engine.loopContinuity
+    && !engine.pendingSeek
+    && !engine.supersededBufferedSeek
+    && startFrame >= currentFrame
+    && startFrame - currentFrame < streamingRoleCapacityFrames(current)
+    && startFrame - currentFrame < engine.diagnostics.bufferedFrames.current
+    && startFrame < Math.round((Number(engine.snapshot.duration) || 0) * engine.sampleRate);
+  if (bufferedSeekEligible) {
+    const requestId = engine.nextBufferedSeekRequestId =
+      (Number(engine.nextBufferedSeekRequestId) || 0) + 1;
+    const outcome = new Promise((resolve) => {
+      engine.pendingBufferedSeek = {
+        generation: engine.generation,
+        currentStreamId: current.streamId,
+        requestId,
+        startFrame,
+        resolve,
+      };
+    });
+    engine.diagnostics.seekRequestedAtMs = performance.now();
+    engine.diagnostics.seekCapture = null;
+    engine.diagnostics.seekSilentFrames = null;
+    engine.diagnostics.seekCommittedAtMs = 0;
+    engine.snapshot.requestedStartFrame = startFrame;
+    engine.snapshot.currentTime = startSeconds;
+    engine.node.port.postMessage({
+      type: 'reserve-buffered-seek',
+      generation: engine.generation,
+      requestId,
+      streamId: current.streamId,
+      timelineFrame: startFrame,
+    });
+    publishStreamingDiagnostics();
+    const result = await outcome;
+    if (result === 'committed') return current;
+    if (result === 'superseded') return null;
+    if (engine.generation !== current.generation
+        || engine.roles.current !== current) return null;
   }
   cancelStreamingWaveformGeneration(engine.generation);
   const staleContinuity = engine.roles.continuity;
@@ -10676,13 +11571,7 @@ async function seekStreamingPlayback(seconds) {
     ? { ...(pendingQueuedOptions || activeQueuedOptions) }
     : null;
   if (staleContinuity) {
-    const accepted = sendStreamingControl({
-      type: 'close',
-      generation: staleContinuity.generation,
-      streamId: staleContinuity.streamId,
-      reason: 'seek-replaced',
-    });
-    if (!accepted) return null;
+    if (!closeStreamingRoleStream(staleContinuity, 'seek-replaced')) return null;
     engine.node.port.postMessage({
       type: 'drop-continuity',
       generation: staleContinuity.generation,
@@ -10699,11 +11588,9 @@ async function seekStreamingPlayback(seconds) {
   engine.pendingContinuityOptions = queuedOptions;
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
-  const startSeconds = Math.max(0, Number(seconds) || 0);
-  const startFrame = streamingFrames(startSeconds);
-  const replacement = openStreamingRole('continuity', currentTrack, startFrame, {
-    kind: 'seek', startSeconds, endSeconds: startSeconds,
-  });
+  const seekOptions = { kind: 'seek', startSeconds, endSeconds: startSeconds };
+  const replacement = openLocalStreamingSeekRole(current, startFrame, seekOptions)
+    || openStreamingRole('continuity', currentTrack, startFrame, seekOptions);
   if (!replacement) return null;
   engine.pendingSeek = {
     generation: engine.generation,
@@ -10727,9 +11614,13 @@ async function seekStreamingPlayback(seconds) {
   return replacement;
 }
 
-async function scheduleStreamingContinuity(track, options = {}) {
+async function scheduleBrowserStreamingContinuity(track, options = {}) {
   const engine = streamingEngineState();
   if (!engine.roles.current) return null;
+  if (mayPrimeStreamingCachedTrack()) {
+    await primeStreamingCachedTrack(track);
+    if (!engine.roles.current) return null;
+  }
   const normalized = normalizeStreamingContinuityOptions(options);
   if (normalized.kind === 'queued-next') {
     // Most albums share one rate, so an unknown track is opened at this rate and
@@ -10803,7 +11694,7 @@ async function scheduleStreamingContinuity(track, options = {}) {
   return continuity;
 }
 
-function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
+function setBrowserStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
   const engine = streamingEngineState();
   if (!engine.node) return;
   const loop = engine.loopContinuity;
@@ -10836,6 +11727,7 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
 
 async function cleanupStreamingResources(reason, {
   preserveError = false,
+  preserveSnapshot = false,
   socketAlreadyClosed = false,
 } = {}) {
   const engine = streamingEngineState();
@@ -10847,6 +11739,8 @@ async function cleanupStreamingResources(reason, {
     cancelStreamingWaveformGeneration(engine.generation);
   }
   settleStreamingReplacementCushionWaiter(false);
+  settlePendingBufferedSeek('superseded');
+  discardSupersededBufferedSeek();
   settlePendingStreamingCutover(new Error(`Prepared track replacement stopped: ${reason}`));
   for (const requestId of [...(engine.sampleRateProbes?.keys() || [])]) {
     settleStreamingSampleRateProbe(requestId, 0);
@@ -10878,11 +11772,11 @@ async function cleanupStreamingResources(reason, {
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
   engine.diagnostics.activeRoles = [];
   Object.assign(engine.snapshot, {
-    currentTime: 0,
-    duration: 0,
+    currentTime: preserveSnapshot ? engine.snapshot.currentTime : 0,
+    duration: preserveSnapshot ? engine.snapshot.duration : 0,
     paused: true,
     ended: false,
-    src: '',
+    src: preserveSnapshot ? engine.snapshot.src : '',
     readyState: 0,
   });
   const cleanupErrors = [];
@@ -10955,11 +11849,11 @@ function beginStreamingCleanup(reason, options = {}) {
   return cleanup;
 }
 
-async function stopStreamingPlayback(reason = 'stopped') {
+async function stopBrowserStreaming(reason = 'stopped', options = {}) {
   streamingEngineState().pendingTransportRecovery = null;
-  return beginStreamingCleanup(reason);
+  return beginStreamingCleanup(reason, options);
 }
-function getStreamingPlaybackSnapshot() {
+function getBrowserStreamingSnapshot() {
   const engine = streamingEngineState();
   return {
     ...engine.snapshot,
@@ -11003,9 +11897,10 @@ function getStreamingPlaybackSnapshot() {
   };
 }
 
+// The contract (playback-engine.js) loads after this file and answers for whichever engine plays.
 Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
   configurable: true,
-  get: getStreamingPlaybackSnapshot,
+  get: () => getStreamingPlaybackSnapshot(),
 });
 
 // END js/runtime/player-streaming-engine.js
@@ -11346,6 +12241,8 @@ function attachAccountMenu(component, options = {}) {
       reject(event);
       return;
     }
+    // A row that reports its own progress keeps the menu open so its result can be read.
+    if (item.getAttribute('data-account-menu-keep-open') !== null) return;
     // Restore the opener before Settings captures focus for its modal.
     close(true);
   }, true);
@@ -12184,159 +13081,1291 @@ function buildDisplayGroups(groups) {
 
 // END js/runtime/gallery-display-preference-helpers.js
 
+// BEGIN js/runtime/android-bridge-client.js
+
+// Web side of Android bridge v1. `AlbumHavenBridge` exists only inside the APK,
+// injected by the shell for its exact allowed origins.
+//
+// The bridge policy. `protocolMin`-`protocolMax` keeps the latest and the immediately previous
+// stable shell protocol (tests/fixtures/android-bridge/stable-shells.json). `capabilities` names
+// every shell capability this site reads. `optional`: without it the feature hides or fails closed.
+// `required`: the site cannot run without it, so the shell refuses the handshake and shows its
+// Update required screen. scripts/ci/android-release-compatibility.cjs reads the JSON between the
+// two markers as data, without running this file, to order web releases after the APKs they need.
+const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
+  "protocolMin": 1,
+  "protocolMax": 1,
+  "capabilities": {
+    "playback.native.v1": "optional",
+    "playback.webview.v1": "optional",
+    "playback.queue.v1": "optional",
+    "playback.loops.v2": "optional",
+    "playback.media_session.v1": "optional",
+    "playback.resumption.v1": "optional",
+    "playback.album_details.v1": "optional",
+    "sandbox.select.v1": "optional",
+    "updates.manual.v1": "optional",
+    "downloads.link.v1": "optional",
+    "files.save.v1": "optional",
+    "app.copy.v1": "optional"
+  }
+} /* end android-bridge-policy */;
+const ANDROID_BRIDGE_PROTOCOL_MIN = ANDROID_BRIDGE_POLICY.protocolMin;
+const ANDROID_BRIDGE_PROTOCOL_MAX = ANDROID_BRIDGE_POLICY.protocolMax;
+const ANDROID_BRIDGE_CAPABILITY_USE = Object.freeze({ ...ANDROID_BRIDGE_POLICY.capabilities });
+const ANDROID_BRIDGE_TIMEOUT_MS = 15000;
+const ANDROID_REQUIRED_CAPABILITIES = Object.keys(ANDROID_BRIDGE_CAPABILITY_USE)
+  .filter(capability => ANDROID_BRIDGE_CAPABILITY_USE[capability] === 'required').sort();
+
+// `updateRequired` is set when the shell cannot run this site: no shared protocol or a missing
+// required capability. Every bridge feature then stays off, as it does with no shell at all.
+// `commands` answers what the shell asks of this page, by command name.
+const androidBridge = {
+  info: null, pending: new Map(), connection: null, events: new Map(), commands: new Map(), updateRequired: false,
+};
+
+// The shell injects a plain script object with `postMessage`; capability-ui.js, which every page
+// loads before this bundle, owns that test.
+function isAndroidShell() {
+  return typeof window !== 'undefined' && window.AlbumHavenCapabilities?.isAndroidShell() === true;
+}
+
+function hasAndroidCapability(capability) {
+  return Boolean(androidBridge.info?.capabilities?.includes(capability));
+}
+
+function isAndroidUpdateRequired() {
+  return androidBridge.updateRequired;
+}
+
+// Fails closed: the APK stays silent until its shell negotiates an audio path,
+// either native audio or the interim web player inside the WebView.
+function isAndroidPlaybackUnavailable() {
+  return isAndroidShell() && !hasAndroidCapability('playback.native.v1')
+    && !hasAndroidCapability('playback.webview.v1');
+}
+
+function createAndroidBridgeMessageId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  const hex = Array.from(window.crypto.getRandomValues(new Uint8Array(16)),
+    byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+function handleAndroidBridgeMessage(event) {
+  let message;
+  try {
+    message = JSON.parse(event.data);
+  } catch (_error) {
+    return;
+  }
+  if (message?.type === 'event') {
+    const handler = androidBridge.events.get(message.name);
+    if (handler && message.payload && typeof message.payload === 'object') handler(message.payload);
+    return;
+  }
+  if (message?.type === 'command') {
+    const answer = androidBridge.commands.get(message.name);
+    if (answer && message.payload && typeof message.payload === 'object') answerAndroidBridgeCommand(message, answer);
+    return;
+  }
+  if (message?.type !== 'response') return;
+  const pending = androidBridge.pending.get(message.id);
+  if (!pending) return;
+  androidBridge.pending.delete(message.id);
+  clearTimeout(pending.timer);
+  if (message.payload?.ok) {
+    pending.resolve(message.payload);
+  } else {
+    pending.reject(Object.assign(new Error(message.payload?.error?.message || 'Android bridge request failed.'),
+      { code: message.payload?.error?.code || 'unknown' }));
+  }
+}
+
+// Replies to the shell's command with `answer`'s result, or with its error's code and message.
+function answerAndroidBridgeCommand(message, answer) {
+  const reply = payload => window.AlbumHavenBridge.postMessage(JSON.stringify({
+    protocol: message.protocol, id: message.id, type: 'response', name: message.name, payload,
+  }));
+  Promise.resolve().then(() => answer(message.payload)).then(
+    result => reply({ ok: true, ...result }),
+    error => reply({ ok: false, error: { code: error?.code || 'failed', message: error?.message || 'Request failed.' } }),
+  );
+}
+
+function sendAndroidBridgeCommand(name, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const id = createAndroidBridgeMessageId();
+    const timer = setTimeout(() => {
+      androidBridge.pending.delete(id);
+      reject(Object.assign(new Error('Android bridge timed out.'), { code: 'timeout' }));
+    }, ANDROID_BRIDGE_TIMEOUT_MS);
+    androidBridge.pending.set(id, { resolve, reject, timer });
+    // Commands use the negotiated protocol; the handshake offers the newest this site speaks.
+    window.AlbumHavenBridge.postMessage(JSON.stringify({
+      protocol: androidBridge.info?.bridgeProtocol || ANDROID_BRIDGE_PROTOCOL_MAX, id, type: 'command', name, payload,
+    }));
+  });
+}
+
+// A shell that negotiated outside this site's range, or lacks a required capability, cannot run it.
+// Current shells refuse such a handshake themselves; this also covers one that did not.
+function canAndroidShellRunSite(info) {
+  const protocol = info?.bridgeProtocol;
+  return Number.isInteger(protocol) && protocol >= ANDROID_BRIDGE_PROTOCOL_MIN && protocol <= ANDROID_BRIDGE_PROTOCOL_MAX
+    && Array.isArray(info.capabilities) && ANDROID_REQUIRED_CAPABILITIES.every(name => info.capabilities.includes(name));
+}
+
+function connectAndroidBridge() {
+  if (!isAndroidShell()) return Promise.resolve(null);
+  if (!androidBridge.connection) {
+    window.AlbumHavenBridge.onmessage = handleAndroidBridgeMessage;
+    androidBridge.connection = sendAndroidBridgeCommand('bridge.handshake', {
+      protocolMin: ANDROID_BRIDGE_PROTOCOL_MIN, protocolMax: ANDROID_BRIDGE_PROTOCOL_MAX,
+      requiredCapabilities: ANDROID_REQUIRED_CAPABILITIES,
+    }).then((info) => {
+      if (!canAndroidShellRunSite(info)) {
+        androidBridge.updateRequired = true;
+        return null;
+      }
+      androidBridge.info = info;
+      if (isAndroidNativePlayback()) registerAndroidNativePlaybackEvents();
+      if (hasAndroidCapability(ANDROID_DOWNLOAD_LINKS_CAPABILITY)) androidBridge.commands.set('downloads.link', answerAndroidDownloadLink);
+      adoptAndroidAppCopy(info);
+      // Settings (android-settings.js) takes the shell's update and sandbox state from every success.
+      if (typeof adoptAndroidSettingsHandshake === 'function') adoptAndroidSettingsHandshake(info);
+      return info;
+    }, (error) => {
+      androidBridge.updateRequired = error.code === 'incompatible_bridge' || error.code === 'update_required';
+      // A shell that refused this site stays refused; a timeout or other failure is asked again.
+      if (!androidBridge.updateRequired) androidBridge.connection = null;
+      return null;
+    });
+  }
+  return androidBridge.connection;
+}
+
+// ---- The app's copy of the last view (app.copy.v1) ----
+// A shell that offers it skips its Connecting screen while this origin has a copy (app-copy.js
+// keeps it). The page tells the shell whether one exists; the shell asks it to forget the copy
+// before a sandbox switch, and says in the handshake when a switch happened while no page could.
+const ANDROID_APP_COPY_CAPABILITY = 'app.copy.v1';
+
+function adoptAndroidAppCopy(info) {
+  const appCopy = window.AlbumHavenAppCopy;
+  if (!appCopy) return;
+  if (!hasAndroidCapability(ANDROID_APP_COPY_CAPABILITY)) {
+    appCopy.adoptShell(null);
+    return;
+  }
+  androidBridge.commands.set('copy.forget', () => appCopy.forget());
+  appCopy.adoptShell({ forget: info.appCopy?.forget === true }, {
+    report: stored => sendAndroidBridgeCommand('copy.state', { stored }),
+  });
+}
+
+// ---- Cookie-less downloads (downloads.link.v1) ----
+// The shell never hands the session to Android's Download Manager, which keeps its requests in its
+// own database. For a same-origin download it asks this page for a link instead: the page requests
+// one with its own session, and the server links only an allowlisted download this account may
+// fetch, for five minutes. A refusal is the shell's "Download unavailable".
+const ANDROID_DOWNLOAD_LINKS_CAPABILITY = 'downloads.link.v1';
+
+async function answerAndroidDownloadLink({ path }) {
+  const response = await fetch('/downloads/links', {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+  });
+  const link = response.ok ? await response.json() : null;
+  if (typeof link?.url !== 'string') throw Object.assign(new Error('Download unavailable.'), { code: 'download_unavailable' });
+  return { url: link.url };
+}
+
+// ---- Page-built files (files.save.v1) ----
+// The Download Manager cannot fetch a page's `blob:` URLs either, so a shell that saves files gets
+// the bytes in base64 chunks of one transfer, each inside the bridge's 64 KiB message limit, and
+// writes them to Downloads. Browsers, and shells without the capability, keep the download anchor.
+const ANDROID_FILES_CAPABILITY = 'files.save.v1';
+const ANDROID_FILE_LIMIT_BYTES = 10 * 1024 * 1024;
+const ANDROID_FILE_CHUNK_BYTES = 45 * 1024;
+
+function androidBase64(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return window.btoa(binary);
+}
+
+async function downloadPageFile(filename, mimeType, text) {
+  if (await connectAndroidBridge() && hasAndroidCapability(ANDROID_FILES_CAPABILITY)) {
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.length > ANDROID_FILE_LIMIT_BYTES) throw new Error('Files over 10 MB cannot be saved in the Android app.');
+    const transfer = createAndroidBridgeMessageId();
+    for (let offset = 0; offset < bytes.length; offset += ANDROID_FILE_CHUNK_BYTES) {
+      const data = androidBase64(bytes.subarray(offset, offset + ANDROID_FILE_CHUNK_BYTES));
+      await sendAndroidBridgeCommand('files.save', { transfer, name: filename, mimeType, size: bytes.length, offset, data });
+    }
+    return;
+  }
+  const objectUrl = URL.createObjectURL(new Blob([text], { type: mimeType }));
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+// ---- Native playback (playback.native.v1) ----
+// Inside an APK that negotiates native playback, the streaming facade routes every transport
+// call here instead of starting AudioWorklet output. The web player keeps its queue and UI logic;
+// Android owns the audible clock, the PCM socket, the server playback claim and every listen write
+// (now-playing, scrobble, completion), so listening is recorded with or without this document.
+const ANDROID_NATIVE_PLAYBACK_CAPABILITY = 'playback.native.v1';
+// A queue replaced around the playing item (`keepCurrent`). Every v1 queue item names its album
+// `queueGroup`, so groups need no capability.
+const ANDROID_NATIVE_QUEUE_CAPABILITY = 'playback.queue.v1';
+// `playback.setLoop` with the web's loop kind, and `playback.clearLoop`.
+// Loop points travel in frames of the track at the sample rate Android reports for it.
+const ANDROID_NATIVE_LOOPS_CAPABILITY = 'playback.loops.v2';
+const ANDROID_NATIVE_QUEUE_LIMIT = 100;
+const ANDROID_NATIVE_TEXT_LIMIT = 512;
+const ANDROID_NATIVE_MESSAGE_BUDGET_BYTES = 60 * 1024;
+const ANDROID_NATIVE_REFERENCE_CACHE_LIMIT = 512;
+// A cached reference is reused only while it stays valid well past a long track.
+const ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS = 60 * 60 * 1000;
+// The shell keeps playback in a media session that outlives the document (playback.media_session.v1).
+const ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY = 'playback.media_session.v1';
+const ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY = 'albumhaven.androidNativeQueue.v1';
+// The shell persists each item's path-free resume token, so its media card can resume playback
+// after the session, the process or the device restarted (playback.resumption.v1).
+const ANDROID_NATIVE_RESUMPTION_CAPABILITY = 'playback.resumption.v1';
+const ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY = 'playback.album_details.v1';
+const ANDROID_NATIVE_RESUME_TOKEN = /^[A-Za-z0-9_.-]{1,512}$/;
+const ANDROID_NATIVE_ATTACHABLE_STATES = new Set(['loading', 'buffering', 'playing', 'paused']);
+// How long a seek outlasts positions Android sent before it took the seek, and how near the
+// target a report must be to show Android has taken it.
+const ANDROID_NATIVE_SEEK_HOLD_MS = 1500;
+const ANDROID_NATIVE_SEEK_MATCH_SECONDS = 0.5;
+
+const androidNativePlayback = {
+  revision: 0,
+  appliedRevision: 0,
+  // Android may hold a queue this document sent or adopted, answered or superseded; only
+  // `playback.stop` releases it.
+  holdsQueue: false,
+  // The unanswered start that replaces Android's current item; a pause supersedes it.
+  startingRevision: 0,
+  items: [],
+  index: 0,
+  generation: 0,
+  streamId: 0,
+  firstFrameNotified: false,
+  referenceRetried: false,
+  loopKind: null,
+  // The loop the web asked for, in seconds, and the rate it was last sent at; Android counts loop
+  // points in the current track's own frames, so a loop waits until that rate is known.
+  loop: null,
+  // The current item's sample rate, as Android last reported it; 0 until it knows.
+  sampleRate: 0,
+  mode: 'stopped',
+  lastError: null,
+  // `owned` follows Android's claim events; `ownerIntent` covers a start whose claim is pending.
+  ownership: 'none',
+  ownerIntent: false,
+  // The seek whose target the seekbar holds until Android reports it (androidNativeReportedSeconds).
+  seekHold: null,
+  refs: new Map(),
+  snapshot: { currentTime: 0, duration: 0, paused: true, ended: false, src: '', readyState: 0 },
+};
+
+function isAndroidNativePlayback() {
+  return hasAndroidCapability(ANDROID_NATIVE_PLAYBACK_CAPABILITY);
+}
+
+// Null outside the APK, so ordinary browsers keep their synchronous start path unchanged.
+function androidNativePlaybackRoute() {
+  if (!isAndroidShell()) return null;
+  return connectAndroidBridge().then(() => isAndroidNativePlayback());
+}
+
+// The native client owns the server claim; web ownership reads then report it as "here".
+function getAndroidNativePlaybackClientId() {
+  if (!isAndroidNativePlayback()) return '';
+  const clientId = String(androidBridge.info?.playback?.clientId || '');
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(clientId) ? clientId : '';
+}
+
+// The web's side-effect guard for native playback: Android owns, or is acquiring for, this start.
+function isAndroidNativePlaybackOwner() {
+  const native = androidNativePlayback;
+  return isAndroidNativePlayback() && (native.ownership === 'owned' || native.ownerIntent);
+}
+
+function androidNativeText(value) {
+  return String(value || '').replace(/[\u0000-\u001f]/g, ' ').slice(0, ANDROID_NATIVE_TEXT_LIMIT);
+}
+
+// The album queue `track` plays in, from its first track so Android's previous reaches what the
+// web's previous does (`playCompactQueueOffset`), then the albums the web's own queue continues
+// into (`resolveNextPlaybackContextQueue`), so Android plays album to album gaplessly. Each album is
+// one `queueGroup`: Android's previous and next stay inside it, as the web's do.
+function androidNativeQueueWindow(track) {
+  let queue = state.player.playbackQueue;
+  const tracks = (Array.isArray(queue?.tracks) ? queue.tracks : []).filter(item => item?.path);
+  const start = tracks.findIndex(item => String(item.path) === String(track.path));
+  if (start < 0) return { items: [track], groups: [0], currentIndex: 0 };
+  const following = tracks.slice(start + 1, start + ANDROID_NATIVE_QUEUE_LIMIT);
+  // Following tracks keep their place first; earlier ones fill what the limit leaves.
+  const earlier = tracks.slice(Math.max(0, start - (ANDROID_NATIVE_QUEUE_LIMIT - 1 - following.length)), start);
+  // A track started from its row carries no album year; its queue entry does.
+  const current = track.year || !tracks[start].year ? track : { ...track, year: tracks[start].year };
+  const items = [...earlier, current, ...following];
+  const groups = items.map(() => 0);
+  const albums = new Set([String(queue?.albumRef || '')]);
+  while (items.length < ANDROID_NATIVE_QUEUE_LIMIT && typeof resolveNextPlaybackContextQueue === 'function') {
+    queue = resolveNextPlaybackContextQueue(queue);
+    if (!queue || albums.has(String(queue.albumRef || ''))) break;
+    albums.add(String(queue.albumRef || ''));
+    const next = (Array.isArray(queue.tracks) ? queue.tracks : []).filter(item => item?.path)
+      .slice(0, ANDROID_NATIVE_QUEUE_LIMIT - items.length);
+    items.push(...next);
+    groups.push(...next.map(() => albums.size - 1));
+  }
+  return { items, groups, currentIndex: earlier.length };
+}
+
+function cachedAndroidNativePlaybackRef(path) {
+  const cached = androidNativePlayback.refs.get(path);
+  return cached && cached.expiresAtMs - Date.now() > ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS ? cached : null;
+}
+
+// One bounded batch for the references not already held, immediately before the queue reaches
+// Android; a partial batch never does. Each entry is `{ playbackRef, resumeToken }`; the resume
+// token is null when the server issued none. The server prepares the tracks in the order asked,
+// so the one about to play goes first, then those after it, then those before.
+async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
+  const refs = items.map(item => cachedAndroidNativePlaybackRef(String(item.path)));
+  const missing = items.map((item, index) => ({ index, path: String(item.path) }))
+    .filter(({ index }) => !refs[index])
+    .sort((a, b) => (a.index < currentIndex) - (b.index < currentIndex) || a.index - b.index);
+  if (!missing.length) return refs;
+  const tracks = missing.map(({ path }) => ({ clientKey: createAndroidBridgeMessageId(), path }));
+  const response = await fetch('/playback/refs', {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ protocol: 1, tracks }),
+  });
+  if (!response.ok) throw new Error('Playback references are unavailable.');
+  const result = await response.json();
+  if (result?.protocol !== 1 || !Array.isArray(result.tracks) || result.tracks.length !== tracks.length) {
+    throw new Error('Playback references are unavailable.');
+  }
+  const issuedRefs = tracks.map((track, index) => {
+    const issued = result.tracks[index];
+    if (issued?.clientKey !== track.clientKey || typeof issued.playbackRef !== 'string' || !issued.playbackRef) {
+      throw new Error('Playback references are unavailable.');
+    }
+    const resumeToken = typeof issued.resumeToken === 'string' && ANDROID_NATIVE_RESUME_TOKEN.test(issued.resumeToken)
+      ? issued.resumeToken : null;
+    return { playbackRef: issued.playbackRef, resumeToken };
+  });
+  const expiresAtMs = Date.parse(result.expiresAt);
+  missing.forEach(({ index, path }, position) => {
+    refs[index] = issuedRefs[position];
+    if (!(expiresAtMs > Date.now())) return;
+    const cache = androidNativePlayback.refs;
+    cache.delete(path);
+    cache.set(path, { ...issuedRefs[position], expiresAtMs });
+    if (cache.size > ANDROID_NATIVE_REFERENCE_CACHE_LIMIT) cache.delete(cache.keys().next().value);
+  });
+  return refs;
+}
+
+// The web's own track identity (`getTrackIdentity`, which decides "same track" for a listen),
+// hashed to 64 opaque bits, so Android tells a refreshed reference from another track without a path.
+function androidNativeListenKey(item) {
+  const identity = getTrackIdentity(item);
+  let high = 0xdeadbeef;
+  let low = 0x41c6ce57;
+  for (let index = 0; index < identity.length; index += 1) {
+    const code = identity.charCodeAt(index);
+    high = Math.imul(high ^ code, 2654435761);
+    low = Math.imul(low ^ code, 1597334677);
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909);
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909);
+  return `lk1-${[high, low].map(half => (half >>> 0).toString(16).padStart(8, '0')).join('')}`;
+}
+
+// The window shrinks to the message budget from its front, then from its end, never past `currentIndex`.
+function buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent = false) {
+  const resumable = hasAndroidCapability(ANDROID_NATIVE_RESUMPTION_CAPABILITY);
+  const albumDetails = hasAndroidCapability(ANDROID_NATIVE_ALBUM_DETAILS_CAPABILITY);
+  const payload = {
+    queueRevision: revision,
+    items: queueWindow.items.map((item, index) => ({
+      playbackRef: refs[index].playbackRef,
+      listenKey: androidNativeListenKey(item),
+      title: androidNativeText(item.title),
+      artist: androidNativeText(item.artist),
+      album: androidNativeText(item.album),
+      // The track's cover, path-free, as the server resolves it for the resume token's track.
+      artworkUrl: refs[index].resumeToken ? `/playback/artwork/${refs[index].resumeToken}` : null,
+      durationMs: Math.max(0, Math.round((Number(item.durationSeconds) || 0) * 1000)),
+      trackNumber: androidNativeText(item.trackNumber),
+      queueGroup: queueWindow.groups[index],
+      ...(resumable && refs[index].resumeToken ? { resumeToken: refs[index].resumeToken } : {}),
+      ...(albumDetails && androidNativeText(item.year) ? { year: androidNativeText(item.year).slice(0, 32) } : {}),
+    })),
+    currentIndex: queueWindow.currentIndex,
+    positionMs: Math.max(0, Math.round((Number(startSeconds) || 0) * 1000)),
+    loop: null,
+    autoplay: Boolean(autoplay),
+    // The current item is the one Android already plays; only the queue around it changes.
+    ...(keepCurrent ? { keepCurrent: true } : {}),
+  };
+  const encoder = new TextEncoder();
+  let first = 0;
+  while (payload.items.length > 1
+      && encoder.encode(JSON.stringify(payload)).length > ANDROID_NATIVE_MESSAGE_BUDGET_BYTES) {
+    if (payload.currentIndex > 0) {
+      payload.items.shift();
+      payload.currentIndex -= 1;
+      first += 1;
+    } else {
+      payload.items.pop();
+    }
+  }
+  return { payload, first };
+}
+
+function androidNativeCurrentRole() {
+  const native = androidNativePlayback;
+  return {
+    track: native.items[native.index] || null,
+    generation: native.generation,
+    streamId: native.streamId,
+    firstFrameNotified: native.firstFrameNotified,
+  };
+}
+
+async function startAndroidNativePlaybackTrack(track, {
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+} = {}) {
+  const native = androidNativePlayback;
+  const revision = ++native.revision;
+  native.startingRevision = keepCurrent ? 0 : revision;
+  native.ownerIntent = Boolean(autoplay);
+  const queueWindow = androidNativeQueueWindow(track);
+  // A refused reference may be stale; the retry asks for fresh ones.
+  if (referenceRetry) queueWindow.items.forEach(item => native.refs.delete(String(item.path)));
+  let payload;
+  let first;
+  try {
+    const refs = await requestAndroidNativePlaybackRefs(queueWindow.items, queueWindow.currentIndex);
+    if (revision !== native.revision) return null;
+    // A pause or play while the references were fetched decides whether the kept item plays.
+    if (keepCurrent) autoplay = !native.snapshot.paused;
+    ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    native.holdsQueue = true;
+    await sendAndroidBridgeCommand('playback.loadQueue', payload);
+  } catch (error) {
+    // Nothing Android plays came from this start, so it acquires nothing for it.
+    if (revision === native.revision) native.ownerIntent = false;
+    throw error;
+  } finally {
+    if (revision === native.revision) native.startingRevision = 0;
+  }
+  if (revision !== native.revision) return null;
+  native.appliedRevision = revision;
+  native.items = queueWindow.items.slice(first, first + payload.items.length);
+  saveAndroidNativeAttachment(revision, native.items);
+  native.index = payload.currentIndex;
+  // Android keeps playing the same item, so its first frame and listen are not new.
+  if (keepCurrent) return androidNativeCurrentRole();
+  native.generation += 1;
+  native.streamId += 1;
+  native.firstFrameNotified = false;
+  native.loopKind = null;
+  native.loop = null;
+  native.sampleRate = 0;
+  native.lastError = null;
+  if (!referenceRetry) native.referenceRetried = false;
+  Object.assign(native.snapshot, {
+    currentTime: Math.max(0, Number(startSeconds) || 0),
+    duration: Number(track.durationSeconds) || 0,
+    paused: !autoplay,
+    ended: false,
+    src: track.src || '',
+    readyState: 0,
+  });
+  native.mode = autoplay ? 'starting' : 'paused';
+  return androidNativeCurrentRole();
+}
+
+function androidNativeStoredTrack(track) {
+  return {
+    src: String(track.src || ''),
+    path: String(track.path || ''),
+    title: String(track.title || ''),
+    artist: String(track.artist || ''),
+    ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
+    album: String(track.album || ''),
+    ...(track.year ? { year: String(track.year) } : {}),
+    coverPath: String(track.coverPath || ''),
+    ...(track.trackNumber ? { trackNumber: String(track.trackNumber) } : {}),
+    ...(Number(track.durationSeconds) > 0 ? { durationSeconds: Number(track.durationSeconds) } : {}),
+  };
+}
+
+// The queue this document handed Android, kept beside the persisted player state so the next
+// document of this origin can name the tracks Android is still playing.
+function saveAndroidNativeAttachment(revision, items) {
+  if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || typeof setLocalStorageItem !== 'function') return;
+  setLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY, JSON.stringify({
+    clientId: getAndroidNativePlaybackClientId(),
+    queueRevision: revision,
+    tracks: items.map(androidNativeStoredTrack),
+  }));
+}
+
+// Only the exact native client and revision that queue was applied as can be adopted.
+function readAndroidNativeAttachment(live) {
+  if (typeof getLocalStorageItem !== 'function') return null;
+  let record = null;
+  try {
+    record = JSON.parse(getLocalStorageItem(ANDROID_NATIVE_ATTACHMENT_STORAGE_KEY) || 'null');
+  } catch (_error) {
+    return null;
+  }
+  const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
+  if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
+  if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
+      || !tracks.every(track => track?.path && track.src)) return null;
+  return tracks;
+}
+
+// Null outside the APK, so ordinary browsers restore exactly as before.
+function attachAndroidNativePlayback(persistedState = null) {
+  if (!isAndroidShell()) return null;
+  return connectAndroidBridge().then(() => adoptAndroidNativePlayback(persistedState));
+}
+
+// A reloaded document of the same origin takes over the queue Android kept playing instead of
+// restarting it: the same tracks, item, position and revision. Android's listen continues.
+function adoptAndroidNativePlayback(persistedState) {
+  const native = androidNativePlayback;
+  const live = androidBridge.info?.playback;
+  if (!hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY) || native.revision !== 0
+      || !ANDROID_NATIVE_ATTACHABLE_STATES.has(live?.state)) return false;
+  const tracks = readAndroidNativeAttachment(live);
+  if (!tracks) return false;
+  const track = tracks[live.currentIndex];
+  const playing = live.state !== 'paused';
+  native.revision = live.queueRevision;
+  native.appliedRevision = live.queueRevision;
+  native.holdsQueue = true;
+  native.items = tracks;
+  native.index = live.currentIndex;
+  native.generation += 1;
+  native.streamId += 1;
+  native.firstFrameNotified = live.state === 'playing';
+  native.referenceRetried = false;
+  native.loopKind = null;
+  native.loop = null;
+  native.sampleRate = 0;
+  native.lastError = null;
+  native.ownerIntent = playing;
+  if (live.state === 'playing') native.ownership = 'owned';
+  native.mode = { playing: 'playing', paused: 'paused', loading: 'starting', buffering: 'buffering' }[live.state];
+  Object.assign(native.snapshot, {
+    currentTime: Math.max(0, Number(live.positionMs) || 0) / 1000,
+    duration: Number(track.durationSeconds) || Math.max(0, Number(live.durationMs) || 0) / 1000,
+    paused: !playing,
+    ended: false,
+    src: track.src,
+    readyState: live.state === 'playing' ? 4 : 0,
+  });
+  state.player.playbackQueue = null;
+  const restoredQueue = persistedState && typeof restorePersistedPlaybackQueue === 'function'
+    && restorePersistedPlaybackQueue(persistedState, track.path);
+  if (!restoredQueue && typeof resolveAlbumForPlayerTrack === 'function' && typeof setAlbumPlaybackQueue === 'function') {
+    const album = resolveAlbumForPlayerTrack(track);
+    if (album) setAlbumPlaybackQueue(album, track.path);
+  }
+  if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
+  // A reload restores loops inactive, so Android's loop ends with the old document.
+  clearAndroidNativeLoop();
+  notifyAndroidNativeWaveformReady();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  if (typeof persistPlayerState === 'function') persistPlayerState(true);
+  return true;
+}
+
+function sendAndroidNativeTransport(name, payload = {}) {
+  if (!androidNativePlayback.appliedRevision) return Promise.resolve(false);
+  return sendAndroidBridgeCommand(name, payload).then(() => true);
+}
+
+// The sandbox app writes these lines to the phone's log, so a stop nobody asked for can be traced.
+function traceAndroidPlaybackStop(action) {
+  if (!hasAndroidCapability('sandbox.select.v1')) return;
+  console.warn(`[playback-stop] ${action}\n${new Error().stack}`);
+}
+
+function pauseAndroidNativePlayback() {
+  const native = androidNativePlayback;
+  traceAndroidPlaybackStop('pause');
+  // As the web engine's pause supersedes its pending start, a pause stops a pending switch, so
+  // Android never plays the track the web does not show. The next play restarts the shown one.
+  if (native.startingRevision && native.startingRevision === native.revision) {
+    return stopAndroidNativePlayback('paused', { preserveSnapshot: true });
+  }
+  native.ownerIntent = false;
+  native.snapshot.paused = true;
+  if (native.mode !== 'error') native.mode = 'paused';
+  return sendAndroidNativeTransport('playback.pause').then(() => undefined);
+}
+
+async function resumeAndroidNativePlayback(onPlaybackStarted = null) {
+  const native = androidNativePlayback;
+  if (!native.items.length) return false;
+  if (native.snapshot.paused === false) return true;
+  native.ownerIntent = true;
+  let resumed = false;
+  try {
+    resumed = await sendAndroidNativeTransport('playback.play', { queueRevision: native.appliedRevision });
+  } finally {
+    // A refused play acquires nothing.
+    if (!resumed) native.ownerIntent = false;
+  }
+  if (!resumed) return false;
+  native.snapshot.paused = false;
+  native.snapshot.ended = false;
+  native.mode = native.firstFrameNotified ? 'playing' : 'starting';
+  if (typeof onPlaybackStarted === 'function') onPlaybackStarted();
+  return true;
+}
+
+async function seekAndroidNativePlayback(seconds) {
+  const native = androidNativePlayback;
+  if (!native.items.length) return null;
+  const startSeconds = Math.max(0, Number(seconds) || 0);
+  native.snapshot.currentTime = startSeconds;
+  native.snapshot.ended = false;
+  native.seekHold = {
+    seconds: startSeconds, streamId: native.streamId, untilMs: performance.now() + ANDROID_NATIVE_SEEK_HOLD_MS,
+  };
+  await sendAndroidNativeTransport('playback.seek', {
+    queueRevision: native.appliedRevision, positionMs: Math.round(startSeconds * 1000),
+  });
+  return androidNativeCurrentRole();
+}
+
+async function scheduleAndroidNativeContinuity(track, options = {}) {
+  const native = androidNativePlayback;
+  const current = native.items[native.index];
+  if (!current) return null;
+  const kind = options.kind || 'queued-next';
+  if (kind === 'queued-next') {
+    if (String(native.items[native.index + 1]?.path || '') === String(track?.path || '')) {
+      return androidNativeCurrentRole();
+    }
+    // The queue changed under Android; replace the queue around the playing item unless that cannot
+    // help. A shell without queue replacement keeps its own queue.
+    const queueWindow = androidNativeQueueWindow(current);
+    if (!hasAndroidCapability(ANDROID_NATIVE_QUEUE_CAPABILITY)
+        || String(queueWindow.items[queueWindow.currentIndex + 1]?.path || '') !== String(track?.path || '')) {
+      return androidNativeCurrentRole();
+    }
+    return startAndroidNativePlaybackTrack(current, {
+      startSeconds: native.snapshot.currentTime, autoplay: !native.snapshot.paused, keepCurrent: true,
+    });
+  }
+  // Without native loops the loop stays off, as when the web cannot schedule one.
+  if (!hasAndroidCapability(ANDROID_NATIVE_LOOPS_CAPABILITY)) return null;
+  const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
+  const endSeconds = Math.max(0, Number(options.endSeconds) || 0);
+  if (endSeconds <= startSeconds) return null;
+  native.loopKind = kind;
+  native.loop = { kind, startSeconds, endSeconds, sentRate: 0 };
+  await sendAndroidNativeLoop();
+  return androidNativeCurrentRole();
+}
+
+// Sends the loop in frames of the current track at its reported rate; until Android reports the
+// rate, the loop waits and goes out with the first report.
+async function sendAndroidNativeLoop() {
+  const native = androidNativePlayback;
+  const loop = native.loop;
+  const sampleRate = native.sampleRate;
+  if (!loop || !sampleRate || loop.sentRate === sampleRate) return;
+  const startFrame = Math.round(loop.startSeconds * sampleRate);
+  const endFrame = Math.round(loop.endSeconds * sampleRate);
+  if (endFrame <= startFrame) return;
+  loop.sentRate = sampleRate;
+  // The web's kind decides retained replay exactly, as its worklet's `set-loop` does.
+  await sendAndroidNativeTransport('playback.setLoop', {
+    queueRevision: native.appliedRevision, startFrame, endFrame, sampleRate, kind: loop.kind,
+  });
+}
+
+// Every snapshot names the current item's rate once Android knows it.
+function noteAndroidNativeSampleRate(payload) {
+  const native = androidNativePlayback;
+  const rate = Number(payload?.sampleRate);
+  native.sampleRate = Number.isInteger(rate) && rate > 0 ? rate : 0;
+  if (native.loop && native.sampleRate && native.loop.sentRate !== native.sampleRate) {
+    void sendAndroidNativeLoop().catch(() => {});
+  }
+}
+
+function clearAndroidNativeLoop() {
+  androidNativePlayback.loopKind = null;
+  androidNativePlayback.loop = null;
+  if (!hasAndroidCapability(ANDROID_NATIVE_LOOPS_CAPABILITY)) return;
+  void sendAndroidNativeTransport('playback.clearLoop', {
+    queueRevision: androidNativePlayback.appliedRevision,
+  }).catch(() => {});
+}
+
+function setAndroidNativeLoop(active) {
+  if (!active) clearAndroidNativeLoop();
+  return true;
+}
+
+async function stopAndroidNativePlayback(reason = 'stopped', { preserveSnapshot = false, preserveError = false } = {}) {
+  const native = androidNativePlayback;
+  // A media session outlives the document: the next document of this origin re-attaches to it.
+  if (reason === 'unload' && hasAndroidCapability(ANDROID_NATIVE_MEDIA_SESSION_CAPABILITY)) return;
+  traceAndroidPlaybackStop(`stop ${reason}`);
+  native.revision += 1;
+  native.ownerIntent = false;
+  native.items = [];
+  native.index = 0;
+  native.loopKind = null;
+  native.loop = null;
+  native.sampleRate = 0;
+  if (!preserveError) {
+    native.mode = 'stopped';
+    native.lastError = null;
+  }
+  Object.assign(native.snapshot, {
+    currentTime: preserveSnapshot ? native.snapshot.currentTime : 0,
+    duration: preserveSnapshot ? native.snapshot.duration : 0,
+    paused: true,
+    ended: false,
+    src: preserveSnapshot ? native.snapshot.src : '',
+    readyState: 0,
+  });
+  // A load Android has been sent may already play, even unanswered or superseded; the shell
+  // applies the stop after it.
+  const stopped = native.holdsQueue ? sendAndroidBridgeCommand('playback.stop') : null;
+  native.holdsQueue = false;
+  // Android releases its claim with the stop; no event of the stopped queue applies any more.
+  native.appliedRevision = 0;
+  native.ownership = 'none';
+  await stopped;
+}
+
+// The native engine's side of the player's `fail`: the queue stops and keeps the error to show.
+function failAndroidNativeEngine(source, event, reason) {
+  failAndroidNativePlayback(source, event?.error?.message || event?.message);
+  void stopAndroidNativePlayback(reason, { preserveError: true }).catch(() => {});
+}
+
+function failAndroidNativePlayback(source, message) {
+  const native = androidNativePlayback;
+  native.mode = 'error';
+  native.lastError = { source, message: String(message || `${source} failed`) };
+  native.snapshot.paused = true;
+}
+
+function getAndroidNativePlaybackSnapshot() {
+  const native = androidNativePlayback;
+  return {
+    ...native.snapshot,
+    mode: native.mode,
+    generation: native.generation,
+    diagnostics: {
+      native: true,
+      queueRevision: native.appliedRevision,
+      currentIndex: native.index,
+      ...(native.lastError ? { lastError: { ...native.lastError } } : {}),
+      bufferedFrames: { current: 0, continuity: 0 },
+      inFlightFrames: { current: 0, continuity: 0 },
+      activeRoles: [],
+    },
+  };
+}
+
+function observeAndroidNativeFacade(result, source) {
+  if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(result, source);
+}
+
+function notifyAndroidNativeWaveformReady() {
+  const native = androidNativePlayback;
+  if (typeof handleStreamingPlaybackWaveformReady !== 'function') return;
+  void Promise.resolve(handleStreamingPlaybackWaveformReady({
+    generation: native.generation,
+    currentPath: String(native.items[native.index]?.path || ''),
+    continuityPath: String(native.items[native.index + 1]?.path || ''),
+  })).catch(error => console.warn('[AlbumHaven][Waveform] Optional peak load failed.', error));
+}
+
+// Android's notification, lock screen, media buttons, Bluetooth and audio focus act on the native
+// queue directly. The web then runs its own pause or resume path so its UI follows as after an
+// on-page tap; Android has already applied the change and its listen writes.
+function followAndroidNativeSystemState(payload) {
+  const snapshot = androidNativePlayback.snapshot;
+  const active = payload.state === 'playing' || payload.state === 'buffering' || payload.state === 'loading';
+  if (payload.state === 'paused' && !snapshot.paused && typeof pausePlayerPlaybackForHandoff === 'function') {
+    snapshot.currentTime = Math.max(0, Number(payload.positionMs) || 0) / 1000;
+    void pausePlayerPlaybackForHandoff(getAndroidNativePlaybackSnapshot());
+  } else if (active && snapshot.paused && typeof togglePlayerPlayback === 'function') {
+    togglePlayerPlayback({ focusTimelineOnResume: false });
+  }
+}
+
+// A skip from Android's controls: the web selects the item Android moved to as its own skip
+// buttons would.
+function followAndroidNativeSystemStep(payload) {
+  const native = androidNativePlayback;
+  const incoming = native.items[payload.currentIndex];
+  if (!incoming || payload.currentIndex === native.index) return;
+  const previousPlaybackSnapshot = getAndroidNativePlaybackSnapshot();
+  native.index = payload.currentIndex;
+  native.streamId += 1;
+  native.firstFrameNotified = false;
+  Object.assign(native.snapshot, {
+    currentTime: Math.max(0, Number(payload.positionMs) || 0) / 1000,
+    duration: Number(incoming.durationSeconds) || 0,
+    src: incoming.src || '',
+    ended: false,
+  });
+  const queue = state.player.playbackQueue;
+  if (payload.reason === 'next' && typeof peekNextQueuedTrack === 'function'
+      && String(peekNextQueuedTrack()?.path || '') === String(incoming.path)) {
+    getNextQueuedTrack();
+  } else if (Array.isArray(queue?.tracks)) {
+    const found = queue.tracks.findIndex(track => String(track?.path || '') === String(incoming.path));
+    if (found >= 0) queue.currentIndex = found;
+  }
+  if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(incoming, { previousPlaybackSnapshot });
+  notifyAndroidNativeWaveformReady();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+// Android reports the seek target from the moment it takes a seek; a position it sent before that
+// still names the old place and would pull the seekbar back, so it reads as the target.
+function androidNativeReportedSeconds(payload) {
+  const native = androidNativePlayback;
+  const reported = Math.max(0, Number(payload.positionMs) || 0) / 1000;
+  const hold = native.seekHold;
+  if (!hold) return reported;
+  if (hold.streamId !== native.streamId || performance.now() > hold.untilMs
+      || Math.abs(reported - hold.seconds) < ANDROID_NATIVE_SEEK_MATCH_SECONDS) {
+    native.seekHold = null;
+    return reported;
+  }
+  return hold.seconds;
+}
+
+function handleAndroidNativeState(payload) {
+  const native = androidNativePlayback;
+  const snapshot = native.snapshot;
+  if (payload.initiator === 'system') followAndroidNativeSystemState(payload);
+  const trackPath = String(native.items[native.index]?.path || '');
+  const nativeState = payload.state;
+  snapshot.currentTime = androidNativeReportedSeconds(payload);
+  // Android plays only while it holds the claim, and only with valid references.
+  if (nativeState === 'playing') {
+    native.ownership = 'owned';
+    native.referenceRetried = false;
+  } else if (nativeState !== 'buffering' && nativeState !== 'loading') native.ownerIntent = false;
+  if (nativeState === 'playing' || nativeState === 'buffering' || nativeState === 'loading') {
+    Object.assign(snapshot, { paused: false, ended: false });
+    native.mode = nativeState === 'playing' ? 'playing' : nativeState === 'loading' ? 'starting' : 'buffering';
+    if (nativeState === 'playing') snapshot.readyState = 4;
+    if (nativeState === 'playing' && !native.firstFrameNotified && trackPath) {
+      native.firstFrameNotified = true;
+      if (typeof handleStreamingPlaybackFirstFrame === 'function') {
+        observeAndroidNativeFacade(handleStreamingPlaybackFirstFrame({
+          generation: native.generation, streamId: native.streamId, trackPath,
+        }), 'first-frame-facade-error');
+      }
+      notifyAndroidNativeWaveformReady();
+    }
+  } else if (nativeState === 'ended') {
+    Object.assign(snapshot, { paused: true, ended: true, readyState: 4 });
+    native.mode = 'ended';
+    const queuedBeyondWindow = native.index === native.items.length - 1 && typeof peekNextQueuedTrack === 'function'
+      ? String(peekNextQueuedTrack()?.path || '') : '';
+    if (typeof handleStreamingPlaybackEnded === 'function' && trackPath) {
+      observeAndroidNativeFacade(handleStreamingPlaybackEnded({
+        generation: native.generation, streamId: native.streamId, trackPath,
+        timelineFrame: 0, currentTime: snapshot.currentTime,
+        // The queue continues past the native window, so its next track starts anew.
+        startNextTrackPath: queuedBeyondWindow,
+      }), 'ended-facade-error');
+    }
+  } else {
+    snapshot.paused = true;
+    if (nativeState === 'error') native.mode = 'error';
+    else if (native.mode !== 'error') native.mode = nativeState === 'idle' ? 'stopped' : 'paused';
+  }
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+function handleAndroidNativePosition(payload) {
+  const native = androidNativePlayback;
+  const trackPath = String(native.items[native.index]?.path || '');
+  native.snapshot.currentTime = androidNativeReportedSeconds(payload);
+  if (typeof handleStreamingPlaybackPosition === 'function' && trackPath) {
+    observeAndroidNativeFacade(handleStreamingPlaybackPosition({
+      generation: native.generation, streamId: native.streamId, trackPath,
+      timelineFrame: 0, currentTime: native.snapshot.currentTime,
+    }), 'position-facade-error');
+  } else if (typeof updatePlayerUi === 'function') {
+    updatePlayerUi();
+  }
+}
+
+function handleAndroidNativeCurrentItem(payload) {
+  const native = androidNativePlayback;
+  if (payload.initiator === 'system' && (payload.reason === 'next' || payload.reason === 'previous')) {
+    followAndroidNativeSystemStep(payload);
+    return;
+  }
+  // The web's own loads name items it already selected; only a natural advance is new.
+  if (payload.reason !== 'advance' || payload.currentIndex !== native.index + 1) return;
+  const outgoing = native.items[native.index];
+  const incoming = native.items[payload.currentIndex];
+  if (!outgoing || !incoming) return;
+  const outgoingPlaybackSnapshot = {
+    ...native.snapshot,
+    currentTime: Number(outgoing.durationSeconds) || native.snapshot.currentTime,
+    duration: Number(outgoing.durationSeconds) || 0,
+    src: outgoing.src || '',
+  };
+  const outgoingStreamId = native.streamId;
+  native.index = payload.currentIndex;
+  native.streamId += 1;
+  Object.assign(native.snapshot, {
+    currentTime: Math.max(0, Number(payload.positionMs) || 0) / 1000,
+    duration: Number(incoming.durationSeconds) || 0,
+    src: incoming.src || '',
+    ended: false,
+  });
+  if (typeof handleStreamingPlaybackBoundary === 'function') {
+    observeAndroidNativeFacade(handleStreamingPlaybackBoundary({
+      generation: native.generation,
+      outgoingStreamId,
+      incomingStreamId: native.streamId,
+      outgoingTrackPath: String(outgoing.path || ''),
+      incomingTrackPath: String(incoming.path || ''),
+      outgoingPlaybackSnapshot,
+      incomingListenSession: null,
+      renderedFrame: 0,
+      continuityKind: 'queued-next',
+    }), 'boundary-facade-error');
+  }
+  notifyAndroidNativeWaveformReady();
+}
+
+function handleAndroidNativeLoopWrapped() {
+  const native = androidNativePlayback;
+  const trackPath = String(native.items[native.index]?.path || '');
+  if (!native.loopKind || !trackPath || typeof handleStreamingPlaybackBoundary !== 'function') return;
+  const outgoingStreamId = native.streamId;
+  native.streamId += 1;
+  observeAndroidNativeFacade(handleStreamingPlaybackBoundary({
+    generation: native.generation, outgoingStreamId, incomingStreamId: native.streamId,
+    outgoingTrackPath: trackPath, incomingTrackPath: trackPath, renderedFrame: 0,
+    continuityKind: native.loopKind,
+  }), 'boundary-facade-error');
+}
+
+function handleAndroidNativeOwnership(payload) {
+  const native = androidNativePlayback;
+  native.ownership = payload.ownership === 'owned' ? 'owned' : 'none';
+  if (payload.ownership === 'owned') {
+    if (typeof clearBlockedPlaybackState === 'function') clearBlockedPlaybackState();
+    return;
+  }
+  if (payload.ownership !== 'blocked' && payload.ownership !== 'lost') return;
+  native.ownerIntent = false;
+  // Another client holds the claim: the same blocked path as the web player's refused claim.
+  if (typeof losePlaybackOwnership === 'function') losePlaybackOwnership('ownership-takeover');
+  if (typeof handlePlaybackOwnershipEvent === 'function') void handlePlaybackOwnershipEvent();
+  if (payload.ownership === 'blocked' && typeof notifyBlockedPlaybackStart === 'function') {
+    notifyBlockedPlaybackStart();
+  }
+}
+
+function handleAndroidNativeError(payload) {
+  failAndroidNativePlayback('native', payload.error?.message);
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+function handleAndroidNativeReferenceExpired() {
+  const native = androidNativePlayback;
+  const track = native.items[native.index];
+  if (!track || native.referenceRetried) {
+    failAndroidNativePlayback('reference', 'Playback reference expired.');
+    if (typeof updatePlayerUi === 'function') updatePlayerUi();
+    return;
+  }
+  // References last a day; one fresh batch recovers a long session at the heard position.
+  native.referenceRetried = true;
+  observeAndroidNativeFacade(startAndroidNativePlaybackTrack(track, {
+    startSeconds: native.snapshot.currentTime, autoplay: true, referenceRetry: true,
+  }), 'reference-refresh-error');
+}
+
+function registerAndroidNativePlaybackEvents() {
+  const handlers = {
+    'playback.state': handleAndroidNativeState,
+    'playback.position': handleAndroidNativePosition,
+    'playback.currentItem': handleAndroidNativeCurrentItem,
+    'playback.loopWrapped': handleAndroidNativeLoopWrapped,
+    'playback.ownership': handleAndroidNativeOwnership,
+    'playback.error': handleAndroidNativeError,
+    'playback.referenceExpired': handleAndroidNativeReferenceExpired,
+  };
+  for (const [name, handler] of Object.entries(handlers)) {
+    androidBridge.events.set(name, (payload) => {
+      // Events echo the applied revision so a replaced or stopped queue cannot overwrite newer state.
+      const applied = androidNativePlayback.appliedRevision;
+      if (!applied || payload.queueRevision !== applied) return;
+      noteAndroidNativeSampleRate(payload);
+      handler(payload);
+    });
+  }
+}
+
+// END js/runtime/android-bridge-client.js
+
+// BEGIN js/runtime/playback-engine.js
+
+// The player's one playback-engine contract. Two engines implement it: the browser's
+// AudioWorklet engine (player-streaming-engine.js) and Android's native engine behind the shell
+// bridge (android-bridge-client.js). Player code calls only the functions below; nothing else asks
+// which platform it runs on.
+//
+// Each engine also answers two policy questions for the ownership and listen helpers:
+// `holdsOwnClaim` (it acquires, renews and releases the server playback claim itself) and
+// `recordsListens` (it sends every listen write itself).
+
+const BROWSER_PLAYBACK_ENGINE = Object.freeze({
+  id: 'browser',
+  holdsOwnClaim: false,
+  recordsListens: false,
+  claimClientId: () => '',
+  ownsPlayback: () => false,
+  adopt: () => null,
+  start: (track, options) => startBrowserStreamingTrack(track, options),
+  pause: () => pauseBrowserStreaming(),
+  resume: (expectedStartRequestId, onPlaybackStarted, expectedCurrentRole) =>
+    resumeBrowserStreaming(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole),
+  seek: seconds => seekBrowserStreaming(seconds),
+  continuity: (track, options) => scheduleBrowserStreamingContinuity(track, options),
+  setLoop: (active, startSeconds, endSeconds) => setBrowserStreamingLoop(active, startSeconds, endSeconds),
+  stop: (reason, options) => stopBrowserStreaming(reason, options),
+  snapshot: () => getBrowserStreamingSnapshot(),
+  fail: (source, event, reason) => failBrowserStreaming(source, event, reason),
+});
+
+const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
+  id: 'android-native',
+  holdsOwnClaim: true,
+  recordsListens: true,
+  claimClientId: () => getAndroidNativePlaybackClientId(),
+  ownsPlayback: () => isAndroidNativePlaybackOwner(),
+  adopt: persistedState => attachAndroidNativePlayback(persistedState),
+  start: (track, { startSeconds = 0, autoplay = true } = {}) =>
+    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay }),
+  pause: () => pauseAndroidNativePlayback(),
+  resume: (_expectedStartRequestId, onPlaybackStarted) => resumeAndroidNativePlayback(onPlaybackStarted),
+  seek: seconds => seekAndroidNativePlayback(seconds),
+  continuity: (track, options) => scheduleAndroidNativeContinuity(track, options),
+  setLoop: active => setAndroidNativeLoop(active),
+  stop: (reason, options) => stopAndroidNativePlayback(reason, options),
+  snapshot: () => getAndroidNativePlaybackSnapshot(),
+  fail: (source, event, reason) => failAndroidNativeEngine(source, event, reason),
+});
+
+function isInsideAndroidShell() {
+  return typeof isAndroidShell === 'function' && isAndroidShell();
+}
+
+// The engine playing now: Android's once its handshake negotiated native playback.
+function currentPlaybackEngine() {
+  return typeof isAndroidNativePlayback === 'function' && isAndroidNativePlayback()
+    ? ANDROID_NATIVE_PLAYBACK_ENGINE : BROWSER_PLAYBACK_ENGINE;
+}
+
+// Inside the APK only the bridge handshake says which engine plays: the promise to wait for it, or
+// null elsewhere, so a browser never waits a turn it did not need.
+function playbackEngineHandshake() {
+  return isInsideAndroidShell() ? connectAndroidBridge() : null;
+}
+
+// A reloaded document re-attaches to playback its engine kept going; null when there is none.
+function adoptEnginePlayback(persistedState) {
+  return isInsideAndroidShell() ? ANDROID_NATIVE_PLAYBACK_ENGINE.adopt(persistedState) : null;
+}
+
+// A new start decides its engine, waiting for the handshake only inside the APK.
+async function startStreamingTrack(track, options = {}) {
+  const nativeRoute = typeof androidNativePlaybackRoute === 'function' ? androidNativePlaybackRoute() : null;
+  const engine = nativeRoute && await nativeRoute ? ANDROID_NATIVE_PLAYBACK_ENGINE : BROWSER_PLAYBACK_ENGINE;
+  return engine.start(track, options);
+}
+
+function pauseStreamingPlayback() {
+  return currentPlaybackEngine().pause();
+}
+
+function resumeStreamingPlayback(expectedStartRequestId = null, onPlaybackStarted = null, expectedCurrentRole = null) {
+  return currentPlaybackEngine().resume(expectedStartRequestId, onPlaybackStarted, expectedCurrentRole);
+}
+
+function seekStreamingPlayback(seconds) {
+  return currentPlaybackEngine().seek(seconds);
+}
+
+function scheduleStreamingContinuity(track, options = {}) {
+  return currentPlaybackEngine().continuity(track, options);
+}
+
+function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
+  return currentPlaybackEngine().setLoop(active, startSeconds, endSeconds);
+}
+
+function stopStreamingPlayback(reason = 'stopped', options = {}) {
+  return currentPlaybackEngine().stop(reason, options);
+}
+
+function getStreamingPlaybackSnapshot() {
+  return currentPlaybackEngine().snapshot();
+}
+
+function failStreamingEngine(source, event, reason) {
+  return currentPlaybackEngine().fail(source, event, reason);
+}
+
+// END js/runtime/playback-engine.js
+
 // BEGIN js/runtime/playback-ownership-helpers.js
 
-const PLAYBACK_OWNERSHIP_STORAGE_KEY = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
-const PLAYBACK_OWNERSHIP_LEASE_MS = 15000;
-const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 5000;
+const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
+const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
+const PLAYBACK_HANDOFF_RETRY_MS = 100;
+let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
+let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
+  ? createPlaybackOwnershipToken() : '';
+
+function createPlaybackOwnershipToken() {
+  if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') return '';
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let token = '';
+  for (let index = 0; index < bytes.length; index += 3) {
+    const value = (bytes[index] << 16) | ((bytes[index + 1] || 0) << 8) | (bytes[index + 2] || 0);
+    token += alphabet[(value >> 18) & 63] + alphabet[(value >> 12) & 63];
+    if (index + 1 < bytes.length) token += alphabet[(value >> 6) & 63];
+    if (index + 2 < bytes.length) token += alphabet[value & 63];
+  }
+  return token;
+}
+
+function normalizePlaybackOwnershipHandoff(value) {
+  if (!value || typeof value !== 'object') return null;
+  const id = String(value.id || '').toLowerCase();
+  const token = String(value.token || '');
+  const expiresAt = String(value.expiresAt || '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)
+      || !/^[A-Za-z0-9_-]{43}$/.test(token)
+      || !(Date.parse(expiresAt) > Date.now())) return null;
+  return { id, token, expiresAt };
+}
+
+function takePlaybackOwnershipHandoffEnvelope() {
+  if (typeof getSessionStorageItem !== 'function') return { found: false, handoff: null };
+  const raw = getSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY);
+  if (!raw) return { found: false, handoff: null };
+  try { return { found: true, handoff: normalizePlaybackOwnershipHandoff(JSON.parse(raw)) }; }
+  catch (_error) { return { found: true, handoff: null }; }
+}
+
+function createPlaybackOwnershipHandoff() {
+  const id = createPlaybackOwnershipTabId();
+  const token = createPlaybackOwnershipToken();
+  if (!id || !token) return null;
+  return { id, token, expiresAt: new Date(Date.now() + PLAYBACK_HANDOFF_WINDOW_MS).toISOString() };
+}
 
 function getPlaybackOwnershipState() {
-  if (!state?.player) {
-    return {
-      tabId: '',
-      lockStatus: 'unlocked',
-      blockedReason: '',
-      mirroredTrack: null,
-      activeClaim: null,
-      channel: null,
-      heartbeatTimer: 0,
-      initialized: false,
-    };
-  }
-  if (!state.player.ownership || typeof state.player.ownership !== 'object') {
-    state.player.ownership = {
-      tabId: '',
-      lockStatus: 'unlocked',
-      blockedReason: '',
-      mirroredTrack: null,
-      activeClaim: null,
-      channel: null,
-      heartbeatTimer: 0,
-      initialized: false,
-    };
-  }
-  return state.player.ownership;
+  return state.player.ownership ||= { tabId: '', activeClaim: null, lockStatus: 'unlocked',
+    blockedReason: '', mirroredTrack: null, heartbeatTimer: 0, initialized: false };
+}
+
+function createPlaybackOwnershipTabId() {
+  if (window?.crypto?.randomUUID) return String(window.crypto.randomUUID());
+  return typeof newMeasuredPlaybackId === 'function' ? newMeasuredPlaybackId() : '';
+}
+
+// The playing engine's claim policy from the playback-engine contract; without it, the browser's.
+function playingEngine() {
+  return typeof currentPlaybackEngine === 'function' ? currentPlaybackEngine() : null;
+}
+
+// Inside the APK the bridge handshake decides the engine: the promise to wait for, or null.
+function playingEngineHandshake() {
+  return typeof playbackEngineHandshake === 'function' ? playbackEngineHandshake() : null;
+}
+
+function getPlaybackOwnershipTabId() {
+  // An engine that holds its own claim, as Android's does, names the client the claim belongs to.
+  const engineClientId = playingEngine()?.claimClientId() || '';
+  if (engineClientId) return engineClientId;
+  const ownership = getPlaybackOwnershipState();
+  return ownership.tabId ||= createPlaybackOwnershipTabId();
 }
 
 function normalizePlaybackOwnershipTrack(track) {
   if (!track || typeof track !== 'object') return null;
-  const normalizedPath = String(track.path || '').trim();
-  const normalizedSrc = String(track.src || '').trim();
-  if (!normalizedPath && !normalizedSrc) return null;
-  return {
-    src: normalizedSrc,
-    path: normalizedPath,
-    title: String(track.title || '').trim(),
-    artist: String(track.artist || '').trim(),
-    album: String(track.album || '').trim(),
-    coverPath: String(track.coverPath || '').trim(),
-    trackNumber: String(track.trackNumber || '').trim(),
-  };
+  return { title: String(track.title || ''), artist: String(track.artist || ''),
+    album: String(track.album || ''), artworkUrl: track.artworkUrl || null };
 }
 
-function createPlaybackOwnershipTabId() {
-  if (window?.crypto?.randomUUID) {
-    return String(window.crypto.randomUUID());
-  }
-  return `tab-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-}
-
-function getPlaybackOwnershipTabId() {
-  const ownership = getPlaybackOwnershipState();
-  if (!ownership.tabId) {
-    ownership.tabId = createPlaybackOwnershipTabId();
-  }
-  return ownership.tabId;
-}
-
-function parsePlaybackOwnershipRecord(raw) {
-  if (!raw) return null;
+async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBACK_OWNERSHIP_HEARTBEAT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      tab_id: String(parsed.tab_id || '').trim(),
-      status: String(parsed.status || '').trim().toLowerCase(),
-      reason: String(parsed.reason || '').trim(),
-      updated_at_ms: Number(parsed.updated_at_ms || 0) || 0,
-      expires_at_ms: Number(parsed.expires_at_ms || 0) || 0,
-      track: normalizePlaybackOwnershipTrack(parsed.track),
-    };
-  } catch (_error) {
-    return null;
-  }
+    const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
+      signal: controller.signal,
+      ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+    if (!response.ok) {
+      const error = new Error('Playback ownership is unavailable.');
+      error.status = response.status;
+      throw error;
+    }
+    return await response.json();
+  } finally { clearTimeout(timeout); }
 }
 
-function readPlaybackOwnershipRecord() {
-  return parsePlaybackOwnershipRecord(getLocalStorageItem(PLAYBACK_OWNERSHIP_STORAGE_KEY));
-}
-
-function isPlaybackOwnershipRecordActive(record) {
-  return Boolean(
-    record
-    && record.tab_id
-    && record.status === 'playing'
-    && Number(record.expires_at_ms || 0) > Date.now()
-  );
-}
-
-function buildPlaybackOwnershipRecord(track, status = 'playing', reason = '') {
-  const normalizedTrack = normalizePlaybackOwnershipTrack(track);
-  const now = Date.now();
-  const normalizedStatus = String(status || '').trim().toLowerCase() || 'stopped';
-  return {
-    tab_id: getPlaybackOwnershipTabId(),
-    status: normalizedStatus,
-    reason: String(reason || '').trim(),
-    updated_at_ms: now,
-    expires_at_ms: normalizedStatus === 'playing' ? now + PLAYBACK_OWNERSHIP_LEASE_MS : now,
-    track: normalizedTrack,
-  };
-}
-
-function announcePlaybackOwnership(record) {
-  if (!record) return;
-  setLocalStorageItem(PLAYBACK_OWNERSHIP_STORAGE_KEY, JSON.stringify(record));
-  const ownership = getPlaybackOwnershipState();
-  if (ownership.channel && typeof ownership.channel.postMessage === 'function') {
-    ownership.channel.postMessage(record);
-  }
-}
-
-function stopPlaybackOwnershipHeartbeat() {
-  const ownership = getPlaybackOwnershipState();
-  if (!ownership.heartbeatTimer) return;
-  clearInterval(ownership.heartbeatTimer);
-  ownership.heartbeatTimer = 0;
-}
-
-function refreshPlaybackOwnershipClaim(track = null) {
-  const ownership = getPlaybackOwnershipState();
-  const activeClaim = ownership.activeClaim;
-  if (!activeClaim) return false;
-  const nextTrack = normalizePlaybackOwnershipTrack(track)
-    || normalizePlaybackOwnershipTrack(state?.player?.current)
-    || activeClaim.track;
-  const nextRecord = buildPlaybackOwnershipRecord(nextTrack, 'playing', 'active_playback');
-  ownership.activeClaim = nextRecord;
-  ownership.lockStatus = 'unlocked';
-  ownership.blockedReason = '';
-  ownership.mirroredTrack = null;
-  announcePlaybackOwnership(nextRecord);
-  return true;
-}
-
-function startPlaybackOwnershipHeartbeat() {
-  const ownership = getPlaybackOwnershipState();
-  if (ownership.heartbeatTimer || typeof setInterval !== 'function') return;
-  ownership.heartbeatTimer = setInterval(() => {
-    const playback = typeof getPlayerPlaybackSnapshot === 'function'
-      ? getPlayerPlaybackSnapshot()
-      : { paused: true, ended: false };
-    if (playback.paused || playback.ended) return;
-    refreshPlaybackOwnershipClaim();
-  }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+function isShellPlaybackUnavailable() {
+  return typeof isAndroidPlaybackUnavailable === 'function' && isAndroidPlaybackUnavailable();
 }
 
 function clearBlockedPlaybackState() {
@@ -12346,155 +14375,383 @@ function clearBlockedPlaybackState() {
   ownership.mirroredTrack = null;
 }
 
-function syncMirroredPlaybackState(record, options = {}) {
+function stopPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
-  const wasLockedByAnotherTab = ownership.lockStatus === 'locked';
-  const isActive = isPlaybackOwnershipRecordActive(record);
-  const sameTab = isActive && record.tab_id === getPlaybackOwnershipTabId();
-  if (sameTab) {
-    ownership.activeClaim = record;
-    clearBlockedPlaybackState();
-    startPlaybackOwnershipHeartbeat();
-    return;
-  }
+  if (ownership.heartbeatTimer) clearInterval(ownership.heartbeatTimer);
+  ownership.heartbeatTimer = 0;
+}
+
+function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
+  const ownership = getPlaybackOwnershipState();
+  ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   ownership.activeClaim = null;
-  stopPlaybackOwnershipHeartbeat();
-  if (isActive) {
+  if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+  ownership.lockStatus = 'locked';
+  ownership.blockedReason = 'playback_unavailable';
+  const offset = typeof getPlayerPlaybackSnapshot === 'function'
+    ? getPlayerPlaybackSnapshot().currentTime : 0;
+  if (typeof closeListenSegment === 'function') closeListenSegment(offset);
+  if (!state.player.listenSession?.paused_at_unix_ms && typeof markListenSessionPaused === 'function') {
+    markListenSessionPaused(offset);
+  }
+  if (typeof stopStreamingPlayback === 'function') {
+    void Promise.resolve(stopStreamingPlayback(reason, { preserveSnapshot: true })).catch(() => {});
+  }
+  if (updateUi && typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+function syncMirroredPlaybackState(snapshot) {
+  const ownership = getPlaybackOwnershipState();
+  if (snapshot?.is_playing_elsewhere) {
+    if (ownership.blockedReason !== 'playing_in_another_tab') losePlaybackOwnership('ownership-takeover', false);
     ownership.lockStatus = 'locked';
     ownership.blockedReason = 'playing_in_another_tab';
-    ownership.mirroredTrack = normalizePlaybackOwnershipTrack(record.track);
-    if (options.pauseLocalPlayback !== false && !wasLockedByAnotherTab) {
-      if (typeof stopStreamingPlayback === 'function') {
-        try {
-          Promise.resolve(stopStreamingPlayback('ownership-takeover')).catch((error) => {
-            console.warn('[AlbumHaven][Playback] Failed to stop streaming after ownership takeover.', error);
-          });
-        } catch (error) {
-          console.warn('[AlbumHaven][Playback] Failed to stop streaming after ownership takeover.', error);
-        }
-      }
-    }
-  } else {
+    ownership.mirroredTrack = normalizePlaybackOwnershipTrack(snapshot.track);
+  } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
   }
-  if (typeof updatePlayerUi === 'function') {
-    updatePlayerUi();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+async function handlePlaybackOwnershipEvent() {
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion || 0;
+  try {
+    // Inside the APK the native client may already own playback a reloaded document re-attaches to;
+    // only the handshake names it, so asking before it would report this app's own playback as elsewhere.
+    const handshake = playingEngineHandshake();
+    if (handshake) await handshake;
+    const snapshot = await playbackOwnershipRequest('GET',
+      `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}`);
+    if (version === (ownership.requestVersion || 0)) syncMirroredPlaybackState(snapshot);
+  } catch (_error) {
+    // A failed read never grants playback; acquisition still requires PUT.
   }
+}
+
+function announcePlaybackOwnership() {
+  getPlaybackOwnershipState().channel?.postMessage({ type: 'changed' });
+}
+
+function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = null) {
+  const ownership = getPlaybackOwnershipState();
+  const claim = ownership.activeClaim;
+  const playback = playbackSnapshot
+    || (typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null);
+  if (ownership.handoffAttempted || !claim?.claimToken || playback?.paused || playback?.ended
+      || typeof navigator?.sendBeacon !== 'function') return false;
+  ownership.handoffAttempted = true;
+  const handoff = createPlaybackOwnershipHandoff();
+  if (!handoff || typeof setSessionStorageItem !== 'function'
+      || !setSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY, JSON.stringify(handoff))) return false;
+  let accepted = false;
+  try {
+    accepted = navigator.sendBeacon('/playback/state/handoff', new Blob([JSON.stringify({
+      protocol: 1,
+      clientId: getPlaybackOwnershipTabId(),
+      claimToken: claim.claimToken,
+      csrf_token: window.readSessionCsrfCookie?.() || '',
+      handoff: { id: handoff.id, token: handoff.token },
+      completion,
+    })], { type: 'application/json' }));
+  } catch (_error) {
+    accepted = false;
+  }
+  if (!accepted && typeof removeSessionStorageItem === 'function') {
+    removeSessionStorageItem(PLAYBACK_HANDOFF_STORAGE_KEY);
+  }
+  return accepted;
+}
+
+function isPlaybackClaimRenewable() {
+  const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+  return !playback?.paused && !playback?.ended;
+}
+
+function startPlaybackOwnershipHeartbeat() {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
+  ownership.heartbeatTimer = setInterval(() => {
+    if (ownership.recoveryPromise) return;
+    if (ownership.activeClaim) {
+      if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+    }
+    else void handlePlaybackOwnershipEvent();
+  }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+}
+
+function recoverPlaybackOwnership(callback) {
+  const ownership = getPlaybackOwnershipState();
+  stopPlaybackOwnershipHeartbeat();
+  const recovery = Promise.resolve().then(callback);
+  ownership.recoveryPromise = recovery;
+  return recovery.finally(() => {
+    if (ownership.recoveryPromise !== recovery) return;
+    ownership.recoveryPromise = null;
+    startPlaybackOwnershipHeartbeat();
+  });
+}
+
+async function playbackOwnershipTrack(track, previous = null) {
+  if (!track?.path) throw new Error('Playback track is unavailable.');
+  let playbackRef = previous?.path === track.path ? previous.track.playbackRef : null;
+  if (!playbackRef || Date.parse(previous?.referenceExpiresAt || '') <= Date.now()) {
+    const refs = await playbackOwnershipRequest('POST', '/playback/refs', { protocol: 1,
+      tracks: [{ clientKey: getPlaybackOwnershipTabId(), path: track.path }] });
+    if (refs.protocol !== 1 || refs.tracks?.length !== 1 || !refs.tracks[0].playbackRef) {
+      throw new Error('Playback reference is unavailable.');
+    }
+    playbackRef = refs.tracks[0].playbackRef;
+    previous = { referenceExpiresAt: refs.expiresAt };
+  }
+  return { path: track.path, referenceExpiresAt: previous.referenceExpiresAt,
+    track: { ...normalizePlaybackOwnershipTrack(track), artworkUrl: null, playbackRef } };
+}
+
+async function deletePlaybackClaim(claim) {
+  if (!claim?.claimToken) return;
+  await playbackOwnershipRequest('DELETE', '/playback/state', {
+    protocol: 1, clientId: getPlaybackOwnershipTabId(), claimToken: claim.claimToken,
+  });
+}
+
+async function requestPlaybackClaim(payload, timeoutMs) {
+  // The answer's expiresAt is on the server's clock, so this document times the lease on its own
+  // monotonic clock, from before the request: the server starts the lease before it answers.
+  const sentAt = performance.now();
+  return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt };
+}
+
+function acceptPlaybackClaim(result, prepared) {
+  if (result.protocol !== 1 || !result.claimToken || !Number.isFinite(Date.parse(result.expiresAt))
+      || !(Number.isFinite(result.leaseMs) && result.leaseMs > 0)) {
+    throw new Error('Playback claim is unavailable.');
+  }
+  const ownership = getPlaybackOwnershipState();
+  // Every acquire and heartbeat says afresh whether listen writes can reach Last.fm; null when it does not say.
+  const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
+  const leaseDeadline = result.sentAt + result.leaseMs;
+  const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
+  ownership.activeClaim = claim;
+  clearBlockedPlaybackState();
+  if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+  ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
+    Math.max(0, leaseDeadline - performance.now()));
+  startPlaybackOwnershipHeartbeat();
+  announcePlaybackOwnership();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+async function expirePlaybackClaim(claim) {
+  const ownership = getPlaybackOwnershipState();
+  // A claim request in flight confirms or drops this claim itself within its request deadline,
+  // and a newer request queued behind it decides ownership in its turn.
+  const version = ownership.requestVersion || 0;
+  await ownership.pendingOperation;
+  if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return;
+  // A jump in this document's clock can reach this deadline while the server's lease still runs,
+  // so a playing claim asks the server once; the renewal drops it on refusal or failure.
+  if (isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
+  else losePlaybackOwnership();
+}
+
+async function refreshPlaybackOwnershipClaim(track = null) {
+  const ownership = getPlaybackOwnershipState();
+  if (!ownership.activeClaim || ownership.renewing) return false;
+  const version = ownership.requestVersion || 0;
+  const previousOperation = ownership.pendingOperation;
+  ownership.renewing = true;
+  const operation = (async () => {
+    await previousOperation;
+    if (version !== (ownership.requestVersion || 0)) return false;
+    const claim = ownership.activeClaim;
+    if (!claim) return false;
+    try {
+      const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
+      if (version !== (ownership.requestVersion || 0)) return false;
+      const result = await requestPlaybackClaim({ protocol: 1,
+        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
+        state: 'playing', track: prepared.track });
+      if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
+      acceptPlaybackClaim(result, prepared);
+      return true;
+    } catch (_error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+      return false;
+    }
+  })().finally(() => { ownership.renewing = false; });
+  ownership.pendingOperation = operation;
+  return operation;
+}
+
+async function acquirePlaybackOwnershipHandoff(prepared, handoff) {
+  playbackOwnershipRuntimeClaimToken ||= createPlaybackOwnershipToken();
+  if (!playbackOwnershipRuntimeClaimToken) throw new Error('Playback handoff is unavailable.');
+  const deadline = Math.min(Date.parse(handoff.expiresAt), Date.now() + PLAYBACK_HANDOFF_WINDOW_MS);
+  while (Date.now() < deadline) {
+    try {
+      return await requestPlaybackClaim({ protocol: 1,
+        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+        claimToken: playbackOwnershipRuntimeClaimToken, state: 'playing', track: prepared.track,
+        handoff: { id: handoff.id, token: handoff.token } },
+      Math.max(1, Math.min(PLAYBACK_OWNERSHIP_HEARTBEAT_MS, deadline - Date.now())));
+    } catch (error) {
+      if (error?.status && error.status !== 409) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise(resolve => setTimeout(resolve, Math.min(PLAYBACK_HANDOFF_RETRY_MS, remaining)));
+    }
+  }
+  throw new Error('Playback handoff expired.');
+}
+
+async function claimPlaybackOwnership(track, options = {}) {
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  const previousOperation = ownership.pendingOperation;
+  const handoff = options.handoff || null;
+  const operation = (async () => {
+    await previousOperation;
+    // Inside the APK only the handshake says whether Android plays natively or at all.
+    const handshake = playingEngineHandshake();
+    if (handshake) await handshake;
+    if (version !== ownership.requestVersion) return false;
+    const claim = ownership.activeClaim;
+    // An engine that holds its own claim acquires, heartbeats and releases it before any output.
+    if (playingEngine()?.holdsOwnClaim) return true;
+    try {
+      if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
+      const prepared = await playbackOwnershipTrack(track, claim);
+      if (version !== ownership.requestVersion) return false;
+      const result = handoff
+        ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
+        : await requestPlaybackClaim({ protocol: 1,
+          clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+      if (version !== ownership.requestVersion) {
+        if (!claim) await deletePlaybackClaim(result).catch(() => {});
+        return false;
+      }
+      acceptPlaybackClaim(result, prepared);
+      return true;
+    } catch (_error) {
+      if (version === ownership.requestVersion) {
+        losePlaybackOwnership();
+        await handlePlaybackOwnershipEvent();
+        if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();
+      }
+      return false;
+    }
+  })();
+  ownership.pendingOperation = operation;
+  return operation;
+}
+
+async function releasePlaybackOwnership() {
+  // An engine that holds its own claim releases it once its listen writes drain.
+  if (playingEngine()?.holdsOwnClaim) return false;
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  const claim = ownership.activeClaim;
+  if (claim && typeof drainPlaybackSessionRequests === 'function') {
+    await drainPlaybackSessionRequests(claim.claimToken);
+  }
+  if (version !== ownership.requestVersion) return false;
+  const previousOperation = ownership.pendingOperation;
+  const operation = (async () => {
+    await previousOperation;
+    if (version !== ownership.requestVersion) return false;
+    ownership.activeClaim = null;
+    if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+    clearBlockedPlaybackState();
+    await deletePlaybackClaim(claim).catch(() => {});
+    announcePlaybackOwnership();
+    return Boolean(claim);
+  })();
+  ownership.pendingOperation = operation;
+  return operation;
 }
 
 function notifyBlockedPlaybackStart() {
   if (typeof showToast === 'function') {
-    showToast('Playback is active in another tab.', 'error', 2800);
+    showToast(getPlaybackOwnershipState().blockedReason === 'playing_in_another_tab'
+      ? 'Playback is active in another tab.' : 'Playback is unavailable.', 'error', 2800);
   }
-}
-
-function claimPlaybackOwnership(track, options = {}) {
-  const activeRecord = readPlaybackOwnershipRecord();
-  if (isPlaybackOwnershipRecordActive(activeRecord) && activeRecord.tab_id !== getPlaybackOwnershipTabId()) {
-    syncMirroredPlaybackState(activeRecord);
-    if (options.showBlockedToast !== false) {
-      notifyBlockedPlaybackStart();
-    }
-    return false;
-  }
-  const nextRecord = buildPlaybackOwnershipRecord(
-    track,
-    'playing',
-    String(options.reason || 'active_playback'),
-  );
-  const ownership = getPlaybackOwnershipState();
-  ownership.activeClaim = nextRecord;
-  clearBlockedPlaybackState();
-  announcePlaybackOwnership(nextRecord);
-  startPlaybackOwnershipHeartbeat();
-  if (typeof updatePlayerUi === 'function') {
-    updatePlayerUi();
-  }
-  return true;
-}
-
-function releasePlaybackOwnership(status = 'paused', track = null) {
-  const ownership = getPlaybackOwnershipState();
-  const activeRecord = ownership.activeClaim || readPlaybackOwnershipRecord();
-  if (!activeRecord || activeRecord.tab_id !== getPlaybackOwnershipTabId()) {
-    ownership.activeClaim = null;
-    stopPlaybackOwnershipHeartbeat();
-    return false;
-  }
-  ownership.activeClaim = null;
-  stopPlaybackOwnershipHeartbeat();
-  const nextRecord = buildPlaybackOwnershipRecord(
-    track || state?.player?.current,
-    status,
-    status === 'paused' ? 'playback_paused' : 'playback_stopped',
-  );
-  announcePlaybackOwnership(nextRecord);
-  clearBlockedPlaybackState();
-  if (typeof updatePlayerUi === 'function') {
-    updatePlayerUi();
-  }
-  return true;
 }
 
 function canRestoreActivePlayback(parsedState) {
-  return claimPlaybackOwnership(parsedState?.track, {
-    reason: 'restore_request',
+  const stored = pendingPlaybackOwnershipHandoff;
+  pendingPlaybackOwnershipHandoff = null;
+  if (stored?.found && !stored.handoff) return false;
+  return recoverPlaybackOwnership(() => claimPlaybackOwnership(parsedState?.track, {
     showBlockedToast: false,
+    handoff: stored?.handoff || null,
+  }));
+}
+
+function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
+  const ownership = getPlaybackOwnershipState();
+  ownership.handoffAttempted = false;
+  const stored = takePlaybackOwnershipHandoffEnvelope();
+  const handoff = stored.handoff;
+  if (!handoff) {
+    if (!state.player.current || playbackSnapshot?.paused !== false
+        || playbackSnapshot?.ended || !isActivePlaybackOwner()) return false;
+    return recoverPlaybackOwnership(() => claimPlaybackOwnership(
+      state.player.current, { showBlockedToast: false },
+    ));
+  }
+  if (!state.player.current) return false;
+  const runtimeClientId = createPlaybackOwnershipTabId();
+  const runtimeClaimToken = createPlaybackOwnershipToken();
+  if (!runtimeClientId || !runtimeClaimToken) return false;
+  return recoverPlaybackOwnership(() => {
+    ownership.tabId = runtimeClientId;
+    playbackOwnershipRuntimeClaimToken = runtimeClaimToken;
+    ownership.activeClaim = null;
+    if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
+    return claimPlaybackOwnership(state.player.current, { showBlockedToast: false, handoff });
   });
 }
 
-function canStartPlaybackInThisTab(track) {
-  return claimPlaybackOwnership(track, {
-    reason: 'manual_start',
-    showBlockedToast: true,
-  });
-}
+function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
 
 function isActivePlaybackOwner() {
-  const activeRecord = readPlaybackOwnershipRecord();
-  return Boolean(
-    isPlaybackOwnershipRecordActive(activeRecord)
-    && activeRecord.tab_id === getPlaybackOwnershipTabId()
-  );
+  const claim = getPlaybackOwnershipState().activeClaim;
+  return Boolean(claim?.claimToken && claim.leaseDeadline > performance.now());
 }
 
 function canEmitPlaybackSessionSideEffects() {
-  const activeRecord = readPlaybackOwnershipRecord();
-  if (!isPlaybackOwnershipRecordActive(activeRecord)) return true;
-  return activeRecord.tab_id === getPlaybackOwnershipTabId();
+  // An engine that holds its own claim authorizes listen writes by it.
+  const engine = playingEngine();
+  return engine?.holdsOwnClaim ? engine.ownsPlayback() : isActivePlaybackOwner();
 }
 
-function isPlaybackLockedByAnotherTab() {
-  const ownership = getPlaybackOwnershipState();
-  return ownership.lockStatus === 'locked';
+/** The held claim's last answer says this account's listens cannot reach Last.fm. */
+function isScrobblingUnavailableAtClaim() {
+  return getPlaybackOwnershipState().activeClaim?.scrobblingAvailable === false;
 }
 
-function getMirroredPlaybackTrack() {
-  return normalizePlaybackOwnershipTrack(getPlaybackOwnershipState().mirroredTrack);
+function getPlaybackClaimContext() {
+  const claim = getPlaybackOwnershipState().activeClaim;
+  return isActivePlaybackOwner() ? { clientId: getPlaybackOwnershipTabId(), claimToken: claim.claimToken } : {};
 }
 
-function handlePlaybackOwnershipEvent(record) {
-  syncMirroredPlaybackState(record);
-}
+function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
+function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
 function initPlaybackOwnershipCoordinator() {
+  if (window?.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   const ownership = getPlaybackOwnershipState();
   if (ownership.initialized) return;
   ownership.initialized = true;
   getPlaybackOwnershipTabId();
-  if (typeof window?.addEventListener === 'function') {
-    window.addEventListener('storage', (event) => {
-      if (event.key !== PLAYBACK_OWNERSHIP_STORAGE_KEY) return;
-      handlePlaybackOwnershipEvent(parsePlaybackOwnershipRecord(event.newValue));
-    });
-  }
   if (typeof BroadcastChannel === 'function') {
     ownership.channel = new BroadcastChannel(PLAYBACK_OWNERSHIP_CHANNEL_NAME);
-    ownership.channel.addEventListener('message', (event) => {
-      handlePlaybackOwnershipEvent(parsePlaybackOwnershipRecord(JSON.stringify(event.data || null)));
-    });
+    ownership.channel.addEventListener('message', handlePlaybackOwnershipEvent);
   }
-  syncMirroredPlaybackState(readPlaybackOwnershipRecord(), { pauseLocalPlayback: false });
+  startPlaybackOwnershipHeartbeat();
+  void handlePlaybackOwnershipEvent();
 }
 
 // END js/runtime/playback-ownership-helpers.js
@@ -14997,14 +17254,16 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumKey = String(getAlbumRequestKey(openAlbum) || '').trim();
   if (!albumKey) return false;
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
-  // The rows stay until fresh details replace them, so an unrelated change shows nothing.
+  // Rows this session edited were rendered optimistically, so they stay until canonical details land.
+  const editedLocally = locallyEditedAlbumKeys.has(albumKey);
+  if (!editedLocally) renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
-      resolveLineage: !locallyEditedAlbumKeys.has(albumKey),
+      resolveLineage: !editedLocally,
     });
   } catch (error) {
     loadError = error;
@@ -15064,6 +17323,12 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
 }
 
 function cancelTrackModalAlbumDetailsPrewarms() {
+  // Unregister aborted loads now: their rejection can settle a task later, and an
+  // open in between must start its own request instead of joining a doomed one.
+  trackModalAlbumDetailsLoads.forEach((load, alias) => {
+    if (trackModalSpeculativeAlbumDetailsLoadControllers.has(load)) trackModalAlbumDetailsLoads.delete(alias);
+  });
+  trackModalSpeculativeAlbumDetailsLoadControllers.clear();
   trackModalSpeculativePrewarmControllers.forEach((controller) => controller.abort());
   trackModalSpeculativePrewarmControllers.clear();
 }
@@ -16952,6 +19217,17 @@ function parseLoopTime(value) {
 }
 
 function getProblematicAlbumNavigationOptions(album, selected) {
+  if (album?.entity_kind === 'artist') {
+    const artistName = String(album.name || '').trim() || 'Unknown Artist';
+    const artworkLabel = `Artist ${artistName}`;
+    return {
+      variant: 'wide', action: true, key: album.key, selected, label: artistName,
+      subtitle: `Artist · ${String(album.problem_reasons?.[0] || '')}`,
+      artworkHtml: buildAlbumArtboxHtml({ state: 'missing', label: artworkLabel }), artworkLabel,
+      count: null, countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+    };
+  }
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
@@ -20067,28 +22343,16 @@ function readBrowserLogHistoryEntries() {
   return browserLogHistoryStore.read();
 }
 
+// Saved through the Android app where it can (android-bridge-client.js), else by a download anchor.
 async function exportBrowserLogHistory() {
   const result = await readBrowserLogHistoryEntries();
   const exportDocument = buildBrowserLogHistoryExportDocument(result.items);
-  const blob = new Blob([`${JSON.stringify(exportDocument, null, 2)}\n`], {
-    type: 'application/json;charset=utf-8',
-  });
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
   const filenameTimestamp = exportDocument.exported_at
     .replace(/[:.]/g, '-')
     .replace('T', '_')
     .replace('Z', '');
-  anchor.href = objectUrl;
-  anchor.download = `album-haven-log-history-${filenameTimestamp}.json`;
-  anchor.hidden = true;
-  document.body.appendChild(anchor);
-  try {
-    anchor.click();
-  } finally {
-    anchor.remove();
-    URL.revokeObjectURL(objectUrl);
-  }
+  await downloadPageFile(`album-haven-log-history-${filenameTimestamp}.json`, 'application/json',
+    `${JSON.stringify(exportDocument, null, 2)}\n`);
   return exportDocument;
 }
 
@@ -20444,19 +22708,11 @@ async function selectUtilityLogHistoryEvent(id) {
   await controller.selectEvent(id);
 }
 
+// Saved through the Android app where it can (android-bridge-client.js), else by a download anchor.
 async function downloadUtilityLogHistory() {
   const data = await getUtilityLogHistoryController().exportCurrent();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-  anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.hidden = true;
-  document.body.appendChild(anchor);
-  try {
-    anchor.click();
-  } finally {
-    anchor.remove();
-    URL.revokeObjectURL(url);
-  }
+  await downloadPageFile(`album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`, 'application/json',
+    JSON.stringify(data, null, 2));
 }
 
 function openUtilityLogHistoryQuery(exportAfter = false) {
@@ -20768,6 +23024,24 @@ function buildAlbumTrackTableSkeletonRow(index) {
   };
 }
 
+function isValidAlbumRating(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 10;
+}
+
+// A disc after the first shows its own rating only when it and the album are
+// both rated and the two ratings differ; the first disc never does.
+function buildDiscRatingHtml(group, groupIndex, albumRating) {
+  const discRating = group?.discRating;
+  if (groupIndex < 1 || !isValidAlbumRating(discRating) || !isValidAlbumRating(albumRating)) return '';
+  if (discRating === albumRating) return '';
+  return buildGalleryRatingHtml({
+    value: discRating,
+    maximum: 10,
+    label: `Disc rating ${discRating}/10`,
+    className: 'album-track-table__disc-rating',
+  });
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
@@ -20863,9 +23137,13 @@ function buildAlbumTrackTableHtml(config = {}) {
         : `<span class="album-track-table__disc-title">${escapeHtml(label)}</span>${count ? `<span class="album-track-table__disc-count">${escapeHtml(count)}</span>` : ''}${length ? `<span class="album-track-table__disc-length">${escapeHtml(length)}</span>` : ''}`;
       return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${headingContent}</summary>${table}${summaryHtml}</details>`;
     }
-    const heading = showLabel
+    const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
+    const ratingHtml = showLabel ? buildDiscRatingHtml(group, groupIndex, config.albumRating) : '';
+    const heading = ratingHtml
+      ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
+      : headingHtml;
     return `<section class="album-track-table__disc">${heading}${table}${summaryHtml}</section>`;
   }).join('');
   const loading = groups.some((group) => group?.loadingRows);
@@ -21638,6 +23916,36 @@ function resolveAlbumForPlayerTrack(track) {
     if (albumMatch) return albumMatch;
   }
   return null;
+}
+
+// The player's album opens on the first tap: from the albums this page already holds, else from
+// the server by the playing file. A miss says why instead of doing nothing.
+async function openPlayerTrackAlbum(track, modalOptions = {}) {
+  const local = resolveAlbumForPlayerTrack(track);
+  if (local) {
+    openTrackModal(local, modalOptions);
+    return true;
+  }
+  const path = String(track?.path || '');
+  if (!path) return false;
+  let message = "The playing album couldn't be opened. Try again.";
+  try {
+    const response = await fetch(`/album-details?track_path=${encodeURIComponent(path)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.ok && payload?.ok && payload.album) {
+      // A track that changed meanwhile opens nothing rather than the previous album.
+      if (String(state.player.current?.path || '') !== path) return false;
+      openTrackModal(payload.album, modalOptions);
+      return true;
+    }
+    if (payload?.error) message = payload.error;
+  } catch (_error) {
+    // The fallback message covers a failed request.
+  }
+  showToast(message, 'error', 3600);
+  return false;
 }
 
 function getUpdatedAlbumForTrackPaths(updatedAlbums, trackPaths) {
@@ -23914,6 +26222,8 @@ function getAlbumProblemFilterSortIndex(album) {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
+const renderedProblemFilterOptions = new WeakMap();
+
 function renderProblemFilterControls(els) {
   const reasonTypes = getProblemReasonTypes();
   const selected = state.utility.selectedProblemFilters || [];
@@ -23939,7 +26249,7 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    els.problemFilterMenu.innerHTML = reasonTypes.length
+    const optionsHtml = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
             <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
@@ -23949,6 +26259,12 @@ function renderProblemFilterControls(els) {
         ? '<div class="utility-problem-filter-empty">Loading more problem types…</div>'
         : '')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
+    // List refreshes re-render the controls while the menu is open; rewriting
+    // unchanged options would reset its scroll position and keyboard focus.
+    if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
+      els.problemFilterMenu.innerHTML = optionsHtml;
+      renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
+    }
   }
 }
 
@@ -24238,6 +26554,394 @@ async function openUtilityModalForTrack(trackPath) {
       state.utility.problematicNavigationActiveToken = 0;
     }
   }
+}
+
+async function openMusicBrainzArtistProblem(occurrenceId) {
+  const normalizedOccurrenceId = String(occurrenceId || '').trim();
+  if (!normalizedOccurrenceId) return;
+  const hadLoadedProblems = Boolean(state.utility.loaded);
+  if (!state.utility.loaded) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+  }
+  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+    item?.occurrence_id,
+    item?.musicbrainz_occurrence_id,
+    item?.key,
+  ].some((value) => String(value || '').trim() === normalizedOccurrenceId));
+  let problem = findProblem();
+  if (!problem && hadLoadedProblems) {
+    const loadResult = await loadProblematicFiles(true, { render: false });
+    if (loadResult === null) return;
+    problem = findProblem();
+  }
+  if (!problem) {
+    showToast('This artist issue is not currently listed in Problematic Files.', 'error', 3200);
+    return;
+  }
+  state.utility.selectedProblematicKey = String(problem.key || normalizedOccurrenceId);
+  state.utility.deferProblematicAutoSelection = false;
+  state.utility.selectedProblemFilters = [];
+  state.utility.problemDropdownOpen = false;
+  setUtilityActiveTab('problematic-files');
+  if (isMusicBrainzArtistProblem(problem)) {
+    await loadMusicBrainzArtistProblemDetail(problem, { render: false });
+  } else if (!problem.detail_loaded) {
+    await loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true, { render: false });
+  }
+  openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
+}
+
+const MUSICBRAINZ_ARTIST_MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS = 350;
+
+function isMusicBrainzArtistProblem(item) {
+  return item?.entity_kind === 'artist';
+}
+
+function readMusicBrainzArtistMbid(value) {
+  const trimmed = String(value || '').trim();
+  const urlMatch = trimmed.match(/^https:\/\/musicbrainz\.org\/artist\/([0-9a-f-]{36})\/?$/i);
+  const mbid = urlMatch ? urlMatch[1] : trimmed;
+  return MUSICBRAINZ_ARTIST_MBID_PATTERN.test(mbid) ? mbid.toLowerCase() : null;
+}
+
+function getMusicBrainzArtistProblemView(detail = {}) {
+  const reason = String(detail.problem_reason_code || '');
+  if (reason === 'musicbrainz_artist_not_found') return 'not-found';
+  // An unconfirmed single name match is a candidate to confirm, like several matches.
+  if (reason === 'musicbrainz_artist_ambiguous' || reason === 'musicbrainz_manual_review_required') return 'multiple';
+  if (reason === 'musicbrainz_artist_metadata_conflict') return 'conflict';
+  if (reason === 'musicbrainz_mirror_replication_pending' || reason === 'musicbrainz_matched_entity_unavailable') return 'pending';
+  return 'provider';
+}
+
+function getMusicBrainzArtistProblemIdentityRows(detail = {}) {
+  const view = getMusicBrainzArtistProblemView(detail);
+  const candidates = Array.isArray(detail.candidates) ? detail.candidates : [];
+  if (view !== 'conflict' || !detail.artist_mbid) return candidates.map((candidate) => ({ ...candidate, role: 'candidate' }));
+  const current = {
+    artist_mbid: detail.artist_mbid,
+    canonical_name: detail.canonical_name || detail.local_artist_name,
+    disambiguation: detail.disambiguation,
+    artist_kind: detail.artist_kind,
+    country: detail.country,
+    evidence_summary: detail.evidence_summary,
+    musicbrainz_url: detail.musicbrainz_url,
+    role: 'current',
+  };
+  return [current, ...candidates.filter((candidate) => candidate.artist_mbid !== detail.artist_mbid)
+    .map((candidate) => ({ ...candidate, role: 'suggested' }))];
+}
+
+function formatMusicBrainzAttemptTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatMusicBrainzNextRetry(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'With the next library scan';
+  const minutes = Math.round((date.getTime() - Date.now()) / 60000);
+  if (minutes <= 0) return 'Shortly';
+  if (minutes < 60) return `In ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  return formatMusicBrainzAttemptTime(value);
+}
+
+function buildMusicBrainzExternalLinkHtml(url, label, { disabled = false, className = '' } = {}) {
+  return ButtonComponent.renderActionButton({
+    ariaLabel: label,
+    title: disabled ? 'Enter a valid artist URL or MBID first' : 'Open artist page',
+    icon: 'external',
+    presentation: 'bare',
+    className,
+    disabled,
+    attributes: { 'data-open-musicbrainz-url': disabled ? '' : url },
+  });
+}
+
+function buildMusicBrainzIdentityTableHtml(detail, ui) {
+  const view = getMusicBrainzArtistProblemView(detail);
+  const rows = getMusicBrainzArtistProblemIdentityRows(detail);
+  const tableRows = rows.map((row) => {
+    const selected = ui.selectedMbid === row.artist_mbid;
+    const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
+    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
+    const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
+    return {
+      key: row.artist_mbid,
+      ariaSelected: selected,
+      className: selected ? 'is-selected' : '',
+      cells: {
+        target: `<label class="musicbrainz-identity-choice"><input class="musicbrainz-identity-radio" type="radio" name="musicbrainz-artist-identity" value="${escapeHtml(row.artist_mbid)}" data-musicbrainz-select-identity="${escapeHtml(row.artist_mbid)}"${selected ? ' checked' : ''} aria-label="Select ${escapeHtml(name)}"><span class="musicbrainz-identity-copy"><span class="musicbrainz-identity-line"><strong>${escapeHtml(name)}</strong>${facts ? `<small>${escapeHtml(facts)}</small>` : ''}</span><span class="musicbrainz-identity-mbid">${escapeHtml(row.artist_mbid)}</span></span></label>`,
+        reason: `<span class="musicbrainz-identity-evidence">${escapeHtml(row.evidence_summary || 'Name only')}</span>`,
+        action: buildMusicBrainzExternalLinkHtml(row.musicbrainz_url, `Open ${row.canonical_name || 'artist'} on MusicBrainz`),
+      },
+    };
+  });
+  return buildUtilityCompactTable({
+    id: 'musicbrainz-artist-identities',
+    ariaLabel: view === 'conflict' ? 'MusicBrainz identity comparison' : 'MusicBrainz artist candidates',
+    columns: 'minmax(220px,1.4fr) minmax(160px,1fr) 44px',
+    actionTrackWidth: '44px',
+    columnsConfig: [
+      { key: 'target', label: view === 'conflict' ? 'Artist identity / MBID' : 'Candidate artist / MBID' },
+      { key: 'reason', label: 'Local evidence' },
+      { key: 'action', label: 'Actions', action: true, header: 'screen-reader' },
+    ],
+    headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline',
+    selection: 'single', rows: tableRows,
+    emptyHtml: '<p class="utility-detail-meta">No candidate artists are stored yet. Retry to search again.</p>',
+  });
+}
+
+function buildMusicBrainzManualResolutionHtml(detail, ui) {
+  const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+  const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
+  const helper = ui.validating ? 'Verifying with MusicBrainz…'
+    : ui.validationError ? ui.validationError
+      : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
+        : 'Paste the selected artist page URL or MBID to verify it before assignment.';
+  return `<div class="musicbrainz-manual-resolution">
+      <strong>No MusicBrainz artist matched automatically.</strong>
+      <p class="utility-detail-meta">Find the correct artist on MusicBrainz, then paste the artist page URL or bare artist MBID here. Album Haven verifies the entity before assignment.</p>
+      <label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">MusicBrainz artist URL or MBID</label>
+      <div class="musicbrainz-manual-field-row">
+        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1">
+        ${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid })}
+        ${ButtonComponent.renderButton({ label: 'Find manually', attributes: { 'data-open-musicbrainz-url': searchUrl } })}
+      </div>
+      <div class="musicbrainz-manual-helper${ui.validationError ? ' is-error' : ''}" role="status" aria-live="polite">${escapeHtml(helper)}</div>
+    </div>`;
+}
+
+function buildMusicBrainzProviderStatusHtml(detail, view) {
+  const lastAttempt = formatMusicBrainzAttemptTime(detail.last_attempt_at) || 'Not yet attempted';
+  const intro = view === 'pending'
+    ? 'The local MusicBrainz mirror is catching up. Local library data is unaffected.'
+    : 'Existing identity and metadata preserved. Album Haven will retry automatically.';
+  const guidance = view === 'pending'
+    ? 'Album Haven retries automatically while the mirror replicates. Use Retry now to check immediately.'
+    : 'Restore the configured local service, then use Retry now if you do not want to wait. Candidate selection stays unavailable until provider evidence can be verified.';
+  return `<p class="utility-detail-meta">${escapeHtml(intro)}</p>
+    <h4 class="utility-detail-section-title">Retry status</h4>
+    <dl class="musicbrainz-retry-status">
+      <dt>Last attempt</dt><dd>${escapeHtml(lastAttempt)}</dd>
+      <dt>Next retry</dt><dd>${escapeHtml(formatMusicBrainzNextRetry(detail.next_attempt_at))}</dd>
+      <dt>Configured provider</dt><dd>Local metadata service</dd>
+      <dt>Local library</dt><dd>Unaffected</dd>
+    </dl>
+    <p class="utility-detail-meta">${escapeHtml(guidance)}</p>`;
+}
+
+function buildMusicBrainzArtistProblemDetail(item) {
+  const detail = item?.musicbrainz_detail;
+  if (item?.musicbrainz_detail_failed) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Artist details unavailable', message: 'Unable to load this MusicBrainz artist issue.' });
+  }
+  if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
+  const ui = item.musicbrainz_ui || {};
+  const view = getMusicBrainzArtistProblemView(detail);
+  const label = String(detail.unresolved_reason || item.problem_reasons?.[0] || '');
+  const albumCount = Number(detail.local_album_count || item.local_album_count || 0);
+  const lastChecked = formatMusicBrainzAttemptTime(detail.last_checked_at);
+  const artwork = buildAlbumArtboxHtml({ state: 'missing', label: `Artist ${detail.local_artist_name || ''}` });
+  let body = '';
+  let actions = '';
+  if (view === 'not-found') {
+    body = buildMusicBrainzManualResolutionHtml(detail, ui);
+    actions = ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !ui.validated || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } });
+  } else if (view === 'multiple' || view === 'conflict') {
+    body = `<h4 class="utility-detail-section-title">${view === 'conflict' ? 'Identity comparison' : 'Candidate artists'}</h4>
+      <div class="utility-detected-table">${buildMusicBrainzIdentityTableHtml(detail, ui)}</div>`;
+    const canAssign = Boolean(ui.selectedMbid) && ui.selectedMbid !== (view === 'conflict' ? detail.artist_mbid : null);
+    actions = `${view === 'conflict' && detail.artist_mbid ? ButtonComponent.renderButton({ label: 'Keep current MBID', disabled: ui.busy, attributes: { 'data-musicbrainz-keep-current': '1' } }) : ''}
+      ${ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !canAssign || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } })}`;
+  } else {
+    body = buildMusicBrainzProviderStatusHtml(detail, view);
+    actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
+  }
+  const pendingDots = view === 'pending'
+    ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
+    : '';
+  return `<div class="utility-detail-header musicbrainz-artist-problem" data-musicbrainz-artist-problem="${escapeHtml(item.local_artist_id)}">
+      <div class="utility-detail-cover">${artwork}</div>
+      <div class="utility-detail-summary">
+        <h3 class="utility-detail-title">${escapeHtml(detail.local_artist_name || item.name || 'Unknown Artist')}</h3>
+        <div class="utility-detail-meta">Artist</div>
+        <div class="utility-detail-meta">${escapeHtml(`${albumCount} local album${albumCount === 1 ? '' : 's'}`)}</div>
+        ${lastChecked ? `<div class="utility-detail-meta">Last checked: ${escapeHtml(lastChecked)}</div>` : ''}
+        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}</div>
+      </div>
+    </div>
+    ${body}
+    ${ui.error ? buildOnPageAlertHtml({ severity: 'error', title: 'MusicBrainz action failed', message: ui.error }) : ''}
+    <div class="utility-detected-actions">${actions}</div>`;
+}
+
+async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
+  if (!isMusicBrainzArtistProblem(item)) return null;
+  if (!force && (item.musicbrainz_detail || item.musicbrainz_detail_loading)) return item.musicbrainz_detail || null;
+  item.musicbrainz_detail_loading = true;
+  item.musicbrainz_detail_failed = false;
+  try {
+    const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}`, { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.artist) throw new Error(payload?.detail || 'Artist details unavailable.');
+    const detail = payload.artist;
+    const view = getMusicBrainzArtistProblemView(detail);
+    const identities = getMusicBrainzArtistProblemIdentityRows(detail);
+    item.musicbrainz_detail = detail;
+    item.musicbrainz_ui = {
+      selectedMbid: view === 'conflict'
+        ? (identities.find((row) => row.role === 'suggested')?.artist_mbid || detail.artist_mbid || null)
+        : (identities.length === 1 ? identities[0].artist_mbid : null),
+      manualValue: '',
+    };
+  } catch {
+    item.musicbrainz_detail_failed = true;
+  } finally {
+    item.musicbrainz_detail_loading = false;
+  }
+  if (render) renderProblematicFiles({ preserveProblematicTree: true });
+  return item.musicbrainz_detail || null;
+}
+
+function getSelectedMusicBrainzArtistProblem() {
+  const item = getSelectedProblematicAlbum();
+  return isMusicBrainzArtistProblem(item) ? item : null;
+}
+
+async function postMusicBrainzArtistAction(item, path, body, method = 'POST') {
+  const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}/${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(response.status === 404 ? 'No MusicBrainz artist has that MBID.' : (payload?.detail || 'MusicBrainz is unavailable. Try again shortly.'));
+  }
+  return payload;
+}
+
+async function runMusicBrainzArtistMutation(item, perform, successMessage) {
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  if (ui.busy) return;
+  ui.busy = true;
+  ui.error = '';
+  renderProblematicFiles({ preserveProblematicTree: true });
+  try {
+    await perform();
+    if (typeof showToast === 'function') showToast(successMessage, 'info', 2600);
+    await loadProblematicFiles(true);
+    void refreshGalleryArtistMusicBrainzStatus({ force: true });
+  } catch (error) {
+    ui.error = error?.message || 'MusicBrainz action failed.';
+  } finally {
+    ui.busy = false;
+    renderProblematicFiles({ preserveProblematicTree: true });
+  }
+}
+
+function scheduleMusicBrainzManualValidation(item) {
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  clearTimeout(ui.validationTimer);
+  ui.validated = null;
+  ui.validationError = '';
+  const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+  ui.validating = Boolean(mbid);
+  if (!mbid) return;
+  const requestedValue = ui.manualValue;
+  ui.validationTimer = setTimeout(async () => {
+    try {
+      const payload = await postMusicBrainzArtistAction(item, 'validate', { artist_reference: requestedValue });
+      if (ui.manualValue === requestedValue) ui.validated = payload.candidate || null;
+    } catch (error) {
+      if (ui.manualValue === requestedValue) ui.validationError = error?.message || 'Unable to verify that artist.';
+    } finally {
+      if (ui.manualValue === requestedValue) {
+        ui.validating = false;
+        syncMusicBrainzManualStatus(ui);
+      }
+    }
+  }, MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS);
+  syncMusicBrainzManualStatus(ui);
+}
+
+// Updates only the helper and Assign button so the field keeps focus and caret.
+function syncMusicBrainzManualStatus(ui) {
+  const helper = document.querySelector('.musicbrainz-manual-helper');
+  if (helper) {
+    helper.textContent = ui.validating ? 'Verifying with MusicBrainz…'
+      : ui.validationError ? ui.validationError
+        : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
+          : 'Paste the selected artist page URL or MBID to verify it before assignment.';
+    helper.classList.toggle('is-error', Boolean(ui.validationError));
+  }
+  const assign = document.querySelector('[data-musicbrainz-assign]');
+  if (assign) ButtonComponent.setDisabled(assign, !ui.validated || Boolean(ui.busy));
+}
+
+function handleMusicBrainzArtistProblemEvent(event) {
+  const target = event.target;
+  const externalLink = target?.closest?.('[data-open-musicbrainz-url]');
+  if (event.type === 'click' && externalLink) {
+    event.preventDefault();
+    const url = externalLink.dataset.openMusicbrainzUrl;
+    if (url && /^https:\/\/musicbrainz\.org\//.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+  const item = getSelectedMusicBrainzArtistProblem();
+  if (!item) return false;
+  const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
+  if (event.type === 'input' && target?.matches?.('[data-musicbrainz-manual-artist]')) {
+    ui.manualValue = target.value;
+    scheduleMusicBrainzManualValidation(item);
+    const mbid = readMusicBrainzArtistMbid(ui.manualValue);
+    const row = target.closest('.musicbrainz-manual-field-row');
+    const link = row?.querySelector('[data-open-musicbrainz-url]');
+    if (link) {
+      ButtonComponent.setDisabled(link, !mbid);
+      link.dataset.openMusicbrainzUrl = mbid ? `https://musicbrainz.org/artist/${mbid}` : '';
+      link.title = mbid ? 'Open artist page' : 'Enter a valid artist URL or MBID first';
+    }
+    return true;
+  }
+  if (event.type === 'change' && target?.matches?.('[data-musicbrainz-select-identity]')) {
+    ui.selectedMbid = target.value;
+    renderProblematicFiles({ preserveProblematicTree: true });
+    return true;
+  }
+  if (event.type !== 'click') return false;
+  const detail = item.musicbrainz_detail || {};
+  if (target?.closest?.('[data-musicbrainz-retry]')) {
+    event.preventDefault();
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}), 'MusicBrainz retry queued.');
+    return true;
+  }
+  if (target?.closest?.('[data-musicbrainz-keep-current]')) {
+    event.preventDefault();
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
+      artist_mbid: detail.artist_mbid,
+      evidence_summary: 'Owner kept the currently assigned MusicBrainz artist.',
+    }, 'PUT'), 'Current MBID kept.');
+    return true;
+  }
+  if (target?.closest?.('[data-musicbrainz-assign]')) {
+    event.preventDefault();
+    const mbid = getMusicBrainzArtistProblemView(detail) === 'not-found' ? ui.validated?.artist_mbid : ui.selectedMbid;
+    if (!mbid) return true;
+    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'match', {
+      artist_mbid: mbid,
+      evidence_summary: getMusicBrainzArtistProblemView(detail) === 'not-found'
+        ? 'Owner assigned a verified MusicBrainz artist manually.'
+        : 'Owner selected this MusicBrainz artist in Problematic Files.',
+    }, 'PUT'), 'MBID assigned.');
+    return true;
+  }
+  return false;
 }
 
 function getIgnorableProblemRows(album) {
@@ -26143,6 +28847,241 @@ function mountAlertsAppearanceEditor(detail) {
 
 // END js/runtime/problematic-files-virtual-list.js
 
+// BEGIN js/runtime/android-settings.js
+
+// Settings > Android app, and the Update row of the cogwheel menu. Both show only inside the APK.
+const ANDROID_SANDBOX_SWITCH_NOTICE = 'Changing sandbox stops playback, clears the current queue, and loads the selected server.';
+const ANDROID_SANDBOX_CHOICES = Array.from({ length: 99 }, (_, index) => ({
+  value: String(index + 1), label: `sandbox${index + 1}`,
+}));
+
+const ANDROID_UPDATES_CAPABILITY = 'updates.manual.v1';
+const ANDROID_SANDBOX_CAPABILITY = 'sandbox.select.v1';
+
+// `update` is the shell's latest `updates.state` payload; null until the handshake reports one.
+const androidSettings = { status: null, switching: false, update: null };
+
+function androidVersionLabel(info) {
+  return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
+}
+
+// The cogwheel menu's Update row for the shell's update state, or null while it has none to show:
+// [label, bridge action or null while busy, the action named below the label].
+function androidUpdateMenuView() {
+  const update = androidSettings.update;
+  if (!update || !hasAndroidCapability(ANDROID_UPDATES_CAPABILITY)) return null;
+  switch (update.state) {
+    case 'checking': return ['Checking…', null];
+    case 'upToDate': return ['No updates available', 'check'];
+    // One press downloads, verifies and installs it.
+    case 'available': return ['Update available', 'download', 'Download and install'];
+    case 'downloading': return [`Downloading ${update.progress}%`, null];
+    case 'verifying': return ['Verifying update…', null];
+    case 'ready': return ['Install update', 'install'];
+    // Pressing it again shows a confirmation left unanswered; an approved install keeps installing.
+    case 'installing': return ['Installing…', 'install'];
+    case 'authorization': return ['Open install settings', 'install'];
+    // Every failure reads the same; the shell logs its error and reason. A failure that kept its
+    // update downloads it again, as the shell's own retry does; any other checks again.
+    case 'failed': return ['Update failed. Try again', update.versionName ? 'download' : 'check'];
+    default: return ['Check for update', 'check'];
+  }
+}
+
+// The row is changed in place, so an open menu keeps its focus while progress arrives. A menu
+// item is not a live region: screen readers read the new state when they reach the row.
+function renderAndroidUpdateMenuItem() {
+  const item = document.querySelector('[data-android-update-menu-item]');
+  if (!item) return;
+  const view = androidUpdateMenuView();
+  item.hidden = !view;
+  if (!view) return;
+  const [label, action, detail = ''] = view;
+  item.querySelector('[data-android-update-label]').textContent = label;
+  const detailElement = item.querySelector('[data-android-update-detail]');
+  detailElement.textContent = detail;
+  detailElement.hidden = !detail;
+  if (action) {
+    item.setAttribute('data-android-update-action', action);
+    item.removeAttribute('aria-disabled');
+  } else {
+    item.removeAttribute('data-android-update-action');
+    item.setAttribute('aria-disabled', 'true');
+  }
+}
+
+// Renders even when `update` is not a state, so a pressed row is never left busy.
+function setAndroidUpdate(update) {
+  if (update && typeof update === 'object' && typeof update.state === 'string') androidSettings.update = update;
+  renderAndroidUpdateMenuItem();
+}
+
+async function requestAndroidUpdate(action) {
+  // A refused command is not applicable in the shell's current state; its next `updates.state`
+  // event shows that state.
+  const response = await sendAndroidBridgeCommand(`updates.${action}`).catch(() => null);
+  setAndroidUpdate(response?.updates);
+}
+
+function androidSelectsSandbox(info) {
+  return Boolean(info?.sandbox) && hasAndroidCapability(ANDROID_SANDBOX_CAPABILITY);
+}
+
+function buildAndroidSandboxHtml(info) {
+  const label = `sandbox${info.sandbox.slot}`;
+  // The shared dropdown trigger, as Library settings' path choices use it.
+  const trigger = window.ButtonComponent.renderButton({
+    label, disabled: androidSettings.switching,
+    attributes: {
+      'data-android-sandbox-trigger': '', 'aria-labelledby': 'android-sandbox-label',
+      'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-describedby': 'android-sandbox-origin',
+    },
+  });
+  const status = androidSettings.status ? buildOnPageAlertHtml({ ...androidSettings.status, role: 'status' }) : '';
+  return `<section class="android-settings__sandbox" data-android-sandbox-section>
+    <div><h3 id="android-sandbox-label">Sandbox server</h3><p>Choose the server this Sandbox app connects to.</p></div>
+    ${trigger}
+    <p id="android-sandbox-origin">${escapeHtml(info.origin)}</p>
+    ${buildOnPageAlertHtml({ severity: 'warning', title: 'Before changing servers', message: ANDROID_SANDBOX_SWITCH_NOTICE, role: 'status' })}
+    ${status}
+  </section>`;
+}
+
+// The channel badge needs the handshake; a shell that refused it names no channel.
+function buildAndroidCardHtml(info, contentHtml) {
+  const badge = !info ? '' : buildStatusBadgeHtml(info.variant === 'sandbox'
+    ? { label: 'S · Sandbox', variant: 'warning' } : { label: 'Stable', variant: 'neutral' });
+  return `<div class="android-settings">
+    <div class="android-settings__heading">
+      <div><h2>Android app</h2><p>Manage this app on your device.</p></div>
+      ${badge}
+    </div>
+    ${contentHtml}
+  </div>`;
+}
+
+function buildAndroidSettingsHtml(info) {
+  // The shell's own Update required screen offers Check for update; this page has no bridge to ask.
+  if (!info && isAndroidUpdateRequired()) {
+    return buildAndroidCardHtml(null, buildOnPageAlertHtml({ severity: 'warning', title: 'Update required',
+      message: 'This version of Album Haven can’t open the current site. Install the latest app to continue.', role: 'status' }));
+  }
+  if (!info && androidBridge.connection) {
+    return buildOnPageAlertHtml({ severity: 'info', title: 'Android app', message: 'Connecting to the app…', role: 'status' });
+  }
+  if (!info) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Android app',
+      message: 'This app could not connect to the current site.', role: 'status' });
+  }
+  // Updates run from the cogwheel menu; this card names the installed version.
+  return buildAndroidCardHtml(info, `${buildOnPageAlertHtml({ severity: 'info', title: 'Android app', message: androidVersionLabel(info), role: 'status' })}
+    ${androidSelectsSandbox(info) ? buildAndroidSandboxHtml(info) : ''}`);
+}
+
+// Every successful handshake, whichever feature asked for it, names the shell's update state and
+// the sandbox it just connected to.
+function adoptAndroidSettingsHandshake(info) {
+  if (info.updates) androidSettings.update = info.updates;
+  renderAndroidUpdateMenuItem();
+  const connectedSlot = info.sandbox?.connectedSlot;
+  if (connectedSlot) {
+    androidSettings.status = { severity: 'success', title: `Connected to sandbox${connectedSlot}.`,
+      message: 'The selected server is ready.' };
+  }
+  if (state.utility.activeTab === 'android') renderUtilityAndroid();
+}
+
+// Settings without a shell connection asks again each time it renders; a pending handshake is
+// shared, and a failed one waits for the next render rather than retrying in a loop. A success
+// renders through adoptAndroidSettingsHandshake; a refusal or failure replaces the pending state.
+function connectAndroidSettings() {
+  if (androidBridge.info || isAndroidUpdateRequired()) return;
+  void connectAndroidBridge().then(() => {
+    if (androidBridge.info || state.utility.activeTab !== 'android') return;
+    const { detail } = getUtilityModalElements();
+    if (detail) detail.innerHTML = buildAndroidSettingsHtml(null);
+  });
+}
+
+function renderUtilityAndroid() {
+  const els = getUtilityModalElements();
+  if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  connectAndroidSettings();
+  if (els.sidebarLabel) els.sidebarLabel.textContent = 'Android app';
+  const info = androidBridge.info;
+  const rows = [{ key: 'app', label: 'Android app' }];
+  if (androidSelectsSandbox(info)) rows.push({ key: 'sandbox', label: 'Sandbox server' });
+  els.count.textContent = String(rows.length);
+  if (els.problemFilterButton) {
+    els.problemFilterButton.disabled = true;
+    els.problemFilterButton.hidden = true;
+  }
+  if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
+  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
+  els.list.innerHTML = rows.map(row => window.NavigationTree.renderItem({
+    key: row.key, label: row.label, variant: 'panel', action: true, selected: row.key === 'app',
+    attributes: { 'data-utility-android-key': row.key },
+  })).join('');
+  els.detail.innerHTML = buildAndroidSettingsHtml(info);
+}
+
+async function selectAndroidSandbox(slot) {
+  const current = androidBridge.info.sandbox.slot;
+  if (slot === current) return;
+  androidSettings.switching = true;
+  androidSettings.status = { severity: 'info', title: `Switching to sandbox${slot}…`,
+    message: 'Playback has stopped and the current queue is empty.' };
+  renderUtilityAndroid();
+  try {
+    // On success the shell loads the selected origin and this document goes away.
+    await sendAndroidBridgeCommand('sandbox.select', { slot });
+  } catch (_error) {
+    androidSettings.switching = false;
+    androidSettings.status = { severity: 'error', title: `Could not connect to sandbox${slot}.`,
+      message: `Still using sandbox${current}. Check your connection and try again.` };
+    renderUtilityAndroid();
+  }
+}
+
+function handleAndroidSettingsClick(event) {
+  // The menu stays open on this row (account-menu.js) and rejects it while busy; the row stays busy
+  // until the shell answers, so the command cannot be sent twice.
+  const updateAction = event.target.closest?.('[data-android-update-action]');
+  if (updateAction) {
+    event.preventDefault();
+    updateAction.setAttribute('aria-disabled', 'true');
+    void requestAndroidUpdate(updateAction.getAttribute('data-android-update-action'));
+    return;
+  }
+  const row = event.target.closest?.('[data-utility-android-key]');
+  if (row) {
+    const section = row.getAttribute('data-utility-android-key') === 'sandbox'
+      ? '[data-android-sandbox-section]' : '.android-settings__heading';
+    document.querySelector(section)?.scrollIntoView({ block: 'start' });
+    return;
+  }
+  const trigger = event.target.closest?.('[data-android-sandbox-trigger]');
+  if (!trigger || androidSettings.switching) return;
+  event.preventDefault();
+  openUtilityChoiceDropdown(trigger, {
+    formats: ANDROID_SANDBOX_CHOICES, matchTriggerWidth: true, label: 'Sandbox server',
+    selected: String(androidBridge.info.sandbox.slot),
+    onSelect: (value) => {
+      void selectAndroidSandbox(Number(value));
+      return false;
+    },
+  });
+}
+
+function initAndroidSettings() {
+  if (!isAndroidShell()) return;
+  document.addEventListener('click', handleAndroidSettingsClick);
+  androidBridge.events.set('updates.state', setAndroidUpdate);
+  connectAndroidSettings();
+}
+
+// END js/runtime/android-settings.js
+
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
 const problematicNavigationRowContent = new WeakMap();
@@ -26316,6 +29255,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {
+      void loadMusicBrainzArtistProblemDetail(selectedAlbum);
+    }
+    return;
+  }
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
@@ -27020,6 +29966,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityIntegrations();
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
+  } else if (activeTab === 'android') {
+    renderUtilityAndroid();
   } else {
     renderProblematicFiles(options);
   }
@@ -28310,6 +31258,10 @@ async function loadProblematicFiles(force = false, options = {}) {
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
   );
+  const canRenderBoundedPage = () => (
+    !String(state.utility.searchQuery || '').trim()
+    && !(state.utility.selectedProblemFilters || []).length
+  );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
@@ -28338,6 +31290,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
+  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
+  const refreshesCompleteList = state.utility.loaded === true
+    && state.utility.problematicFilesComplete === true;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
@@ -28438,7 +31393,9 @@ async function loadProblematicFiles(force = false, options = {}) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
         }
-        if ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage()) {
+        if ((canRenderBoundedPage()
+            && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
+            || shouldRenderInitialPage()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -28579,6 +31536,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (!normalizedKey) return null;
   const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
+    return currentAlbum;
+  }
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {
@@ -29601,7 +32562,7 @@ function loadActiveUtilityTab(force = false) {
     }
     return null;
   }
-  if (state.utility.activeTab === 'appearance') {
+  if (['appearance', 'android'].includes(state.utility.activeTab)) {
     renderUtilityModalContent();
     return null;
   }
@@ -37704,12 +40665,13 @@ const renderedTrackModalHeaderHtml = new WeakMap();
 function buildTrackModalHeaderHtml(album, { versionTabs = false, missing = false } = {}) {
   return buildAlbumDetailsHeaderHtml({
     layout: String(document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar').trim().toLowerCase(),
-    artist: album.album_artist || '',
+    artist: albumDisplayArtist(album),
     album: album.display_name || album.name || 'Album',
     year: album.display_year || album.year || '',
     releaseType: album.release_type || 'ALBUM',
     sourceMarkersHtml: buildAlbumCoverSourceMarkersHtml(album),
-    tags: [versionTabs ? '' : album.edition || '', missing ? 'Missing' : ''].filter(Boolean),
+    tags: [versionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), missing ? 'Missing' : ''].filter(Boolean),
+    poorArtQuality: album.poor_art_quality === true,
     actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing }),
   });
 }
@@ -38013,6 +40975,16 @@ function getTrackDiscLabel(track) {
   return '';
 }
 
+// Matches album_disc_key() in album_ratings_postgres.py, the identity of
+// app-owned disc ratings.
+function getTrackDiscRatingKey(track) {
+  const raw = String((track && track.disc_number_raw) || '').split('/')[0].trim().replace(/\s+/g, ' ').toLowerCase();
+  if (/^\d+$/.test(raw)) return String(Number(raw));
+  if (raw) return raw;
+  const numeric = Number(track && track.disc_number);
+  return Number.isInteger(numeric) && numeric >= 1 ? String(numeric) : '';
+}
+
 function isBonusDiscTrack(track) {
   const rawDisc = [track?.disc_number_raw, track?.disc_subtitle]
     .map((value) => String(value || '').trim())
@@ -38134,6 +41106,11 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const sectionTitleByFirstTrack = new Map((Array.isArray(album?.track_sections) ? album.track_sections : [])
     .map((section) => [String(section?.first_track_path || '').trim(), String(section?.title || '').trim()])
     .filter(([path, title]) => path && title));
+  const albumPreference = album?.album_preference || {};
+  const discRatingByKey = new Map(
+    (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
+      .map((discRating) => [discRating?.disc_key, discRating?.rating])
+  );
   const componentGroups = grouped.groups.map((group) => {
     let discLabel = String(group.discLabel || '').trim();
     if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
@@ -38191,6 +41168,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discSubtitle: group.discSubtitle,
       isBonus: Boolean(group.isBonus),
       lengthDisplay: discSeconds > 0 ? (formatTrackDuration(discSeconds) || formatAlbumDuration(discSeconds)) : '',
+      discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
       tracks: componentTracks,
     };
   });
@@ -38210,6 +41188,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+    albumRating: albumPreference.rating ?? null,
 
     multiDisc: grouped.multiDisc,
     perDiscLengths: hasNamedLaterDisc,
@@ -38231,6 +41210,7 @@ function buildPlayerTrackPayload(track, album = null) {
     album: track.album || '',
     coverPath: track.cover_path || '',
     durationSeconds: Number(track.duration_seconds) || 0,
+    year: String(album?.display_year || album?.year || track.year || '').trim(),
   };
 }
 
@@ -38585,6 +41565,7 @@ function buildPersistedPlaybackQueue(currentTrackPath) {
         artist: String(track.artist || ''),
         ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
         album: String(track.album || ''),
+        ...(track.year ? { year: String(track.year) } : {}),
         coverPath: String(track.coverPath || ''),
         ...(Number(track.durationSeconds) > 0
           ? { durationSeconds: Number(track.durationSeconds) }
@@ -38634,6 +41615,7 @@ function buildPersistedPlayerState(options = {}) {
       artist: String(current.artist || ''),
       ...(current.albumArtist ? { albumArtist: String(current.albumArtist) } : {}),
       album: String(current.album || ''),
+      ...(current.year ? { year: String(current.year) } : {}),
       coverPath: String(current.coverPath || ''),
       ...(durationSeconds > 0
         ? { durationSeconds }
@@ -38662,6 +41644,7 @@ function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
           artist: String(track.artist || ''),
           ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
           album: String(track.album || ''),
+          ...(track.year ? { year: String(track.year) } : {}),
           coverPath: String(track.coverPath || ''),
           ...(Number(track.durationSeconds) > 0
             ? { durationSeconds: Number(track.durationSeconds) }
@@ -38754,10 +41737,14 @@ function attachAlbumSnapshotToRestoredPlaybackQueue(album, currentTrack) {
 
 let playerUnloadWasPlaying = null;
 let playerUnloadStatePersisted = false;
+let playerUnloadPlaybackSnapshot = null;
 
 function resetPlayerUnloadPersistence() {
+  const playbackSnapshot = playerUnloadPlaybackSnapshot;
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
+  playerUnloadPlaybackSnapshot = null;
+  return playbackSnapshot;
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -38780,16 +41767,14 @@ function persistPlayerState(force = false, options = {}) {
 }
 
 function persistPlayerStateForUnload(reason) {
-  if (playerUnloadStatePersisted) return false;
+  if (reason !== 'pagehide' || playerUnloadStatePersisted) return false;
   playerUnloadStatePersisted = true;
-  const playbackSnapshot = getPlayerPlaybackSnapshot();
+  const playbackSnapshot = playerUnloadPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('paused', state.player.current);
-  }
-  flushListenSessionOnUnload(reason);
+  // Let the lease expire: an unload release could overtake the final beacon.
+  flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,
     wasPlaying: playerUnloadWasPlaying,
@@ -38814,13 +41799,17 @@ function restorePlayerState() {
   }
   const track = parsed?.track;
   if (!track || !track.src) return;
+  const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
     : !Boolean(parsed.wasPlaying);
-  const canResumePlayback = !savedPaused
-    && (typeof canRestoreActivePlayback !== 'function'
-      || Boolean(canRestoreActivePlayback(parsed)));
+  const ownershipResult = !savedPaused
+    && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
+    // A reloaded document re-attaches to the queue its engine kept playing, as Android's does.
+    const adopted = typeof adoptEnginePlayback === 'function' ? adoptEnginePlayback(parsed) : null;
+    if (adopted && await adopted) return;
+    let canResumePlayback = false;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);
     const restoredQueueHasAlbumSnapshot = restoredQueue
@@ -38869,15 +41858,23 @@ function restorePlayerState() {
       updatePlayerUi();
       persistPlayerState(true);
     };
-    const startRestoredRole = () => startStreamingTrack(track, {
+    const startWithOwnership = (allowed) => {
+      if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
+        || (state.player.current && state.player.current.path !== track.path)) return null;
+      canResumePlayback = Boolean(allowed)
+        && (typeof isActivePlaybackOwner !== 'function' || isActivePlaybackOwner());
+      return startStreamingTrack(track, {
       startSeconds: boundedTime,
       autoplay: canResumePlayback,
       ...(canResumePlayback ? {
         allowSuspendedAutoplayFallback: true,
         onAutoplayStarted: completeRestoredAutoplay,
       } : {}),
-    });
-    const restoredRolePromise = canResumePlayback
+      });
+    };
+    const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
+      ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
+    const restoredRolePromise = !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {
@@ -38926,8 +41923,20 @@ function restorePlayerState() {
 // BEGIN js/runtime/player-listen-session-helpers.js
 
 const MIN_RECORDED_LISTEN_SECONDS = 10;
-const LISTEN_SESSION_LONG_PAUSE_MS = 60 * 60 * 1000;
+// How far short of its duration a track's heard audio may fall and still have been heard to the end.
+const HEARD_TO_END_TOLERANCE_SECONDS = 0.25;
+// Last.fm never scrobbles a track this short, however much of it was heard.
+const MAX_UNSCROBBLABLE_DURATION_SECONDS = 30;
+// Last.fm counts a listen after half the track or four minutes, whichever comes first.
+const MAX_SCROBBLE_THRESHOLD_SECONDS = 240;
+const PLAYBACK_SESSION_REQUEST_TIMEOUT_MS = 10000;
+// Transient now-playing and scrobble failures back off from about five seconds to at most five minutes.
+const LISTEN_WRITE_RETRY_BASE_MS = 5000;
+const LISTEN_WRITE_RETRY_MAX_MS = 300000;
+// The server's answer when this account has no Last.fm session.
+const LASTFM_UNAVAILABLE_ERROR = 'account_scoped_scrobble_unavailable';
 let measuredPlaybackDeviceId = '';
+const pendingPlaybackSessionRequests = new Set();
 
 function newMeasuredPlaybackId() {
   if (typeof crypto === 'undefined') return '';
@@ -38977,9 +41986,10 @@ function buildMeasuredCompletionFields(session, { advance = false, finalized = f
   const measurement = session?.measurement;
   if (!measurement?.deviceId || !measurement.sessionId) return {};
   if (advance) measurement.sequence = (Number(measurement.sequence) || 0) + 1;
+  measurement.finalized = Boolean(measurement.finalized || finalized);
   return {
     measurement_version: 'rendered-pcm-v1', device_id: measurement.deviceId,
-    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized,
+    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized: measurement.finalized,
     measured_listened_seconds: Math.round(measurement.total * 1000) / 1000,
     max_measured_contiguous_seconds: Math.round(measurement.longest * 1000) / 1000,
   };
@@ -38994,8 +42004,8 @@ function getListenSessionDuration(session) {
 function getListenScrobbleThreshold(durationSeconds) {
   const duration = Math.max(0, Number(durationSeconds) || 0);
   if (!duration) return 0;
-  if (duration < 600) return duration * 0.5;
-  return 300;
+  if (duration <= MAX_UNSCROBBLABLE_DURATION_SECONDS) return Infinity;
+  return Math.min(duration * 0.5, MAX_SCROBBLE_THRESHOLD_SECONDS);
 }
 
 function totalListenedSeconds(session) {
@@ -39012,7 +42022,14 @@ function longestListenedSegmentSeconds(session) {
 }
 
 function shouldPersistListenSession(session) {
-  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0) > MIN_RECORDED_LISTEN_SECONDS;
+  // A measured listen is judged on its measured audio alone, as the server judges it.
+  const listened = session?.measurement ? Number(session.measurement.total) || 0
+    : Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session));
+  if (listened > MIN_RECORDED_LISTEN_SECONDS) return true;
+  // A track of ten seconds or less is recorded once it was heard to its end.
+  const duration = getListenSessionDuration(session);
+  return duration > 0 && duration <= MIN_RECORDED_LISTEN_SECONDS && listened > 0
+    && listened >= duration - HEARD_TO_END_TOLERANCE_SECONDS;
 }
 
 function clearListenPauseMarker(session) {
@@ -39031,18 +42048,13 @@ function markListenSessionPaused(currentTime = null) {
   session.pause_offset_seconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
 }
 
-function hasListenSessionExceededPauseThreshold(session) {
-  return Boolean(
-    session
-    && Number(session.paused_at_unix_ms || 0) > 0
-    && (Date.now() - Number(session.paused_at_unix_ms || 0)) >= LISTEN_SESSION_LONG_PAUSE_MS
-  );
-}
-
 function canScrobbleListenSession(session) {
   const duration = getListenSessionDuration(session);
   if (!duration) return false;
   const threshold = getListenScrobbleThreshold(duration);
+  if (session?.measurement) {
+    return session.measurement.total >= threshold || session.measurement.longest >= threshold;
+  }
   return totalListenedSeconds(session) >= threshold || longestListenedSegmentSeconds(session) >= threshold;
 }
 
@@ -39051,6 +42063,7 @@ function buildNowPlayingPayload(track, session = null) {
   const activeSession = session || state.player.listenSession;
   return {
     ...buildMeasuredCompletionFields(activeSession),
+    ...(typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {}),
     path: String(track.path || ''),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
@@ -39076,17 +42089,107 @@ function buildPlaybackRequestOrigin() {
   };
 }
 
-async function postPlaybackSession(url, payload) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || 'Playback sync failed');
+// An engine that records listens itself, as Android's does, builds and sends every listen write.
+function isListenRecordedNatively() {
+  return typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().recordsListens;
+}
+
+function listenWriteClockMs() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+function listenWriteRetryJitter() {
+  return Math.random();
+}
+
+/** `Retry-After` as milliseconds from now: delay-seconds or an HTTP date; null when absent or invalid. */
+function parseRetryAfterMs(value) {
+  const text = String(value ?? '').trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const date = text ? Date.parse(text) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function playbackSessionError(response, data) {
+  const error = new Error(data?.error || 'Playback sync failed');
+  error.status = Number(response.status) || 0;
+  error.code = String(data?.error || '');
+  error.retryAfterMs = parseRetryAfterMs(response.headers?.get?.('Retry-After'));
+  return error;
+}
+
+/**
+ * A failed now-playing or scrobble write: Last.fm not connected stops both for the listen; a
+ * network failure, timeout, 429 or 5xx (including the server's 503 for a transient Last.fm
+ * failure) is retried with backoff; any other answer is final.
+ */
+function noteListenWriteFailure(session, effect, error) {
+  if (!session) return;
+  const status = Number(error?.status) || 0;
+  if (status === 409 && error?.code === LASTFM_UNAVAILABLE_ERROR) {
+    session.lastfmUnavailable = true;
+    return;
   }
-  return data;
+  const retry = (session.writeRetries ||= {})[effect] ||= { attempts: 0, at: 0, final: false };
+  if (status && status !== 429 && status < 500) {
+    retry.final = true;
+    return;
+  }
+  retry.attempts += 1;
+  const backoff = LISTEN_WRITE_RETRY_BASE_MS * 2 ** Math.min(retry.attempts - 1, 16);
+  const jittered = Math.min(LISTEN_WRITE_RETRY_MAX_MS, Math.round(backoff * (0.8 + 0.4 * listenWriteRetryJitter())));
+  retry.at = listenWriteClockMs() + (Number.isFinite(error?.retryAfterMs) ? error.retryAfterMs : jittered);
+}
+
+/**
+ * Whether a now-playing or scrobble write may be sent now. A listen whose claim reports that
+ * scrobbling is unavailable sends neither, as after the server's 409; its completions still go.
+ */
+function isListenWriteDue(session, effect) {
+  if (session && typeof isScrobblingUnavailableAtClaim === 'function' && isScrobblingUnavailableAtClaim()) {
+    session.lastfmUnavailable = true;
+  }
+  if (session?.lastfmUnavailable) return false;
+  const retry = session?.writeRetries?.[effect];
+  return !retry || (!retry.final && listenWriteClockMs() >= retry.at);
+}
+
+/** A start or resume retries a backed-off write at its next trigger. */
+function retryListenWritesNow(session) {
+  Object.values(session?.writeRetries || {}).forEach((retry) => { retry.at = 0; });
+}
+
+async function postPlaybackSession(url, payload) {
+  const claim = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {};
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PLAYBACK_SESSION_REQUEST_TIMEOUT_MS);
+  const promise = (async () => {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, ...claim }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.ok) throw playbackSessionError(response, data);
+    return data;
+  })();
+  const pending = { claimToken: claim.claimToken, promise };
+  pendingPlaybackSessionRequests.add(pending);
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timeout);
+    pendingPlaybackSessionRequests.delete(pending);
+  }
+}
+
+async function drainPlaybackSessionRequests(claimToken) {
+  while (claimToken) {
+    const pending = [...pendingPlaybackSessionRequests].filter(request => request.claimToken === claimToken);
+    if (!pending.length) return;
+    await Promise.allSettled(pending.map(request => request.promise));
+  }
 }
 
 function ensureListenSession(track = null) {
@@ -39097,35 +42200,9 @@ function ensureListenSession(track = null) {
   return state.player.listenSession;
 }
 
-async function maybeSplitListenSessionAfterLongPause(track = null) {
-  const session = state.player.listenSession;
-  if (!hasListenSessionExceededPauseThreshold(session)) return false;
-  const finishedSession = session;
-  const resumeTrack = track || finishedSession.track || state.player.current;
-  state.player.listenSession = null;
-  await finalizeListenSession('long-pause-timeout', {
-    session: finishedSession,
-    currentTime: Number(finishedSession.pause_offset_seconds || 0),
-    duration: Number(finishedSession.duration_seconds || getPlayerPlaybackSnapshot().duration) || 0,
-    endedAtOverride: String(finishedSession.paused_at || ''),
-    skipCloseSegment: true,
-  });
-  if (resumeTrack) {
-    startListenSession(resumeTrack);
-  }
-  return true;
-}
-
 async function resumeListenSessionPlayback(track = null, currentTime = null) {
-  const split = await maybeSplitListenSessionAfterLongPause(track);
   const session = ensureListenSession(track);
   if (!session) return null;
-  if (split) {
-    for (const role of Object.values(state.player.streaming?.roles || {})) {
-      if (role && (role.role === 'current' || role.continuityOptions?.kind !== 'queued-next')
-          && String(role.track?.path || '') === String(session.track?.path || '')) role.measuredListenSession = session;
-    }
-  }
   clearListenPauseMarker(session);
   beginListenSegment(currentTime);
   return session;
@@ -39154,8 +42231,10 @@ function closeListenSegment(currentTime = null, session = state.player.listenSes
 }
 
 function maybeSendNowPlaying(track, session) {
+  if (isListenRecordedNatively()) return Promise.resolve(false);
   if (session?.nowPlayingPromise) return session.nowPlayingPromise;
   if (session?.nowPlayingSent) return Promise.resolve(true);
+  if (session && !isListenWriteDue(session, 'now-playing')) return Promise.resolve(false);
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
     return Promise.resolve(false);
   }
@@ -39165,6 +42244,7 @@ function maybeSendNowPlaying(track, session) {
     if (session) session.nowPlayingSent = true;
     return true;
   }).catch((error) => {
+    noteListenWriteFailure(session, 'now-playing', error);
     console.warn('[AlbumHaven][Lastfm] Failed to update now playing.', error);
     return false;
   }).finally(() => {
@@ -39176,11 +42256,17 @@ function maybeSendNowPlaying(track, session) {
   return nowPlayingPromise;
 }
 
+/** A now-playing that failed transiently is sent again once its backoff elapses. */
+function maybeRetryNowPlaying(session) {
+  if (!session?.writeRetries?.['now-playing']?.attempts) return Promise.resolve(false);
+  return maybeSendNowPlaying(session.track, session);
+}
+
 async function maybeScrobbleListenSession(session) {
   if (!session) return false;
   if (session.scrobblePromise) return session.scrobblePromise;
   if (session.scrobbled || !canScrobbleListenSession(session)) return false;
-  if (session.scrobblePending) return false;
+  if (session.scrobblePending || !isListenWriteDue(session, 'scrobble')) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;
   session.scrobblePayload ||= {
@@ -39196,6 +42282,7 @@ async function maybeScrobbleListenSession(session) {
     session.scrobbled = true;
     return true;
   }).catch((error) => {
+    noteListenWriteFailure(session, 'scrobble', error);
     console.warn('[AlbumHaven][Lastfm] Failed to scrobble track.', error);
     return false;
   }).finally(() => {
@@ -39213,7 +42300,7 @@ function startListenSession(track) {
 }
 
 function createListenSession(track) {
-  if (!track) return null;
+  if (!track || isListenRecordedNatively()) return null;
   return {
     measurement: { deviceId: getMeasuredPlaybackDeviceId(), sessionId: newMeasuredPlaybackId(), total: 0, contiguous: 0, longest: 0 },
     track: {
@@ -39249,6 +42336,7 @@ async function finalizeListenSession(reason, options = {}) {
     state.player.listenSession = null;
   }
   session.completionState = 'pending';
+  if (session.nowPlayingPromise) await Promise.resolve(session.nowPlayingPromise).catch(() => {});
   if (options.skipCloseSegment !== true) {
     closeListenSegment(options.currentTime, session);
   }
@@ -39276,6 +42364,8 @@ async function finalizeListenSession(reason, options = {}) {
   }
   const scrobbleEligible = canScrobbleListenSession(session);
   if (scrobbleEligible && !session.scrobbled) {
+    // The listen's end is its last chance: a backed-off scrobble is sent once more without waiting.
+    retryListenWritesNow(session);
     await maybeScrobbleListenSession(session);
   }
   const payload = session.completionPayload || {
@@ -39313,26 +42403,59 @@ function getTrackIdentity(track) {
   return `${String(track?.path || '')}::${String(track?.src || '')}`;
 }
 
-function flushListenSessionOnUnload(reason = 'unload') {
+async function persistPausedListenSession(session = state.player.listenSession) {
+  if (!session) return false;
+  const claimToken = typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext().claimToken : null;
+  await Promise.all([session.nowPlayingPromise, session.scrobblePromise]);
+  if (session !== state.player.listenSession
+      || (typeof getPlaybackClaimContext === 'function' && claimToken !== getPlaybackClaimContext().claimToken)
+      || !shouldPersistListenSession(session)
+      || (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects())) return false;
+  session.scrobblePayload = null;
+  const payload = {
+    ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
+    ended_at: session.paused_at || isoNow(),
+    total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
+    max_contiguous_seconds: Math.round(longestListenedSegmentSeconds(session) * 1000) / 1000,
+    finished_fully: false,
+    skipped: false,
+    completion_reason: 'paused',
+    scrobble_eligible: canScrobbleListenSession(session),
+    scrobbled: Boolean(session.scrobbled),
+    segments: session.segments.map(segment => ({
+      start_seconds: Number(segment.start_seconds || 0), end_seconds: Number(segment.end_seconds || 0),
+    })),
+  };
+  await postPlaybackSession('/playback/session/complete', payload);
+  return true;
+}
+
+function flushListenSessionOnUnload(reason = 'unload', playbackSnapshot = null) {
+  if (reason !== 'pagehide') return false;
+  const snapshot = playbackSnapshot || getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
-  if (!session || session.completionState === 'pending' || session.completionState === 'done') return false;
+  if (!session || session.completionState === 'pending' || session.completionState === 'done') {
+    return typeof stagePlaybackOwnershipHandoff === 'function'
+      ? stagePlaybackOwnershipHandoff(null, snapshot) : false;
+  }
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
     return false;
   }
-  closeListenSegment();
-  session.duration_seconds = Math.round((Number(getPlayerPlaybackSnapshot().duration) || Number(session.duration_seconds) || 0) * 1000) / 1000;
-  session.ended_at = session.paused_at || isoNow();
-  if (!shouldPersistListenSession(session)) {
+  if (typeof stagePlaybackOwnershipHandoff !== 'function') {
     session.completionState = 'done';
     clearListenPauseMarker(session);
     state.player.listenSession = null;
     return false;
   }
+  closeListenSegment(snapshot.currentTime);
+  session.duration_seconds = Math.round((Number(snapshot.duration) || Number(session.duration_seconds) || 0) * 1000) / 1000;
+  session.ended_at = session.paused_at || isoNow();
   session.completionState = 'pending';
-  const payload = {
+  const completion = shouldPersistListenSession(session) ? {
     ...buildNowPlayingPayload(session.track, session),
     ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
@@ -39348,22 +42471,15 @@ function flushListenSessionOnUnload(reason = 'unload') {
       start_seconds: Number(segment.start_seconds || 0),
       end_seconds: Number(segment.end_seconds || 0),
     })),
-  };
-  try {
-    if (navigator?.sendBeacon) {
-      const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-      navigator.sendBeacon('/playback/session/complete', body);
-      if (!payload.measurement_version && payload.scrobble_eligible && !payload.scrobbled) {
-        navigator.sendBeacon('/playback/session/scrobble', new Blob([JSON.stringify(buildNowPlayingPayload(session.track, session))], { type: 'application/json' }));
-      }
-    }
-  } catch (_error) {
-    // Ignore unload delivery errors.
-  }
+  } : null;
+  const accepted = stagePlaybackOwnershipHandoff(
+    completion?.measurement_version ? completion : null,
+    snapshot,
+  );
   session.completionState = 'done';
   clearListenPauseMarker(session);
   state.player.listenSession = null;
-  return true;
+  return accepted;
 }
 
 // END js/runtime/player-listen-session-helpers.js
@@ -39371,13 +42487,94 @@ function flushListenSessionOnUnload(reason = 'unload') {
 // BEGIN js/runtime/gallery-cover-preview-cache.js
 
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v3';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
-const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
+// Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
+// SHA-256 of the cover URL without its version), and the version it answers is the URL's `v`.
+const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
+const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
+const MAX_REMEMBERED_COVER_KEYS = 4096;
+const GALLERY_COVER_SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+// SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs; the app-copy worker computes
+// the same digest with crypto.subtle.
+// Resolves in a new task (not a microtask), so work after it does not join the current task.
+function galleryCoverYield() {
+  if (typeof globalThis.MessageChannel !== 'function') return new Promise(resolve => globalThis.setTimeout(resolve, 0));
+  return new Promise((resolve) => {
+    const channel = new globalThis.MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+// Reused across calls: no allocation per cover beyond growing the byte buffer for a longer URL.
+const GALLERY_COVER_SHA256_W = new Int32Array(64);
+const GALLERY_COVER_SHA256_ENCODER = new TextEncoder();
+let galleryCoverSha256Bytes = new Uint8Array(1024);
+
+function galleryCoverSha256Hex(text) {
+  const source = String(text);
+  if (galleryCoverSha256Bytes.length < source.length * 3 + 72) {
+    galleryCoverSha256Bytes = new Uint8Array(source.length * 3 + 72);
+  }
+  const bytes = galleryCoverSha256Bytes;
+  const byteLength = GALLERY_COVER_SHA256_ENCODER.encodeInto(source, bytes).written;
+  const length = ((byteLength + 9 + 63) >> 6) << 6;
+  bytes.fill(0, byteLength, length);
+  bytes[byteLength] = 0x80;
+  const bitLength = byteLength * 8;
+  bytes[length - 5] = Math.floor(bitLength / 0x100000000) & 0xff;
+  bytes[length - 4] = bitLength >>> 24;
+  bytes[length - 3] = (bitLength >>> 16) & 0xff;
+  bytes[length - 2] = (bitLength >>> 8) & 0xff;
+  bytes[length - 1] = bitLength & 0xff;
+  const w = GALLERY_COVER_SHA256_W;
+  const k = GALLERY_COVER_SHA256_K;
+  let h0 = 0x6a09e667 | 0; let h1 = 0xbb67ae85 | 0; let h2 = 0x3c6ef372 | 0; let h3 = 0xa54ff53a | 0;
+  let h4 = 0x510e527f | 0; let h5 = 0x9b05688c | 0; let h6 = 0x1f83d9ab | 0; let h7 = 0x5be0cd19 | 0;
+  for (let offset = 0; offset < length; offset += 64) {
+    for (let i = 0; i < 16; i += 1) {
+      const at = offset + i * 4;
+      w[i] = (bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3];
+    }
+    for (let i = 16; i < 64; i += 1) {
+      const x = w[i - 15];
+      const y = w[i - 2];
+      const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+      const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let a = h0; let b = h1; let c = h2; let d = h3; let e = h4; let f = h5; let g = h6; let h = h7;
+    for (let i = 0; i < 64; i += 1) {
+      const t1 = (h + (((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7)))
+        + ((e & f) ^ (~e & g)) + k[i] + w[i]) | 0;
+      const t2 = ((((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10)))
+        + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + h) | 0;
+  }
+  const hex = word => (word >>> 0).toString(16).padStart(8, '0');
+  return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4) + hex(h5) + hex(h6) + hex(h7);
+}
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -39396,6 +42593,9 @@ class GalleryCoverPreviewCache {
     this.liveFetches = new Map();
     this.keyGenerations = new Map();
     this.latestRequestedProductionUrls = new Map();
+    // Each production URL's stored key and version, and each cover's key whatever its version.
+    this.coverKeys = new Map();
+    this.unversionedCoverKeys = new Map();
     this.openPromise = null;
     this.generation = 0;
     this.requestSequence = 0;
@@ -39542,7 +42742,51 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob, productionUrl) {
+  // [productionUrl]'s stored key, the same key as app-copy-worker.js coverKey (the SHA-256 of the
+  // URL without its version; one per cover and size), and the version it answers, the URL's `v`
+  // (a revision, never a file). Each cover is hashed once: a new version of a cover (a save, a
+  // revision bump across the gallery) reuses its key without hashing again.
+  coverKeysFor(productionUrl) {
+    let keys = this.coverKeys.get(productionUrl);
+    if (!keys) {
+      const url = new URL(productionUrl);
+      const version = url.searchParams.get('v') || '';
+      url.searchParams.delete('v');
+      const unversioned = `${url.origin}${url.pathname}${url.search}`;
+      let key = this.unversionedCoverKeys.get(unversioned);
+      if (!key) {
+        key = `${url.origin}${GALLERY_COVER_KEY_PREFIX}${galleryCoverSha256Hex(`${url.pathname}${url.search}`)}`;
+        if (this.unversionedCoverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.unversionedCoverKeys.clear();
+        this.unversionedCoverKeys.set(unversioned, key);
+      }
+      keys = { key, version };
+      if (this.coverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.coverKeys.clear();
+      this.coverKeys.set(productionUrl, keys);
+    }
+    return keys;
+  }
+
+  // As coverKeysFor, for a cover load: a cover not hashed yet first yields one task, so a burst of
+  // new covers (a gallery page, a save that re-renders many cards) hashes across many short tasks
+  // instead of one long one.
+  async coverKeysForLoad(productionUrl) {
+    if (!this.coverKeys.has(productionUrl)) {
+      const url = new URL(productionUrl);
+      url.searchParams.delete('v');
+      if (!this.unversionedCoverKeys.has(`${url.origin}${url.pathname}${url.search}`)) await galleryCoverYield();
+    }
+    return this.coverKeysFor(productionUrl);
+  }
+
+  storedCoverKey(productionUrl) {
+    return this.coverKeysFor(productionUrl).key;
+  }
+
+  coverVersionTag(productionUrl) {
+    return this.coverKeysFor(productionUrl).version;
+  }
+
+  createCacheableResponse(response, blob, versionTag) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
@@ -39550,7 +42794,7 @@ class GalleryCoverPreviewCache {
       statusText: String(response?.statusText || ''),
       headers: {
         ...(contentType ? { 'Content-Type': contentType } : {}),
-        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+        [GALLERY_COVER_VERSION_HEADER]: versionTag,
       },
     });
   }
@@ -39675,14 +42919,15 @@ class GalleryCoverPreviewCache {
           && !signal?.aborted
           && this.isLatestRequestedProductionUrl(productionUrl)
         );
+        const storedKey = this.storedCoverKey(productionUrl);
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          await cache.put(baseKey, cacheCandidate);
+          await cache.put(storedKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(baseKey);
+            await cache.delete(storedKey);
           }
           return {
             blob,
@@ -39710,10 +42955,11 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cacheKey = this.baseCacheKey(productionUrl);
+    const { key: cacheKey, version: versionTag } = await this.coverKeysForLoad(productionUrl);
+    this.throwIfAborted(signal);
     const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_VERSION_HEADER) === versionTag) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -39767,7 +43013,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
+        cacheCandidate = this.createCacheableResponse(response, blob, versionTag);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -40051,7 +43297,7 @@ class GalleryCoverPreviewCache {
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
+      return Boolean(await cache.delete(this.storedCoverKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;
@@ -43349,7 +46595,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -43395,7 +46641,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -43687,6 +46933,9 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
+  const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
+    && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
+  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
@@ -43709,10 +46958,10 @@ function updatePlayerUi() {
   }
   if (els.time) {
     els.time.hidden = !hasTrack;
-    els.time.textContent = state.player.loopActive
+    els.time.textContent = lockedByAnotherTab
+      ? blockedLabel
+      : state.player.loopActive
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
-      : lockedByAnotherTab
-      ? 'Playing in another tab'
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   els.loopActions?._loopActionController?.update({
@@ -43724,14 +46973,16 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
+    els.play.setAttribute('aria-label', lockedByAnotherTab
+      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+      : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
-    els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
-    els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? 'Playing in another tab' : 'Nothing is playing');
+    els.timeline.parentElement.classList.toggle('is-idle', !hasTrack);
+    els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? blockedLabel : 'Nothing is playing');
   }
   if (els.loopRegion) els.loopRegion.hidden = !state.player.loopActive;
   if (els.loopStartHandle) els.loopStartHandle.hidden = !state.player.loopActive;
@@ -43829,11 +47080,11 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
   if (typeof resumeListenSessionPlayback !== 'function') return;
   const sessionPromise = resumeListenSessionPlayback(track, startSeconds);
   if (!sessionPromise || typeof sessionPromise.then !== 'function') return;
-  void sessionPromise.then((session) => (
-    typeof maybeSendNowPlaying === 'function'
-      ? maybeSendNowPlaying(track, session)
-      : null
-  ));
+  void sessionPromise.then((session) => {
+    // A start or resume may send a backed-off now-playing or scrobble at once.
+    if (typeof retryListenWritesNow === 'function') retryListenWritesNow(session);
+    return typeof maybeSendNowPlaying === 'function' ? maybeSendNowPlaying(track, session) : null;
+  });
 }
 
 let playerTrackSelectionToken = 0;
@@ -43860,22 +47111,40 @@ function clearSelectedTrack() {
 }
 
 async function playTrackFromPayload(track, options = {}) {
+  const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
-  if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
-    return false;
+  const requestedTrackPath = String(track?.path || '');
+  const currentTrackPath = String(state.player.current?.path || '');
+  if (shouldAutoplay && requestedTrackPath && currentTrackPath
+      && requestedTrackPath !== currentTrackPath
+      && typeof cancelStreamingWaveformGeneration === 'function') {
+    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
   }
+  const ownershipAlreadyClaimed = options.ownershipClaimed === true
+    && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
+  // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
+  // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
+    ? canStartPlaybackInThisTab(track)
+    : true;
+  if (pendingClaim === false) return false;
+  if (selectionToken !== playerTrackSelectionToken) return false;
+  pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
+  const requestedStartSeconds = Number(options.startSeconds);
+  const startSeconds = Number.isFinite(requestedStartSeconds)
+    ? Math.max(0, requestedStartSeconds)
+    : (resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0);
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  const selectionToken = ++playerTrackSelectionToken;
   showSelectedTrackImmediately(track, shouldAutoplay);
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
-      startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
+      startSeconds,
       autoplay: shouldAutoplay,
       allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
     });
@@ -43894,6 +47163,14 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  if (pendingClaim !== true && !await pendingClaim) {
+    if (selectionToken === playerTrackSelectionToken) {
+      pauseStreamingPlayback();
+      updatePlayerUi();
+    }
+    return false;
+  }
+  if (selectionToken !== playerTrackSelectionToken) return false;
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
       generation: startedRole.generation,
@@ -43909,10 +47186,22 @@ async function playTrackFromPayload(track, options = {}) {
     }
   }
   if (shouldAutoplay) {
-    beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
+    beginStreamingPlayerListenSession(track, startSeconds);
   }
   updatePlayerUi();
   return true;
+}
+
+function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
+  const track = state.player.current;
+  if (!track || typeof isActivePlaybackOwner !== 'function' || !isActivePlaybackOwner()) {
+    return Promise.resolve(false);
+  }
+  return playTrackFromPayload(track, {
+    autoplay: true,
+    ownershipClaimed: true,
+    startSeconds: Number(playbackSnapshot?.currentTime) || 0,
+  });
 }
 
 let handledStreamingFirstFrameIdentity = '';
@@ -43932,15 +47221,22 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (!nextTrack || typeof scheduleStreamingContinuity !== 'function') {
+  if ((!nextTrack && !state.player.loopActive) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
-  const scheduling = Promise.resolve().then(() => scheduleStreamingContinuity(nextTrack));
+  const scheduling = Promise.resolve().then(() => {
+    if (selectionToken !== playerTrackSelectionToken
+      || selectedTrackPath !== String(state.player.current?.path || '')) return;
+    return state.player.loopActive
+      ? dispatchActiveStreamingLoop()
+      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+  });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;
@@ -43961,6 +47257,7 @@ async function handleStreamingPlaybackPosition(event = {}) {
     state.player.listenSession.duration_seconds = Math.round(
       (Number(playback.duration) || 0) * 1000,
     ) / 1000;
+    if (typeof maybeRetryNowPlaying === 'function') void maybeRetryNowPlaying(state.player.listenSession);
     if (typeof maybeScrobbleListenSession === 'function') {
       await maybeScrobbleListenSession(state.player.listenSession);
     }
@@ -43979,9 +47276,8 @@ async function handleStreamingPlaybackEnded(event = {}) {
   handledStreamingEndedIdentity = identity;
   const playback = getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('stopped', track);
-  }
+  const ownershipVersion = typeof getPlaybackOwnershipState === 'function'
+    ? (getPlaybackOwnershipState().requestVersion || 0) : null;
   if (typeof finalizeListenSession === 'function') {
     await finalizeListenSession('ended', {
       session,
@@ -43990,9 +47286,15 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
+  if (typeof releasePlaybackOwnership === 'function'
+      && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
+    await releasePlaybackOwnership('stopped', track);
+  }
   updatePlayerUi();
-  if (event.sampleRateChangeTrackPath
-      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+  // The engine names a queued successor it could not continue into: a new sample rate, or a
+  // native queue that ended its window.
+  if (event.startNextTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath) {
     // A locked phone may refuse the new context; stay paused so a tap can resume it.
     await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
   }
@@ -44101,6 +47403,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
 
 let streamingLoopScheduleToken = 0;
 let pendingPlayerPlaybackHandoff = null;
+let pendingPlayerPlaybackHandoffSelectionToken = null;
 
 function renewPlayerLoopExpiryAfterBoundaryEdit(range) {
   const nextStart = Number(range?.startSeconds);
@@ -44377,14 +47680,39 @@ function togglePlayerPlayback(options = {}) {
   if (typeof resumeStreamingPlayback !== 'function'
       || typeof pauseStreamingPlayback !== 'function') return false;
   if (playback.paused) {
-    if (typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(state.player.current)) {
-      return false;
-    }
-    const restart = playback.ended && typeof seekStreamingPlayback === 'function'
-      ? seekStreamingPlayback(0)
-      : null;
-    Promise.resolve(restart).then(() => resumeStreamingPlayback()).then((resumed) => {
-      if (resumed === false) return;
+    const track = state.player.current;
+    const selectionToken = ++playerTrackSelectionToken;
+    Promise.resolve().then(async () => {
+      if (selectionToken !== playerTrackSelectionToken) return false;
+      const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
+      // Instant resume: the paused stream sounds while the claim is asked for; a refusal pauses it again.
+      const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
+        ? resumeStreamingPlayback()
+        : null;
+      // The controls follow the sound as soon as it resumes, not after the claim's round trip.
+      Promise.resolve(early).then((resumed) => {
+        if (resumed && selectionToken === playerTrackSelectionToken) updatePlayerUi();
+      }).catch(() => {});
+      if (claim !== true && !await claim) {
+        if (early && selectionToken === playerTrackSelectionToken) {
+          pauseStreamingPlayback();
+          updatePlayerUi();
+        }
+        return false;
+      }
+      if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
+      pendingPlayerPlaybackHandoff = null;
+      if (early) return early;
+      if (playback.mode === 'stopped') {
+        return Boolean(await startStreamingTrack(track, {
+          startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
+        }));
+      }
+      if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
+      if (selectionToken !== playerTrackSelectionToken) return false;
+      return resumeStreamingPlayback();
+    }).then((resumed) => {
+      if (resumed === false || selectionToken !== playerTrackSelectionToken) return;
       beginStreamingPlayerListenSession(
         state.player.current,
         playback.ended ? 0 : (Number(playback.currentTime) || 0),
@@ -44399,19 +47727,43 @@ function togglePlayerPlayback(options = {}) {
 }
 
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
-  if (pendingPlayerPlaybackHandoff) return pendingPlayerPlaybackHandoff;
+  if (pendingPlayerPlaybackHandoff && pendingPlayerPlaybackHandoffSelectionToken === playerTrackSelectionToken) {
+    return pendingPlayerPlaybackHandoff;
+  }
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
-  const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(() => {
+  pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
+  const selectionToken = playerTrackSelectionToken;
+  const track = state.player.current;
+  const session = state.player.listenSession;
+  const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;
+  const ownershipVersion = ownership ? (ownership.requestVersion = (ownership.requestVersion || 0) + 1) : null;
+  const isCurrentPause = () => selectionToken === playerTrackSelectionToken
+    && session === state.player.listenSession && track === state.player.current
+    && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
+  const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
+    if (!isCurrentPause()) return false;
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
-      void maybeScrobbleListenSession(state.player.listenSession);
+      await maybeScrobbleListenSession(session);
     }
+    if (!isCurrentPause()) return false;
+    let saved = true;
+    if (typeof persistPausedListenSession === 'function') {
+      try {
+        await persistPausedListenSession(session);
+      } catch (_error) {
+        if (!isCurrentPause()) return false;
+        saved = false;
+        showToast('Listening history could not be saved.', 'error', 4200);
+      }
+    }
+    if (!isCurrentPause()) return saved;
     if (typeof releasePlaybackOwnership === 'function') {
-      releasePlaybackOwnership('paused', state.player.current);
+      await releasePlaybackOwnership('paused', track);
     }
     updatePlayerUi();
-    return true;
+    return saved;
   });
   const trackedPause = pauseEffects.finally(() => {
     if (pendingPlayerPlaybackHandoff === trackedPause) pendingPlayerPlaybackHandoff = null;
@@ -44636,11 +47988,18 @@ function attachPlayerEvents() {
   els.player?.addEventListener('pointerdown', claimGlobalPlayerSpaceOwnership);
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
-  els.albumLink?.addEventListener('click', () => openCurrentPlayerTrackSource());
-  els.coverButton?.addEventListener('click', () => openCurrentPlayerTrackSource({
-    coverLightboxGallery: false,
-    foreground: true,
-  }));
+  els.albumLink?.addEventListener('click', () => {
+    void openPlayerTrackAlbum(state.player.current);
+  });
+  // On a phone the artist and title rows are most of the player, so a tap there opens the album too.
+  els.title?.closest('.player-track-meta')?.addEventListener('click', (event) => {
+    if (event.target?.closest?.('#player-album-link') || !state.player.current) return;
+    if (typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()) return;
+    void openPlayerTrackAlbum(state.player.current);
+  });
+  els.coverButton?.addEventListener('click', () => {
+    void openPlayerTrackAlbum(state.player.current, { coverLightboxGallery: false, foreground: true });
+  });
   els.timeline?.addEventListener('keydown', handlePlayerTimelineKeydown);
   els.timeline?.addEventListener('input', () => {
     const next = Number(els.timeline.value) || 0;
@@ -45188,10 +48547,9 @@ function initCompactPlayer() {
   els.play?.addEventListener('click', () => togglePlayerPlayback());
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
-  const openCurrentAlbumDetails = () => openCurrentPlayerTrackSource({
-    coverLightboxGallery: false,
-    foreground: true,
-  });
+  const openCurrentAlbumDetails = () => {
+    void openPlayerTrackAlbum(state.player.current, { coverLightboxGallery: false, foreground: true });
+  };
   els.albumLink?.addEventListener('click', openCurrentAlbumDetails);
   els.cover?.addEventListener('click', event => {
     if (compactPlayerSuppressClick) { event.preventDefault(); compactPlayerSuppressClick = false; return; }
@@ -45500,6 +48858,7 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -45602,7 +48961,7 @@ async function handleUtilityBootstrapClick(event) {
       if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
-    } else if (state.utility.activeTab !== 'appearance') {
+    } else if (!['appearance', 'android'].includes(state.utility.activeTab)) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;
       try {
@@ -45679,6 +49038,20 @@ async function handleUtilityBootstrapClick(event) {
           .find((option) => option.getAttribute('data-problem-filter-value') === value)?.focus();
       }
     }
+    return;
+  }
+
+  const removeProblemFilter = event.target.closest('[data-remove-problem-filter]');
+  if (removeProblemFilter) {
+    event.preventDefault();
+    const value = removeProblemFilter.getAttribute('data-remove-problem-filter') || '';
+    const nextSelectedFilters = (state.utility.selectedProblemFilters || []).filter((reason) => reason !== value);
+    state.utility.selectedProblemFilters = nextSelectedFilters;
+    state.utility.deferProblematicAutoSelection = true;
+    reconcileProblematicSelectionForFilters(nextSelectedFilters);
+    state.utility.problemDropdownOpen = false;
+    state.utility.showRepairedDisplay = true;
+    renderUtilityModalContent();
     return;
   }
 
@@ -46488,6 +49861,7 @@ function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
 }
 
 function handleUtilityBootstrapInput(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const localPlaylistFileInput = event.target.closest('[data-local-playlist-import-file]');
   if (localPlaylistFileInput) {
     const file = Array.isArray(localPlaylistFileInput.files)
@@ -46676,6 +50050,7 @@ function bindCoverLookupFileInput(coverLookupFiles) {
 }
 
 function handleUtilityBootstrapChange(event) {
+  if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {
     void stageCoverLookupFiles(coverLookupFiles);
@@ -47341,6 +50716,20 @@ function handleGalleryBootstrapClick(event) {
     event.preventDefault();
     hideStatusContextMenu();
     cancelAlbumCoverScan();
+    return;
+  }
+
+  const musicBrainzSyncAction = event.target.closest('[data-status-action="musicbrainz-sync"]');
+  if (musicBrainzSyncAction) {
+    event.preventDefault();
+    triggerMusicBrainzArtistSync();
+    return;
+  }
+
+  const artistProblemAction = event.target.closest('[data-open-musicbrainz-artist-problem]');
+  if (artistProblemAction) {
+    event.preventDefault();
+    openMusicBrainzArtistProblem(artistProblemAction.dataset.openMusicbrainzArtistProblem);
     return;
   }
 
@@ -48678,6 +52067,14 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
+  // clearing the query and the artist the search selected.
+  const libraryHome = document?.querySelector?.('.app-bar-brand[data-library-home="1"]');
+  if (!String(nextQuery).trim() && libraryHome
+      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    libraryHome.click();
+    return;
+  }
   applyImmediateExactSearchArtistSelection(nextQuery);
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else clearMobileSearchResultsMarker();
@@ -50569,19 +53966,22 @@ const MOBILE_UTILITY_SECTIONS = Object.freeze({
   'log-history': { label: 'Log History', action: 'library.logs.read' },
   integrations: { label: 'Integrations', action: 'integration.settings.read' },
   appearance: { label: 'Appearance', action: null },
+  android: { label: 'Android app', action: null },
 });
 function mobileUtilityTabAllowed(tab, actions = window.__ALBUM_HAVEN_UTILITY_ALLOWED_ACTIONS__ || {}) {
+  if (tab === 'android' && !(typeof isAndroidShell === 'function' && isAndroidShell())) return false;
   const section = Object.hasOwn(MOBILE_UTILITY_SECTIONS, tab) ? MOBILE_UTILITY_SECTIONS[tab] : null;
   return Boolean(section && (!section.action || actions[section.action] === true));
 }
 function mobileUtilitySubsectionAttribute(tab = state.utility.activeTab) {
-  return ({ appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
+  return ({ android: 'data-utility-android-key', appearance: 'data-utility-appearance-key', integrations: 'data-utility-integration-key', rules: 'data-utility-rule-key' })[tab] || '';
 }
 function mobileUtilitySubsections() {
   const list = getUtilityModalElements().list;
   const attribute = mobileUtilitySubsectionAttribute();
   if (!attribute) return [];
-  const selected = state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
+  const selected = state.utility.activeTab === 'android' ? 'updates'
+    : state.utility.activeTab === 'appearance' ? state.utility.appearanceKey
     : state.utility.activeTab === 'rules' ? state.utility.selectedRuleKey : state.utility.selectedIntegrationKey;
   return [...(list?.querySelectorAll(`[${attribute}]`) || [])].map(node => ({
     key: node.getAttribute(attribute),
@@ -51128,6 +54528,7 @@ attachPlayerEvents();
 if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
+  if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'
@@ -51334,7 +54735,11 @@ updateStatusIndicator({
   covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
-  last_scan_display: bootstrap.lastScanDisplay || ''
+  last_scan_display: bootstrap.lastScanDisplay || '',
+  // The first status poll compares against the revision this page was rendered at.
+  ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
+    ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);
@@ -51430,6 +54835,11 @@ if (shouldStartImmediateHydration) {
   }
 }
 
+// A page shown from the Android app's copy brings its view up to date in place once the server
+// answers, keeping its scroll position and open album (app-copy.js).
+window.AlbumHavenAppCopy?.onServerAnswer(() => {
+  void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
+});
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
@@ -51582,15 +54992,17 @@ window.addEventListener('pagehide', () => {
 });
 window.addEventListener('pageshow', (event) => {
   if (event?.persisted) {
-    resetPlayerUnloadPersistence();
+    const playbackSnapshot = resetPlayerUnloadPersistence();
     unloadStreamingCleanupPromise = null;
+    if (typeof restorePlaybackOwnershipFromPageCache === 'function') {
+      void Promise.resolve(restorePlaybackOwnershipFromPageCache(playbackSnapshot)).then((restored) => {
+        if (!restored || typeof resumePlayerPlaybackFromPageCache !== 'function') return;
+        return resumePlayerPlaybackFromPageCache(playbackSnapshot);
+      }).catch(() => {});
+    }
   }
   if (!state.player.loopActive) return;
   setLoopActive(false);
-});
-window.addEventListener('beforeunload', () => {
-  persistPlayerStateForUnload('beforeunload');
-  void cleanupStreamingPlaybackForUnload();
 });
 window.addEventListener('resize', () => {
   hideAlbumCardContextMenu();

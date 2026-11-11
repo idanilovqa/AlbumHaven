@@ -269,9 +269,9 @@ Every Wave 2 or later product feature must move through this sequence:
 4. Obtain owner approval for the technical design and each exact visual artifact.
 5. Record functional cases and the automated-test proposal, then add failing unit
    or integration tests for the approved behavior.
-6. Implement one complete vertical slice in React. If the slice first touches a
-   legacy UI ownership boundary, migrate that whole boundary and remove its
-   superseded live implementation.
+6. Implement one complete vertical slice on the existing UI stack. Moving to
+   React is separate, not-yet-started work; a feature never migrates a screen to
+   React as a side effect.
 7. Run focused verification and give the owner an exact manual test script or
    build.
 8. Wait for the owner's manual acceptance.
@@ -286,7 +286,7 @@ be added to the private owner registry at `docs/permissions-and-capabilities.md`
 when that repository is available; ask the owner to approve its capabilities,
 scope, reusable role-preset membership, deployment modes, and client constraints
 before technical design approval. Never infer access from an existing screen or
-tier name. All new post-migration UI uses React. When the private owner
+tier name. When the private owner
 repository is available, every visible post-migration surface must also map to
 `docs/ui-component-system.md`. Reuse approved components and tokens. If the
 catalog is insufficient, obtain owner approval for a reusable extension before

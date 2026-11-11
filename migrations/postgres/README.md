@@ -151,6 +151,28 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0083_add_album_raw_artist_search_index.sql
 0084_create_local_artist_search_projection.sql
 0085_add_stale_track_file_candidate_index.sql
+0086_create_root_gallery_projection.sql
+0087_library_source_indicators.sql
+0088_add_active_physical_parent_index.sql
+0089_allow_gallery_projection_featured_kind.sql
+0090_patch_local_artist_search_projection.sql
+0091_add_gallery_projection_artist_lookup_indexes.sql
+0092_add_locale_independent_search_prefilter.sql
+0093_add_duplicate_identity_lookup_index.sql
+0094_stage_gallery_projection_publication.sql
+0095_add_root_preview_artist_order_index.sql
+0096_create_generated_preview_storage.sql
+0097_repair_generated_preview_inventory_path_constraint.sql
+0098_track_generated_preview_current_path.sql
+0099_reconcile_cover_lookup_notification_album_identities.sql
+0100_archive_invalid_featured_track_cover_notifications.sql
+0101_create_local_album_identity_transitions.sql
+0102_narrow_synthetic_unknown_album_identity_guard.sql
+0103_repair_synthetic_unknown_cover_task_identities.sql
+0104_create_playback_claims.sql
+0105_add_playback_claim_handoffs.sql
+0106_create_android_artifact_access.sql
+0107_add_android_device_key_signer.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -227,7 +249,8 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091` are unreleased branch migrations. Their presence in a
+`0099` through `0107` are unreleased branch migrations.
+Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
 before starting the matching application version. Run `0083` outside an
@@ -272,3 +295,130 @@ This ordinary transactional index build allows reads but temporarily blocks writ
 Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
 
 Migration `0101_create_local_album_identity_transitions.sql` adds append-only album identity lineage for scan, watcher, and structural-edit moves. Migration `0102_narrow_synthetic_unknown_album_identity_guard.sql` keeps valid VA and known-artist loose-track successors while excluding the synthetic `Unknown Artist / Unknown Album` catch-all. Migration `0103_repair_synthetic_unknown_cover_task_identities.sql` repairs only legacy cover tasks with complete active paths and one exact artist/title/year target; ambiguous rows remain unchanged.
+
+Migration `0104_create_playback_claims.sql` adds the durable, account-and-library-
+scoped playback ownership lease used by web and mobile clients. PostgreSQL stores
+only the 32-byte digest of each renewable claim token; the raw credential is not
+persisted. The table is additive, and older application versions leave it unused.
+
+Migration `0105_add_playback_claim_handoffs.sql` extends each claim with four
+nullable fields: the one-time handoff ID, 32-byte handoff-token digest, 32-byte
+completion fingerprint, and handoff expiry. Its constraint requires all four
+fields to be null or present together and validates both digests. These fields
+hold short-lived ownership-transfer state only; they do not add credentials or
+metadata markers to listen history.
+
+Apply `0104` and then `0105`, with their checksums recorded, before starting an
+application version that reads or writes playback claims or reload handoffs.
+Existing application versions remain compatible with both additive migrations.
+For rollback, stop or roll back the claim-aware application before changing this
+schema. Prefer retaining the table and nullable columns: expired claim and
+handoff rows are harmless, while rewriting or removing an applied migration
+would invalidate ledger history. Dropping the table discards only transient
+ownership leases, not listen-history rows, but must not occur while any running
+application depends on durable ownership.
+
+Migration `0106_create_android_artifact_access.sql` adds two additive tables for
+attested Android update downloads. `app.android_artifact_challenges` holds only the
+SHA-256 of each single-use, two-minute attestation or request nonce, bound to the
+account, session, channel and purpose. `app.android_device_keys` holds the attested
+public key (SubjectPublicKeyInfo DER), its digest and security level per account and
+channel; no private key, token or certificate chain is stored. Older application
+versions leave both tables unused. For rollback, roll back the application first;
+retaining the tables is harmless, and dropping them only forces every device to
+attest again.
+
+Migration `0107_add_android_device_key_signer.sql` adds the nullable
+`signing_certificate_sha256` (32 bytes) to `app.android_device_keys`: the allowed
+signing certificate a key's attestation matched. The server rechecks it, and the
+key's security level, against the current configuration on every signed request
+and download. It is a separate migration rather than an edit of `0106`, whose
+checksum sandboxes may already have recorded. Existing rows keep null; nothing is
+inferred for them, so those devices are refused until the app attests again. The
+table's existing grants cover the column. For rollback, roll back the application
+first; the column can stay.
+
+Migration `0086_create_root_gallery_projection.sql` adds the derived,
+library-scoped Gallery projection and its transactional invalidation boundary.
+Rollback first disables projection readers and writers, then removes its triggers,
+functions, and projection tables in dependency order; local inventory remains the
+source of truth.
+
+Migration `0172_add_musicbrainz_artist_discogs_link.sql` follows it for the same
+reason. It adds a nullable, range-checked `discogs_artist_id` to
+`integration.musicbrainz_artists`: the Discogs artist named by the MusicBrainz
+artist's url-rels, or null when MusicBrainz lists none or several. Only the ID is
+stored; the public link is derived from it. Rollback drops the column after
+readers stop selecting it.
+
+Migration `0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql` repairs
+Delivery 1 data: it deletes only automatic, matched artist rows whose evidence is
+"MusicBrainz embedded evidence agreed.", because that evidence was a stored local
+artist MBID from Last.fm's name lookup rather than file tags, and was accepted
+without the album check. Manual choices and search-evidence matches are kept. The
+startup backfill and the owner's MusicBrainz sync then re-check those artists with
+the corrected matcher. It is idempotent; rollback is the next re-check, which
+re-creates any row the albums confirm.
+
+Migration `0174_add_musicbrainz_matcher_version_and_credit_name.sql` adds two
+columns to `library.local_artist_musicbrainz_matches`. `matcher_version` (existing
+rows are 1) lets the startup backfill re-check every non-manual decision made by
+an older matcher; a re-check that finds another artist moves a match to conflict
+instead of replacing it. `credit_name` keeps the local name an artist was matched
+under through a release credit ("credited as 3 Crows"). Adding columns with a
+constant default does not rewrite the table. Rollback stops the readers and drops
+both columns; the next backfill then treats every row as version 1 again.
+
+Migration `0175_add_musicbrainz_match_album_evidence.sql` adds the nullable
+`album_evidence` array to `library.local_artist_musicbrainz_matches`. Matcher
+version 3 writes the albums a later data-correction list can propose fixing: every
+agreeing album of an artist matched under another credited name, and every album
+that matched one disc of a multi-disc release (a box-set disc or a bonus EP tagged
+as its own album), each with the MusicBrainz release group, release, disc and
+agreeing signals. Existing rows stay null until their re-check. Adding a nullable
+column does not rewrite the table. Rollback drops the column.
+
+Migration `0176_create_album_disc_ratings.sql` adds the app-owned per-account
+`app.album_disc_ratings` table: one rating per disc of a local album, read from
+the disc's own file tags and shown on a later disc's heading only when it differs
+from the album's. Its number follows 0175 because sandbox ledgers already record a
+different `0099`. Rows follow album re-keys by cascade; when a scan empties an
+album row, its disc ratings are carried to the successor row like album ratings,
+or the row is kept. Rollback drops the table; album ratings are unaffected.
+
+Migration `0177_create_local_album_artist_identities.sql` adds
+`library.local_album_artist_identities`, one row per local album naming the
+MusicBrainz artist the album certainly belongs to (its title, track titles and
+track count agree with one of that artist's releases), with the matched release
+as evidence and a `tag_differs` flag for a later approved tag correction. It also
+adds the `per_album` state to `local_artist_musicbrainz_matches`, for a local
+name whose albums belong to several MusicBrainz artists. Rows follow an album's
+re-key by cascade and are carried to a successor row like ratings when a scan
+empties an album row. The runtime role may delete rows, because a re-check
+replaces an artist's automatic identities; owner choices are kept. Rollback stops
+the readers, drops the table and restores the state check without `per_album`
+(after re-checking those artists).
+
+Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
+`0099` through `0170` are already taken by unmerged branches or recorded in the
+production ledger, so it skips them instead of colliding. It adds the bounded
+artist-only MusicBrainz canonical projection, aliases, countries, complete tag
+facts, current library-scoped matches and candidates, durable jobs, and diagnostic
+history. The display view chooses at most three official genres, preferring
+positive-vote genres and using zero-vote genres only when the artist has no
+positive-vote genre; negative-vote and non-genre tags remain retained but are not
+displayed. Rollback first disables scheduling, workers, and enrichment readers.
+The additive tables remain as retained identity and audit evidence until a
+separately authorized contraction.
+
+Migration `0112_add_problematic_file_path_projection.sql` also uses a reserved
+number: it comes from the Problematic Files performance work and is already in
+the production ledger. It adds stored generated columns to
+`library.local_track_files` that project the existing path and file-album tags
+(path-key presence, physical parent, source directory, physical album container,
+and duplicate album identity), plus a partial index on the projected membership
+problem. No user-owned value is read or changed. Adding stored columns rewrites
+the table under an exclusive lock, so apply it in a controlled migration window
+before starting application writers. Problematic Files falls back to the inline
+expressions on databases without these columns, so rollback only drops the index
+and the columns; a running server retries with the inline form once it finds them gone.

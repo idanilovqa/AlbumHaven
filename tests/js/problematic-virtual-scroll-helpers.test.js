@@ -88,7 +88,11 @@ function capturePage() {
   let listener;
   return { on(event, callback) { assert.equal(event, 'response'); listener = callback; },
     off(event, callback) { assert.equal(event, 'response'); assert.equal(callback, listener); listener = null; },
-    emit(url, value, ok = true) { assert.ok(listener); listener({ url: () => `https://app.test${url}`, ok: () => ok, json: async () => value }); },
+    emit(url, value, ok = true) {
+      assert.ok(listener);
+      listener({ url: () => `https://app.test${url}`, ok: () => ok,
+        json: async () => { if (value instanceof Error) throw value; return value; } });
+    },
     listening: () => Boolean(listener) };
 }
 
@@ -125,6 +129,42 @@ for (const [label, url, response, ok] of [
     assert.equal(page.listening(), false);
   });
 }
+
+const droppedBody = () => new Error('Protocol error (Network.getResponseBody): No resource with given identifier found');
+
+test('a dropped older summary body is tolerated only while a newer complete summary is captured', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage(); const capture = observeProblematicDetails(page);
+  page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
+  page.emit('/utilities/problematic-files', droppedBody());
+  page.emit('/utilities/problematic-files', { items: [{ key: 'first' }, { key: 'second' }] });
+  assert.deepEqual((await capture.summary()).map(item => item.key), ['first', 'second']);
+  await capture.dispose();
+
+  const stalePage = capturePage(); const stale = observeProblematicDetails(stalePage);
+  stalePage.emit('/utilities/problematic-files', { items: [{ key: 'old' }] });
+  stalePage.emit('/utilities/problematic-files', droppedBody());
+  await assert.rejects(stale.summary(), /newest complete summary body must be captured/);
+  await stale.dispose();
+
+  const boundedPage = capturePage(); const bounded = observeProblematicDetails(boundedPage);
+  boundedPage.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
+  await assert.rejects(bounded.summary(), /Capture must be installed/);
+  await bounded.dispose();
+
+  const otherPage = capturePage(); const other = observeProblematicDetails(otherPage);
+  otherPage.emit('/utilities/problematic-files', new Error('socket hang up'));
+  await assert.rejects(other.summary(), /evidence capture failed/);
+  await assert.rejects(other.dispose(), /evidence capture failed/);
+});
+
+test('a complete bounded first page counts as the complete summary', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage(); const capture = observeProblematicDetails(page);
+  page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'only' }], complete: true });
+  assert.deepEqual((await capture.summary()).map(item => item.key), ['only']);
+  await capture.dispose();
+});
 
 function navigationRecords() {
   return [{ detailRender: false, detailRenderCount: 0, activeKey: 'chosen', detailTitle: '', detailText: '', mutation: 'list spacers' },

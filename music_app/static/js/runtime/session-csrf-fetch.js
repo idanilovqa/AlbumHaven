@@ -18,6 +18,9 @@
     return '';
   };
 
+  const readSessionCsrfCookie = () => readCookie(csrfCookieName);
+  window.readSessionCsrfCookie = readSessionCsrfCookie;
+
   const fetchSameOriginRead = async (input, init) => {
     try {
       return await originalFetch(input, init);
@@ -43,7 +46,7 @@
     }
     if (url.origin !== window.location.origin) return originalFetch(input, init);
     const send = () => {
-      const csrfToken = readCookie(csrfCookieName);
+      const csrfToken = readSessionCsrfCookie();
       if (!csrfToken) return originalFetch(input, init);
       const headers = new Headers(requestInit?.headers || input?.headers || undefined);
       headers.set('X-Album-Haven-CSRF', csrfToken);

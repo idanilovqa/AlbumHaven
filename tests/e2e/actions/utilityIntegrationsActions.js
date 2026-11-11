@@ -185,6 +185,19 @@ export class UtilityIntegrationsActions {
     };
   }
 
+  async expectPlaybackStatistics(localPlaycount, totalListeningSeconds) {
+    const minutes = Math.floor(totalListeningSeconds / 60), hours = Math.floor(minutes / 60);
+    const duration = `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}`;
+    await this.utilityIntegrationsTab.scrobbling.click();
+    await expect(this.utilityIntegrationsTab.playbackStatistics).toBeVisible();
+    await expect(this.utilityIntegrationsTab.localPlaycount).toHaveText(String(localPlaycount));
+    await expect(this.utilityIntegrationsTab.totalListeningTime).toHaveText(duration);
+  }
+
+  async readPersistedPlaybackStatistics() {
+    return this.utilityIntegrationsTab.readPersistedPlaybackStatistics();
+  }
+
   async submitPendingScrobbles() {
     const responsePromise = this.utilityIntegrationsTab.page.waitForResponse((response) => (
       response.request().method() === 'POST'

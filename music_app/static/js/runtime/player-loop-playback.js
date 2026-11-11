@@ -155,6 +155,9 @@ function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
+  const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
+    && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
+  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
@@ -177,10 +180,10 @@ function updatePlayerUi() {
   }
   if (els.time) {
     els.time.hidden = !hasTrack;
-    els.time.textContent = state.player.loopActive
+    els.time.textContent = lockedByAnotherTab
+      ? blockedLabel
+      : state.player.loopActive
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
-      : lockedByAnotherTab
-      ? 'Playing in another tab'
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   els.loopActions?._loopActionController?.update({
@@ -192,14 +195,16 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
+    els.play.setAttribute('aria-label', lockedByAnotherTab
+      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+      : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
-    els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
-    els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? 'Playing in another tab' : 'Nothing is playing');
+    els.timeline.parentElement.classList.toggle('is-idle', !hasTrack);
+    els.timeline.parentElement.setAttribute('data-idle-label', lockedByAnotherTab ? blockedLabel : 'Nothing is playing');
   }
   if (els.loopRegion) els.loopRegion.hidden = !state.player.loopActive;
   if (els.loopStartHandle) els.loopStartHandle.hidden = !state.player.loopActive;
@@ -297,11 +302,11 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
   if (typeof resumeListenSessionPlayback !== 'function') return;
   const sessionPromise = resumeListenSessionPlayback(track, startSeconds);
   if (!sessionPromise || typeof sessionPromise.then !== 'function') return;
-  void sessionPromise.then((session) => (
-    typeof maybeSendNowPlaying === 'function'
-      ? maybeSendNowPlaying(track, session)
-      : null
-  ));
+  void sessionPromise.then((session) => {
+    // A start or resume may send a backed-off now-playing or scrobble at once.
+    if (typeof retryListenWritesNow === 'function') retryListenWritesNow(session);
+    return typeof maybeSendNowPlaying === 'function' ? maybeSendNowPlaying(track, session) : null;
+  });
 }
 
 let playerTrackSelectionToken = 0;
@@ -328,22 +333,40 @@ function clearSelectedTrack() {
 }
 
 async function playTrackFromPayload(track, options = {}) {
+  const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
-  if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
-    return false;
+  const requestedTrackPath = String(track?.path || '');
+  const currentTrackPath = String(state.player.current?.path || '');
+  if (shouldAutoplay && requestedTrackPath && currentTrackPath
+      && requestedTrackPath !== currentTrackPath
+      && typeof cancelStreamingWaveformGeneration === 'function') {
+    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
   }
+  const ownershipAlreadyClaimed = options.ownershipClaimed === true
+    && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
+  // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
+  // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
+    ? canStartPlaybackInThisTab(track)
+    : true;
+  if (pendingClaim === false) return false;
+  if (selectionToken !== playerTrackSelectionToken) return false;
+  pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
+  const requestedStartSeconds = Number(options.startSeconds);
+  const startSeconds = Number.isFinite(requestedStartSeconds)
+    ? Math.max(0, requestedStartSeconds)
+    : (resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0);
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  const selectionToken = ++playerTrackSelectionToken;
   showSelectedTrackImmediately(track, shouldAutoplay);
   let startedRole;
   try {
     startedRole = await startStreamingTrack(track, {
-      startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
+      startSeconds,
       autoplay: shouldAutoplay,
       allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
     });
@@ -362,6 +385,14 @@ async function playTrackFromPayload(track, options = {}) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  if (pendingClaim !== true && !await pendingClaim) {
+    if (selectionToken === playerTrackSelectionToken) {
+      pauseStreamingPlayback();
+      updatePlayerUi();
+    }
+    return false;
+  }
+  if (selectionToken !== playerTrackSelectionToken) return false;
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
       generation: startedRole.generation,
@@ -377,10 +408,22 @@ async function playTrackFromPayload(track, options = {}) {
     }
   }
   if (shouldAutoplay) {
-    beginStreamingPlayerListenSession(track, resetTime ? 0 : previousPlaybackSnapshot.currentTime);
+    beginStreamingPlayerListenSession(track, startSeconds);
   }
   updatePlayerUi();
   return true;
+}
+
+function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
+  const track = state.player.current;
+  if (!track || typeof isActivePlaybackOwner !== 'function' || !isActivePlaybackOwner()) {
+    return Promise.resolve(false);
+  }
+  return playTrackFromPayload(track, {
+    autoplay: true,
+    ownershipClaimed: true,
+    startSeconds: Number(playbackSnapshot?.currentTime) || 0,
+  });
 }
 
 let handledStreamingFirstFrameIdentity = '';
@@ -400,15 +443,22 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (!nextTrack || typeof scheduleStreamingContinuity !== 'function') {
+  if ((!nextTrack && !state.player.loopActive) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
-  const scheduling = Promise.resolve().then(() => scheduleStreamingContinuity(nextTrack));
+  const scheduling = Promise.resolve().then(() => {
+    if (selectionToken !== playerTrackSelectionToken
+      || selectedTrackPath !== String(state.player.current?.path || '')) return;
+    return state.player.loopActive
+      ? dispatchActiveStreamingLoop()
+      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+  });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;
@@ -429,6 +479,7 @@ async function handleStreamingPlaybackPosition(event = {}) {
     state.player.listenSession.duration_seconds = Math.round(
       (Number(playback.duration) || 0) * 1000,
     ) / 1000;
+    if (typeof maybeRetryNowPlaying === 'function') void maybeRetryNowPlaying(state.player.listenSession);
     if (typeof maybeScrobbleListenSession === 'function') {
       await maybeScrobbleListenSession(state.player.listenSession);
     }
@@ -447,9 +498,8 @@ async function handleStreamingPlaybackEnded(event = {}) {
   handledStreamingEndedIdentity = identity;
   const playback = getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('stopped', track);
-  }
+  const ownershipVersion = typeof getPlaybackOwnershipState === 'function'
+    ? (getPlaybackOwnershipState().requestVersion || 0) : null;
   if (typeof finalizeListenSession === 'function') {
     await finalizeListenSession('ended', {
       session,
@@ -458,9 +508,15 @@ async function handleStreamingPlaybackEnded(event = {}) {
       finishedFully: true,
     });
   }
+  if (typeof releasePlaybackOwnership === 'function'
+      && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0))) {
+    await releasePlaybackOwnership('stopped', track);
+  }
   updatePlayerUi();
-  if (event.sampleRateChangeTrackPath
-      && String(peekNextQueuedTrack()?.path || '') === event.sampleRateChangeTrackPath) {
+  // The engine names a queued successor it could not continue into: a new sample rate, or a
+  // native queue that ended its window.
+  if (event.startNextTrackPath
+      && String(peekNextQueuedTrack()?.path || '') === event.startNextTrackPath) {
     // A locked phone may refuse the new context; stay paused so a tap can resume it.
     await playTrackFromPayload(getNextQueuedTrack(), { allowSuspendedAutoplayFallback: true });
   }
@@ -569,6 +625,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
 
 let streamingLoopScheduleToken = 0;
 let pendingPlayerPlaybackHandoff = null;
+let pendingPlayerPlaybackHandoffSelectionToken = null;
 
 function renewPlayerLoopExpiryAfterBoundaryEdit(range) {
   const nextStart = Number(range?.startSeconds);
@@ -845,14 +902,39 @@ function togglePlayerPlayback(options = {}) {
   if (typeof resumeStreamingPlayback !== 'function'
       || typeof pauseStreamingPlayback !== 'function') return false;
   if (playback.paused) {
-    if (typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(state.player.current)) {
-      return false;
-    }
-    const restart = playback.ended && typeof seekStreamingPlayback === 'function'
-      ? seekStreamingPlayback(0)
-      : null;
-    Promise.resolve(restart).then(() => resumeStreamingPlayback()).then((resumed) => {
-      if (resumed === false) return;
+    const track = state.player.current;
+    const selectionToken = ++playerTrackSelectionToken;
+    Promise.resolve().then(async () => {
+      if (selectionToken !== playerTrackSelectionToken) return false;
+      const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
+      // Instant resume: the paused stream sounds while the claim is asked for; a refusal pauses it again.
+      const early = claim !== true && playback.mode !== 'stopped' && !playback.ended
+        ? resumeStreamingPlayback()
+        : null;
+      // The controls follow the sound as soon as it resumes, not after the claim's round trip.
+      Promise.resolve(early).then((resumed) => {
+        if (resumed && selectionToken === playerTrackSelectionToken) updatePlayerUi();
+      }).catch(() => {});
+      if (claim !== true && !await claim) {
+        if (early && selectionToken === playerTrackSelectionToken) {
+          pauseStreamingPlayback();
+          updatePlayerUi();
+        }
+        return false;
+      }
+      if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
+      pendingPlayerPlaybackHandoff = null;
+      if (early) return early;
+      if (playback.mode === 'stopped') {
+        return Boolean(await startStreamingTrack(track, {
+          startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),
+        }));
+      }
+      if (playback.ended && typeof seekStreamingPlayback === 'function') await seekStreamingPlayback(0);
+      if (selectionToken !== playerTrackSelectionToken) return false;
+      return resumeStreamingPlayback();
+    }).then((resumed) => {
+      if (resumed === false || selectionToken !== playerTrackSelectionToken) return;
       beginStreamingPlayerListenSession(
         state.player.current,
         playback.ended ? 0 : (Number(playback.currentTime) || 0),
@@ -867,19 +949,43 @@ function togglePlayerPlayback(options = {}) {
 }
 
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
-  if (pendingPlayerPlaybackHandoff) return pendingPlayerPlaybackHandoff;
+  if (pendingPlayerPlaybackHandoff && pendingPlayerPlaybackHandoffSelectionToken === playerTrackSelectionToken) {
+    return pendingPlayerPlaybackHandoff;
+  }
   if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
-  const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(() => {
+  pendingPlayerPlaybackHandoffSelectionToken = ++playerTrackSelectionToken;
+  const selectionToken = playerTrackSelectionToken;
+  const track = state.player.current;
+  const session = state.player.listenSession;
+  const ownership = typeof getPlaybackOwnershipState === 'function' ? getPlaybackOwnershipState() : null;
+  const ownershipVersion = ownership ? (ownership.requestVersion = (ownership.requestVersion || 0) + 1) : null;
+  const isCurrentPause = () => selectionToken === playerTrackSelectionToken
+    && session === state.player.listenSession && track === state.player.current
+    && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
+  const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
+    if (!isCurrentPause()) return false;
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
-      void maybeScrobbleListenSession(state.player.listenSession);
+      await maybeScrobbleListenSession(session);
     }
+    if (!isCurrentPause()) return false;
+    let saved = true;
+    if (typeof persistPausedListenSession === 'function') {
+      try {
+        await persistPausedListenSession(session);
+      } catch (_error) {
+        if (!isCurrentPause()) return false;
+        saved = false;
+        showToast('Listening history could not be saved.', 'error', 4200);
+      }
+    }
+    if (!isCurrentPause()) return saved;
     if (typeof releasePlaybackOwnership === 'function') {
-      releasePlaybackOwnership('paused', state.player.current);
+      await releasePlaybackOwnership('paused', track);
     }
     updatePlayerUi();
-    return true;
+    return saved;
   });
   const trackedPause = pauseEffects.finally(() => {
     if (pendingPlayerPlaybackHandoff === trackedPause) pendingPlayerPlaybackHandoff = null;
@@ -1104,11 +1210,18 @@ function attachPlayerEvents() {
   els.player?.addEventListener('pointerdown', claimGlobalPlayerSpaceOwnership);
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
-  els.albumLink?.addEventListener('click', () => openCurrentPlayerTrackSource());
-  els.coverButton?.addEventListener('click', () => openCurrentPlayerTrackSource({
-    coverLightboxGallery: false,
-    foreground: true,
-  }));
+  els.albumLink?.addEventListener('click', () => {
+    void openPlayerTrackAlbum(state.player.current);
+  });
+  // On a phone the artist and title rows are most of the player, so a tap there opens the album too.
+  els.title?.closest('.player-track-meta')?.addEventListener('click', (event) => {
+    if (event.target?.closest?.('#player-album-link') || !state.player.current) return;
+    if (typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()) return;
+    void openPlayerTrackAlbum(state.player.current);
+  });
+  els.coverButton?.addEventListener('click', () => {
+    void openPlayerTrackAlbum(state.player.current, { coverLightboxGallery: false, foreground: true });
+  });
   els.timeline?.addEventListener('keydown', handlePlayerTimelineKeydown);
   els.timeline?.addEventListener('input', () => {
     const next = Number(els.timeline.value) || 0;

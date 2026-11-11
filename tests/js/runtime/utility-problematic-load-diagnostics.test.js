@@ -680,7 +680,6 @@ test('a changed complete summary keeps the loaded off-page detail usable until i
   await load;
   assert.equal(context.state.utility.problematicFiles.find((item) => item.key === 'off-page').name, 'Refreshed detail');
 });
-
 test('loadProblematicFiles reuses its owned complete request for a concurrent forced load', async () => {
   const fullResponse = createDeferred();
   const requestedUrls = [];
@@ -1304,10 +1303,6 @@ test('loadProblematicFiles rejects a JSON HTTP error without committing empty su
 
   assert.equal(context.state.utility.problematicFiles.length, 0);
   assert.equal(context.state.utility.loaded, false);
-  assert.equal(
-    context.state.utility.problematicLoadError,
-    'Problematic-file projection is temporarily unavailable.',
-  );
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(calls.consoleErrors.length, 1);
@@ -1432,7 +1427,6 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loading, false);
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 0);
-  assert.match(context.state.utility.problematicLoadError, /Unexpected end (?:of )?JSON input/);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, false);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.match(context.state.utility.problematicDiagnostics.summaryLoad.error, /Unexpected end of JSON input/);
@@ -1447,7 +1441,6 @@ test('loadProblematicFiles keeps malformed successful responses retryable and re
   assert.equal(context.state.utility.loadPromise, null);
   assert.equal(context.state.utility.problematicFiles.length, 1);
   assert.equal(context.state.utility.problematicFiles[0].key, 'album-1');
-  assert.equal(context.state.utility.problematicLoadError, '');
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.ok, true);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.status, 200);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.error, null);
@@ -2822,4 +2815,35 @@ test('Settings keeps its body hidden until the requested section renders (no Pro
     /setAttribute\('data-active-tab', activeTab\);\s*els\.overlay\?\.removeAttribute\?\.\('data-utility-tab-pending'\)/);
   assert.match(fs.readFileSync(require('node:path').join(runtime, 'static/css/runtime/utilities.css'), 'utf8'),
     /#utility-modal\[data-utility-tab-pending\] \.utility-modal-body \{ visibility: hidden; \}/);
+});
+
+test('a forced refresh keeps the complete list on screen instead of painting its bounded page', async () => {
+  const fullResponse = createDeferred();
+  const renderedLengths = [];
+  const item = (key) => ({ key, name: key, detail_loaded: false });
+  const response = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
+  const { context } = loadHelper({
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return response({ complete: false, items: [item('first')] });
+      }
+      return fullResponse.promise;
+    },
+    renderUtilityModalContent() {
+      renderedLengths.push(context.state.utility.problematicFiles.length);
+    },
+  });
+  Object.assign(context.state.utility, {
+    loaded: true,
+    problematicFilesComplete: true,
+    problematicFiles: [item('first'), item('second'), item('third')],
+  });
+
+  const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  fullResponse.resolve(response({ items: [item('first'), item('third')] }));
+  await refresh;
+
+  assert.deepEqual(renderedLengths, [3, 2], 'only the replaced and the complete list paint');
 });

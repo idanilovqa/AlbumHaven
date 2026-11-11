@@ -16,8 +16,11 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
+from music_app.routes.playback_control_asgi import playback_config
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.playback_io import run_playback_io
+from music_app.services.playback_seek_table import flac_seek_table
 from music_app.services.playback_encoded import (
     INITIAL_ENCODED_CREDIT_BYTES,
     EncodedStream,
@@ -33,6 +36,7 @@ from music_app.services.playback_pcm import (
     pack_pcm_frame,
     read_native_sample_rate,
 )
+from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.waveform_peaks import (
     WAVEFORM_ANALYZER_VERSION,
     WaveformPeaksBusyError,
@@ -228,9 +232,15 @@ def _gathered_failures(results: list[object]) -> list[BaseException]:
     return [result for result in results if isinstance(result, BaseException)]
 
 
+class _PlaybackCleanupError(RuntimeError):
+    """Cleanup aggregate containing only operation labels and sanitized failures."""
+
+
 def _format_cleanup_failure(error: BaseException) -> str:
-    message = str(error)
-    return message if message else type(error).__name__
+    # Decoder exceptions can contain private media paths or protocol tokens.
+    if isinstance(error, _PlaybackCleanupError):
+        return str(error)
+    return type(error).__name__
 
 
 def _bounded_integer(
@@ -290,6 +300,56 @@ def _encoded_fields(decoder: object) -> dict[str, object] | None:
     }
 
 
+def _decoder_name(decoder: object) -> str:
+    return f"encoded-{decoder.codec}" if isinstance(decoder, EncodedStream) else "ffmpeg-pcm"
+
+
+def _elapsed_ms(started_at: float, at: float | None) -> str:
+    return "-" if at is None else str(round((at - started_at) * 1000))
+
+
+@dataclass(slots=True, eq=False)
+class _OpenTiming:
+    """Monotonic milestones of one `open`, logged once as one path-free line of fixed keys.
+
+    Every milestone counts from the open's arrival: the media resolved (authorization and
+    reference included), the decoder started or refused, the first credit, the first decoded PCM
+    and its send. The client's credit gates decoding, so a late first credit is the client's wait.
+    """
+
+    generation: int
+    stream_id: int
+    role: str
+    received_at: float
+    resolved_at: float | None = None
+    decoder_started_at: float | None = None
+    first_credit_at: float | None = None
+    first_decoded_at: float | None = None
+    first_sent_at: float | None = None
+    decoder: str = "-"
+    logged: bool = False
+
+    def log(self, outcome: str) -> None:
+        if self.logged:
+            return
+        self.logged = True
+        _LOGGER.info(
+            "Playback stream open generation=%s stream=%s role=%s decoder=%s outcome=%s "
+            "resolve_ms=%s decoder_start_ms=%s first_credit_ms=%s first_decoded_ms=%s "
+            "first_sent_ms=%s",
+            self.generation,
+            self.stream_id,
+            self.role,
+            self.decoder,
+            outcome,
+            _elapsed_ms(self.received_at, self.resolved_at),
+            _elapsed_ms(self.received_at, self.decoder_started_at),
+            _elapsed_ms(self.received_at, self.first_credit_at),
+            _elapsed_ms(self.received_at, self.first_decoded_at),
+            _elapsed_ms(self.received_at, self.first_sent_at),
+        )
+
+
 @dataclass(slots=True, eq=False)
 class _PlaybackStream:
     decoder: PcmDecoderProcess
@@ -298,6 +358,11 @@ class _PlaybackStream:
     role: str
     sequence: int = 0
     credit_task: asyncio.Task[None] | None = None
+    timing: _OpenTiming | None = None
+
+    def log_open_timing(self, outcome: str) -> None:
+        if self.timing is not None:
+            self.timing.log(outcome)
 
 
 def _log_slow_stream_step(step: str, stream: _PlaybackStream, started_at: float) -> None:
@@ -508,6 +573,10 @@ class _PlaybackPcmConnection:
             return await self._log_decoder_fallback(control)
         if command_type == "output-report":
             return await self._log_audio_output(control)
+        # A paused client's socket carries nothing; proxies close an idle WebSocket after about
+        # 100 seconds, so clients that cannot send WebSocket pings send this instead.
+        if command_type == "keepalive" and set(control) == {"type"}:
+            return True
         await self.reject(CLOSE_INVALID_CONTROL)
         return False
 
@@ -609,8 +678,8 @@ class _PlaybackPcmConnection:
             return False
         size_bytes = 0
         try:
-            sample_rate = await asyncio.to_thread(read_native_sample_rate, resolved_path)
-            size_bytes = await asyncio.to_thread(lambda: resolved_path.stat().st_size)
+            sample_rate = await run_playback_io(read_native_sample_rate, resolved_path)
+            size_bytes = await run_playback_io(lambda: resolved_path.stat().st_size)
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             _LOGGER.warning("Playback sample rate probe failed: %s", type(error).__name__)
             sample_rate = 0
@@ -634,6 +703,7 @@ class _PlaybackPcmConnection:
             self._pending_opens.discard(task)
 
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
+        received_at = time.monotonic()
         if self._closed or not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
@@ -657,8 +727,11 @@ class _PlaybackPcmConnection:
             codec in ("mp3", "flac") for codec in raw_codecs
         )
         quality = control.get("quality", "original")
+        # Clients that seek inside received bytes ask for the stream's seek table.
+        wants_seek_table = control.get("seekTable", False)
         if (
-            not codecs_valid
+            not isinstance(wants_seek_table, bool)
+            or not codecs_valid
             or quality not in ("original", "320")
             or generation is None
             or stream_id is None
@@ -673,17 +746,29 @@ class _PlaybackPcmConnection:
         ):
             return await self._reject_open(CLOSE_INVALID_CONTROL)
 
-        raw_path = control.get("path")
-        if not isinstance(raw_path, str) or not raw_path:
-            return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
-        if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+        timing = _OpenTiming(generation, stream_id, role, received_at)
+        if "path" in control and "playbackRef" in control:
             return await self._reject_open(CLOSE_INVALID_CONTROL)
-        resolved_path = resolve_configured_media_path(
-            self._websocket.app.state.config,
-            raw_path,
-        )
+        if "playbackRef" in control:
+            try:
+                service = PlaybackReferenceService(playback_config(self._websocket))
+                resolved_path = await run_playback_io(service.resolve,
+                    self._websocket.state.current_actor, control["playbackRef"])
+            except PlaybackContractError:
+                return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+        else:
+            raw_path = control.get("path")
+            if not isinstance(raw_path, str) or not raw_path:
+                return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+            if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+                return await self._reject_open(CLOSE_INVALID_CONTROL)
+            resolved_path = resolve_configured_media_path(
+                self._websocket.app.state.config,
+                raw_path,
+            )
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+        timing.resolved_at = time.monotonic()
 
         generations = {stream.generation for stream in self._streams_by_id.values()}
         generations.update(
@@ -719,11 +804,13 @@ class _PlaybackPcmConnection:
                 quality=quality,
             ) or await PcmDecoderProcess.start(command)
         except BaseException as error:
+            timing.decoder_started_at = time.monotonic()
             await self._registry.release_decoder()
             if not isinstance(error, Exception):
                 raise
             if self._closed:
                 return False
+            timing.log("rate_mismatch" if isinstance(error, SampleRateMismatch) else "decoder_error")
             if isinstance(error, SampleRateMismatch):
                 await self._send_json(
                     {
@@ -743,11 +830,14 @@ class _PlaybackPcmConnection:
             )
             return True
 
+        timing.decoder_started_at = time.monotonic()
+        timing.decoder = _decoder_name(decoder)
         stream = _PlaybackStream(
             decoder=decoder,
             generation=generation,
             stream_id=stream_id,
             role=role,
+            timing=timing,
         )
         self._completed_streams_by_role.pop(role, None)
         for completed_role, completed_stream in list(self._completed_streams_by_role.items()):
@@ -761,9 +851,24 @@ class _PlaybackPcmConnection:
             _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
         )
         if isinstance(decoder, EncodedStream):
-            decoder.grant_credit(INITIAL_ENCODED_CREDIT_BYTES)
-            self._start_credit_drain(stream)
+            self._grant_credit(stream, INITIAL_ENCODED_CREDIT_BYTES)
+            if wants_seek_table:
+                self._send_seek_table(stream, decoder)
         return True
+
+    def _send_seek_table(self, stream: _PlaybackStream, decoder: EncodedStream) -> None:
+        """Sends the stream's seek table: at once for MP3, once its frames are scanned for FLAC."""
+        async def send() -> None:
+            table = decoder.seek_table
+            if table is None and decoder.flac_layout is not None:
+                table = await asyncio.to_thread(flac_seek_table, *decoder.flac_layout)
+            if table is None or self._closed or self._streams_by_id.get(stream.stream_id) is not stream:
+                return
+            await self._send_json(table.event(generation=stream.generation, stream_id=stream.stream_id))
+
+        task = asyncio.create_task(send())
+        self._pending_credit_tasks.add(task)
+        task.add_done_callback(self._pending_credit_tasks.discard)
 
     async def _reject_open(self, code: int) -> bool:
         if self._closed:
@@ -804,9 +909,14 @@ class _PlaybackPcmConnection:
             await self.reject(CLOSE_CREDIT_VIOLATION)
             return False
 
-        stream.decoder.grant_credit(frames)
-        self._start_credit_drain(stream)
+        self._grant_credit(stream, frames)
         return True
+
+    def _grant_credit(self, stream: _PlaybackStream, amount: int) -> None:
+        if stream.timing is not None and stream.timing.first_credit_at is None:
+            stream.timing.first_credit_at = time.monotonic()
+        stream.decoder.grant_credit(amount)
+        self._start_credit_drain(stream)
 
     def _start_credit_drain(self, stream: _PlaybackStream) -> None:
         if stream.credit_task is None or stream.credit_task.done():
@@ -826,7 +936,10 @@ class _PlaybackPcmConnection:
                     delivery_role=stream.role,
                 )
                 _log_slow_stream_step("decoder read", stream, read_started_at)
+                timing = stream.timing if stream.sequence == 0 else None
                 if chunk.frame_count:
+                    if timing is not None:
+                        timing.first_decoded_at = time.monotonic()
                     payload = (
                         pack_encoded_frame(
                             generation=stream.generation,
@@ -849,11 +962,15 @@ class _PlaybackPcmConnection:
                     if not await self._send_stream_bytes(stream, payload):
                         return
                     _log_slow_stream_step("socket send", stream, send_started_at)
+                    if timing is not None:
+                        timing.first_sent_at = time.monotonic()
+                        timing.log("first_frame")
                     stream.sequence += 1
                     await asyncio.sleep(PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS)
                     continue
 
                 metadata = await stream.decoder.finish()
+                stream.log_open_timing("eos")
                 try:
                     if not await self._send_stream_eos(stream, metadata):
                         return
@@ -867,6 +984,7 @@ class _PlaybackPcmConnection:
         except Exception as error:
             if self._closed or self._streams_by_id.get(stream.stream_id) is not stream:
                 return
+            stream.log_open_timing("decoder_error")
             await self._send_decoder_error(
                 generation=stream.generation,
                 stream_id=stream.stream_id,
@@ -975,8 +1093,7 @@ class _PlaybackPcmConnection:
             if message == "ffmpeg returned truncated partial PCM frame"
             else "decoder_failed"
         )
-        if message.startswith("ffmpeg"):
-            message = "FFmpeg" + message[len("ffmpeg") :]
+        message = "FFmpeg returned truncated partial PCM frame" if error_code == "truncated_pcm" else "Audio decoder failed."
         await self._send_json(
             {
                 "type": "error",
@@ -992,6 +1109,7 @@ class _PlaybackPcmConnection:
     async def _remove_stream(self, stream: _PlaybackStream, *, cancel: bool = True) -> None:
         if self._streams_by_id.get(stream.stream_id) is not stream:
             return
+        stream.log_open_timing("closed")
         await self._cancel_stream_credit_task(stream)
         if cancel:
             await stream.decoder.cancel()
@@ -1007,6 +1125,7 @@ class _PlaybackPcmConnection:
     def _retire_stream_unlocked(self, stream: _PlaybackStream) -> None:
         if self._streams_by_id.get(stream.stream_id) is not stream:
             return
+        stream.log_open_timing("closed")
         self._streams_by_id.pop(stream.stream_id, None)
         if self._streams_by_role.get(stream.role) is stream:
             self._streams_by_role.pop(stream.role, None)
@@ -1035,7 +1154,9 @@ class _PlaybackPcmConnection:
         failures = _gathered_failures(results)
         if failures:
             details = "; ".join(_format_cleanup_failure(failure) for failure in failures)
-            raise RuntimeError(f"playback stream cleanup failed: {details}")
+            raise _PlaybackCleanupError(
+                f"playback stream cleanup failed: decoder cancel failed: {details}"
+            )
 
     async def reject(self, code: int) -> None:
         await self._finalize(close_code=code)
@@ -1089,7 +1210,7 @@ class _PlaybackPcmConnection:
                 details = "; ".join(
                     _format_cleanup_failure(failure) for failure in failures
                 )
-                raise RuntimeError(f"playback connection cleanup failed: {details}")
+                raise _PlaybackCleanupError(f"playback connection cleanup failed: {details}")
 
 
 @router.websocket("/playback/pcm")

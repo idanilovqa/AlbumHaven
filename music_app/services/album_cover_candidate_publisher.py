@@ -197,6 +197,19 @@ class AlbumCoverCandidatePublisher:
                 return str(published.get("id") or "").strip() or None
         return None
 
+    def display_ordered(self, candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        """Order candidates as this generation's snapshot displays them; unpublished ones last."""
+        positions = {
+            str(candidate["url"]): index
+            for index, candidate in enumerate(self._published_candidates)
+        }
+
+        def position(candidate: Mapping[str, object]) -> int:
+            sanitized = _sanitize_candidate(candidate)
+            return positions.get(str(sanitized["url"]), len(positions)) if sanitized else len(positions)
+
+        return sorted(candidates, key=position)
+
     def mark_automatic_improvement(self, candidate_id: object) -> bool:
         normalized_candidate_id = str(candidate_id or "").strip()
         if (

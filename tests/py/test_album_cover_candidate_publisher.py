@@ -396,6 +396,25 @@ def test_incremental_publish_keeps_existing_candidate_order_when_a_better_candid
     assert repository.snapshot["best_candidate_id"] == stored[2]["id"]
 
 
+def test_display_order_follows_the_snapshot_when_a_later_merge_reorders_providers():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    service = raw_candidate("https://images.example/service.jpg", source="apple", score=0.9)
+    archive = raw_candidate("https://images.example/archive.jpg", source="cover_art_archive", score=0.6)
+    discogs = raw_candidate("https://images.example/discogs.jpg", source="discogs", score=0.7)
+    unpublished = {"url": "http://127.0.0.1/private.jpg", "source": "direct_url"}
+
+    # Cover Art Archive answers first; the final merge lists Discogs before it.
+    publisher.publish_candidates([service, archive])
+    merged = [service, discogs, archive, unpublished]
+    publisher.publish_candidates(merged)
+
+    assert publisher.display_ordered(merged) == [service, archive, discogs, unpublished]
+    assert [item["url"] for item in repository.snapshot["candidates"]] == [
+        candidate["url"] for candidate in (service, archive, discogs)
+    ]
+
+
 def test_publish_caps_the_ranked_snapshot_at_24_candidates():
     repository = FakeSnapshotRepository()
     publisher = publisher_for(repository)

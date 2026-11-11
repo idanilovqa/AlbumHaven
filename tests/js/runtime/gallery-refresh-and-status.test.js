@@ -8030,3 +8030,31 @@ test('search progress belongs to the latest request and clears on failure', asyn
   assert.equal(context.state.ui.pendingGallerySearch, false);
   assert.equal(context.state.ui.pendingViewTransition, false);
 });
+
+test('status changes that only add or remove actions never refetch Problematic Files during a warm open', async () => {
+  // The /status payload now offers catalogue.enrichment.request only while enrichment
+  // runs (5fc852c6); such a change must not add a summary request to a warm Settings open.
+  const fixture = watcherRefreshFixture();
+  const utility = fixture.context.state.utility;
+  const healthy = { state: 'healthy', problems: [] };
+  const observeStatus = async (extra) => {
+    const requestIndex = fixture.pendingRequests.length;
+    const pending = fixture.context.pollStatus();
+    fixture.pendingRequests[requestIndex].resolveWith({ inventory_mutation_revision: 12, watcher_health: healthy, ...extra });
+    await pending;
+  };
+  await observeStatus({});
+  assert.deepEqual(fixture.refreshes, [], 'the first observation is a baseline');
+
+  // A warm open is in flight: its own first-page and complete requests own the list.
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['open summary']);
+  await observeStatus({ allowed_actions: { 'library.loops.create': true, 'catalogue.enrichment.request': true } });
+  await observeStatus({ allowed_actions: { 'library.loops.create': true } });
+  utility.loading = false;
+  utility.loadPromise = null;
+  await observeStatus({ allowed_actions: { 'library.loops.create': true, 'catalogue.enrichment.request': true } });
+  await observeStatus({ musicbrainz_enrichment: { state: 'running', queued: 3 } });
+
+  assert.deepEqual(fixture.refreshes, [], 'only inventory or watcher-health changes refresh the list');
+});

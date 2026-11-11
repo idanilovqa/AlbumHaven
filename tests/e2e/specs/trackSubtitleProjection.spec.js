@@ -103,12 +103,11 @@ test(
             ...identity,
             edition: track.edition,
           });
-          // Historical album identities are retained until the user explicitly
-          // removes missing albums. They must no longer own tracks or project as
-          // active releases after the scan adopts those tracks into the base album.
-          expect(staleEdition.album_ids).toHaveLength(1);
-          expect(staleEdition.album_keys).toHaveLength(1);
-          expect(staleEdition.track_counts).toEqual([0]);
+          // Owner decision 2026-11-09: a scan retires an edition row its tracks all
+          // moved out of when it carries no user decision, so no stale edition remains.
+          expect(staleEdition.album_ids).toEqual([]);
+          expect(staleEdition.album_keys).toEqual([]);
+          expect(staleEdition.track_counts).toEqual([]);
         }
       });
     }

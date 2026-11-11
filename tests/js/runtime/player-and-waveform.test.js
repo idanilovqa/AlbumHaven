@@ -496,29 +496,30 @@ async function run() {
 
   {
     const { context } = loadRuntime();
-    const album = { key: 'alpha', name: 'Album Alpha' };
-    const modalCalls = [];
+    const opened = [];
     const createButton = () => {
       let clickHandler = null;
       return {
         addEventListener(type, handler) {
           if (type === 'click') clickHandler = handler;
         },
-        click() {
-          clickHandler?.();
+        click(target = { closest: () => null }) {
+          clickHandler?.({ target });
         },
       };
     };
     const albumLink = createButton();
     const coverButton = createButton();
-    context.state.player.current = {
+    const trackMeta = createButton();
+    const title = { closest: (selector) => (selector === '.player-track-meta' ? trackMeta : null) };
+    const current = {
       src: '/track?path=current.flac',
       path: 'C:/Music/current.flac',
       title: 'Current',
     };
-    context.getPlayerElements = () => ({ albumLink, coverButton });
-    context.resolveAlbumForPlayerTrack = () => album;
-    context.openTrackModal = (...args) => modalCalls.push(args);
+    context.state.player.current = current;
+    context.getPlayerElements = () => ({ albumLink, coverButton, title });
+    context.openPlayerTrackAlbum = (track, options) => { opened.push([track, options]); };
     context.setCurrentPlayerTrack = () => {};
     context.updatePlayerUi = () => {};
     context.restorePlayerState = () => {};
@@ -526,30 +527,33 @@ async function run() {
     context.attachPlayerEvents();
     albumLink.click();
     coverButton.click();
+    context.usesMobilePageLayout = () => false;
+    trackMeta.click();
+    context.usesMobilePageLayout = () => true;
+    trackMeta.click();
 
-    assert.equal(modalCalls.length, 2);
-    assert.strictEqual(modalCalls[0][0], album);
-    assert.equal(modalCalls[0].length, 1, 'the album title keeps the normal gallery-enabled modal default');
-    assert.strictEqual(modalCalls[1][0], album);
+    assert.equal(opened.length, 3, 'a desktop title click opens nothing; a phone tap on the title does');
+    assert.strictEqual(opened[0][0], current);
+    assert.equal(opened[0][1], undefined, 'the album title keeps the normal gallery-enabled modal default');
     assert.deepEqual(
-      JSON.parse(JSON.stringify(modalCalls[1][1])),
+      JSON.parse(JSON.stringify(opened[1][1])),
       { coverLightboxGallery: false, foreground: true },
       'the player cover opens a single-cover lightbox modal',
     );
+    assert.deepEqual(opened[2], [current, undefined], 'a phone tap on the artist or title opens the playing album');
 
-    const looseTrackCalls = [];
-    context.resolveAlbumForPlayerTrack = () => null;
-    context.openNonAlbumModal = (options) => looseTrackCalls.push(options);
-    context.state.player.current = {
+    const looseTrack = {
       path: 'C:/Music/Начало Века/2009 - Тебя ждала (single)/loose.mp3',
       title: 'Тебя ждала',
       looseTracksOrigin: { libraryWide: true },
     };
+    context.state.player.current = looseTrack;
     coverButton.click();
     albumLink.click();
-    assert.equal(modalCalls.length, 2, 'a loose track has no album to open');
-    assert.deepEqual(JSON.parse(JSON.stringify(looseTrackCalls)), [{ libraryWide: true }, { libraryWide: true }],
-      'player art and album link reopen the Loose Tracks collection the track was played from');
+    assert.deepEqual(opened.slice(3).map(([track]) => track), [looseTrack, looseTrack],
+      'player art and album link route loose tracks through the shared album opener');
+    assert.deepEqual(JSON.parse(JSON.stringify(opened.slice(3).map(([, options]) => options))),
+      [{ coverLightboxGallery: false, foreground: true }, null]);
   }
 }
 

@@ -267,6 +267,19 @@ test('AlbumTrackTable uses theme text tokens, plain durations, and a subtly diss
   assert.match(css, /album-track-table__row--animated::after\s*\{[^}]*opacity:\s*\.84/s);
 });
 
+test('a paused current track keeps a dim, still highlight and its play button', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  const paused = css.match(/\.album-track-table__row--current:not\(\.album-track-table__row--playing\)\s*\{([^}]*)\}/s);
+  assert.ok(paused, 'the paused current row has its own highlight');
+  assert.match(paused[1], /outline:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 50%/);
+  assert.match(paused[1], /background:\s*color-mix\(in srgb, var\(--album-track-accent\) 8%/);
+  assert.doesNotMatch(paused[1], /animation|box-shadow/, 'only the playing row glows and moves');
+  assert.match(css, /:is\([^)]*\.album-track-table__row--current\) \.album-track-table__play \{ opacity: 1; \}/);
+});
+
 test('play activation is transient and live playback refresh can own the component state classes', () => {
   const context = loadTrackTable();
   assert.equal(typeof context.triggerAlbumTrackPlayActivation, 'function');
@@ -402,4 +415,55 @@ test('Loose Tracks credit motion reads every row before writing and pans only vi
   assert.ok(firstWrite > lastRead, `layout reads interleaved with class writes: ${log.join(', ')}`);
   assert.deepEqual(rows.map((row) => row.classList.contains('is-credit-overflowing')), [true, false, true, false]);
   assert.ok(!log.includes('read-row-1') && !log.includes('read-row-3'), 'off-screen rows must not be measured');
+});
+
+function loadTrackTableWithRating() {
+  const context = loadTrackTable();
+  vm.runInContext(
+    fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'gallery-main-components.js'), 'utf8'),
+    context,
+  );
+  return context;
+}
+
+function discHeaders(html) {
+  return [...html.matchAll(/<div class="album-track-table__disc-header">([\s\S]*?)<\/div><\/div><\/div>/g)].map((match) => match[1]);
+}
+
+test('AlbumTrackTable shows a later disc rating on its heading only when both are rated and they differ', () => {
+  const context = loadTrackTableWithRating();
+  const track = (name) => ({ path: `C:/Music/${name}.flac`, title: name, trackNumber: 1, duration: '3:00' });
+  const render = (discRating, albumRating, { firstDiscRating = null, secondLabel = 'CD 2', isBonus = false } = {}) => (
+    context.buildAlbumTrackTableHtml({
+      albumRating,
+      groups: [
+        { discNumber: 1, discLabel: 'CD 1', tracks: [track('main')], discRating: firstDiscRating },
+        { discNumber: 2, discLabel: secondLabel, isBonus, tracks: [track('second')], discRating },
+      ],
+      multiDisc: true,
+    })
+  );
+
+  // The Pineapple Thief "All the Wars": album 5, disc 2 tagged "2/2" and rated 8.
+  const rated = discHeaders(render(8, 5));
+  assert.equal(rated.length, 1);
+  assert.match(rated[0], /^<h4 class="album-track-table__disc-heading">CD 2<\/h4><div class="rating-row/);
+  assert.match(rated[0], /class="rating-row album-track-table__disc-rating" data-rating-value="8"/);
+  assert.match(rated[0], /aria-label="Disc rating 8\/10"/);
+  assert.equal((rated[0].match(/class="star filled"/g) || []).length, 8);
+  assert.match(rated[0], /<div class="rating-text">8\/10$/);
+  assert.equal(discHeaders(render(9, 5, { secondLabel: 'Bonus CD', isBonus: true })).length, 1);
+
+  for (const [discRating, albumRating, options] of [
+    [5, 5, {}],
+    [null, 5, {}],
+    [0, 5, {}],
+    [11, 5, {}],
+    [8, null, {}],
+    [8, 0, {}],
+    [null, 5, { firstDiscRating: 8 }],
+  ]) {
+    const html = render(discRating, albumRating, options);
+    assert.doesNotMatch(html, /album-track-table__disc-rating/, `no disc rating for ${discRating}/${albumRating}/${JSON.stringify(options)}`);
+  }
 });

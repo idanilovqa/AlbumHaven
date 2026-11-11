@@ -1080,6 +1080,49 @@ test('inventory mutation refresh keeps rows until fresh details replace them', a
   assert.equal(rendered.tracks[0].title, 'Fresh title');
 });
 
+test('inventory mutation refresh keeps rows and title of an album this session edited', async () => {
+  const edited = {
+    key: 'edited-album',
+    request_key: 'edited-album',
+    name: 'Edited Album',
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Optimistic title' }],
+  };
+  let resolveResponse = null;
+  const { context } = loadHelper({
+    initialAlbums: [edited],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }),
+  });
+  context.state.modalReleases = [edited];
+  context.state.modalReleaseIndex = 0;
+  const elements = context.getTrackModalElements();
+  elements.overlay.hidden = false;
+  elements.title.textContent = 'Artist - Edited Album';
+  elements.subtitle.textContent = '1 track';
+  elements.list.innerHTML = '<li>Optimistic title</li>';
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+  context.rememberLocallyEditedAlbum(edited);
+
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+
+  assert.equal(elements.list.innerHTML, '<li>Optimistic title</li>');
+  assert.equal(elements.title.textContent, 'Artist - Edited Album');
+  assert.equal(elements.subtitle.textContent, '1 track');
+  resolveResponse({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: edited }),
+  });
+  assert.equal(await refresh, true);
+  assert.deepEqual(refreshed, [{ albumKey: 'edited-album', album: edited }]);
+});
+
 test('inventory mutation refresh follows a cached stale child to its merged release', async () => {
   const staleChild = {
     album_id: 17,
@@ -1319,6 +1362,24 @@ test('revision reload preserves a speculative detail request promoted to foregro
   assert.equal(responses[1].requestOptions.signal.aborted, false);
   responses[1].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
   assert.equal(await foreground, album);
+});
+
+test('an open right after prewarms are cancelled never joins the aborted request', async () => {
+  const preview = { key: 'late-abort-album', name: 'Late Abort Album', preview_only: true, tracks: [] };
+  const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };
+  const { context } = loadHelper({ initialAlbums: [preview],
+    // An abort that lands while the body is read rejects in a later task, not at once.
+    onFetchAlbumDetails: ({ requestOptions }) => (requestOptions.signal
+      ? new Promise((_resolve, reject) => requestOptions.signal.addEventListener('abort', () => {
+        setTimeout(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), 0);
+      }, { once: true }))
+      : Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) })),
+  });
+  context.queueTrackModalAlbumDetailsPrewarm(preview.key);
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  const foreground = context.loadTrackModalAlbumDetails(preview.key);
+  assert.equal(await foreground, album);
+  assert.equal(context.fetchCalls.length, 2, 'the open starts its own request');
 });
 
 test('opening a preview album renders all known edition tabs before details resolve', () => {

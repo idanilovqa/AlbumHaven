@@ -85,7 +85,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
 {
     const context = loadHelpers();
     const attributes = {};
-    const menu = { setAttribute(name, value) { attributes[name] = value; } };
+    const menu = { dataset: {}, setAttribute(name, value) { attributes[name] = value; } };
     const appended = [];
     context.ButtonComponent = ButtonComponent;
     context.document.createElement = () => menu;

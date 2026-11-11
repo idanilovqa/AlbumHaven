@@ -46,6 +46,8 @@ def test_private_routes_have_explicit_action_classification():
                 "/accept-invitation/continue",
                 "/favicon.ico",
                 "/static",
+                "/artifacts/android/download/{token}",
+                "/downloads/{token}",
             }:
                 continue
             action = private_action_for_route(method, path)
@@ -58,6 +60,7 @@ def test_private_routes_have_explicit_action_classification():
                     ("POST", "/logout"),
                     ("POST", "/account/password"),
                     ("POST", "/account/password-suggestion/dismiss"),
+                    ("POST", "/playback/state/handoff"),
                 }
                 else "session_header"
             )
@@ -76,6 +79,12 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/refresh-api", "library.refresh"),
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
         ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
+        ("POST", "/playback/state/handoff", "app.access"),
+        ("POST", "/artifacts/android/challenge", "account.self.android_updates"),
+        ("POST", "/artifacts/android/attest", "account.self.android_updates"),
+        ("GET", "/artifacts/android/{channel}/manifest.json", "account.self.android_updates"),
+        ("POST", "/artifacts/android/{channel}/{name}", "account.self.android_updates"),
+        ("POST", "/downloads/links", "account.self.downloads"),
         ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
         (
             "POST",
@@ -114,6 +123,7 @@ def test_write_inventory_classifies_header_and_route_owned_csrf():
     assert csrf_mode_for_route("POST", "/logout") == "route_form"
     assert csrf_mode_for_route("POST", "/refresh-api") == "session_header"
     assert csrf_mode_for_route("POST", "/account/password") == "route_form"
+    assert csrf_mode_for_route("POST", "/playback/state/handoff") == "route_form"
     assert csrf_mode_for_route("GET", "/status") == "none"
     assert csrf_mode_for_route("WEBSOCKET", "/playback/pcm") == "none"
     assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.read"

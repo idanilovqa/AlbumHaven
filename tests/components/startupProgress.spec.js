@@ -14,10 +14,13 @@ const renderProgressMarkup = initialPercent => fs.readFileSync(
   .replace(/{% if not startup_progress_percent %} hidden{% endif %}/, initialPercent ? '' : ' hidden')
   .replace(/<script[\s\S]*?<\/script>/, '');
 
-const loadProgress = async (page, initialPercent, { themed = true } = {}) => {
+const loadProgress = async (page, initialPercent, {
+  themed = true,
+  appearance = { palette_id: 'parchment-pine', panel_index: 0 },
+} = {}) => {
   const markup = renderProgressMarkup(initialPercent);
   await page.setContent(`<body>${markup}<main><button>Gallery action</button></main></body>`);
-  if (themed) await applyFixtureAppearance(page, { palette_id: 'parchment-pine', panel_index: 0 });
+  if (themed) await applyFixtureAppearance(page, appearance);
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/base-layout.css') });
   await page.addStyleTag({ path: path.join(root, 'music_app/static/css/startup-progress.css') });
   await page.addScriptTag({ path: path.join(root, 'music_app/static/js/startup-progress.js') });
@@ -131,6 +134,33 @@ test('a startup failure hides the whole meter, never a lone percent', async ({ p
   await expect(page.locator('[data-startup-meter]')).toBeHidden();
   await expect(page.locator('[data-startup-percent]')).toBeHidden();
   await expect(page.getByRole('alert')).toBeVisible();
+});
+
+// Default accounts set no player tokens, and the app page does not load login.css.
+test('startup bar stays visible on the app page for a default-appearance account', async ({ page }) => {
+  await loadProgress(page, 50, { appearance: { palette_id: null, panel_index: 0 } });
+  await expect(page.locator('[data-startup-percent]')).toHaveText('50%');
+
+  const bar = await page.evaluate(() => {
+    const track = document.querySelector('.progress-bar');
+    const fill = document.querySelector('.progress-fill');
+    const percent = document.querySelector('[data-startup-percent]');
+    return {
+      fillColor: getComputedStyle(fill).backgroundColor,
+      fillWidth: fill.getBoundingClientRect().width,
+      percentColor: getComputedStyle(percent).color,
+      trackBorder: getComputedStyle(track).borderTopStyle,
+      trackColor: getComputedStyle(track).backgroundColor,
+      trackHeight: track.getBoundingClientRect().height,
+      trackWidth: track.getBoundingClientRect().width,
+    };
+  });
+  expect(bar.fillColor).toBe('rgb(50, 188, 115)');
+  expect(bar.percentColor).toBe(bar.fillColor);
+  expect(bar.trackColor).not.toBe('rgba(0, 0, 0, 0)');
+  expect(bar.trackBorder).toBe('solid');
+  expect(bar.trackHeight).toBeGreaterThanOrEqual(12);
+  expect(bar.fillWidth).toBeGreaterThan(bar.trackWidth * 0.45);
 });
 
 test('startup progress honors reduced motion with an immediate stage update', async ({ page }) => {

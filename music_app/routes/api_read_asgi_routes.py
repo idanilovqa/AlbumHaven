@@ -7,6 +7,7 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 import logging
 import shlex
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable, Mapping
 
 from fastapi import APIRouter, Query, Request
@@ -52,6 +53,10 @@ from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.private_track_search import build_private_track_search_contract
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
+from music_app.routes.musicbrainz_enrichment_asgi import (
+    load_problematic_artist_items,
+    project_artist_problems_into_problematic_files,
+)
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
@@ -82,6 +87,8 @@ _ALBUM_DETAIL_QUERY_PARAMS = frozenset(
         "client_surface",
         "client_surface_class",
         "resolve_lineage",
+        # The player knows only the file it plays; the album is found by that file.
+        "track_path",
     }
 )
 
@@ -492,7 +499,12 @@ async def status(request: Request) -> JSONResponse:
     ):
         # Deferred startup has no runtime inventory; reuse the scoped durable count.
         payload["album_total"] = identity.get("catalog_album_count", payload["album_total"])
-    payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
+    # The shell reads these to show loop creation and, only while MusicBrainz
+    # enrichment runs, MusicBrainz sync and artist repair status.
+    status_actions = ("library.loops.create",)
+    if getattr(request.app.state, "musicbrainz_enrichment_api_service", None) is not None:
+        status_actions += ("catalogue.enrichment.request",)
+    payload["allowed_actions"] = allowed_actions_for_request(request, status_actions).as_payload()
     return JSONResponse(payload)
 
 
@@ -1128,6 +1140,20 @@ async def album_details(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
     if album_id is not None and album_id <= 0:
         return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
+    track_path = str(request.query_params.get("track_path") or "").strip()
+    if not album_key and album_id is None and track_path:
+        try:
+            album_id = await run_in_threadpool(
+                AlbumCoverCandidateSnapshotRepository(_app_config(request)).resolve_album_id_for_track_paths,
+                track_paths={track_path},
+            )
+        except (RuntimeError, OSError):
+            album_id = None
+        if album_id is None:
+            return JSONResponse(
+                {"ok": False, "error": "The playing track's album isn't in the library."},
+                status_code=404,
+            )
     if not album_key and album_id is None:
         return JSONResponse(
             {"ok": False, "error": "Missing album_key"},
@@ -1303,7 +1329,8 @@ def _should_use_postgres_album_detail_path(
         return False
     album_key = str(request.query_params.get("album_key") or "").strip()
     album_id = str(request.query_params.get("album_id") or "").strip()
-    if (not album_key and not album_id) or album_key.startswith("non-album::"):
+    track_path = str(request.query_params.get("track_path") or "").strip()
+    if (not album_key and not album_id and not track_path) or album_key.startswith("non-album::"):
         return False
     resolved_state = (
         browse_state
@@ -1356,13 +1383,17 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        if q.strip():
-            payload = repository.build_problematic_files_search(q)
-        elif limit is not None:
-            payload = repository.build_problematic_files_page(limit=limit)
-        else:
-            payload = repository.build_problematic_files_payload()
-        _project_missing_album_actions_for_request(request, payload)
+        # The owner's Artist rows load beside the page, adding no readiness time.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            artist_items = pool.submit(load_problematic_artist_items, request)
+            if q.strip():
+                payload = repository.build_problematic_files_search(q)
+            elif limit is not None:
+                payload = repository.build_problematic_files_page(limit=limit)
+            else:
+                payload = repository.build_problematic_files_payload()
+            _project_missing_album_actions_for_request(request, payload)
+            project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_albums_payload(

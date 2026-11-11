@@ -127,6 +127,7 @@ LOCAL_ALBUM_FEATURED_ARTIST_DELETE_GRANT_MIGRATION = (
     MIGRATIONS_DIR / "0025_grant_local_album_featured_artist_delete.sql"
 )
 ALBUM_RATINGS_MIGRATION = MIGRATIONS_DIR / "0026_create_album_ratings.sql"
+ALBUM_DISC_RATINGS_MIGRATION = MIGRATIONS_DIR / "0176_create_album_disc_ratings.sql"
 COVER_LOOKUP_TASK_DELETE_GRANT_REPAIR_MIGRATION = (
     MIGRATIONS_DIR / "0027_repair_cover_lookup_task_delete_grant.sql"
 )
@@ -464,8 +465,10 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     migration_numbers = [int(name[:4]) for name in migration_names]
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-80:] == [
+    assert set(migration_numbers) == set(range(1, 122)) | set(range(171, 178))
+    duplicates = {number for number in migration_numbers if migration_numbers.count(number) > 1}
+    assert duplicates == {104, 105, 106, 107}
+    assert migration_names[-91:] == [
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -528,9 +531,13 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0101_create_local_album_identity_transitions.sql",
         "0102_narrow_synthetic_unknown_album_identity_guard.sql",
         "0103_repair_synthetic_unknown_cover_task_identities.sql",
+        "0104_create_playback_claims.sql",
         "0104_preserve_cover_notification_order.sql",
+        "0105_add_playback_claim_handoffs.sql",
         "0105_index_cover_notification_track_sets.sql",
+        "0106_create_android_artifact_access.sql",
         "0106_index_accent_insensitive_artist_search.sql",
+        "0107_add_android_device_key_signer.sql",
         "0107_add_local_cover_inventory.sql",
         "0108_add_scoped_relation_projection.sql",
         "0109_add_incremental_gallery_membership.sql",
@@ -546,6 +553,13 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0119_create_cover_mutation_revisions.sql",
         "0120_create_deleted_loose_track_removal_function.sql",
         "0121_create_non_album_track_snapshots.sql",
+        "0171_create_musicbrainz_artist_enrichment.sql",
+        "0172_add_musicbrainz_artist_discogs_link.sql",
+        "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",
+        "0174_add_musicbrainz_matcher_version_and_credit_name.sql",
+        "0175_add_musicbrainz_match_album_evidence.sql",
+        "0176_create_album_disc_ratings.sql",
+        "0177_create_local_album_artist_identities.sql",
     ]
 
 
@@ -1753,6 +1767,30 @@ def test_cover_lookup_task_delete_grant_repair_is_role_guarded_and_least_privile
         r"\bgrant\s+(?:select|insert|update|truncate|references|trigger)\b",
         sql,
     )
+
+
+def test_album_disc_ratings_migration_scopes_nullable_disc_authority_to_the_local_album():
+    sql = _normalized_sql(ALBUM_DISC_RATINGS_MIGRATION.read_text(encoding="utf-8"))
+
+    required_fragments = {
+        "create table if not exists app.album_disc_ratings",
+        "account_id bigint not null references app.accounts(id) on delete cascade",
+        "library_id bigint not null references library.libraries(id) on delete cascade",
+        "album_key text not null",
+        "disc_key text not null",
+        "rating smallint,",
+        "provenance text not null",
+        "check ( disc_key <> '' and disc_key = lower(btrim(disc_key)) )",
+        "rating is null or rating between 1 and 10",
+        "references library.local_albums(library_id, album_key) on update cascade on delete cascade",
+        "create unique index if not exists album_disc_ratings_account_library_album_disc_idx "
+        "on app.album_disc_ratings (account_id, library_id, album_key, disc_key)",
+        "grant select on table app.album_disc_ratings to album_haven_readonly",
+        "grant select, insert, update on table app.album_disc_ratings to album_haven_app",
+    }
+
+    assert sorted(fragment for fragment in required_fragments if fragment not in sql) == []
+    assert "delete on table app.album_disc_ratings" not in sql
 
 
 def test_album_ratings_migration_file_exists():

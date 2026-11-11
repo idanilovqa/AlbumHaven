@@ -1519,6 +1519,11 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
       SPLIT_FIXTURE.artist,
       SPLIT_FIXTURE.album,
     );
+    // Holding the source album open keeps this session stale until its own refresh,
+    // so a status poll between the split and a click cannot skip the chooser.
+    expect(await staleSession.galleryActions.selectAlbumDetailsByIdentity(sourceIdentity))
+      .toEqual(sourceIdentity);
+    await staleSession.trackModalActions.waitForLoadedSummary();
 
     await tagEditorActions.openForAlbum({
       album: SPLIT_FIXTURE.album,
@@ -1534,7 +1539,6 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     splitApplied = true;
     await trackModalActions.closeIfOpen();
 
-    await staleSession.galleryActions.selectAlbumDetailsByIdentity(sourceIdentity);
     await staleSession.trackModalActions.waitForIdentitySplitChoices([
       SPLIT_FIXTURE.album,
       SPLIT_FIXTURE.splitAlbum,

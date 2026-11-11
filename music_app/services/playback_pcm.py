@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from functools import lru_cache
+from functools import lru_cache, partial
 import math
 from pathlib import Path
 import re
@@ -10,6 +10,7 @@ import struct
 import subprocess
 from typing import Awaitable, Callable, Literal
 
+from music_app.services.playback_io import run_playback_io
 from music_app.services.ffmpeg_runtime import (
     hidden_subprocess_creation_flags,
     resolve_ffmpeg_executable,
@@ -255,10 +256,9 @@ class PcmDecoderProcess:
         if not executable:
             raise RuntimeError("ffmpeg was not found")
 
-        native_sample_rate = await asyncio.to_thread(
-            read_native_sample_rate,
+        native_sample_rate = await run_playback_io(
+            partial(read_native_sample_rate, ffmpeg_executable=executable),
             command.path,
-            ffmpeg_executable=executable,
         )
         if command.sample_rate != native_sample_rate:
             raise SampleRateMismatch(native_sample_rate)

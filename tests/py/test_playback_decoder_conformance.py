@@ -5,6 +5,7 @@ from __future__ import annotations
 from array import array
 import asyncio
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ from music_app.services.playback_pcm import PcmOpenCommand
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 DECODER_SCRIPT = REPOSITORY / "tests/js/support/decode-encoded-stream.cjs"
+# The Android app's decoders, built for this host from the same C sources as the APK.
+ANDROID_DECODER_SOURCE = REPOSITORY / "apps/android-shell/playback-engine/src/main/cpp/host"
 # Different MP3 decoders round differently; this is about -60 dB below full scale.
 SAMPLE_TOLERANCE = 0.001
 SEEK_FRACTIONS = (0, 0.002, 0.13, 0.37, 0.5, 0.77, 0.97)
@@ -61,21 +64,53 @@ def _reference(ffmpeg: str, path: Path) -> array:
     return samples
 
 
-def _decode_with_client(node: str, codec: str, payload: bytes, work: Path) -> array:
-    bytes_path = work / "stream.bin"
-    output_path = work / "decoded.f32"
-    bytes_path.write_bytes(payload)
+@pytest.fixture(scope="module")
+def android_decoder_tool(tmp_path_factory) -> Path:
+    make = shutil.which("make")
+    compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    message = "the Android decoder gate builds a POSIX host tool with make and a C compiler"
+    if os.name == "nt":
+        # The Android suite runs this gate on Linux; Windows has no POSIX host tool build.
+        pytest.skip(f"{message}; the Android suite runs it on Linux")
+    if make is None or compiler is None:
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(f"{message}; CI runs it")
+    build = tmp_path_factory.mktemp("android-decoders")
     subprocess.run(
-        [node, str(DECODER_SCRIPT)],
-        input=json.dumps(
-            {"codec": codec, "bytesPath": str(bytes_path), "outputPath": str(output_path)}
-        ).encode(),
+        [make, "-C", str(ANDROID_DECODER_SOURCE), f"BUILD={build}", f"CC={compiler}", f"-j{os.cpu_count() or 2}"],
         check=True,
         capture_output=True,
     )
-    samples = array("f")
-    samples.frombytes(output_path.read_bytes())
-    return samples
+    return build / "ah-decode-tool"
+
+
+@pytest.fixture(params=["web", "android"])
+def decode_with_client(request, tools):
+    """Every client that ships decoders must match the server reference the same way."""
+    if request.param == "web":
+        _ffmpeg, node = tools
+
+        def run(codec: str, bytes_path: Path, output_path: Path) -> None:
+            request_json = {"codec": codec, "bytesPath": str(bytes_path), "outputPath": str(output_path)}
+            subprocess.run([node, str(DECODER_SCRIPT)], input=json.dumps(request_json).encode(),
+                           check=True, capture_output=True)
+    else:
+        tool = request.getfixturevalue("android_decoder_tool")
+
+        def run(codec: str, bytes_path: Path, output_path: Path) -> None:
+            subprocess.run([str(tool), codec, str(bytes_path), str(output_path)], check=True, capture_output=True)
+
+    def decode(codec: str, payload: bytes, work: Path) -> array:
+        bytes_path = work / "stream.bin"
+        output_path = work / "decoded.f32"
+        bytes_path.write_bytes(payload)
+        run(codec, bytes_path, output_path)
+        samples = array("f")
+        samples.frombytes(output_path.read_bytes())
+        return samples
+
+    return decode
 
 
 def _assert_exact(kept: array, expected: array, label: str) -> None:
@@ -85,8 +120,10 @@ def _assert_exact(kept: array, expected: array, label: str) -> None:
 
 
 @pytest.mark.parametrize("variant", MP3_VARIANTS)
-def test_mp3_map_and_client_decoder_match_reference_at_every_seek(tools, tmp_path, variant):
-    ffmpeg, node = tools
+def test_mp3_map_and_client_decoder_match_reference_at_every_seek(
+    tools, decode_with_client, tmp_path, variant
+):
+    ffmpeg, _node = tools
     rate, encoding = MP3_VARIANTS[variant]
     source = tmp_path / f"{variant}.mp3"
     _generate(ffmpeg, source, rate, *encoding)
@@ -97,9 +134,7 @@ def test_mp3_map_and_client_decoder_match_reference_at_every_seek(tools, tmp_pat
     for fraction in SEEK_FRACTIONS:
         start = int(len(reference) * fraction)
         window = stream_map.window(start)
-        decoded = _decode_with_client(
-            node, "mp3", data[window.start_byte:window.end_byte], tmp_path
-        )
+        decoded = decode_with_client("mp3", data[window.start_byte:window.end_byte], tmp_path)
         kept = decoded[window.skip_frames:window.skip_frames + window.total_frames]
         _assert_exact(kept, reference[start:], f"{variant} at {start}")
 
@@ -139,29 +174,31 @@ def _open_command(path: Path, start_frame: int, sample_rate: int) -> PcmOpenComm
 @pytest.mark.parametrize("sample_format", ["s16", "s32"])
 @pytest.mark.parametrize("fraction", [0, 0.37, 0.77])
 def test_flac_stream_keeps_every_source_sample_from_any_position(
-    tools, tmp_path, sample_format, fraction
+    tools, decode_with_client, tmp_path, sample_format, fraction
 ):
-    ffmpeg, node = tools
+    ffmpeg, _node = tools
     source = tmp_path / "source.flac"
     _generate(ffmpeg, source, 44_100, "-ac", "2", "-c:a", "flac", "-sample_fmt", sample_format)
     reference = _reference(ffmpeg, source)
     start = int(len(reference) * fraction)
     stream, payload = _read_stream(_open_command(source, start, 44_100))
     assert stream.codec == "flac"
-    decoded = _decode_with_client(node, "flac", payload, tmp_path)
+    decoded = decode_with_client("flac", payload, tmp_path)
     _assert_exact(decoded[:stream.total_frames], reference[start:], f"flac at {start}")
 
 
 @pytest.mark.parametrize("fraction", [0, 0.5])
-def test_weak_connection_fallback_keeps_the_timeline_exact(tools, tmp_path, fraction):
-    ffmpeg, node = tools
+def test_weak_connection_fallback_keeps_the_timeline_exact(
+    tools, decode_with_client, tmp_path, fraction
+):
+    ffmpeg, _node = tools
     source = tmp_path / "source.flac"
     _generate(ffmpeg, source, 44_100, "-ac", "2", "-c:a", "flac")
     reference = _reference(ffmpeg, source)
     start = int(len(reference) * fraction)
     stream, payload = _read_stream(_open_command(source, start, 44_100), quality="320")
     assert stream.codec == "mp3"
-    decoded = _decode_with_client(node, "mp3", payload, tmp_path)
+    decoded = decode_with_client("mp3", payload, tmp_path)
     kept = decoded[stream.skip_frames:stream.skip_frames + stream.total_frames]
     assert len(kept) == len(reference) - start
     window = 2048
@@ -184,8 +221,8 @@ def test_flac_header_omits_cover_art_but_keeps_stream_details(tools, tmp_path):
     assert source.read_bytes()[first_audio_byte:first_audio_byte + 2][0] == 0xFF
 
 
-def test_repeated_id3_tags_do_not_hide_the_gapless_header(tools, tmp_path):
-    ffmpeg, node = tools
+def test_repeated_id3_tags_do_not_hide_the_gapless_header(tools, decode_with_client, tmp_path):
+    ffmpeg, _node = tools
     source = tmp_path / "plain.mp3"
     _generate(ffmpeg, source, 44_100, "-ac", "2", "-c:a", "libmp3lame", "-b:a", "192k")
     data = source.read_bytes()
@@ -198,9 +235,7 @@ def test_repeated_id3_tags_do_not_hide_the_gapless_header(tools, tmp_path):
     reference = _reference(ffmpeg, doubled)
     assert stream_map.first_sample == 1105
     window = stream_map.window(0)
-    decoded = _decode_with_client(
-        node, "mp3", doubled.read_bytes()[window.start_byte:window.end_byte], tmp_path
-    )
+    decoded = decode_with_client("mp3", doubled.read_bytes()[window.start_byte:window.end_byte], tmp_path)
     kept = decoded[window.skip_frames:window.skip_frames + window.total_frames]
     _assert_exact(kept, reference, "doubled ID3")
 

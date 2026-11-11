@@ -451,6 +451,9 @@ LASTFM_SCROBBLE_ARTIST = "Album Haven Last.fm Fixture"
 LASTFM_SCROBBLE_ALBUM = "Signed Scrobble Journey"
 LASTFM_SCROBBLE_TRACK = "Fake Loop Source"
 LASTFM_SCROBBLE_YEAR = 2026
+# Last.fm never scrobbles a track of 30 s or less, so the album's later tracks outlast the 14 s
+# loop source its first track keeps for the loop cases.
+LASTFM_SCROBBLE_JOURNEY_TRACK_SECONDS = 32
 TRANSATLANTIC_ARTIST = "Transatlantic"
 TRANSATLANTIC_NEAL_ALBUM = "The Transatlantic Demos"
 NEAL_SCOPE_TRACK_TITLE = "Family Scope Beacon"
@@ -593,7 +596,7 @@ def _resolve_ffmpeg_executable() -> str | None:
         return None
 
 
-def ensure_playable_loop_source(path: Path) -> None:
+def ensure_playable_loop_source(path: Path, *, duration_seconds: int = 14) -> None:
     if path.is_file():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -603,9 +606,9 @@ def ensure_playable_loop_source(path: Path) -> None:
     result = subprocess.run(
         [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-            "anoisesrc=color=white:amplitude=0.08:duration=14:sample_rate=44100:seed=41",
+            f"anoisesrc=color=white:amplitude=0.08:duration={duration_seconds}:sample_rate=44100:seed=41",
             "-f", "lavfi", "-i",
-            "anoisesrc=color=white:amplitude=0.08:duration=14:sample_rate=44100:seed=97",
+            f"anoisesrc=color=white:amplitude=0.08:duration={duration_seconds}:sample_rate=44100:seed=97",
             "-filter_complex", "[0:a][1:a]amerge=inputs=2[stereo]",
             "-map", "[stereo]", "-ac", "2",
             "-codec:a", "libmp3lame", "-q:a", "4", str(path),
@@ -2474,6 +2477,7 @@ def materialize_fixture_track_files(
 
     loop_path = _absolute_fixture_path(playable_loop_source)
     playback_album_dir = loop_path.parent
+    scrobble_journey_source: Path | None = None
     prepared_parent_dirs: set[Path] = set()
     for cache_path, metadata in file_cache.items():
         track_path = _absolute_fixture_path(
@@ -2514,8 +2518,9 @@ def materialize_fixture_track_files(
                 and str(metadata.get("album") or "").strip()
                 == PROBLEMATIC_ENCODING_ALBUM
             )
+            in_playback_album = track_path.parent == playback_album_dir
             copy_playable_source = (
-                track_path.parent == playback_album_dir
+                in_playback_album
                 or is_player_artwork_fixture_album
                 or is_track_credit_player_fixture_album
                 or is_cover_persistence_fixture_track
@@ -2524,8 +2529,15 @@ def materialize_fixture_track_files(
             )
             created_track = False
             try:
-                if copy_playable_source:
-                    with loop_path.open("rb") as source, track_path.open("xb") as target:
+                if in_playback_album and scrobble_journey_source is None:
+                    # The album's first later track is generated in place; the rest copy it.
+                    ensure_playable_loop_source(
+                        track_path, duration_seconds=LASTFM_SCROBBLE_JOURNEY_TRACK_SECONDS,
+                    )
+                    scrobble_journey_source = track_path
+                elif copy_playable_source:
+                    source_path = scrobble_journey_source if in_playback_album else loop_path
+                    with source_path.open("rb") as source, track_path.open("xb") as target:
                         shutil.copyfileobj(source, target)
                 else:
                     track_path.touch(exist_ok=False)
@@ -3420,6 +3432,44 @@ def persist_legacy_ignored_album_contract(setup_database_url: str) -> None:
             )
 
 
+def _rekey_fixture_albums(connection, *, album_filter: str, new_key: str, params: dict, extra_set: str = "") -> int:
+    """Re-key fixture albums and move their app ratings with them, in one statement:
+    publication seeds tag ratings, and album_ratings has no ON UPDATE CASCADE.
+    Returns the number of albums re-keyed."""
+    extra = f",\n              {extra_set}" if extra_set else ""
+    return connection.execute(
+        f"""
+        with album as (
+          select id, library_id, album_key from library.local_albums where {album_filter}
+        ), ratings as (
+          delete from app.album_ratings
+          using album
+          where app.album_ratings.library_id = album.library_id
+            and app.album_ratings.album_key = album.album_key
+          returning app.album_ratings.*
+        ), renamed as (
+          update library.local_albums
+          set album_key = {new_key}{extra}
+          from album
+          where library.local_albums.id = album.id
+          returning library.local_albums.id, library.local_albums.album_key
+        ), moved as (
+          insert into app.album_ratings (
+            account_id, library_id, album_key, rating, provenance, created_at, updated_at, metadata
+          )
+          select ratings.account_id, ratings.library_id, renamed.album_key, ratings.rating,
+                 ratings.provenance, ratings.created_at, ratings.updated_at, ratings.metadata
+          from ratings
+          join album on album.library_id = ratings.library_id and album.album_key = ratings.album_key
+          join renamed on renamed.id = album.id
+          returning 1
+        )
+        select count(*) from renamed;
+        """,
+        params,
+    ).fetchone()[0]
+
+
 def persist_ddt_studio_records_album_year_contract(
     setup_database_url: str,
 ) -> None:
@@ -3431,32 +3481,24 @@ def persist_ddt_studio_records_album_year_contract(
         ) from exc
 
     with psycopg.connect(setup_database_url) as connection:
-        result = connection.execute(
-            """
-            update library.local_albums
-            set
-              album_key = lower(%s::text) || '::' || lower(%s::text),
-              release_year = %s,
-              metadata = jsonb_set(
-                library.local_albums.metadata,
-                '{release_date}',
-                to_jsonb(%s::text),
-                true
-              )
-            where library.local_albums.title = %s;
-            """,
-            (
-                DDT_STUDIO_RECORDS_PERSISTED_ALBUM_ARTIST,
-                DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
-                DDT_STUDIO_RECORDS_FIXTURE_YEAR,
-                f"{DDT_STUDIO_RECORDS_FIXTURE_YEAR}-01-01",
-                DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
-            ),
+        renamed = _rekey_fixture_albums(
+            connection,
+            album_filter="library.local_albums.title = %(title)s",
+            new_key="lower(%(artist)s::text) || '::' || lower(%(title)s::text)",
+            extra_set="""release_year = %(year)s,
+              metadata = jsonb_set(library.local_albums.metadata, '{release_date}',
+                                   to_jsonb(%(release_date)s::text), true)""",
+            params={
+                "artist": DDT_STUDIO_RECORDS_PERSISTED_ALBUM_ARTIST,
+                "title": DDT_STUDIO_RECORDS_FIXTURE_ALBUM,
+                "year": DDT_STUDIO_RECORDS_FIXTURE_YEAR,
+                "release_date": f"{DDT_STUDIO_RECORDS_FIXTURE_YEAR}-01-01",
+            },
         )
-        if result.rowcount != 1:
+        if renamed != 1:
             raise RuntimeError(
                 "The DDT Studio Records fixture must update exactly one persisted "
-                f"album year, updated {result.rowcount}."
+                f"album year, updated {renamed}."
             )
 
 
@@ -3504,24 +3546,16 @@ def persist_tag_split_legacy_album_key_contract(setup_database_url: str) -> None
         ) from exc
 
     with psycopg.connect(setup_database_url) as connection:
-        result = connection.execute(
-            """
-            update library.local_albums
-            set album_key = lower(%s::text) || '::' || lower(%s::text)
-            where library.local_albums.title = %s
-              and library.local_albums.release_year = %s;
-            """,
-            (
-                TAG_RENAME_FIXTURE_ARTIST,
-                TAG_SPLIT_FIXTURE_ALBUM,
-                TAG_SPLIT_FIXTURE_ALBUM,
-                TAG_RENAME_FIXTURE_YEAR,
-            ),
+        renamed = _rekey_fixture_albums(
+            connection,
+            album_filter="library.local_albums.title = %(title)s and library.local_albums.release_year = %(year)s",
+            new_key="lower(%(artist)s::text) || '::' || lower(%(title)s::text)",
+            params={"artist": TAG_RENAME_FIXTURE_ARTIST, "title": TAG_SPLIT_FIXTURE_ALBUM, "year": TAG_RENAME_FIXTURE_YEAR},
         )
-        if result.rowcount != 1:
+        if renamed != 1:
             raise RuntimeError(
                 "The selected-track split fixture must seed exactly one legacy "
-                f"album key, updated {result.rowcount}."
+                f"album key, updated {renamed}."
             )
 
 

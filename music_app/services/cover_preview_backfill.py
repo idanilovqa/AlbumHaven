@@ -9,6 +9,7 @@ from typing import Callable, Mapping
 
 from music_app.services.covers import (
     display_cover_variant_cache_root,
+    display_variant_awaits_relocation,
     find_existing_cover_display_variant,
     resolve_cover_display_variant,
 )
@@ -103,33 +104,43 @@ class CoverPreviewBackfill:
         for source_path, cover_revision in self._load_cover_paths():
             if not self._wait_until_idle():
                 break
-            policy = self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
+            # Only a revisioned preview follows the storage policy; any other stays in app data.
+            storage_policy = (
+                self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
+                if cover_revision or not self._data_dir
+                else None
+            )
             previous_root = source_path.parent / ".album-haven"
-            if (policy is not None and policy.write_cache_root(source_path) != previous_root
+            if (storage_policy is not None and storage_policy.write_cache_root(source_path) != previous_root
                     and previous_root not in cleanup_attempted):
                 cleanup_attempted.add(previous_root)
-                # Previews live elsewhere now; the album-folder cache is unreachable.
                 try:
                     remove_album_folder_previews(previous_root)
                 except OSError:
                     self._logger.warning("Unable to remove old preview directories in %s", previous_root, exc_info=True)
-            generation_options = {}
-            recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-            if recorder is not None:
-                generation_options["on_published"] = recorder
-            self._generate(
+            if not display_variant_awaits_relocation(
                 source_path,
-                cache_root=display_cover_variant_cache_root(
-                    source_path,
-                    data_dir=self._data_dir,
-                    storage_policy=self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY"),
-                ),
+                storage_policy=storage_policy,
                 max_size=_DISPLAY_COVER_SIZE,
-                priority="background",
                 revision=cover_revision,
-                **generation_options,
-            )
-            generated += 1
+            ):
+                generation_options = {}
+                recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
+                if recorder is not None:
+                    generation_options["on_published"] = recorder
+                self._generate(
+                    source_path,
+                    cache_root=display_cover_variant_cache_root(
+                        source_path,
+                        data_dir=self._data_dir,
+                        storage_policy=storage_policy,
+                    ),
+                    max_size=_DISPLAY_COVER_SIZE,
+                    priority="background",
+                    revision=cover_revision,
+                    **generation_options,
+                )
+                generated += 1
             if self._stop_requested.wait(self._throttle_seconds):
                 break
         return generated

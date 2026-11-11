@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
+from music_app.routes.playback_control_asgi import require_playback_claim, resolve_listen_track
 from music_app.services.lastfm import get_saved_lastfm_session, get_lastfm_total_scrobbles
 
 from music_app.routes.api_loop_helpers import (
@@ -48,6 +49,7 @@ from music_app.services.lastfm import (
     scrobble_track,
     update_now_playing,
 )
+from music_app.services.lastfm_listen_sync import has_heard_scrobble_threshold
 from music_app.services.lastfm_retry import (
     LastfmRetryBatchError,
     pending_scrobble_count,
@@ -86,7 +88,7 @@ from music_app.services.loops import (
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.track_preferences import save_track_preference
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
 
 router = APIRouter()
@@ -749,6 +751,8 @@ async def playback_session_now_playing(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    await require_playback_claim(request, payload)
+    payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)
     session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
     if payload.get("measurement_version") is not None and session is None:
@@ -757,8 +761,21 @@ async def playback_session_now_playing(request: Request) -> JSONResponse:
     try:
         result = await run_in_threadpool(update_now_playing, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, 400))
+        return _now_playing_failure_response(exc)
     return JSONResponse(_lastfm_submission_response(result, success_key="now_playing"))
+
+
+# Last.fm error 8 asks the caller to try again; a repeated now-playing is harmless.
+_NOW_PLAYING_RETRY_ERROR_CODES = frozenset({8})
+
+
+def _now_playing_failure_response(exc: LastfmError) -> JSONResponse:
+    """A transient Last.fm failure is a retryable 503, with `Retry-After` when rate limited; any other is a final 400."""
+    transient = (exc.retryable or exc.code in _NOW_PLAYING_RETRY_ERROR_CODES) and exc.error_kind != "configuration_error"
+    if not transient:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    headers = {"Retry-After": str(exc.retry_after_seconds)} if exc.retry_after_seconds is not None else None
+    return JSONResponse({"ok": False, "error": str(exc), "retryable": True}, status_code=503, headers=headers)
 
 
 @router.post("/playback/session/scrobble")
@@ -769,6 +786,11 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    if payload.get("measurement_version") is not None and payload.get("finalized") is True:
+        # Finalizing a measured listen is the /playback/session/complete write.
+        await require_action("integration.lastfm.complete")(request)
+    await require_playback_claim(request, payload)
+    payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)
     session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
     if payload.get("measurement_version") is not None and session is None:
@@ -777,7 +799,7 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     if payload.get("measurement_version") is not None:
         try:
             result, status = await run_in_threadpool(record_playback_session_complete, config,
-                {**payload, "finalized": False}, account_id=trusted.account_id, library_id=trusted.library_id,
+                {**payload, "finalized": payload.get("finalized", False)}, account_id=trusted.account_id, library_id=trusted.library_id,
                 lastfm_session=session, user_timezone="UTC",
                 normalize_playback_track_payload=normalize_playback_track_payload,
                 is_meaningful_listen_session=is_meaningful_listen_session,
@@ -787,6 +809,9 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
             return JSONResponse(result, status_code=status)
         except ValueError as error:
             return JSONResponse({"ok": False, "error": "Invalid or conflicting listen snapshot"}, status_code=getattr(error, "status_code", 400))
+    # An older tab's unmeasured scrobble is held to the same Last.fm threshold as a measured listen.
+    if not has_heard_scrobble_threshold(payload):
+        return JSONResponse({"ok": True, "scrobbled": False, "ignored": True})
     try:
         result = await run_in_threadpool(scrobble_track, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
@@ -819,6 +844,8 @@ async def playback_session_complete(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    await require_playback_claim(request, payload)
+    payload = await resolve_listen_track(request, payload)
     if payload.get("measurement_version") != "rendered-pcm-v1":
         return JSONResponse({"ok": False, "error": "unsupported_measurement"}, status_code=400)
     scope = {}

@@ -885,6 +885,27 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     }]
 
 
+def test_targeted_projection_invalidation_queues_the_settings_prewarm(monkeypatch):
+    from music_app.services import state
+
+    events: list[str] = []
+    monkeypatch.setattr(state, "invalidate_problematic_albums_payload_cache", lambda _: None)
+    monkeypatch.setattr(state, "invalidate_utility_rules_payload_cache", lambda _: None)
+    monkeypatch.setattr(state, "invalidate_postgres_utility_projection_cache", lambda **_: events.append("invalidate"))
+    monkeypatch.setattr(state, "library_browse_postgres_is_effective", lambda config: True)
+    monkeypatch.setattr(
+        state.PostgresLibraryBrowseRepository,
+        "queue_settings_projection_prewarm",
+        lambda self: events.append("prewarm"),
+    )
+
+    state.invalidate_targeted_library_projections(
+        {}, {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"}, revision=1, affected_album_keys=("a",),
+    )
+
+    assert events == ["invalidate", "prewarm"]
+
+
 def test_committed_inventory_callbacks_publish_monotonic_revisions(monkeypatch):
     from threading import Event, Thread
     from music_app.services import state

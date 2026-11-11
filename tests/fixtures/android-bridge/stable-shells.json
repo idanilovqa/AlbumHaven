@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "shells": {
+    "latest": {
+      "versionCode": null,
+      "sourceCommit": null,
+      "fixture": "v1.json",
+      "bridgeProtocolMin": 1,
+      "bridgeProtocolMax": 1,
+      "capabilities": [
+        "playback.native.v1",
+        "playback.queue.v1",
+        "playback.loops.v2",
+        "playback.media_session.v1",
+        "playback.resumption.v1",
+        "updates.manual.v1"
+      ]
+    },
+    "previous": {
+      "versionCode": null,
+      "sourceCommit": null,
+      "fixture": "v1.json",
+      "bridgeProtocolMin": 1,
+      "bridgeProtocolMax": 1,
+      "capabilities": [
+        "playback.native.v1",
+        "playback.queue.v1",
+        "playback.loops.v2",
+        "playback.media_session.v1",
+        "playback.resumption.v1",
+        "updates.manual.v1"
+      ]
+    }
+  }
+}

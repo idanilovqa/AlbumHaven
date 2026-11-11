@@ -20,7 +20,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual-1', 34],
   ['gallery-search-visual-2', 46],
   ['cover-providers-1', 26],
-  ['cover-providers-2', 14],
+  ['cover-providers-2', 15],
   ['metadata-mutations', 18],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 14],
@@ -43,8 +43,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
 ];
-const FIXTURE_RELEASE = 'fixtures-v1.0.29';
-const FIXTURE_MANIFEST_SHA256 = '9EA722991C29E42E0A4115B73E06A4D24D31048A60207032F0A4A44F05B4A7AA';
+const FIXTURE_RELEASE = 'fixtures-v1.0.30';
+const FIXTURE_MANIFEST_SHA256 = '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -118,7 +118,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 180-case assignment', () => {
+test('functional shard contract pins the approved eight-way 181-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -132,7 +132,7 @@ test('functional shard contract pins the approved eight-way 180-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 180);
+  assert.equal(total, 181);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -941,7 +941,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['gallery-search-visual-1', { cases: 34, waves: [1, 2] }],
     ['gallery-search-visual-2', { cases: 46, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 26, waves: [1, 2, 4] }],
-    ['cover-providers-2', { cases: 14, waves: [1, 2] }],
+    ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 18, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 14, waves: [1, 2, 5] }],

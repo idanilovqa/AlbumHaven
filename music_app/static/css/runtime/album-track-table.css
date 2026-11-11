@@ -20,6 +20,14 @@
 .album-track-table__disc { min-width: 0; }
 .album-track-table__disc + .album-track-table__disc { margin-top: 14px; }
 .album-track-table__disc-heading { display: block; margin: 0 0 7px; color: var(--album-track-accent); font-size: 0.86rem; font-weight: 750; }
+.album-track-table__disc-header { display: flex; align-items: center; gap: 12px; margin: 0 0 7px; }
+.album-track-table__disc-header > .album-track-table__disc-heading { margin: 0; }
+.album-track-table__disc-rating { width: 150px; }
+@media (max-width: 900px) {
+  .album-track-table__disc-rating { width: auto; }
+  .album-track-table__disc-rating .stars,
+  .album-track-table__disc-rating::after { display: none; }
+}
 .album-track-table__disc--collapsible > summary { cursor: pointer; list-style: none; }
 .album-track-table__disc--collapsible > summary::-webkit-details-marker { display: none; }
 .album-track-table__disc--collapsible > summary::before { content: '\203A'; display: inline-block; margin-right: 7px; transition: transform 120ms ease; }
@@ -100,6 +108,14 @@
   background: color-mix(in srgb, var(--album-track-accent) 7%, transparent);
   box-shadow: inset 0 0 18px color-mix(in srgb, var(--album-track-accent) 7%, transparent), 0 0 14px color-mix(in srgb, var(--album-track-accent) 20%, transparent);
 }
+/* The paused current track keeps a dim, still version of the playing highlight, so its place stays visible. */
+.album-track-table__row--current:not(.album-track-table__row--playing) {
+  border-radius: 8px;
+  outline: 1px solid color-mix(in srgb, var(--album-track-accent) 50%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--album-track-accent) 8%, transparent);
+}
+.album-track-table__row--current:not(.album-track-table__row--playing) .album-track-table__play { border-color: color-mix(in srgb, var(--album-track-accent) 60%, transparent); color: var(--album-track-accent); }
 .album-track-table__row--playing::before,
 .album-track-table__row--playing::after {
   --album-track-spectrum-offset: 0turn;
@@ -237,8 +253,8 @@
 .album-track-table__number-play { position: relative; display: grid; place-items: center; width: 28px; height: 28px; }
 .album-track-table__number-play > .album-track-table__play { position: absolute; inset: 0; opacity: 0; }
 .album-track-table__number { font-variant-numeric: tabular-nums; }
-.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__number { visibility: hidden; }
-.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__play { opacity: 1; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__number { visibility: hidden; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing, .album-track-table__row--current) .album-track-table__play { opacity: 1; }
 .album-track-table__title, .album-track-table__path { user-select: text; }
 .album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
 

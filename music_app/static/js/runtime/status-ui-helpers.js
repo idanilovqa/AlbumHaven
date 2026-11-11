@@ -147,25 +147,74 @@ function resolveStatusIndicatorTitleText(indicator, data = {}) {
   return nextTitle;
 }
 
+let musicBrainzArtistSyncPromise = null;
+
 function ensureStatusContextMenu() {
-  let menu = document.getElementById('status-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'status-context-menu';
-  menu.className = 'gallery-anchored-menu';
-  menu.hidden = true;
-  menu.setAttribute('role', 'group');
-  menu.setAttribute('aria-label', 'Library actions');
-  menu.innerHTML = [
+  const canRequestMusicBrainzSync = state.status?.allowed_actions?.['catalogue.enrichment.request'] === true;
+  const actions = [
     ['scan-action', 'full-rescan', 'Full Rescan'],
     ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
     ['scan-page', 'go-to-scan-page', 'Open Library Status Page'],
-  ].map(([role, action, label]) => ButtonComponent.renderButton({
-    label, className: 'gallery-menu-action',
-    attributes: { 'data-status-role': role, 'data-status-action': action },
-  })).join('');
-  document.body.appendChild(menu);
+  ];
+  if (canRequestMusicBrainzSync) {
+    actions.splice(2, 0, ['musicbrainz-sync', 'musicbrainz-sync', 'MusicBrainz sync']);
+  }
+  const actionSignature = actions.map(([, action]) => action).join('|');
+  let menu = document.getElementById('status-context-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'status-context-menu';
+    menu.className = 'gallery-anchored-menu';
+    menu.hidden = true;
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', 'Library actions');
+    menu.dataset.statusActionSignature = '';
+    document.body.appendChild(menu);
+  }
+  // An existing unsigned menu already holds the base actions; only a
+  // capability change that adds or removes MusicBrainz sync re-renders it.
+  const renderedSignature = menu.dataset.statusActionSignature ?? 'full-rescan|fetch-covers|go-to-scan-page';
+  if (renderedSignature !== actionSignature) {
+    menu.innerHTML = actions.map(([role, action, label]) => ButtonComponent.renderButton({
+      label, className: 'gallery-menu-action',
+      attributes: { 'data-status-role': role, 'data-status-action': action },
+    })).join('') + (canRequestMusicBrainzSync
+      ? '<span data-status-role="musicbrainz-feedback" role="status" aria-live="polite"></span>'
+      : '');
+    menu.dataset.statusActionSignature = actionSignature;
+  }
   return menu;
+}
+
+function setMusicBrainzSyncFeedback(severity, message) {
+  const menu = ensureStatusContextMenu();
+  const feedback = menu.querySelector('[data-status-role="musicbrainz-feedback"]');
+  if (feedback) feedback.innerHTML = buildSmallAlertHtml({ severity, message });
+}
+
+function triggerMusicBrainzArtistSync() {
+  if (musicBrainzArtistSyncPromise) return musicBrainzArtistSyncPromise;
+  state.status.musicbrainz_sync_in_progress = true;
+  syncStatusContextMenu();
+  musicBrainzArtistSyncPromise = fetch('/api/musicbrainz/artists/sync', { method: 'POST' })
+    .then(async (response) => {
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail || `Request failed (${response.status})`);
+      const count = Math.max(0, Number(payload?.enqueued_count || 0));
+      setMusicBrainzSyncFeedback('info', `MusicBrainz sync queued ${count} ${count === 1 ? 'artist' : 'artists'}.`);
+      if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus({ force: true });
+      return payload;
+    })
+    .catch((error) => {
+      setMusicBrainzSyncFeedback('error', error?.message || 'MusicBrainz sync failed.');
+      return false;
+    })
+    .finally(() => {
+      state.status.musicbrainz_sync_in_progress = false;
+      musicBrainzArtistSyncPromise = null;
+      syncStatusContextMenu();
+    });
+  return musicBrainzArtistSyncPromise;
 }
 
 function resolvePrimaryStatusContextAction(status = {}, options = {}) {
@@ -209,6 +258,14 @@ function syncStatusContextMenu() {
   const menu = ensureStatusContextMenu();
   const primaryButton = menu.querySelector('[data-status-role="scan-action"]');
   const fetchOrCancelButton = menu.querySelector('[data-status-role="cover-action"]');
+  const musicBrainzSyncButton = menu.querySelector('[data-status-role="musicbrainz-sync"]');
+  if (musicBrainzSyncButton) {
+    syncStatusContextButtonPresentation(musicBrainzSyncButton, {
+      action: 'musicbrainz-sync',
+      label: 'MusicBrainz sync',
+      disabled: Boolean(state.status?.musicbrainz_sync_in_progress),
+    });
+  }
   if (primaryButton) {
     const scanPageVisible = Boolean(state.ui?.scanPageReturnContext);
     const primaryAction = resolvePrimaryStatusContextAction(state.status || {}, { scanPageVisible });
@@ -285,6 +342,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);

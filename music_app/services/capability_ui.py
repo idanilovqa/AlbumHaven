@@ -103,11 +103,24 @@ def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[s
         f'[data-required-action="{action}"]' for action in UI_ACTIONS
         if not allowed.get(action, False)
     )
+    # The Android app's offline copy (app-copy.js) hides these while the server is unreachable:
+    # every permitted action that is not a read.
+    read_only_selectors = [
+        selector
+        for action, selectors in ACTION_SELECTORS.items()
+        if allowed.get(action, False) and not action.endswith(".read")
+        for selector in selectors
+    ]
+    read_only_selectors.extend(
+        f'[data-required-action="{action}"]' for action in UI_ACTIONS
+        if allowed.get(action, False) and not action.endswith(".read")
+    )
     return {
         "allowed_actions": allowed,
         "client_surface": client_surface,
         "cover_provider_groups": list(PROVIDER_LOOKUP_GROUPS),
         "denied_selectors": denied_selectors,
+        "read_only_selectors": read_only_selectors,
         "denied_tabs": denied_tabs,
         "available_tabs": [tab for tab in UTILITY_TAB_ACTIONS if tab not in denied_tabs],
     }

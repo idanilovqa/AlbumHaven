@@ -12,6 +12,7 @@ function buildPersistedPlaybackQueue(currentTrackPath) {
         artist: String(track.artist || ''),
         ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
         album: String(track.album || ''),
+        ...(track.year ? { year: String(track.year) } : {}),
         coverPath: String(track.coverPath || ''),
         ...(Number(track.durationSeconds) > 0
           ? { durationSeconds: Number(track.durationSeconds) }
@@ -61,6 +62,7 @@ function buildPersistedPlayerState(options = {}) {
       artist: String(current.artist || ''),
       ...(current.albumArtist ? { albumArtist: String(current.albumArtist) } : {}),
       album: String(current.album || ''),
+      ...(current.year ? { year: String(current.year) } : {}),
       coverPath: String(current.coverPath || ''),
       ...(durationSeconds > 0
         ? { durationSeconds }
@@ -89,6 +91,7 @@ function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
           artist: String(track.artist || ''),
           ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
           album: String(track.album || ''),
+          ...(track.year ? { year: String(track.year) } : {}),
           coverPath: String(track.coverPath || ''),
           ...(Number(track.durationSeconds) > 0
             ? { durationSeconds: Number(track.durationSeconds) }
@@ -181,10 +184,14 @@ function attachAlbumSnapshotToRestoredPlaybackQueue(album, currentTrack) {
 
 let playerUnloadWasPlaying = null;
 let playerUnloadStatePersisted = false;
+let playerUnloadPlaybackSnapshot = null;
 
 function resetPlayerUnloadPersistence() {
+  const playbackSnapshot = playerUnloadPlaybackSnapshot;
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
+  playerUnloadPlaybackSnapshot = null;
+  return playbackSnapshot;
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -207,16 +214,14 @@ function persistPlayerState(force = false, options = {}) {
 }
 
 function persistPlayerStateForUnload(reason) {
-  if (playerUnloadStatePersisted) return false;
+  if (reason !== 'pagehide' || playerUnloadStatePersisted) return false;
   playerUnloadStatePersisted = true;
-  const playbackSnapshot = getPlayerPlaybackSnapshot();
+  const playbackSnapshot = playerUnloadPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('paused', state.player.current);
-  }
-  flushListenSessionOnUnload(reason);
+  // Let the lease expire: an unload release could overtake the final beacon.
+  flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,
     wasPlaying: playerUnloadWasPlaying,
@@ -241,13 +246,17 @@ function restorePlayerState() {
   }
   const track = parsed?.track;
   if (!track || !track.src) return;
+  const selectionToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
   const savedPaused = typeof parsed.paused === 'boolean'
     ? parsed.paused
     : !Boolean(parsed.wasPlaying);
-  const canResumePlayback = !savedPaused
-    && (typeof canRestoreActivePlayback !== 'function'
-      || Boolean(canRestoreActivePlayback(parsed)));
+  const ownershipResult = !savedPaused
+    && (typeof canRestoreActivePlayback !== 'function' || canRestoreActivePlayback(parsed));
   const restore = async () => {
+    // A reloaded document re-attaches to the queue its engine kept playing, as Android's does.
+    const adopted = typeof adoptEnginePlayback === 'function' ? adoptEnginePlayback(parsed) : null;
+    if (adopted && await adopted) return;
+    let canResumePlayback = false;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);
     const restoredQueueHasAlbumSnapshot = restoredQueue
@@ -296,15 +305,23 @@ function restorePlayerState() {
       updatePlayerUi();
       persistPlayerState(true);
     };
-    const startRestoredRole = () => startStreamingTrack(track, {
+    const startWithOwnership = (allowed) => {
+      if ((selectionToken !== null && selectionToken !== playerTrackSelectionToken)
+        || (state.player.current && state.player.current.path !== track.path)) return null;
+      canResumePlayback = Boolean(allowed)
+        && (typeof isActivePlaybackOwner !== 'function' || isActivePlaybackOwner());
+      return startStreamingTrack(track, {
       startSeconds: boundedTime,
       autoplay: canResumePlayback,
       ...(canResumePlayback ? {
         allowSuspendedAutoplayFallback: true,
         onAutoplayStarted: completeRestoredAutoplay,
       } : {}),
-    });
-    const restoredRolePromise = canResumePlayback
+      });
+    };
+    const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
+      ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
+    const restoredRolePromise = !savedPaused
       && typeof window !== 'undefined'
       && typeof window.addEventListener === 'function'
       ? new Promise((resolve, reject) => {

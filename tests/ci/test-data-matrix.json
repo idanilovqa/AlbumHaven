@@ -1,5 +1,23 @@
 [
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackOwnership.spec.js",
+    "case": "FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate paused listens",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:two-context-ownership-and-paused-listen"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["visible-blocked-metadata", "single-audible-owner", "bidirectional-handoff", "paused-listen-identity", "exactly-once-provider", "persistent-visible-totals"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-ownership",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",
@@ -575,6 +593,22 @@
     "expectedContracts": [
       "startup-progress-player-colors",
       "startup-progress-content-release",
+      "appearance-independent-startup-background"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup bar stays visible on the app page for a default-appearance account",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-player-colors",
       "appearance-independent-startup-background"
     ],
     "ownerApproval": "approved"
@@ -2194,7 +2228,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
-    "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order",
+    "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks over 30 s each scrobble exactly once in order and a shorter one never does",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -10666,6 +10700,186 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "virtual-featured-on-divider-geometry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "the Update row shows only inside the Android app",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the Update row shows only inside the Android app"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "separator lines set the Update row apart inside the app",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "separator lines set the Update row apart inside the app"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Check for update runs from the menu, which stays open to show the result",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Check for update runs from the menu, which stays open to show the result"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "an open menu follows the download in place, then offers Install update",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "an open menu follows the download in place, then offers Install update"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Installing… stays pressable and sends updates.install",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Installing… stays pressable and sends updates.install"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Update failed. Try again stays pressable and sends updates.check",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Update failed. Try again stays pressable and sends updates.check"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Update failed. Try again stays pressable and sends updates.download",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Update failed. Try again stays pressable and sends updates.download"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-001: once kept, a start shows the copy at once without asking the server for the page",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-001: once kept, a start shows the copy at once without asking the server for the page"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-005: offline, the copy is read-only with its notice, and recovers without a reload",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-005: offline, the copy is read-only with its notice, and recovers without a reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-006: a copy whose session ended is deleted and the sign-in page replaces it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-006: a copy whose session ended is deleted and the sign-in page replaces it"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-006: another account's copy is never left on screen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-006: another account's copy is never left on screen"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-007: a copy older than seven days is not shown",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-007: a copy older than seven days is not shown"
     ],
     "ownerApproval": "approved"
   },

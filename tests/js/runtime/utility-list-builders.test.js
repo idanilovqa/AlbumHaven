@@ -242,6 +242,70 @@ function loadPlayerAlbumResolutionHelpers() {
   return context;
 }
 
+function loadPlayerAlbumOpener(fetchResult) {
+  const context = loadPlayerAlbumResolutionHelpers();
+  context.opened = [];
+  context.toasts = [];
+  context.requests = [];
+  context.openTrackModal = (album, options) => context.opened.push({ album, options });
+  context.showToast = (message, variant) => context.toasts.push({ message, variant });
+  context.fetch = async (url) => {
+    context.requests.push(url);
+    if (fetchResult instanceof Error) throw fetchResult;
+    return { ok: fetchResult.status === 200, json: async () => fetchResult.body };
+  };
+  return context;
+}
+
+const unloadedTrack = { path: 'C:\\Music\\Elsewhere\\Album\\01 Song.flac', album: 'Album', artist: 'Elsewhere' };
+
+test('the player opens an album this page already holds without a request', async () => {
+  const context = loadPlayerAlbumOpener(new Error('no request expected'));
+  const album = { key: 'elsewhere::album', name: 'Album', album_artist: 'Elsewhere', tracks: [{ path: unloadedTrack.path }] };
+  context.state.view.artist_groups = [{ artist: 'Elsewhere', albums: [album] }];
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack, { foreground: true }), true);
+  assert.strictEqual(context.opened[0].album, album);
+  assert.equal(context.opened[0].options.foreground, true);
+  assert.deepEqual(context.requests, []);
+});
+
+test('the player opens an album the page no longer holds from the server by the playing file', async () => {
+  const album = { key: 'elsewhere::album', name: 'Album', tracks: [] };
+  const context = loadPlayerAlbumOpener({ status: 200, body: { ok: true, album } });
+  context.state.player.current = unloadedTrack;
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), true);
+  assert.deepEqual(context.requests, [`/album-details?track_path=${encodeURIComponent(unloadedTrack.path)}`]);
+  assert.equal(context.opened[0].album, album);
+  assert.deepEqual(context.toasts, []);
+});
+
+test('a player album the server cannot find says why instead of doing nothing', async () => {
+  const context = loadPlayerAlbumOpener({ status: 404, body: { ok: false, error: "The playing track's album isn't in the library." } });
+  context.state.player.current = unloadedTrack;
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), false);
+  assert.deepEqual(context.opened, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.toasts)), [{ message: "The playing track's album isn't in the library.", variant: 'error' }]);
+});
+
+test('a failed player album request shows a retry message', async () => {
+  const context = loadPlayerAlbumOpener(new Error('offline'));
+  context.state.player.current = unloadedTrack;
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), false);
+  assert.equal(context.toasts[0].message, "The playing album couldn't be opened. Try again.");
+});
+
+test('the player opens nothing when the track changed while its album loaded', async () => {
+  const context = loadPlayerAlbumOpener({ status: 200, body: { ok: true, album: { key: 'elsewhere::album' } } });
+  context.state.player.current = { path: 'C:\\Music\\Next\\01 Other.flac' };
+
+  assert.equal(await context.openPlayerTrackAlbum(unloadedTrack), false);
+  assert.deepEqual(context.opened, []);
+});
+
 test('player queue retains the canonical album ref for a hydrated path-bearing snapshot', () => {
   const context = loadPlayerAlbumResolutionHelpers();
   const identityHelperStart = albumIdentityHelperSource.indexOf('function getAlbumRequestKey(album)');

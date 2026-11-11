@@ -332,7 +332,7 @@ test('S01/S03 live Settings template removes redundant visible shell and sidebar
   assert.doesNotMatch(template, /class="utility-modal-subtitle"/);
   assert.doesNotMatch(template, /class="utility-sidebar-title"/);
   assert.match(template, /role="tablist"/);
-  assert.equal((template.match(/data-utility-tab="/g) || []).length, 6);
+  assert.equal((template.match(/data-utility-tab="/g) || []).length, 7);
 });
 
 test('S05 remote thumbnail keeps the original remote artwork as its enlargement source', () => {

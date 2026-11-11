@@ -119,3 +119,35 @@ test('mobile: an always-visible surface such as the view switcher never swallows
     assert.equal(stopped, false, type);
   }
 });
+
+test('list refreshes keep the open filter menu options, so its scroll position survives', () => {
+  const state = { utility: {
+    problematicFiles: [{ problem_reasons: ['Missing year'] }, { problem_reasons: ['MBID: Not found'] }],
+    selectedProblemFilters: [], problemDropdownOpen: true,
+  } };
+  const context = vm.createContext({ state, window: {}, escapeHtml: value => value });
+  const runtime = path.resolve(__dirname, '../../../music_app/static/js/runtime');
+  for (const file of ['trigger-anchor.js', 'utility-list-builders.js']) {
+    vm.runInContext(fs.readFileSync(path.join(runtime, file), 'utf8'), context);
+  }
+  const menu = element();
+  let writes = 0;
+  let html = '';
+  Object.defineProperty(menu, 'innerHTML', { get: () => html, set(value) { writes += 1; html = value; } });
+  const els = { problemFilterButton: element(), problemFilterMenu: menu };
+
+  context.renderProblemFilterControls(els);
+  assert.equal(writes, 1);
+  // A progressive list refresh with the same problem types re-renders the controls.
+  state.utility.problematicFiles = [...state.utility.problematicFiles, { problem_reasons: ['Missing year'] }];
+  context.renderProblemFilterControls(els);
+  assert.equal(writes, 1, 'unchanged options are not rewritten');
+
+  state.utility.problematicFiles.push({ problem_reasons: ['Poor art quality'] });
+  context.renderProblemFilterControls(els);
+  assert.equal(writes, 2, 'a new problem type updates the menu');
+  assert.match(html, /Poor art quality/);
+  state.utility.selectedProblemFilters = ['Missing year'];
+  context.renderProblemFilterControls(els);
+  assert.equal(writes, 3, 'a selection change updates the menu');
+});

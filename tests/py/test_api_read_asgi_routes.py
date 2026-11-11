@@ -73,6 +73,38 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["log_history_revision"] == ""
 
 
+@pytest.mark.parametrize("owner", [True, False])
+def test_asgi_status_allows_musicbrainz_sync_only_for_the_library_owner(app, owner):
+    from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
+
+    asgi_app = _make_asgi_app()
+    asgi_app.state.musicbrainz_enrichment_api_service = object()
+    if not owner:
+        listener = CurrentActor(
+            state=ActorState.ACTIVE, account_id=8, session_id=12, username_display="listener",
+            current_library_id=1, library_relationships=(LibraryRelationship(1, "member", False),),
+            capability_grants=(CapabilityGrant("capability.view", "library", 1), CapabilityGrant("capability.play", "library", 1)),
+        )
+        asgi_app.state.current_actor_resolver = SimpleNamespace(resolve=lambda _token: listener)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    allowed = _decode_json(body)["allowed_actions"]
+    # Denied actions are omitted; the shell shows MusicBrainz sync only for an explicit true.
+    assert (allowed.get("catalogue.enrichment.request") is True) is owner
+
+
+def test_asgi_status_offers_no_musicbrainz_sync_while_enrichment_is_off(app):
+    asgi_app = _make_asgi_app()
+    asgi_app.state.musicbrainz_enrichment_api_service = None
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    assert "catalogue.enrichment.request" not in _decode_json(body)["allowed_actions"]
+
+
 def test_status_payload_keeps_post_scan_cover_handoff_busy():
     from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
 
@@ -3520,6 +3552,58 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     assert len(worker_calls) == 4
     assert worker_calls[-1].__self__.__class__.__name__ == "AlbumIdentityLineageRepository"
     assert worker_calls[1] is asgi_read_routes._repair_album_detail_cover_identity
+
+
+def test_asgi_album_details_finds_the_playing_album_by_its_track_file(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    resolved: list[set[str]] = []
+    built: list[int] = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    class FakeSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths: set[str]):
+            resolved.append(track_paths)
+            return 41 if track_paths == {r"N:\Music\Artist\Album\01.flac"} else None
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            built.append(album_id)
+            return {"key": "artist::album", "album_id": album_id, "tracks": []}
+
+    monkeypatch.setattr(asgi_read_routes, "AlbumCoverCandidateSnapshotRepository", FakeSnapshotRepository)
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type("Selection", (), {"seam_id": seam_id, "effective_backend": "postgres"})(),
+    )
+
+    found_status, _headers, found_body = _run_asgi_request(
+        asgi_app, "GET", "/album-details", query={"track_path": r"N:\Music\Artist\Album\01.flac"},
+    )
+    missing_status, _headers, missing_body = _run_asgi_request(
+        asgi_app, "GET", "/album-details", query={"track_path": r"N:\Music\Gone\01.flac"},
+    )
+
+    assert found_status == 200
+    assert _decode_json(found_body)["album"]["album_id"] == 41
+    assert built == [41]
+    assert missing_status == 404
+    assert _decode_json(missing_body) == {"ok": False, "error": "The playing track's album isn't in the library."}
+    assert resolved[0] == {r"N:\Music\Artist\Album\01.flac"}
 
 
 def test_asgi_album_details_unknown_query_parameter_never_falls_back_to_full_hydration(

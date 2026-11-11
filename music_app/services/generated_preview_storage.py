@@ -141,6 +141,17 @@ class PreviewStoragePolicy:
         )
         return _cache_root(source_path, mode=mode, root=root)
 
+    def relocation_source_root(self, source_path: Path) -> Path | None:
+        """The root a running move is emptying, where previews may still wait to move.
+
+        Writers must reuse a preview found there: generating it again at the
+        destination repoints its inventory row and strands the source copy.
+        """
+        if self.snapshot.requested_mode is None or self.snapshot.operation_state == "canceled":
+            return None
+        source_root = _cache_root(source_path, mode=self.snapshot.mode, root=self.snapshot.active_root)
+        return None if source_root == self.write_cache_root(source_path) else source_root
+
     def read_cache_roots(self, source_path: Path) -> tuple[Path, ...]:
         roots = []
         if self.snapshot.requested_mode:

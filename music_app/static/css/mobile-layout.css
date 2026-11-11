@@ -201,7 +201,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .utility-modal-body { display: flex; flex-direction: column; min-height: 0; overflow: visible; }
   .is-mobile-page .utility-problem-filter-menu { left: 0; }
   .is-mobile-page .utility-sidebar { width: 100%; min-width: 0; max-height: 170px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .is-mobile-page:is([data-active-tab="appearance"], [data-active-tab="integrations"], [data-active-tab="rules"]) .utility-sidebar { display: none; }
+  .is-mobile-page:is([data-active-tab="appearance"], [data-active-tab="integrations"], [data-active-tab="rules"], [data-active-tab="android"]) .utility-sidebar { display: none; }
   .is-mobile-page .utility-detail { padding: 0 0 16px; width: 100%; min-width: 0; overflow: visible; }
   .is-mobile-page .utility-modal-footer { position: sticky; bottom: 0; z-index: 3; background: var(--appearance-main-surface, var(--bg)); padding: 12px 0; }
   .is-mobile-page :is(.background-editor-columns, .appearance-album-page__workspace, .selection-hover-workspace, .player-style-workspace) { grid-template-columns: minmax(0, 1fr) !important; min-width: 0; }
@@ -348,6 +348,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-overview { grid-template-columns: 32px minmax(0, 1fr) 32px; }
   #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-actions { grid-column: 3; grid-row: 1; align-self: start; justify-self: end; flex-direction: column; }
   #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-identity { grid-column: 1 / -1; grid-row: 2; text-align: center; }
+  /* The title row is a flex row for its quality alert; it centers under the cover with the line above it. */
+  #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-identity .album-details-header__primary-row { justify-content: center; }
   .is-mobile-page .appearance-album-layout-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
   .is-mobile-page .appearance-album-page__controls > .appearance-subsection-heading { display: block; }
   /* Same range and audio clock. Three-pixel visual track, 24px touch/keyboard target. */
@@ -497,7 +499,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-artist-dialog > header { padding-right: 48px; align-items: center; flex: 0 0 auto; }
   .is-mobile-artist-dialog .artist-info-overlay__image { width: 88px; height: 88px; flex-basis: 88px; }
   .is-mobile-artist-dialog .artist-info-overlay__body { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
-  .is-mobile-artist-dialog .artist-info-overlay__body [data-artist-info-summary] { display: block; overflow: visible; -webkit-line-clamp: unset; }
 
   /* All account pages start with the same bar at the top of their main body. */
   .settings-host.settings-shell { grid-template-rows: var(--app-bar-height) minmax(0, 1fr); }
@@ -859,12 +860,14 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
     :root[data-library-source-icons="false"] .album-card .gallery-card-info .album-length { grid-column: 1 / -1; }
   }
 
-  /* Keep gutter width stable; only its initial paint is hidden. */
-  #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"]) {
-    scrollbar-color: transparent transparent;
-  }
-  #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"])::-webkit-scrollbar-thumb {
-    background: transparent;
+  /* Keep gutter width stable; only its initial paint is hidden. Touch devices use overlay scrollbars. */
+  @media (hover: hover) and (pointer: fine) {
+    #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"]) {
+      scrollbar-color: transparent transparent;
+    }
+    #mobile-page-outlet[data-mobile-page-kind="album"]:not([data-page-interacted="true"])::-webkit-scrollbar-thumb {
+      background: transparent;
+    }
   }
 }
 @media (max-width: 900px) and (forced-colors: active) {

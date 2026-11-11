@@ -267,6 +267,20 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
+  const musicBrainzSyncAction = event.target.closest('[data-status-action="musicbrainz-sync"]');
+  if (musicBrainzSyncAction) {
+    event.preventDefault();
+    triggerMusicBrainzArtistSync();
+    return;
+  }
+
+  const artistProblemAction = event.target.closest('[data-open-musicbrainz-artist-problem]');
+  if (artistProblemAction) {
+    event.preventDefault();
+    openMusicBrainzArtistProblem(artistProblemAction.dataset.openMusicbrainzArtistProblem);
+    return;
+  }
+
   const indicator = event.target.closest('#scan-indicator');
   if (indicator) {
     event.preventDefault();
@@ -1601,6 +1615,14 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
+  // clearing the query and the artist the search selected.
+  const libraryHome = document?.querySelector?.('.app-bar-brand[data-library-home="1"]');
+  if (!String(nextQuery).trim() && libraryHome
+      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+    libraryHome.click();
+    return;
+  }
   applyImmediateExactSearchArtistSelection(nextQuery);
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else clearMobileSearchResultsMarker();

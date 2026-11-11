@@ -8,6 +8,10 @@ async function loadProblematicFiles(force = false, options = {}) {
     options.renderInitialPage === true
     && state.utility.activeTab === 'problematic-files'
   );
+  const canRenderBoundedPage = () => (
+    !String(state.utility.searchQuery || '').trim()
+    && !(state.utility.selectedProblemFilters || []).length
+  );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
@@ -36,6 +40,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
+  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
+  const refreshesCompleteList = state.utility.loaded === true
+    && state.utility.problematicFilesComplete === true;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
@@ -136,7 +143,9 @@ async function loadProblematicFiles(force = false, options = {}) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
         }
-        if ((shouldRender() && !navigationOwnsRendering()) || shouldRenderInitialPage()) {
+        if ((canRenderBoundedPage()
+            && shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
+            || shouldRenderInitialPage()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -277,6 +286,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (!normalizedKey) return null;
   const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
+    return currentAlbum;
+  }
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {
@@ -1299,7 +1312,7 @@ function loadActiveUtilityTab(force = false) {
     }
     return null;
   }
-  if (state.utility.activeTab === 'appearance') {
+  if (['appearance', 'android'].includes(state.utility.activeTab)) {
     renderUtilityModalContent();
     return null;
   }

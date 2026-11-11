@@ -11,6 +11,10 @@ from music_app.services.policy import PolicyContext
 
 
 LIBRARY_SHELL_ACTIONS = frozenset({"app.shell.read", "app.bootstrap.read", "app.status.read"})
+_PRIMARY_OWNER_ACTIONS = frozenset({
+    "catalogue.enrichment.request",
+    "library.metadata_matches.review",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +114,12 @@ class PolicyEvaluator:
             context.action, context.client_surface_class, administrator=administrator
         ):
             return False, "client_surface_denied"
+        if context.action in _PRIMARY_OWNER_ACTIONS and not any(
+            relationship.library_id == context.library_id
+            and relationship.is_primary_owner
+            for relationship in actor.library_relationships
+        ):
+            return False, "library_owner_required"
         if actor.is_bootstrap_owner:
             return True, "bootstrap_owner"
         if context.action == "auth.session.logout" and actor.session_id is not None:

@@ -1031,7 +1031,9 @@ def test_live_guest_artist_track_stays_in_its_soundtrack_album(watcher_repair_in
     fixture.seed(*score, guest)
 
     albums, members = _live_album_rows(fixture)
-    assert {members[entry["path"]] for entry in (*score, guest)} == {members[guest["path"]]}, "one soundtrack album after a scan"
+    soundtrack = members[guest["path"]]
+    assert {members[entry["path"]] for entry in (*score, guest)} == {soundtrack}, "one soundtrack album after a scan"
+    assert soundtrack.startswith("howard shore::")
 
     # A watcher batch that sees only the guest's file keeps it in the soundtrack.
     entries = {entry["path"]: entry for entry in (*score, guest)}

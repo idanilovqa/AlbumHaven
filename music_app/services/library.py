@@ -384,10 +384,11 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
                 and len(track_artist_credit_members(solo_artist, solo_artist)) == 1):
             return False, solo_artist, [solo_artist]
 
+    dominant_track_artist = _dominant_track_artist(track_artist_counts)
     if explicit_various and not positive_compilation and len(distinct_track_artists) == 2 and all(
         not _is_various_artist(artist) and artist.casefold() != "unknown artist"
         for artist in distinct_track_artists
-    ):
+    ) and not _one_off_guest_album_override(dominant_track_artist, track_artist_counts):
         return compilation_state(True), _format_shared_album_artist(distinct_track_artists), distinct_track_artists
     if len(distinct_track_artists) >= 2 and any(
         str(entry.get("album_type") or "").strip().casefold() == "split"
@@ -401,7 +402,6 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     )
     if not primary_artist and distinct_track_artists:
         primary_artist = distinct_track_artists[0]
-    dominant_track_artist = _dominant_track_artist(track_artist_counts)
     override_primary_artist = primary_artist
     if not override_primary_artist or _is_various_artist(override_primary_artist):
         override_primary_artist = dominant_track_artist

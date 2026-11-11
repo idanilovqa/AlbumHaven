@@ -204,13 +204,13 @@ function loadStartupProgress() {
 test('startup stages are accessible, monotonic and permanently complete after first usable view', () => {
   const ui = loadStartupProgress();
   while (ui.frameCallbacks.length) ui.frameCallbacks.shift()();
-  assert.equal(ui.bar.attributes['aria-valuenow'], '50');
+  assert.equal(ui.bar.attributes['aria-valuenow'], '95');
   assert.equal(ui.content.inert, true);
   ui.controller.show(75);
   ui.controller.show(50);
   while (ui.frameCallbacks.length) ui.frameCallbacks.shift()();
-  assert.equal(ui.bar.attributes['aria-valuenow'], '75');
-  assert.equal(ui.percentLabel.textContent, '75%');
+  assert.equal(ui.bar.attributes['aria-valuenow'], '95');
+  assert.equal(ui.percentLabel.textContent, '95%');
   ui.controller.finish();
   while (ui.frameCallbacks.length) ui.frameCallbacks.shift()();
   assert.equal(ui.bar.attributes['aria-valuenow'], '100');

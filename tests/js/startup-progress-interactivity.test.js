@@ -69,7 +69,7 @@ test('startup progress records the first visible feedback boundary', () => {
   assert.equal(typeof ui.startupMarks[0].atMs, 'number');
 });
 
-test('startup completion releases the usable app two paint frames after reaching 100', () => {
+test('startup completion holds the full bar before releasing the usable app', () => {
   const ui = loadStartupProgress();
   ui.runNextFrame(0);
   assert.equal(ui.root.hidden, false);
@@ -81,6 +81,10 @@ test('startup completion releases the usable app two paint frames after reaching
   assert.equal(ui.root.hidden, false);
   ui.runNextFrame(732);
   ui.runNextFrame(748);
+  assert.equal(ui.root.hidden, false);
+  ui.runNextFrame(916);
+  ui.runNextFrame(932);
+  ui.runNextFrame(948);
 
   assert.equal(ui.root.hidden, true);
   assert.equal(ui.content.inert, false);
@@ -107,5 +111,24 @@ test('startup completion animates the visible bar to 100 before hiding', () => {
   ui.runNextFrame(1316);
   assert.equal(ui.root.hidden, false);
   ui.runNextFrame(1332);
+  assert.equal(ui.root.hidden, false);
+  ui.runNextFrame(1500);
+  ui.runNextFrame(1516);
+  ui.runNextFrame(1532);
   assert.equal(ui.root.hidden, true);
+});
+
+test('startup progress keeps moving between real bootstrap milestones', () => {
+  const ui = loadStartupProgress();
+  ui.runNextFrame(0);
+  ui.controller.show(70);
+  ui.runNextFrame(100);
+  ui.runNextFrame(600);
+  const firstWidth = Number.parseFloat(ui.fill.style.width);
+  ui.runNextFrame(950);
+  ui.runNextFrame(1100);
+  ui.runNextFrame(1450);
+
+  assert.ok(Number.parseFloat(ui.fill.style.width) > firstWidth);
+  assert.ok(Number.parseFloat(ui.fill.style.width) < 100);
 });

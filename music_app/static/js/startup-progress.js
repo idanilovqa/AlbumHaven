@@ -12,7 +12,12 @@
   let animationFrame = 0;
   let animationStartedAt = null;
   let animationStartPercent = 0;
+  let driftStartedAt = null;
+  let completionRenderedAt = null;
+  let lastFrameTime = 0;
   const animationDurationMs = 700;
+  const driftIntervalMs = 500;
+  const completionHoldMs = 200;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
   const markFirstVisibleFeedback = () => {
     const queue = Array.isArray(window.__ALBUM_HAVEN_STARTUP_MARKS__)
@@ -41,17 +46,34 @@
   const finishHide = () => window.requestAnimationFrame(() => window.requestAnimationFrame(hide));
   const animate = timestamp => {
     animationFrame = 0;
-    const frameTime = Number.isFinite(timestamp)
-      ? timestamp
-      : (animationStartedAt ?? 0) + animationDurationMs;
+    const frameTime = Number.isFinite(timestamp) ? timestamp : lastFrameTime + animationDurationMs;
+    lastFrameTime = frameTime;
     if (animationStartedAt === null) animationStartedAt = frameTime;
     if (percent < targetPercent) {
       const elapsed = Math.min(1, (frameTime - animationStartedAt) / animationDurationMs);
       const eased = 1 - ((1 - elapsed) ** 3);
       render(animationStartPercent + ((targetPercent - animationStartPercent) * eased));
     }
-    if (percent < targetPercent) animationFrame = window.requestAnimationFrame(animate);
-    else if (completed && percent === 100) finishHide();
+    if (!completed && targetPercent >= 50 && targetPercent < 95) {
+      if (driftStartedAt === null) driftStartedAt = frameTime;
+      const increments = Math.floor((frameTime - driftStartedAt) / driftIntervalMs);
+      if (increments > 0) {
+        targetPercent = Math.min(95, targetPercent + increments);
+        animationStartPercent = percent;
+        animationStartedAt = frameTime;
+        driftStartedAt += increments * driftIntervalMs;
+      }
+    }
+    if (percent < targetPercent || (!completed && targetPercent < 95)) {
+      animationFrame = window.requestAnimationFrame(animate);
+    } else if (completed && percent === 100) {
+      if (completionRenderedAt === null) completionRenderedAt = frameTime;
+      if (frameTime - completionRenderedAt < completionHoldMs) {
+        animationFrame = window.requestAnimationFrame(animate);
+      } else {
+        finishHide();
+      }
+    }
   };
   const show = value => {
     const next = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
@@ -59,6 +81,7 @@
     targetPercent = next;
     animationStartPercent = percent;
     animationStartedAt = null;
+    driftStartedAt = null;
     root.hidden = false;
     markFirstVisibleFeedback();
     for (const element of document.body.children) {
@@ -80,6 +103,9 @@
       targetPercent = 100;
       animationStartPercent = percent;
       animationStartedAt = null;
+      driftStartedAt = null;
+      completionRenderedAt = null;
+      lastFrameTime = 0;
       if (reducedMotion) {
         render(100);
         finishHide();
@@ -100,6 +126,9 @@
       animationFrame = 0;
       animationStartedAt = null;
       animationStartPercent = 0;
+      driftStartedAt = null;
+      completionRenderedAt = null;
+      lastFrameTime = 0;
       render(0); error.hidden = true; meter.hidden = false; hide();
     },
   };

@@ -6680,3 +6680,40 @@ test('a kept track starts mid-track from its seek table', async () => {
   assert.equal(decoders.at(-1).inputs[0][0], 124_200 % 251);
   assert.equal(decoders.at(-1).inputs[0].length, 173_700 - 124_200);
 });
+
+test('a successor prepared ahead is kept at the local audible boundary', async () => {
+  const harness = encodedHarness();
+  const kept = withTrackCache(harness);
+  await harness.api.start(makeTrack('01.mp3'));
+  const current = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.sockets[0].receive({
+    type: 'eos', generation: current.generation, streamId: current.streamId, role: 'current',
+    emittedFrames: 10_000, authoritativeTotalFrames: 10_000,
+  });
+  await harness.api.continuity(makeTrack('02.mp3'));
+  const continuity = harness.engine.roles.continuity;
+  const wire = {
+    track: makeTrack('02.mp3'), quality: 'original', codec: 'mp3', streamStart: 0, serverless: false,
+    initialSkip: 0, initialTotal: 10_000, table: null, bytes: new Uint8Array(8), size: 8,
+  };
+  const eos = { authoritativeTotalFrames: 10_000 };
+  continuity.encoded = { wire, eos };
+
+  harness.context.keepStreamingWire(wire, eos, 'continuity');
+  assert.deepEqual(kept, [], 'a song only fetched ahead is not kept');
+
+  harness.nodes[0].port.dispatch({
+    type: 'boundary', generation: current.generation,
+    outgoingStreamId: current.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame: 10_000, timelineFrame: 0, capture: {},
+  });
+  assert.deepEqual(kept.map(({ key }) => key), [`${makeTrack('02.mp3').path}|original`]);
+  harness.sockets[0].receive({
+    type: 'promoted', generation: current.generation, streamId: continuity.streamId, role: 'current',
+  });
+  assert.equal(kept.length, 1, 'it is kept once');
+});

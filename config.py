@@ -246,6 +246,8 @@ class Config:
     )
     CACHE_MAX_AGE_SECONDS = int(os.environ.get("MUSIC_CACHE_MAX_AGE_SECONDS", "0"))
     SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav"}
+    CUE_EXTENSIONS = {".cue"}
+    CUE_MAX_BYTES = 1024 * 1024
     IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
     COVER_PROVIDER_GROUPS = normalize_cover_provider_groups(
         os.environ.get("ALBUM_HAVEN_COVER_PROVIDER_GROUPS")

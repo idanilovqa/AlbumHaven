@@ -6,7 +6,9 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PureWindowsPath
+from typing import Mapping
 
 from music_app.services.exception_overrides import apply_exception_override
 from music_app.services.covers import image_dimensions
@@ -21,6 +23,7 @@ from music_app.services.metadata import (
     schema_upgrade_requires_file_read,
     upgrade_stored_file_entry,
 )
+from music_app.services.cue_program import CueProgram, parse_cue_program
 
 
 _REMOTE_COVER_KEYS = (
@@ -44,6 +47,124 @@ _SCAN_ESTIMATE_MIN_ELAPSED_SECONDS = 3.0
 _SCAN_ESTIMATE_MIN_FILES = 12
 _SCAN_ESTIMATE_EMA_BLEND = 0.28
 _SCAN_FIRST_PARTIAL_ALBUM_PUBLISH_FILES = 250
+
+
+@dataclass(frozen=True, slots=True)
+class CueSourceCandidate:
+    source_kind: str
+    source_identity: str
+    source_bytes: bytes
+    revision_sha256: str
+    media_paths: tuple[Path, ...]
+    program: CueProgram
+
+
+def _cue_text(source_bytes: bytes) -> str:
+    try:
+        return source_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return source_bytes.decode("latin-1")
+
+
+def _cue_media_paths(
+    program: CueProgram,
+    *,
+    source_directory: Path,
+    root: Path,
+    supported_extensions: set[str],
+) -> tuple[tuple[Path, ...], CueProgram]:
+    media_paths: list[Path] = []
+    problems = list(program.problems)
+    for source_ref in program.files:
+        raw_path = Path(source_ref)
+        if raw_path.is_absolute() or PureWindowsPath(source_ref).is_absolute():
+            problems.append("CUE FILE reference is absolute.")
+            continue
+        resolved = (source_directory / raw_path).resolve(strict=False)
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            problems.append("CUE FILE reference escapes the library root.")
+            continue
+        if resolved.suffix.casefold() not in supported_extensions:
+            problems.append("CUE FILE reference uses an unsupported audio format.")
+            continue
+        if not resolved.is_file():
+            problems.append("CUE FILE reference is missing.")
+            continue
+        if resolved not in media_paths:
+            media_paths.append(resolved)
+    return tuple(media_paths), replace(program, problems=tuple(dict.fromkeys(problems)))
+
+
+def discover_cue_sources(
+    root: Path,
+    candidate_paths: list[Path] | tuple[Path, ...],
+    *,
+    metadata_by_path: Mapping[str, Mapping[str, object]] | None = None,
+    supported_extensions: set[str] | None = None,
+    max_bytes: int = 1024 * 1024,
+) -> tuple[CueSourceCandidate, ...]:
+    """Discover private external and embedded CUE programs under one root."""
+    resolved_root = Path(root).resolve(strict=False)
+    supported = {
+        str(extension).casefold()
+        for extension in (supported_extensions or {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav"})
+    }
+    metadata = metadata_by_path or {}
+    byte_limit = max(0, int(max_bytes))
+    candidates: list[CueSourceCandidate] = []
+    seen_paths: set[Path] = set()
+    for path in sorted((Path(value) for value in candidate_paths), key=lambda value: str(value).casefold()):
+        resolved_path = path.resolve(strict=False)
+        if resolved_path in seen_paths:
+            continue
+        seen_paths.add(resolved_path)
+        try:
+            relative_path = resolved_path.relative_to(resolved_root)
+        except ValueError:
+            continue
+        sources: list[tuple[str, str, bytes, bool]] = []
+        if resolved_path.suffix.casefold() == ".cue" and resolved_path.is_file():
+            oversized = resolved_path.stat().st_size > byte_limit
+            if oversized:
+                source_bytes = b""
+            else:
+                with resolved_path.open("rb") as source:
+                    source_bytes = source.read(byte_limit + 1)
+                oversized = len(source_bytes) > byte_limit
+            sources.append(("external", relative_path.as_posix(), source_bytes, oversized))
+        entry = metadata.get(str(path)) or metadata.get(str(resolved_path)) or {}
+        embedded = entry.get("embedded_cue") if isinstance(entry, Mapping) else None
+        if isinstance(embedded, str) and embedded.strip():
+            source_bytes = embedded.encode("utf-8")
+            sources.append((
+                "embedded", f"{relative_path.as_posix()}#embedded-cue", source_bytes,
+                len(source_bytes) > byte_limit,
+            ))
+        for source_kind, source_identity, source_bytes, oversized in sources:
+            if oversized:
+                source_bytes = b""
+                program = parse_cue_program("", source_name=source_identity)
+                program = replace(program, problems=("CUE source exceeds the size limit.",))
+                media_paths: tuple[Path, ...] = ()
+            else:
+                program = parse_cue_program(_cue_text(source_bytes), source_name=source_identity)
+                media_paths, program = _cue_media_paths(
+                    program,
+                    source_directory=resolved_path.parent,
+                    root=resolved_root,
+                    supported_extensions=supported,
+                )
+            candidates.append(CueSourceCandidate(
+                source_kind=source_kind,
+                source_identity=source_identity,
+                source_bytes=source_bytes,
+                revision_sha256=program.revision_sha256,
+                media_paths=media_paths,
+                program=program,
+            ))
+    return tuple(sorted(candidates, key=lambda candidate: (candidate.source_identity.casefold(), candidate.source_kind)))
 _SCAN_PARTIAL_ALBUM_PUBLISH_INTERVAL_FILES = 1000
 _SCAN_METADATA_READ_WORKERS = 4
 _SCAN_METADATA_PREFETCH_ITEMS = 8
@@ -472,6 +593,7 @@ def _discover_music_files_with_stats(
     discovered_files: list[tuple[Path, os.stat_result]] = []
     discovered_album_folders: set[Path] = set()
     total_bytes = 0
+    cue_source_paths: list[Path] = []
 
     library_state["scan_phase"] = "discovering"
     library_state["scan_processed"] = 0
@@ -493,6 +615,9 @@ def _discover_music_files_with_stats(
                 if current_generation != expected_scan_generation or not scan_still_active:
                     raise ScanCancelled("Library indexing cancelled")
             path = Path(entry.path)
+            if path.suffix.casefold() == ".cue":
+                cue_source_paths.append(path)
+                continue
             if path.suffix.lower() not in supported_extensions:
                 continue
             try:
@@ -513,6 +638,7 @@ def _discover_music_files_with_stats(
             library_state["scan_total_bytes"] = total_bytes
             library_state["scan_album_folders_total"] = len(discovered_album_folders)
 
+    library_state["_cue_source_paths"] = tuple(cue_source_paths)
     return discovered_files, len(discovered_album_folders), total_bytes
 
 
@@ -851,5 +977,29 @@ def scan_library_file_cache(
     library_state["scan_album_folders_processed"] = album_folders_total
     finish_scan_stage(library_state, "metadata")
     clear_ambiguous_folder_covers(updated_file_cache)
+    cue_source_paths = tuple(library_state.pop("_cue_source_paths", ()))
+    cue_candidates: list[CueSourceCandidate] = []
+    for root in roots:
+        resolved_root = root.resolve(strict=False)
+
+        def belongs_to_root(candidate: Path) -> bool:
+            try:
+                candidate.resolve(strict=False).relative_to(resolved_root)
+            except ValueError:
+                return False
+            return True
+
+        root_paths = [
+            *[path for path in cue_source_paths if belongs_to_root(path)],
+            *[Path(path) for path in updated_file_cache if belongs_to_root(Path(path))],
+        ]
+        cue_candidates.extend(discover_cue_sources(
+            resolved_root,
+            root_paths,
+            metadata_by_path=updated_file_cache,
+            supported_extensions=supported_extensions,
+        ))
+    library_state["_cue_source_candidates"] = tuple(cue_candidates)
+    publication_target["_cue_source_candidates"] = tuple(cue_candidates)
     _publish_partial_scan_albums(publication_target, updated_file_cache)
     return updated_file_cache, last_scan

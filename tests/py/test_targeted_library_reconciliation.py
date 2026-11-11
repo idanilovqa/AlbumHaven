@@ -10,6 +10,7 @@ import pytest
 class RecordingRepository:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.cue_calls: list[dict[str, object]] = []
 
     def persist_targeted_inventory_mutation(self, **kwargs):
         self.calls.append(kwargs)
@@ -18,6 +19,9 @@ class RecordingRepository:
             "affected_album_keys": ["broadcast::tender buttons"],
             "new_track_paths": list(kwargs["active_file_entries"]),
         }
+
+    def reconcile_cue_sources(self, **kwargs):
+        self.cue_calls.append(kwargs)
 
 
 def _request(
@@ -144,6 +148,42 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert list(entries) == [str(requested)]
     assert entries[str(requested)]["library_root_id"] == "main"
     assert entries[str(requested)]["library_root_category"] == "main_library"
+
+
+@pytest.mark.parametrize("changed_name", ["album.cue", "image.flac"])
+def test_targeted_reconciler_rebuilds_cue_for_changed_program_or_media(tmp_path, changed_name):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    album = root / "Artist" / "Album"
+    album.mkdir(parents=True)
+    audio = album / "image.flac"
+    cue = album / "album.cue"
+    audio.write_bytes(b"synthetic audio")
+    cue.write_text(
+        'FILE "image.flac" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n',
+        encoding="utf-8",
+    )
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "CUE_EXTENSIONS": {".cue"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+        metadata_reader=lambda path: {
+            "path": str(path), "title": "Image", "album": "Album", "artist": "Artist",
+            "album_artist": "Artist", "embedded_cue": None,
+        },
+        wait=lambda _seconds: None,
+    )
+
+    result = reconciler.reconcile(_request(paths=(album / changed_name,)))
+
+    assert result.revision == 12
+    assert set(repository.calls[0]["active_file_entries"]) == {str(audio)}
+    assert len(repository.cue_calls) == 1
+    [candidate] = repository.cue_calls[0]["candidates"]
+    assert candidate.source_identity == "Artist/Album/album.cue"
+    assert candidate.media_paths == (audio.resolve(),)
 
 
 def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(

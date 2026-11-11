@@ -27,7 +27,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 7
+FILE_METADATA_SCHEMA_VERSION = 8
 # What each reader version changed in a file entry. A version that only adds
 # or re-derives the listed fields names them, and an unchanged file stored by an
 # older reader takes just those fields from its fresh read; "fields": None means
@@ -48,6 +48,8 @@ FILE_METADATA_SCHEMA_CHANGES: dict[int, dict[str, object]] = {
         "requires_file_read": False,
         "derive": lambda entry: derive_readable_artist_credits(entry),
     },
+    # Embedded CUE text exists only in the media tags.
+    8: {"fields": ("embedded_cue",), "requires_file_read": True},
 }
 _OLDEST_UPGRADABLE_SCHEMA_VERSION = 2
 
@@ -90,6 +92,7 @@ def file_metadata_schema_is_current(entry: object) -> bool:
         and not isinstance(value, bool)
         and value == FILE_METADATA_SCHEMA_VERSION
         and "release_date" in entry
+        and "embedded_cue" in entry
     )
 
 
@@ -829,6 +832,7 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
     release_date = extract_release_date(tags)
     edition = first_tag(tags, ["edition", "album edition", "albumedition", "version"]) or first_custom_tag(tags, ["edition", "album edition", "albumedition"])
     album_type = first_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"]) or first_custom_tag(tags, ["musicbrainz_albumtype", "musicbrainz album type", "albumtype", "album type"])
+    embedded_cue = first_custom_tag(tags, ["cuesheet", "cue sheet"])
     album_rating = extract_album_rating(tags)
     exception_type = normalize_exception_value(first_custom_tag(tags, NON_ALBUM_EXCEPTION_TAG_NAMES))
     return {
@@ -842,4 +846,5 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
         "text_corrections": text_corrections,
+        "embedded_cue": embedded_cue,
     }

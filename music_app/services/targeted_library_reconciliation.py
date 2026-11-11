@@ -11,7 +11,7 @@ from threading import Event, Lock
 from typing import Any
 
 from music_app.services.library_event_coordinator import _stat_signature
-from music_app.services.library_indexing import enrich_library_file_entry
+from music_app.services.library_indexing import discover_cue_sources, enrich_library_file_entry
 from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library_roots import get_library_roots
 from music_app.services.metadata import read_metadata_for_file
@@ -99,6 +99,10 @@ class TargetedLibraryReconciler:
             str(extension).casefold()
             for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
         }
+        cue_extensions = {
+            str(extension).casefold()
+            for extension in self._config.get("CUE_EXTENSIONS", {".cue"})
+        }
 
         def is_supported_media(path: Path) -> bool:
             return not supported_extensions or path.suffix.casefold() in supported_extensions
@@ -108,12 +112,20 @@ class TargetedLibraryReconciler:
             for extension in self._config.get("IMAGE_EXTENSIONS", ())
         }
         active_targets: list[tuple[Path, dict[str, object]]] = []
+        cue_paths: dict[str, tuple[Path, dict[str, object]]] = {}
         normalization_paths: dict[str, Path] = {}
         event_directories: set[tuple[str, str]] = set()
 
         def add_event_file(path: Path, root: dict[str, object]) -> None:
             if is_supported_media(path):
                 active_targets.append((path, root))
+            elif path.suffix.casefold() in cue_extensions:
+                cue_paths[str(path.resolve(strict=False))] = (path, root)
+                active_targets.extend(
+                    (media_path, root)
+                    for media_path in self._supported_album_media(path.parent)
+                    if self._belongs_to_root(media_path, root)
+                )
             if (
                 self._prepare_stable_file is not None
                 and path.suffix.casefold() in normalization_extensions
@@ -134,11 +146,12 @@ class TargetedLibraryReconciler:
             if key in event_directories:
                 return
             event_directories.add(key)
-            extensions = (
+            extensions = set(
                 normalization_extensions
                 if self._prepare_stable_file is not None
                 else supported_extensions
             )
+            extensions |= cue_extensions
             for candidate in self._supported_media_descendants(path, extensions=extensions):
                 if self._belongs_to_root(candidate, root):
                     add_event_file(candidate, root)
@@ -226,7 +239,7 @@ class TargetedLibraryReconciler:
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
         has_inventory_work = bool(
-            active_targets or deleted_paths or deleted_subtrees or normalized_moves
+            active_targets or cue_paths or deleted_paths or deleted_subtrees or normalized_moves
         )
         if not has_inventory_work and not normalization_paths:
             return TargetedReconciliationResult(0, ())
@@ -251,6 +264,9 @@ class TargetedLibraryReconciler:
                 for media_path in self._supported_album_media(album_directory)
                 if self._belongs_to_root(media_path, matched_root)
             )
+            for cue_path in self._cue_files_in_directory(album_directory, cue_extensions):
+                if self._belongs_to_root(cue_path, matched_root):
+                    cue_paths.setdefault(str(cue_path.resolve(strict=False)), (cue_path, matched_root))
         active_targets = expanded_targets
 
         folder_cover_cache: dict[str, object] = {}
@@ -281,7 +297,7 @@ class TargetedLibraryReconciler:
             )
         try:
             disposition, stable_signatures = self._stable_targets_disposition(
-                active_by_path, optional_paths=normalization_paths,
+                {*active_by_path, *cue_paths}, optional_paths=normalization_paths,
             )
             if disposition != "ready":
                 return TargetedReconciliationResult(0, (), disposition)
@@ -348,6 +364,35 @@ class TargetedLibraryReconciler:
                     else {}
                 ),
             )
+            cue_candidates = []
+            for candidate_root in root_definitions:
+                root_path = Path(str(candidate_root.get("path") or "")).resolve(strict=False)
+                discovery_paths = [
+                    *(
+                        cue_path
+                        for cue_path, _root in cue_paths.values()
+                        if self._belongs_to_root(cue_path, candidate_root)
+                    ),
+                    *(
+                        Path(path)
+                        for path in active_entries
+                        if self._belongs_to_root(Path(path), candidate_root)
+                    ),
+                ]
+                cue_candidates.extend(discover_cue_sources(
+                    root_path,
+                    discovery_paths,
+                    metadata_by_path=active_entries,
+                    supported_extensions=supported_extensions,
+                    max_bytes=int(self._config.get("CUE_MAX_BYTES", 1024 * 1024)),
+                ))
+            reconcile_cue_sources = getattr(self._repository, "reconcile_cue_sources", None)
+            if callable(reconcile_cue_sources):
+                reconcile_cue_sources(
+                    root_id=root_id,
+                    candidates=tuple(cue_candidates),
+                    changed_paths=tuple(sorted(cue_paths)),
+                )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),
                 tuple(
@@ -468,6 +513,16 @@ class TargetedLibraryReconciler:
                     and media_path.suffix.casefold() in supported
                 )
         return tuple(media_paths)
+
+    @staticmethod
+    def _cue_files_in_directory(directory: Path, cue_extensions: set[str]) -> tuple[Path, ...]:
+        if not directory.is_dir():
+            return ()
+        return tuple(
+            candidate
+            for candidate in directory.iterdir()
+            if candidate.is_file() and candidate.suffix.casefold() in cue_extensions
+        )
 
     def _supported_media_descendants(
         self, directory: Path, *, extensions: set[str] | None = None,

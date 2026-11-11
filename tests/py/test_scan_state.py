@@ -1046,6 +1046,7 @@ def test_changing_library_data_corrections_keeps_reusing_unchanged_files(
         "path": str(track_path), "title": "Song", "album": "Album", "artist": "Artist",
         "album_artist": "Artist", "album_rating": 0, "mtime": stat.st_mtime, "size": stat.st_size,
         "cover_path": None, "release_date": None, "compilation_tag": None,
+        "embedded_cue": None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
     }
     settings = {"main_library_roots": [{"id": "main", "path": str(root), "layout_mode": "artist"}]}

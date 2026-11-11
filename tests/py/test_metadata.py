@@ -168,9 +168,9 @@ def test_explicit_and_legacy_editions_still_split_albums(monkeypatch, tmp_path, 
         ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None}, False),
         ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": "2004-07-16"}, False),
         ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "is_compilation": False}, False),
-        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "compilation_tag": None}, True),
-        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "compilation_tag": False}, True),
-        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": "2004-07-16", "compilation_tag": True}, True),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "embedded_cue": None}, True),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": None, "compilation_tag": False, "embedded_cue": None}, True),
+        ({"metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION, "release_date": "2004-07-16", "compilation_tag": True, "embedded_cue": "FILE image.flac WAVE"}, True),
     ],
 )
 def test_file_metadata_schema_is_current_requires_exact_non_bool_version(
@@ -651,7 +651,7 @@ def test_read_metadata_for_generated_mp3_parses_real_id3_album_rating_txxx(
     assert parsed["album_artist"] == "Christopher Tin"
     assert parsed["genre"] == "Classical Crossover"
     assert parsed["album_rating"] == 9
-    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 7
+    assert parsed["metadata_schema_version"] == metadata.FILE_METADATA_SCHEMA_VERSION == 8
 
 def test_read_editable_tag_values_returns_exact_blanks_and_requested_fields(monkeypatch):
     audio = {
@@ -721,6 +721,19 @@ def test_read_metadata_strips_nul_from_every_tag_value(monkeypatch, tmp_path):
     assert entry["album"] == "Album"
     assert all("\x00" not in str(value) for value in entry.values())
     assert all("\x00" not in name for name in entry["artists"])
+
+
+def test_read_metadata_exposes_embedded_cue_text_through_the_existing_adapter(monkeypatch, tmp_path):
+    from music_app.services import metadata
+
+    track = tmp_path / "image.flac"
+    track.write_bytes(b"fixture")
+    cue_text = 'FILE "image.flac" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00'
+    monkeypatch.setattr(metadata, "read_tags", lambda _path: {
+        "title": "Image", "album": "Album", "artist": "Artist", "cuesheet": [cue_text],
+    })
+
+    assert metadata.read_metadata_for_file(track)["embedded_cue"] == cue_text
 
 
 def test_unchanged_file_from_an_older_reader_takes_only_a_versions_declared_fields(monkeypatch):
@@ -802,16 +815,21 @@ def test_lost_character_track_artist_uses_the_album_artist(tmp_path):
     assert entry["text_corrections"] == {"artist": {"original": "??", "corrected": "\u5929\u9580", "kind": "lost_characters"}}
 
 
-def test_stored_v6_lost_character_credits_upgrade_without_reading_the_file():
+def test_stored_v6_upgrade_derives_credits_and_reads_only_the_new_embedded_cue_field():
     stored = {
         "album_artist": "\u5929\u9580", "artist": "??", "artists": ["??"], "title": "Main Theme",
         "metadata_schema_version": 6, "release_date": None, "compilation_tag": None,
     }
-    assert metadata.schema_upgrade_requires_file_read(stored) is False
-    upgraded = metadata.upgrade_stored_file_entry(stored)
+    assert metadata.schema_upgrade_requires_file_read(stored) is True
+    upgraded = metadata.upgrade_stored_file_entry(stored, {
+        "title": "Fresh title must not replace stored title",
+        "embedded_cue": "FILE image.flac WAVE",
+        "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION,
+    })
     assert upgraded == {
         **stored, "artist": "\u5929\u9580", "artists": ["\u5929\u9580"],
         "metadata_schema_version": metadata.FILE_METADATA_SCHEMA_VERSION,
+        "embedded_cue": "FILE image.flac WAVE",
         "text_corrections": {"artist": {"original": "??", "corrected": "\u5929\u9580", "kind": "lost_characters"}},
     }
     assert metadata.entry_with_original_tag_text(upgraded)["artist"] == "??"

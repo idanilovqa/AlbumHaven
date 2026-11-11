@@ -347,6 +347,7 @@ def test_scan_library_file_cache_reuses_unchanged_cached_entry(tmp_path: Path, m
         "disc_number_raw": None,
         "year": 2000,
         "release_date": "2000-01-01",
+        "embedded_cue": None,
         "edition": "",
         "album_rating": 0,
         "duration_seconds": 180,
@@ -712,6 +713,7 @@ def test_scan_library_file_cache_reuses_existing_cover_validation_for_multiple_c
         "disc_number_raw": None,
         "year": 2000,
         "release_date": "2000-01-01",
+        "embedded_cue": None,
         "edition": "",
         "album_rating": 0,
         "duration_seconds": 180,
@@ -775,6 +777,7 @@ def test_incremental_scan_reuses_unchanged_persisted_cover_validation(tmp_path: 
         "disc_number_raw": None,
         "year": 2000,
         "release_date": "2000-01-01",
+        "embedded_cue": None,
         "edition": "",
         "album_rating": 0,
         "duration_seconds": 180,
@@ -860,6 +863,7 @@ def test_scan_library_file_cache_tracks_eta_and_album_folder_progress(tmp_path: 
             "disc_number_raw": None,
             "year": 2000,
             "release_date": "2000-01-01",
+            "embedded_cue": None,
             "edition": "",
             "album_rating": 0,
             "duration_seconds": 180,
@@ -986,6 +990,7 @@ def test_cache_aware_incremental_scan_skips_unchanged_partial_album_publication(
             "disc_number_raw": None,
             "year": 2000,
             "release_date": "2000-01-01",
+            "embedded_cue": None,
             "edition": "",
             "album_rating": 0,
             "duration_seconds": 180,
@@ -1147,6 +1152,7 @@ def test_scan_library_file_cache_recovers_unchanged_v2_unknown_album_metadata(
         if complete:
             entry["metadata_schema_version"] = FILE_METADATA_SCHEMA_VERSION
             entry["release_date"] = None
+            entry["embedded_cue"] = None
         return entry
 
     legacy_entry = cached_entry(legacy_track, rating=None, complete=True)
@@ -1764,6 +1770,7 @@ def test_cache_aware_scan_resolves_root_provenance_once_per_track_folder(
                 "disc_number": 1,
                 "year": 2026,
                 "release_date": None,
+                "embedded_cue": None,
                 "mtime": 1.0,
                 "size": album_index + 1,
                 "cover_path": None,
@@ -1853,6 +1860,147 @@ def test_scan_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path: P
 
     assert set(updated) == {str(first), str(second)}
     assert all(entry["cover_path"] is None for entry in updated.values())
+
+
+def test_discover_cue_sources_reads_contained_external_single_and_multi_file_programs(tmp_path):
+    from music_app.services.library_indexing import discover_cue_sources
+
+    fixture_root = Path(__file__).parent / "fixtures" / "cue_programs"
+    for name in ("single-image.cue", "multi-file.cue"):
+        (tmp_path / name).write_bytes((fixture_root / name).read_bytes())
+    media = []
+    for name in ("album.flac", "disc1.flac", "disc2.flac"):
+        path = tmp_path / name
+        path.write_bytes(b"synthetic audio")
+        media.append(path)
+
+    discovered = discover_cue_sources(
+        tmp_path,
+        [tmp_path / "single-image.cue", tmp_path / "multi-file.cue", tmp_path / "single-image.cue", *media],
+        supported_extensions={".flac"},
+    )
+
+    assert [(candidate.source_kind, candidate.source_identity) for candidate in discovered] == [
+        ("external", "multi-file.cue"),
+        ("external", "single-image.cue"),
+    ]
+    assert [[path.name for path in candidate.media_paths] for candidate in discovered] == [
+        ["disc1.flac", "disc2.flac"],
+        ["album.flac"],
+    ]
+    assert all(candidate.source_bytes and len(candidate.revision_sha256) == 64 for candidate in discovered)
+    assert all(not candidate.program.problems for candidate in discovered)
+
+
+@pytest.mark.parametrize(
+    ("file_ref", "create_name", "problem"),
+    [
+        ("../outside.flac", "outside.flac", "escapes"),
+        (r"C:\\outside.flac", None, "absolute"),
+        ("missing.flac", None, "missing"),
+        ("notes.txt", "notes.txt", "unsupported"),
+    ],
+)
+def test_discover_cue_sources_rejects_uncontained_missing_and_unsupported_media(
+    tmp_path, file_ref, create_name, problem,
+):
+    from music_app.services.library_indexing import discover_cue_sources
+
+    root = tmp_path / "root"
+    root.mkdir()
+    if create_name:
+        target = (tmp_path if file_ref.startswith("..") else root) / create_name
+        target.write_bytes(b"fixture")
+    cue = root / "bad.cue"
+    cue.write_text(
+        f'FILE "{file_ref}" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n',
+        encoding="utf-8",
+    )
+
+    [candidate] = discover_cue_sources(root, [cue], supported_extensions={".flac"})
+
+    assert candidate.media_paths == ()
+    assert any(problem in message.lower() for message in candidate.program.problems)
+    assert str(tmp_path) not in " ".join(candidate.program.problems)
+
+
+def test_discover_cue_sources_reads_embedded_text_from_existing_metadata(tmp_path):
+    from music_app.services.library_indexing import discover_cue_sources
+
+    audio = tmp_path / "image.flac"
+    audio.write_bytes(b"synthetic audio")
+    text = 'FILE "image.flac" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n'
+
+    [candidate] = discover_cue_sources(
+        tmp_path,
+        [audio],
+        metadata_by_path={str(audio): {"embedded_cue": text}},
+        supported_extensions={".flac"},
+    )
+
+    assert candidate.source_kind == "embedded"
+    assert candidate.source_identity == "image.flac#embedded-cue"
+    assert candidate.source_bytes == text.encode("utf-8")
+    assert candidate.media_paths == (audio.resolve(),)
+
+
+def test_discover_cue_sources_reports_non_audio_program_without_media_projection(tmp_path):
+    from music_app.services.library_indexing import discover_cue_sources
+
+    fixture = Path(__file__).parent / "fixtures" / "cue_programs" / "non-audio.cue"
+    cue = tmp_path / fixture.name
+    cue.write_bytes(fixture.read_bytes())
+    (tmp_path / "data.bin").write_bytes(b"data")
+
+    [candidate] = discover_cue_sources(tmp_path, [cue], supported_extensions={".flac"})
+
+    assert candidate.media_paths == ()
+    assert any("non-audio" in problem.lower() for problem in candidate.program.problems)
+
+
+def test_discover_cue_sources_rejects_oversized_external_source_before_reading_it(tmp_path):
+    from music_app.services.library_indexing import discover_cue_sources
+
+    cue = tmp_path / "oversized.cue"
+    cue.write_bytes(b"12345")
+
+    [candidate] = discover_cue_sources(tmp_path, [cue], max_bytes=4)
+
+    assert candidate.source_bytes == b""
+    assert candidate.media_paths == ()
+    assert candidate.program.problems == ("CUE source exceeds the size limit.",)
+
+
+def test_full_scan_discovers_cue_without_projecting_it_as_playable_media(tmp_path, monkeypatch):
+    album = tmp_path / "Artist" / "Album"
+    album.mkdir(parents=True)
+    audio = album / "image.flac"
+    cue = album / "album.cue"
+    audio.write_bytes(b"synthetic audio")
+    cue.write_text(
+        'FILE "image.flac" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", lambda path: {
+        "path": str(path), "title": "Image", "album": "Album", "artist": "Artist",
+        "album_artist": "Artist", "release_date": None, "compilation_tag": None,
+        "embedded_cue": None, "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+        "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION, "cover_path": None,
+    })
+
+    state = {"file_cache": {}}
+    file_cache, _ = library_indexing.scan_library_file_cache(
+        state,
+        roots=[tmp_path],
+        supported_extensions={".flac"},
+        image_extensions={".jpg"},
+        exception_overrides={},
+    )
+
+    assert set(file_cache) == {str(audio)}
+    [candidate] = state["_cue_source_candidates"]
+    assert candidate.source_identity == "Artist/Album/album.cue"
+    assert candidate.media_paths == (audio.resolve(),)
 
 
 def test_scan_rereads_unchanged_files_from_a_historical_reader_version(tmp_path: Path, monkeypatch):

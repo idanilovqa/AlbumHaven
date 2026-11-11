@@ -5475,6 +5475,10 @@ function gallerySourceScopesEqual(left = [], right = []) {
   return left.length === right.length && left.every(source => right.includes(source));
 }
 
+function gallerySourceScopeKey(categories = []) {
+  return [...new Set(categories)].sort().join('|');
+}
+
 function withActiveGallerySources(view, mainState) {
   return mainState ? { ...view, gallery_scope: 'all', visible_library_categories: activeGallerySourceCategories(mainState) } : view;
 }
@@ -5542,7 +5546,7 @@ function resolveGalleryBarContext(config = {}) {
     : summaryContext;
 }
 
-function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
+function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups, sourceTotalsByScope = {}) {
   if (view.selected_artist) return mountedTotals;
   let rootTotals = mountedTotals;
   if (Array.isArray(groups)) {
@@ -5562,7 +5566,11 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
   const activeSources = filterState ? activeGallerySourceCategories(filterState) : [];
   if (activeSources.length && !gallerySourceScopesEqual(activeSources, loadedSources)
     && (view.initial_view_partial || activeSources.some(source => !loadedSources.includes(source)))) {
-    return { artistCount: null, albumCount: null };
+    const cached = sourceTotalsByScope[gallerySourceScopeKey(activeSources)];
+    return cached || {
+      artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : rootTotals.artistCount,
+      albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : rootTotals.albumCount,
+    };
   }
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
@@ -6104,6 +6112,8 @@ const state = {
     relatedFilterDefaultPrimaryGroups: [],
     relatedFilterDefaultFamilyGroups: [],
     mainGalleryVisibleCategories: ['main_library', 'hoard', 'new_arrivals'],
+    sourceTotalsByScope: {},
+    pendingSourceTotalScopes: new Set(),
   },
   utility: {
     activeTab: 'problematic-files',
@@ -7527,6 +7537,64 @@ function ensureGalleryMainState() {
   return state.gallery.mainState;
 }
 
+function cacheGallerySourceTotals(categories, payload) {
+  if (typeof state === 'undefined' || !state?.gallery) return false;
+  const artistCount = Number(payload?.artist_count ?? payload?.artistCount);
+  const albumCount = Number(payload?.album_count ?? payload?.albumCount);
+  if (!Number.isFinite(artistCount) || !Number.isFinite(albumCount)) return false;
+  state.gallery.sourceTotalsByScope ||= {};
+  state.gallery.sourceTotalsByScope[gallerySourceScopeKey(categories)] = { artistCount, albumCount };
+  return true;
+}
+
+function cacheCurrentGallerySourceTotals() {
+  if (typeof state === 'undefined' || !state?.view) return false;
+  const categories = state.view.loaded_library_categories || state.view.visible_library_categories;
+  if (!Array.isArray(categories)) return false;
+  return cacheGallerySourceTotals(categories, state.view);
+}
+
+async function prefetchGallerySourceTotals(categories) {
+  if (typeof state === 'undefined' || !state?.gallery || !state?.view
+    || typeof fetch !== 'function' || state.view.query || state.view.selected_artist) return;
+  const normalized = ['main_library', 'new_arrivals', 'hoard'].filter(source => categories.includes(source));
+  const key = gallerySourceScopeKey(normalized);
+  state.gallery.sourceTotalsByScope ||= {};
+  state.gallery.pendingSourceTotalScopes ||= new Set();
+  if (state.gallery.sourceTotalsByScope[key] || state.gallery.pendingSourceTotalScopes.has(key)) return;
+  if (!normalized.length) {
+    state.gallery.sourceTotalsByScope[key] = { artistCount: 0, albumCount: 0 };
+    return;
+  }
+  state.gallery.pendingSourceTotalScopes.add(key);
+  try {
+    const params = new URLSearchParams({ omit_sidebar: '1' });
+    normalized.forEach(source => params.append('category', source));
+    const response = await fetch(`/home-data?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return;
+    if (cacheGallerySourceTotals(normalized, await response.json())
+      && key === gallerySourceScopeKey(activeGallerySourceCategories(ensureGalleryMainState()))) {
+      updateGalleryMainChrome();
+    }
+  } catch {
+    // Keep the last authoritative total when background prefetch is unavailable.
+  } finally {
+    state.gallery.pendingSourceTotalScopes.delete(key);
+  }
+}
+
+function prefetchGallerySourceNeighborTotals(mainState = ensureGalleryMainState()) {
+  if (typeof state === 'undefined' || !state?.gallery || !state?.view) return;
+  cacheCurrentGallerySourceTotals();
+  const current = activeGallerySourceCategories(mainState);
+  ['main_library', 'new_arrivals', 'hoard'].forEach(source => {
+    const next = current.includes(source)
+      ? current.filter(category => category !== source)
+      : [...current, source];
+    void prefetchGallerySourceTotals(next);
+  });
+}
+
 function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
   const mainState = ensureGalleryMainState();
   const selectionChanged = String(previousView.selected_artist || '') !== String(nextView.selected_artist || '');
@@ -7907,7 +7975,14 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  cacheCurrentGallerySourceTotals();
+  const summaryTotals = resolveGallerySummaryTotals(
+    state.view,
+    model.totals,
+    state.gallery.mainState,
+    model.groups,
+    state.gallery.sourceTotalsByScope,
+  );
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
     primaryArtist,
@@ -7990,6 +8065,7 @@ function updateGalleryMainChrome() {
 }
 
 function transitionGalleryMain(action) {
+  cacheCurrentGallerySourceTotals();
   const previousView = ensureGalleryMainState().view;
   const nextState = applyGalleryClientTransition({ state: state.gallery.mainState, action, location: window.location, history: window.history });
   // Loose-track payloads have no per-track source provenance. Refresh their
@@ -7997,6 +8073,7 @@ function transitionGalleryMain(action) {
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
   state.gallery.mainState = nextState;
+  if (action.type === 'toggle-source') prefetchGallerySourceNeighborTotals(nextState);
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;
     persistCurrentGalleryDisplayPreferences(state.view);
@@ -8166,6 +8243,7 @@ function handleGalleryMainClick(event) {
 function initGalleryMain() {
   if (typeof installPanelSelectionBoundary === 'function') installPanelSelectionBoundary();
   ensureGalleryMainState();
+  prefetchGallerySourceNeighborTotals();
   galleryMainSurfaceController = createAnchoredSurfaceController();
   const panel = document.querySelector('[data-artist-family-panel]');
   const player = document.querySelector('[data-shell-slot="bottom_player"]');

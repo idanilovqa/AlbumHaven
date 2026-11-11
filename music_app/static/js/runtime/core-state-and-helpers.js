@@ -142,6 +142,8 @@ const state = {
     relatedFilterDefaultPrimaryGroups: [],
     relatedFilterDefaultFamilyGroups: [],
     mainGalleryVisibleCategories: ['main_library', 'hoard', 'new_arrivals'],
+    sourceTotalsByScope: {},
+    pendingSourceTotalScopes: new Set(),
   },
   utility: {
     activeTab: 'problematic-files',

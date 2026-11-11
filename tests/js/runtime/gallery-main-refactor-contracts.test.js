@@ -1776,15 +1776,70 @@ test('full root gallery summary preserves client-filtered and query totals', () 
     { ...view, query: 'Artist' }, filtered, context.createGalleryMainState(),
   ), filtered);
 });
-test('a source switch over a partial gallery shows no count until the real totals arrive', () => {
+test('a source switch over a partial gallery keeps an immediate exact count below the title', () => {
   const context = loadRuntime();
   const partial = { initial_view_partial: true, artist_count: 120, album_count: 900, loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'] };
   const mounted = { artistCount: 80, albumCount: 200 };
   const hoardOnly = context.createGalleryMainState({ sources: { main_library: false, new_arrivals: false, hoard: true } });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly))), { artistCount: null, albumCount: null });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly, null, {
+      hoard: { artistCount: 7, albumCount: 11 },
+    }))),
+    { artistCount: 7, albumCount: 11 },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(partial, mounted, hoardOnly))),
+    { artistCount: 120, albumCount: 900 },
+  );
   const complete = { ...partial, initial_view_partial: false };
   assert.equal(context.resolveGallerySummaryTotals(complete, mounted, hoardOnly), mounted);
+});
+
+test('source total prefetch caches the exact Postgres count and refreshes the active header', async () => {
+  const requests = [];
+  const state = {
+    gallery: {
+      mainState: {
+        sources: { main_library: false, new_arrivals: false, hoard: true },
+      },
+      sourceTotalsByScope: {},
+      pendingSourceTotalScopes: new Set(),
+    },
+    view: {
+      query: '',
+      selected_artist: '',
+      loaded_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+      artist_count: 120,
+      album_count: 900,
+    },
+  };
+  let failPrefetch = true;
+  const context = loadRuntime({
+    state,
+    URLSearchParams,
+    fetch: async (url) => {
+      requests.push(url);
+      if (failPrefetch) throw new Error('offline');
+      return { ok: true, json: async () => ({ artist_count: 7, album_count: 11 }) };
+    },
+  });
+  let headerRefreshes = 0;
+  context.updateGalleryMainChrome = () => { headerRefreshes += 1; };
+
+  await context.prefetchGallerySourceTotals(['hoard']);
+  assert.equal(state.gallery.pendingSourceTotalScopes.size, 0);
+  failPrefetch = false;
+  await context.prefetchGallerySourceTotals(['hoard']);
+
+  assert.deepEqual(requests, [
+    '/home-data?omit_sidebar=1&category=hoard',
+    '/home-data?omit_sidebar=1&category=hoard',
+  ]);
+  assert.deepEqual(plain(state.gallery.sourceTotalsByScope), {
+    hoard: { artistCount: 7, albumCount: 11 },
+  });
+  assert.equal(headerRefreshes, 1);
 });
 test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
   const name = { textContent: '' };

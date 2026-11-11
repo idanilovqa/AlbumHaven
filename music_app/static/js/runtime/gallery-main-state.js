@@ -161,6 +161,10 @@ function gallerySourceScopesEqual(left = [], right = []) {
   return left.length === right.length && left.every(source => right.includes(source));
 }
 
+function gallerySourceScopeKey(categories = []) {
+  return [...new Set(categories)].sort().join('|');
+}
+
 function withActiveGallerySources(view, mainState) {
   return mainState ? { ...view, gallery_scope: 'all', visible_library_categories: activeGallerySourceCategories(mainState) } : view;
 }
@@ -228,7 +232,7 @@ function resolveGalleryBarContext(config = {}) {
     : summaryContext;
 }
 
-function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
+function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups, sourceTotalsByScope = {}) {
   if (view.selected_artist) return mountedTotals;
   let rootTotals = mountedTotals;
   if (Array.isArray(groups)) {
@@ -248,7 +252,11 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
   const activeSources = filterState ? activeGallerySourceCategories(filterState) : [];
   if (activeSources.length && !gallerySourceScopesEqual(activeSources, loadedSources)
     && (view.initial_view_partial || activeSources.some(source => !loadedSources.includes(source)))) {
-    return { artistCount: null, albumCount: null };
+    const cached = sourceTotalsByScope[gallerySourceScopeKey(activeSources)];
+    return cached || {
+      artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : rootTotals.artistCount,
+      albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : rootTotals.albumCount,
+    };
   }
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length

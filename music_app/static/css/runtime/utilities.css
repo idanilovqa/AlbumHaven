@@ -1609,6 +1609,22 @@
 .tag-editor-folder-location > .tag-editor-open-folder { flex: none; margin-left: auto; }
 /* "Load all tracks from the folder" sits right after the folder path, wrapping under it only when narrow. */
 .tag-editor-folder-copy { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0; }
+.tag-editor-folder-load {
+  background: transparent;
+  border: 0;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: inherit;
+}
+.tag-editor-folder-load:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
 .tag-editor-track-name { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
 .tag-editor-track-folder { color: var(--muted); font-size: 0.7rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-editor-folder-path {

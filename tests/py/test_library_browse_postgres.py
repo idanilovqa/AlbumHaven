@@ -18587,3 +18587,25 @@ def test_a_display_correction_is_a_problematic_file_until_written():
     assert list(_physical_file_problem_reasons({})) == []
 
 
+def test_album_sql_projects_active_cue_tracks_and_hides_their_whole_image_rows():
+    from music_app.services import library_browse_postgres as browse
+
+    detail_sql = " ".join(browse._album_detail_sql().split()).casefold()
+    eligible_sql = " ".join(browse._eligible_album_tracks_cte_sql().split()).casefold()
+    selected_sql = " ".join(browse._selected_artist_sql().split()).casefold()
+    startup_sql = " ".join(browse._root_startup_payload_sql(6).split()).casefold()
+
+    for sql in (detail_sql, eligible_sql, selected_sql, startup_sql):
+        assert "left join library.local_track_files" in sql
+        assert "library.cue_track_segments" in sql
+        assert "library.cue_programs" in sql
+        assert "library.cue_media_sources" in sql
+        assert "is_active is true" in sql
+        assert "is_valid is true" in sql
+        assert "active_cue_program.library_id = active_cue_media.library_id" in sql
+    for sql in (detail_sql, selected_sql):
+        assert "case when library.cue_programs.id is null then library.local_track_files.metadata" in sql
+    assert "cue_segment_ref" in detail_sql
+    assert "cue_source_kind" in detail_sql
+    assert "not exists" in detail_sql
+

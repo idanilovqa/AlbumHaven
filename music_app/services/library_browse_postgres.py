@@ -8689,9 +8689,19 @@ def _eligible_album_tracks_cte_sql(
           join bootstrap_context
             on bootstrap_context.library_id = library.local_tracks.library_id
 {candidate_album_join}
-          join library.local_track_files
+          left join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
            and library.local_track_files.scan_cache_stale is false
+          left join library.cue_track_segments
+            on library.cue_track_segments.track_id = library.local_tracks.id
+          left join library.cue_programs
+            on library.cue_programs.id = library.cue_track_segments.program_id
+           and library.cue_programs.library_id = library.local_tracks.library_id
+           and library.cue_programs.is_active is true
+           and library.cue_programs.is_valid is true
+          left join library.cue_media_sources
+            on library.cue_media_sources.id = library.cue_track_segments.media_source_id
+           and library.cue_media_sources.library_id = library.local_tracks.library_id
           left join lateral jsonb_to_record(
             case when library.local_track_files.scan_file_entry_is_object is true
               then library.local_track_files.metadata #> '{{scan_cache,file_entry}}'
@@ -8715,6 +8725,28 @@ def _eligible_album_tracks_cte_sql(
             ''
           ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
+          and (
+            (
+              library.cue_programs.id is not null
+              and library.cue_media_sources.id is not null
+            )
+            or (
+              library.local_track_files.id is not null
+              and not exists (
+                select 1
+                from library.cue_media_sources active_cue_media
+                join library.cue_track_segments active_cue_segment
+                  on active_cue_segment.media_source_id = active_cue_media.id
+                join library.cue_programs active_cue_program
+                  on active_cue_program.id = active_cue_segment.program_id
+                 and active_cue_program.library_id = active_cue_media.library_id
+                 and active_cue_program.is_active is true
+                 and active_cue_program.is_valid is true
+                where active_cue_media.library_id = library.local_tracks.library_id
+                  and active_cue_media.private_path = library.local_track_files.private_path
+              )
+            )
+          )
           {track_grouping}
         )
     """.strip()
@@ -8958,9 +8990,18 @@ def _selected_artist_sql() -> str:
           library.local_tracks.disc_number,
           library.local_tracks.track_number,
           library.local_tracks.duration_seconds,
-          library.local_track_files.private_path as file_private_path,
-          library.local_track_files.metadata #> '{{scan_cache,file_entry}}' as file_entry,
-          library.local_track_files.library_root_id as file_library_root_id,
+          case when library.cue_programs.id is not null
+            then library.local_tracks.track_key end as cue_segment_ref,
+          library.cue_programs.source_kind as cue_source_kind,
+          case when library.cue_programs.id is null
+            then library.local_track_files.private_path end as file_private_path,
+          case when library.cue_programs.id is null
+            then library.local_track_files.metadata #> '{{scan_cache,file_entry}}'
+          end as file_entry,
+          coalesce(
+            library.local_track_files.library_root_id,
+            library.cue_media_sources.library_root_id
+          ) as file_library_root_id,
           library.local_track_files.metadata ->> 'library_root_category' as file_library_root_category,
           exception_override.override_payload ->> 'exception_type' as exception_type,
           exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
@@ -8976,9 +9017,19 @@ def _selected_artist_sql() -> str:
         join library.local_tracks
           on library.local_tracks.library_id = selected_artist_albums.library_id
          and library.local_tracks.album_id = selected_artist_albums.album_id
-        join library.local_track_files
+        left join library.local_track_files
           on library.local_track_files.track_id = library.local_tracks.id
          and library.local_track_files.scan_cache_stale is false
+        left join library.cue_track_segments
+          on library.cue_track_segments.track_id = library.local_tracks.id
+        left join library.cue_programs
+          on library.cue_programs.id = library.cue_track_segments.program_id
+         and library.cue_programs.library_id = library.local_tracks.library_id
+         and library.cue_programs.is_active is true
+         and library.cue_programs.is_valid is true
+        left join library.cue_media_sources
+          on library.cue_media_sources.id = library.cue_track_segments.media_source_id
+         and library.cue_media_sources.library_id = library.local_tracks.library_id
         left join lateral (
           select library.exception_overrides.override_payload
           from library.exception_overrides
@@ -8996,6 +9047,28 @@ def _selected_artist_sql() -> str:
             library.exception_overrides.id
           limit 1
         ) exception_override on true
+        where (
+          (
+            library.cue_programs.id is not null
+            and library.cue_media_sources.id is not null
+          )
+          or (
+            library.local_track_files.id is not null
+            and not exists (
+              select 1
+              from library.cue_media_sources active_cue_media
+              join library.cue_track_segments active_cue_segment
+                on active_cue_segment.media_source_id = active_cue_media.id
+              join library.cue_programs active_cue_program
+                on active_cue_program.id = active_cue_segment.program_id
+                 and active_cue_program.library_id = active_cue_media.library_id
+               and active_cue_program.is_active is true
+               and active_cue_program.is_valid is true
+              where active_cue_media.library_id = library.local_tracks.library_id
+                and active_cue_media.private_path = library.local_track_files.private_path
+            )
+          )
+        )
         order by
           selected_artist_albums.album_release_year nulls last,
           selected_artist_albums.album_title,
@@ -9146,9 +9219,18 @@ def _album_detail_sql() -> str:
           library.local_tracks.disc_number,
           library.local_tracks.track_number,
           library.local_tracks.duration_seconds,
-          library.local_track_files.private_path as file_private_path,
-          library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
-          library.local_track_files.library_root_id as file_library_root_id,
+          case when library.cue_programs.id is not null
+            then library.local_tracks.track_key end as cue_segment_ref,
+          library.cue_programs.source_kind as cue_source_kind,
+          case when library.cue_programs.id is null
+            then library.local_track_files.private_path end as file_private_path,
+          case when library.cue_programs.id is null
+            then library.local_track_files.metadata #> '{scan_cache,file_entry}'
+          end as file_entry,
+          coalesce(
+            library.local_track_files.library_root_id,
+            library.cue_media_sources.library_root_id
+          ) as file_library_root_id,
           library.local_track_files.metadata ->> 'library_root_category' as file_library_root_category,
           exception_override.override_payload ->> 'exception_type' as exception_type,
           exception_override.override_payload ->> 'custom_collection_name' as custom_collection_name,
@@ -9178,9 +9260,19 @@ def _album_detail_sql() -> str:
         left join library.local_artists track_artists
           on track_artists.library_id = library.local_tracks.library_id
          and track_artists.id = library.local_tracks.artist_id
-        join library.local_track_files
+        left join library.local_track_files
           on library.local_track_files.track_id = library.local_tracks.id
          and library.local_track_files.scan_cache_stale is false
+        left join library.cue_track_segments
+          on library.cue_track_segments.track_id = library.local_tracks.id
+        left join library.cue_programs
+          on library.cue_programs.id = library.cue_track_segments.program_id
+         and library.cue_programs.library_id = library.local_tracks.library_id
+         and library.cue_programs.is_active is true
+         and library.cue_programs.is_valid is true
+        left join library.cue_media_sources
+          on library.cue_media_sources.id = library.cue_track_segments.media_source_id
+         and library.cue_media_sources.library_id = library.local_tracks.library_id
         left join lateral (
           select library.exception_overrides.override_payload
           from library.exception_overrides
@@ -9205,6 +9297,28 @@ def _album_detail_sql() -> str:
         left join ignored_repair_rollup
           on ignored_repair_rollup.file_private_path = library.local_track_files.private_path
         where library.local_albums.album_key = %(album_key)s
+          and (
+            (
+              library.cue_programs.id is not null
+              and library.cue_media_sources.id is not null
+            )
+            or (
+              library.local_track_files.id is not null
+              and not exists (
+                select 1
+                from library.cue_media_sources active_cue_media
+                join library.cue_track_segments active_cue_segment
+                  on active_cue_segment.media_source_id = active_cue_media.id
+                join library.cue_programs active_cue_program
+                  on active_cue_program.id = active_cue_segment.program_id
+                 and active_cue_program.library_id = active_cue_media.library_id
+                 and active_cue_program.is_active is true
+                 and active_cue_program.is_valid is true
+                where active_cue_media.library_id = library.local_tracks.library_id
+                  and active_cue_media.private_path = library.local_track_files.private_path
+              )
+            )
+          )
         order by
           library.local_tracks.disc_number nulls last,
           library.local_tracks.track_number nulls last,
@@ -9407,9 +9521,19 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
           from library.local_tracks
           join bootstrap_context
             on bootstrap_context.library_id = library.local_tracks.library_id
-          join library.local_track_files
+          left join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
            and library.local_track_files.scan_cache_stale is false
+          left join library.cue_track_segments
+            on library.cue_track_segments.track_id = library.local_tracks.id
+          left join library.cue_programs
+            on library.cue_programs.id = library.cue_track_segments.program_id
+           and library.cue_programs.library_id = library.local_tracks.library_id
+           and library.cue_programs.is_active is true
+           and library.cue_programs.is_valid is true
+          left join library.cue_media_sources
+            on library.cue_media_sources.id = library.cue_track_segments.media_source_id
+           and library.cue_media_sources.library_id = library.local_tracks.library_id
           left join lateral jsonb_to_record(
             case when library.local_track_files.scan_file_entry_is_object is true
               then library.local_track_files.metadata #> '{{scan_cache,file_entry}}'
@@ -9433,6 +9557,28 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             ''
           ))) not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')
           and coalesce(source_file_classification.local_album_membership_problem, '') = ''
+          and (
+            (
+              library.cue_programs.id is not null
+              and library.cue_media_sources.id is not null
+            )
+            or (
+              library.local_track_files.id is not null
+              and not exists (
+                select 1
+                from library.cue_media_sources active_cue_media
+                join library.cue_track_segments active_cue_segment
+                  on active_cue_segment.media_source_id = active_cue_media.id
+                join library.cue_programs active_cue_program
+                  on active_cue_program.id = active_cue_segment.program_id
+                 and active_cue_program.library_id = active_cue_media.library_id
+                 and active_cue_program.is_active is true
+                 and active_cue_program.is_valid is true
+                where active_cue_media.library_id = library.local_tracks.library_id
+                  and active_cue_media.private_path = library.local_track_files.private_path
+              )
+            )
+          )
         ),
         artist_album_rows as materialized (
           select distinct

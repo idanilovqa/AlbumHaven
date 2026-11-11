@@ -291,3 +291,18 @@ def test_live_rescan_restores_files_back_in_place_and_reports_a_deleted_album(wa
     assert _rescan(fixture, keys[deleted["path"]]) == {"status": "missing", "reason": "deleted"}
     assert _files(fixture)[deleted["path"]][:2] == (True, "deleted")
     assert _detail(fixture, keys[deleted["path"]])["missing_reason"] == "deleted"
+
+
+def test_live_rescan_uses_retained_root_identity_when_root_link_is_missing(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    release = fixture.entry("Howard Shore/The Hobbit/01.flac", album="The Hobbit")
+    fixture.seed(release)
+    album_key = _files(fixture)[release["path"]][2]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.local_track_files set library_root_id = null where private_path = %s",
+            (release["path"],),
+        )
+
+    assert _rescan(fixture, album_key, {release["path"]: release})["status"] == "restored"

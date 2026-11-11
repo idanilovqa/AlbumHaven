@@ -149,7 +149,7 @@ _ALBUM_FILES_SQL = """
     from library.local_albums albums
     join library.local_tracks tracks on tracks.album_id = albums.id
     join library.local_track_files files on files.track_id = tracks.id
-    join library.library_roots roots on roots.id = files.library_root_id
+    left join library.library_roots roots on roots.id = files.library_root_id
     join app.bootstrap_owners owners on owners.owner_key = 'local-bootstrap-owner'
     join library.libraries libraries
       on libraries.id = albums.library_id and libraries.owner_account_id = owners.account_id

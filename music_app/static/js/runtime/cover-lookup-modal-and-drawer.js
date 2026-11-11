@@ -3459,6 +3459,50 @@ const coverLookupSplitReleasesByTask = new Map();
 // UI-5 (owner): once the user chooses a split release for a notification, that choice is final.
 const coverLookupSplitChoiceByTask = new Map();
 
+function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
+  const originalPaths = getAlbumTrackPaths(originalAlbum);
+  if (originalPaths.size < 2) return null;
+  const releasesByPaths = new Map();
+  (Array.isArray(updatedAlbums) ? updatedAlbums : []).forEach((album) => {
+    const paths = getAlbumTrackPaths(album);
+    if (
+      paths.size > 0
+      && paths.size < originalPaths.size
+      && Array.from(paths).every((path) => originalPaths.has(path))
+    ) {
+      releasesByPaths.set(Array.from(paths).sort().join('\n'), {
+        ...album,
+        track_count: Number(album?.track_count || 0) || paths.size,
+      });
+    }
+  });
+  const releases = Array.from(releasesByPaths.values());
+  const coveredPaths = new Set(releases.flatMap((album) => Array.from(getAlbumTrackPaths(album))));
+  if (releases.length < 2 || coveredPaths.size !== originalPaths.size) return null;
+  const taskIds = [];
+  (state.coverLookup.tasks || []).forEach((task) => {
+    const taskPaths = getAlbumTrackPaths(task?.album_payload);
+    if (
+      task?.id
+      && taskPaths.size === originalPaths.size
+      && Array.from(taskPaths).every((path) => originalPaths.has(path))
+    ) {
+      const taskId = String(task.id);
+      coverLookupSplitReleasesByTask.set(taskId, releases);
+      taskIds.push(taskId);
+    }
+  });
+  return taskIds.length ? { taskIds, releases } : null;
+}
+
+function clearCoverLookupOptimisticSplit(recordedSplit) {
+  (recordedSplit?.taskIds || []).forEach((taskId) => {
+    if (coverLookupSplitReleasesByTask.get(taskId) === recordedSplit.releases) {
+      coverLookupSplitReleasesByTask.delete(taskId);
+    }
+  });
+}
+
 function handleCoverLookupSplitResponse(releases) {
   const taskId = String(state.coverLookup.modal.taskId || '');
   const album = state.coverLookup.modal.album;
@@ -3496,7 +3540,7 @@ function buildCoverLookupSplitReleaseItemsHtml(releases) {
       year: String(release.year || ''),
       artworkHtml: buildUtilityAlbumArtbox(album, { label: `Artwork for ${label}` }),
       count: `${Number(release.track_count || 0)} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}`,
-      attributes: { 'data-cover-lookup-split-release': String(release.album_id || '') },
+      attributes: { 'data-cover-lookup-split-release': String(release.album_id || release.key || '') },
     });
   }).join('');
 }
@@ -3523,7 +3567,9 @@ async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileShee
     },
     onSubmit: () => chosenId,
   });
-  const found = releases.find((candidate) => String(candidate?.album_id || '') === String(chosen || ''));
+  const found = releases.find((candidate) => (
+    String(candidate?.album_id || candidate?.key || '') === String(chosen || '')
+  ));
   if (!found) return false;
   const release = { ...found, identity_resolution: 'album_split_choice' };
   if (taskId) coverLookupSplitChoiceByTask.set(taskId, release);

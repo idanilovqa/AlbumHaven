@@ -5992,7 +5992,7 @@ test('watchSaveTask keeps default callers on ordinary anchor preservation', asyn
   );
 });
 
-test('watchSaveTask persists a failed tag edit and exposes Log History', async () => {
+test('watchSaveTask keeps Edit Tags closed after a late failure and exposes Log History', async () => {
   const context = loadHelpers();
   const originalAlbum = { key: 'artist::album', name: 'Album', tracks: [] };
   const tagEditorDraft = { album: originalAlbum, values: {} };
@@ -6004,6 +6004,8 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   const persistedEntries = [];
   const alerts = [];
   const restoredDrafts = [];
+  const clearedOptimisticSplits = [];
+  const coverLookupOptimisticSplit = { taskIds: ['cover-task-1'] };
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -6018,11 +6020,17 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   context.prependUtilityLogHistoryEntry = async (entry) => persistedEntries.push(entry);
   context.showRepairAlert = (...args) => alerts.push(args);
   context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
+  context.clearCoverLookupOptimisticSplit = (split) => clearedOptimisticSplits.push(split);
 
-  await context.watchSaveTask('failed-tag-task', { originalAlbum, tagEditorDraft });
+  await context.watchSaveTask('failed-tag-task', {
+    originalAlbum,
+    tagEditorDraft,
+    coverLookupOptimisticSplit,
+  });
 
   assert.deepEqual(persistedEntries, [logEntry]);
-  assert.deepEqual(restoredDrafts, [tagEditorDraft]);
+  assert.deepEqual(restoredDrafts, []);
+  assert.deepEqual(clearedOptimisticSplits, [coverLookupOptimisticSplit]);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], logEntry.error);
   assert.equal(alerts[0][1], 'error');

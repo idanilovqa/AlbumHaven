@@ -122,6 +122,67 @@ test('opening a compact album does not inherit an unrelated compact lookup task'
   assert.equal(context.state.coverLookup.modal.taskId, '');
 });
 
+test('an optimistic album split sends its existing notification straight to the release chooser', async () => {
+  class TestButton {}
+  const firstPath = 'N:/Music/Artist/Album/01.flac';
+  const secondPath = 'N:/Music/Artist/Album/02.flac';
+  const oldAlbum = { album_id: 40, tracks: [{ path: firstPath }, { path: secondPath }] };
+  const releases = [
+    { key: 'artist::first release', name: 'First Release', tracks: [{ path: firstPath }] },
+    { key: 'artist::second release', name: 'Second Release', tracks: [{ path: secondPath }] },
+  ];
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [{ id: 'split-task', album_payload: oldAlbum }],
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async (current, options) => {
+    choices.push({ current, options });
+  };
+
+  const optimisticSplit = context.recordCoverLookupOptimisticSplit(oldAlbum, releases);
+  await context.openCoverLookupModal(oldAlbum, { taskId: 'split-task' });
+
+  assert.equal(overlay.hidden, true, 'Cover Look Up never opens in front of the chooser');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(choices.map(choice => ({
+      albumKeys: choice.current.map(album => album.key),
+      trackCounts: choice.current.map(album => album.track_count),
+      taskId: choice.options.taskId,
+    })))),
+    [{
+      albumKeys: ['artist::first release', 'artist::second release'],
+      trackCounts: [1, 1],
+      taskId: 'split-task',
+    }],
+  );
+
+  context.clearCoverLookupOptimisticSplit(optimisticSplit);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+  await context.openCoverLookupModal(oldAlbum, { taskId: 'split-task' });
+
+  assert.equal(choices.length, 1, 'a rolled-back split must not leave a stale chooser');
+  assert.equal(overlay.hidden, false);
+});
+
 test('split album conflict closes Cover Lookup, asks in a compact chooser, then opens the chosen release', async () => {
   class TestButton {}
   const oldAlbum = { album_id: 40, name: 'Old Album', album_artist: 'Artist' };

@@ -353,9 +353,12 @@
   overflow-wrap: anywhere;
 }
 .cover-lookup-manual-status.is-error { color: var(--appearance-error, #df8f96); }
+.cover-lookup-section-heading + .cover-lookup-manual-add {
+  margin-top: -12px;
+}
 .cover-lookup-manual-divider {
   height: 1px;
-  margin-top: 6px;
+  margin-top: 0;
   background: var(--border);
 }
 .cover-lookup-manual-attachments {

@@ -728,7 +728,7 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    const album = resolveTrackModalActionAlbum(trackModalCoverLookupButton);
     if (album) openCoverLookupModal(album);
     return;
   }

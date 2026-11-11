@@ -879,6 +879,9 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  const coverLookupOptimisticSplit = typeof recordCoverLookupOptimisticSplit === 'function'
+    ? recordCoverLookupOptimisticSplit(album, optimisticUpdatedAlbums)
+    : null;
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
   }
@@ -982,6 +985,7 @@ async function confirmManualTagEdit() {
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
       tagEditAlert,
+      coverLookupOptimisticSplit,
     };
     if (
       provisionalProblematicMutation
@@ -1037,6 +1041,9 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
+    if (coverLookupOptimisticSplit && typeof clearCoverLookupOptimisticSplit === 'function') {
+      clearCoverLookupOptimisticSplit(coverLookupOptimisticSplit);
+    }
     pendingProblematicEntry.settle();
     if (
       provisionalProblematicMutation

@@ -1544,6 +1544,8 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
   const scheduledTimers = [];
   const mutationClaim = { id: 'tag-edit-claim-1' };
   const claimCalls = [];
+  const optimisticSplitCalls = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -1570,6 +1572,10 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     },
     applyUpdatedAlbumsToCurrentView(albums, options) {
       applyCalls.push({ albums, options });
+    },
+    recordCoverLookupOptimisticSplit(...args) {
+      optimisticSplitCalls.push(args);
+      return optimisticSplit;
     },
     updateOpenTrackModalAfterTagEdit() {},
     renderView(options) {
@@ -1618,6 +1624,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     'an empty queued response must retain the already-rendered optimistic state without another apply',
   );
   assert.strictEqual(applyCalls[0].albums, optimisticAlbums);
+  assert.deepEqual(optimisticSplitCalls, [[album, optimisticAlbums]]);
   assert.equal(
     renderCalls.length,
     1,
@@ -1641,6 +1648,7 @@ test('queued tag edit with empty response albums retains the nonempty optimistic
     mutationClaim,
     'the queued save-task watcher must receive the optimistic mutation ownership claim',
   );
+  assert.strictEqual(watchedTasks[0].options.coverLookupOptimisticSplit, optimisticSplit);
   assert.strictEqual(claimCalls[0][0], album);
   assert.deepEqual(Array.from(claimCalls[0][1]), [trackPath]);
   assert.deepEqual(
@@ -2918,6 +2926,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     },
   };
   const alerts = [];
+  const clearedOptimisticSplits = [];
+  const optimisticSplit = { taskIds: ['cover-task-1'] };
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -2930,6 +2940,8 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
       return { [trackPath]: { album: values[trackPath].album, edition: values[trackPath].edition } };
     },
     buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    recordCoverLookupOptimisticSplit() { return optimisticSplit; },
+    clearCoverLookupOptimisticSplit(split) { clearedOptimisticSplits.push(split); },
     deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
     applyUpdatedAlbumsToCurrentView() { return [album]; },
     updateOpenTrackModalAfterTagEdit() {},
@@ -2967,6 +2979,7 @@ test('manual tag edit preserves the editor draft for retry after an immediate fa
     alerts.at(-1)[0],
     'Source changed during the tag edit. Retry with the preserved values.',
   );
+  assert.deepEqual(clearedOptimisticSplits, [optimisticSplit]);
 });
 
 test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {

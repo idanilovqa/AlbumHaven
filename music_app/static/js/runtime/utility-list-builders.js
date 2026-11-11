@@ -2664,6 +2664,12 @@ async function watchSaveTask(taskId, context = {}) {
         return;
       }
       if (data.status === 'failed') {
+        if (
+          context.coverLookupOptimisticSplit
+          && typeof clearCoverLookupOptimisticSplit === 'function'
+        ) {
+          clearCoverLookupOptimisticSplit(context.coverLookupOptimisticSplit);
+        }
         let viewRefreshed = false;
         if (!mutationWasSuperseded()) {
           try {
@@ -2697,13 +2703,6 @@ async function watchSaveTask(taskId, context = {}) {
           updateOpenTrackModalAfterTagEdit(originalAlbum, reconciledAlbums, {
             preserveHydratedModalAfterFailedSave: true,
           });
-        }
-        if (
-          context.tagEditorDraft
-          && canReconcileOriginView()
-          && typeof restoreTagEditorDraftAfterFailedSave === 'function'
-        ) {
-          restoreTagEditorDraftAfterFailedSave(context.tagEditorDraft);
         }
         if (data.log_entry) {
           try {

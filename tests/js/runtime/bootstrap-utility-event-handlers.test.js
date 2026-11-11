@@ -316,21 +316,21 @@ test('clicking the filter search input dismisses only the dropdown without consu
   assert.equal(context.state.utility.selectedProblemFilters, selected);
 });
 
-test('Cover Lookup hydrates the clicked album before opening its gallery', async () => {
+test('Cover Lookup opens from the current album without waiting for hydration', async () => {
   const { context } = createContext();
-  const hydratedAlbum = {
+  const compactAlbum = {
     key: 'revelations-of-divine-love',
-    tracks: [{ path: 'C:\\Music\\Revelations of Divine Love\\01 Track.mp3' }],
+    preview_only: true,
   };
   const button = createElement({ 'data-open-track-modal-cover-lookup': '1' });
   const click = createEvent({ '[data-open-track-modal-cover-lookup="1"]': button });
   let openedAlbum = null;
-  context.resolveTrackModalActionAlbum = () => {
-    assert.fail('Cover Lookup must not use the compact synchronous resolver');
-  };
-  context.resolveHydratedTrackModalActionAlbum = async (candidate) => {
+  context.resolveTrackModalActionAlbum = (candidate) => {
     assert.equal(candidate, button);
-    return hydratedAlbum;
+    return compactAlbum;
+  };
+  context.resolveHydratedTrackModalActionAlbum = async () => {
+    assert.fail('the modal shell must not wait for Album Details hydration');
   };
   context.openCoverLookupModal = (album) => {
     openedAlbum = album;
@@ -339,7 +339,7 @@ test('Cover Lookup hydrates the clicked album before opening its gallery', async
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.strictEqual(openedAlbum, hydratedAlbum);
+  assert.strictEqual(openedAlbum, compactAlbum);
 });
 
 test('Fast Cover Search hydrates its album and passes its clicked control to immediate busy feedback', async () => {

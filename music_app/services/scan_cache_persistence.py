@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
@@ -1984,7 +1984,17 @@ class PostgresScanCacheAdapter:
                                            track_paths=changed_paths):
                 from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
                 schedule_gallery_projection_refresh(self._config, incremental_membership=True)
-                raise RuntimeError("Library changes are still being reconciled. Retry this edit when library preparation finishes.")
+                deadline = perf_counter() + 1.0
+                while perf_counter() < deadline:
+                    sleep(0.05)
+                    if tag_edit_baseline_ready(
+                        self._config,
+                        connect=lambda _url: nullcontext(connection),
+                        track_paths=changed_paths,
+                    ):
+                        break
+                else:
+                    raise RuntimeError("Library changes are still being reconciled. Retry this edit when library preparation finishes.")
             connection.execute(_inventory_publication_advisory_lock_sql())
             _partition_edited_physical_copies(connection, changed_paths, previous_file_entries,
                                              updated_file_entries, apply=False)

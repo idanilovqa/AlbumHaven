@@ -2241,6 +2241,46 @@ def test_tag_edit_prevalidation_rejects_dirty_baseline_and_schedules_replay(monk
     assert connection.executed == []
 
 
+def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
+    from music_app.services import (
+        gallery_projection_postgres,
+        scan_cache_persistence,
+        scoped_relation_projection,
+    )
+
+    connection = StructuralTagEditConnection(_successful_result())
+    adapter = _adapter(monkeypatch, connection)
+    readiness = iter((False, True))
+    scheduled = []
+    monkeypatch.setattr(
+        scoped_relation_projection,
+        "tag_edit_baseline_ready",
+        lambda *a, **k: next(readiness),
+    )
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "schedule_gallery_projection_refresh",
+        lambda *a, **k: scheduled.append(k),
+    )
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "sleep",
+        lambda _seconds: None,
+        raising=False,
+    )
+    paths, previous, updated = _entries()
+
+    adapter.validate_structural_tag_edit(
+        changed_paths=set(paths),
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album"},
+    )
+
+    assert scheduled == [{"incremental_membership": True}]
+    assert connection.executed
+
+
 @pytest.mark.parametrize("edits", [
     {"edition": "Deluxe"}, {"album": "New Release", "year": 2030},
     {"album_type": "EP"}, {"album_rating": 4},

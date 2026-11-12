@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.4 - 2026-11-12
+
+- Expanded real-browser regression coverage for MusicBrainz artist identities, info links, country and genre labels, split identities, and first-page repair filters.
+
 ## 0.11.3 - 2026-11-12
 
 - Improved MusicBrainz matching across localized, original-script, alternate, split, re-release and compilation titles, with bounded typo and mojibake handling and exact track evidence.

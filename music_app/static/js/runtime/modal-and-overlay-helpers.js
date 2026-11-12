@@ -261,7 +261,10 @@ function getVisibleNonAlbumTracks(options = {}) {
   }
   const mainState = state.gallery?.mainState;
   if (mainState) {
-    const activeSources = activeGallerySourceCategories(mainState);
+    const pendingSources = state.gallery?.pendingSourceHydrationCategories;
+    const activeSources = Array.isArray(pendingSources)
+      ? pendingSources
+      : activeGallerySourceCategories(mainState);
     const payloadSources = view.non_album_library_categories
       || view.loaded_library_categories || view.visible_library_categories
       || ['main_library', 'new_arrivals', 'hoard'];
@@ -690,6 +693,11 @@ function syncLibraryNavigationMode(mode) {
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
   collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
+  document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
+    button.classList.toggle('is-selected', collections);
+    if (collections) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {

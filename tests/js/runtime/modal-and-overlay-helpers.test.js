@@ -31,6 +31,10 @@ const albumTrackTableSource = fs.readFileSync(
   path.join(path.dirname(helperPath), 'album-track-table.js'),
   'utf8',
 );
+const appChromeCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'),
+  'utf8',
+);
 
 class FakeClassList {
   constructor() {
@@ -812,8 +816,28 @@ test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', 
     visible_library_categories: categories, loaded_library_categories: categories,
     non_album_tracks: [mainTrack, hoardTrack],
   };
+  const sourceTotalKeys = [
+    '', 'hoard', 'hoard|main_library', 'hoard|main_library|new_arrivals',
+    'hoard|new_arrivals', 'main_library', 'main_library|new_arrivals', 'new_arrivals',
+  ];
+  let completeSourceTotals;
+  const sourceTotalsReady = new Promise(resolve => { completeSourceTotals = resolve; });
+  context.fetch = async () => {
+    await sourceTotalsReady;
+    return {
+      ok: true,
+      json: async () => ({
+        inventory_mutation_revision: 0,
+        source_totals_by_scope: Object.fromEntries(sourceTotalKeys.map(key => [key, {
+          artist_count: 1,
+          album_count: 1,
+        }])),
+      }),
+    };
+  };
   context.window = { location: { href: 'http://localhost/' }, history: {} };
   context.renderArtistGroups = () => {};
+  context.updateGalleryMainChrome = () => {};
   const requests = [];
   let completeRefresh;
   const responseReady = new Promise(resolve => { completeRefresh = resolve; });
@@ -835,10 +859,12 @@ test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', 
   context.openTagEditor = album => edited.push(album);
   context.showRepairAlert = () => {};
 
-  context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
+  const transition = context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
   assert.equal(context.getVisibleNonAlbumTracks().length, 0, 'unscoped records stay unavailable during refresh');
   context.openNonAlbumTagEditor();
   assert.equal(edited.length, 0, 'an immediate Edit tags action cannot use stale records');
+  completeSourceTotals();
+  await transition;
   completeRefresh();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks(), track => track.path), [mainTrack.path],
@@ -2493,10 +2519,19 @@ test('Loose Tracks is a side panel mode: its Custom Collections tree replaces th
   artistsMode.dataset.navigationMode = 'artists';
   const collectionsMode = new FakeElement();
   collectionsMode.dataset.navigationMode = 'collections';
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
   const selected = [];
   collections.querySelectorAll = () => ['loose-tracks-item'];
   context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
-  context.document.querySelectorAll = (selector) => (selector === '[data-navigation-mode]' ? [artistsMode, collectionsMode] : []);
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-navigation-mode]') return [artistsMode, collectionsMode];
+    if (selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]') return [compactLooseTracks];
+    return [];
+  };
 
   context.syncLibraryNavigationMode('collections');
   assert.equal(heading.textContent, 'Custom Collections');
@@ -2504,6 +2539,12 @@ test('Loose Tracks is a side panel mode: its Custom Collections tree replaces th
   assert.equal(artists.hidden, true);
   assert.equal(collectionsMode.getAttribute('aria-pressed'), 'true');
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactLooseTracks.getAttribute('aria-current'), 'page');
+  assert.equal(compactLooseTracks.classList.contains('is-selected'), true);
+  assert.match(
+    appChromeCssSource,
+    /\.shell-navigation-compact-action\.is-selected\s*\{[^}]*background:\s*var\(--appearance-item-selected,[^}]*!important/,
+  );
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', true]);
 
   context.syncLibraryNavigationMode('artists');
@@ -2511,6 +2552,8 @@ test('Loose Tracks is a side panel mode: its Custom Collections tree replaces th
   assert.equal(collections.hidden, true);
   assert.equal(artists.hidden, false);
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactLooseTracks.getAttribute('aria-current'), '');
+  assert.equal(compactLooseTracks.classList.contains('is-selected'), false);
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
 });
 

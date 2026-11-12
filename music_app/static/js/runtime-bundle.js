@@ -8084,6 +8084,9 @@ function transitionGalleryMain(action, options = {}) {
   // authoritative scope on both hide and show; scope mismatch blocks stale edits.
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
+  if (hydrationCategories) {
+    state.gallery.pendingSourceHydrationCategories = hydrationCategories;
+  }
   const sourceTotalsCurrent = state.gallery.sourceTotalsRevision === Number(
     state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
   );
@@ -8091,11 +8094,20 @@ function transitionGalleryMain(action, options = {}) {
     && (!sourceTotalsCurrent
       || !state.gallery.sourceTotalsByScope?.[gallerySourceScopeKey(hydrationCategories)])) {
     return Promise.resolve(prefetchGallerySourceTotalsForAllScopes())
-      .then(resolved => (resolved
-        ? transitionGalleryMain(action, { sourceTotalsResolved: true })
-        : false));
+      .then((resolved) => {
+        if (resolved) return transitionGalleryMain(action, { sourceTotalsResolved: true });
+        if (gallerySourceScopesEqual(
+          state.gallery.pendingSourceHydrationCategories,
+          hydrationCategories,
+        )) state.gallery.pendingSourceHydrationCategories = null;
+        return false;
+      });
   }
   state.gallery.mainState = nextState;
+  if (hydrationCategories && gallerySourceScopesEqual(
+    state.gallery.pendingSourceHydrationCategories,
+    hydrationCategories,
+  )) state.gallery.pendingSourceHydrationCategories = null;
   if (action.type === 'toggle-source') prefetchGallerySourceTotalsForAllScopes();
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;
@@ -15124,7 +15136,10 @@ function getVisibleNonAlbumTracks(options = {}) {
   }
   const mainState = state.gallery?.mainState;
   if (mainState) {
-    const activeSources = activeGallerySourceCategories(mainState);
+    const pendingSources = state.gallery?.pendingSourceHydrationCategories;
+    const activeSources = Array.isArray(pendingSources)
+      ? pendingSources
+      : activeGallerySourceCategories(mainState);
     const payloadSources = view.non_album_library_categories
       || view.loaded_library_categories || view.visible_library_categories
       || ['main_library', 'new_arrivals', 'hoard'];
@@ -15553,6 +15568,11 @@ function syncLibraryNavigationMode(mode) {
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
   collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
+  document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
+    button.classList.toggle('is-selected', collections);
+    if (collections) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {

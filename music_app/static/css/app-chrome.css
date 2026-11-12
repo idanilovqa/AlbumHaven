@@ -212,6 +212,9 @@
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.shell-navigation-compact-action.is-selected {
+  background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))) !important;
+}
 .shell-navigation-rail h2 { margin-left: 12px; }
 .shell-navigation-rail .artist-link { border-color: transparent; }
 .shell-navigation-rail .artist-link:hover { background: #ffffff07; }

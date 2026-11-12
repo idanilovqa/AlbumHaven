@@ -812,6 +812,9 @@ function transitionGalleryMain(action, options = {}) {
   // authoritative scope on both hide and show; scope mismatch blocks stale edits.
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
+  if (hydrationCategories) {
+    state.gallery.pendingSourceHydrationCategories = hydrationCategories;
+  }
   const sourceTotalsCurrent = state.gallery.sourceTotalsRevision === Number(
     state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
   );
@@ -819,11 +822,20 @@ function transitionGalleryMain(action, options = {}) {
     && (!sourceTotalsCurrent
       || !state.gallery.sourceTotalsByScope?.[gallerySourceScopeKey(hydrationCategories)])) {
     return Promise.resolve(prefetchGallerySourceTotalsForAllScopes())
-      .then(resolved => (resolved
-        ? transitionGalleryMain(action, { sourceTotalsResolved: true })
-        : false));
+      .then((resolved) => {
+        if (resolved) return transitionGalleryMain(action, { sourceTotalsResolved: true });
+        if (gallerySourceScopesEqual(
+          state.gallery.pendingSourceHydrationCategories,
+          hydrationCategories,
+        )) state.gallery.pendingSourceHydrationCategories = null;
+        return false;
+      });
   }
   state.gallery.mainState = nextState;
+  if (hydrationCategories && gallerySourceScopesEqual(
+    state.gallery.pendingSourceHydrationCategories,
+    hydrationCategories,
+  )) state.gallery.pendingSourceHydrationCategories = null;
   if (action.type === 'toggle-source') prefetchGallerySourceTotalsForAllScopes();
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;

@@ -348,6 +348,24 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
 }
 
 {
+  const { context, navigationButton } = loadHelper({ isMobile: false, artistTreeFolded: true });
+  let navigationMode = null;
+  context.syncLibraryNavigationMode = mode => { navigationMode = mode; };
+  navigationButton.closest = selector => (
+    selector === '[data-toggle-artist-tree-fold="1"]' ? navigationButton : null
+  );
+
+  const handled = context.handleArtistsDrawerClick({
+    target: navigationButton,
+    preventDefault() {},
+  });
+
+  assert.equal(handled, true);
+  assert.equal(navigationMode, 'artists');
+  assert.equal(context.state.ui.artistTreeFolded, false);
+}
+
+{
   const { context, foldButton, artistList, appShell } = loadHelper({ isMobile: true });
   context.state.ui.artistTreeFolded = true;
 

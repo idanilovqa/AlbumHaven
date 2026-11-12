@@ -231,6 +231,8 @@ function handleArtistsDrawerClick(event) {
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
+    if (foldButton === document.getElementById('artist-tree-navigation-button')
+      && typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists');
     toggleArtistTreeFold();
     return true;
   }

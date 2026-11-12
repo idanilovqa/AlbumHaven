@@ -1285,12 +1285,13 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /text-overflow:\s*ellipsis/);
 });
 
-test('Home names the account and drops the previous artist info button', () => {
+test('Home names the account and drops all previous artist metadata', () => {
   // Owner (11-09): going back to Home kept the "i" beside the account name, and it opened the last searched band.
   const removed = [];
   const info = { remove: () => removed.push('info') };
   const name = { textContent: 'Folkstone' };
   const summary = { textContent: '2 albums' };
+  const metadata = { hidden: false, innerHTML: '<span>singer-songwriter</span>' };
   const bar = {
     parentElement: null,
     before() {},
@@ -1298,6 +1299,7 @@ test('Home names the account and drops the previous artist info button', () => {
     querySelector: (selector) => ({
       '[data-gallery-context-name]': name,
       '[data-gallery-context-summary]': summary,
+      '[data-gallery-context-metadata]': metadata,
       '[data-artist-info-trigger]': info,
       '.gallery-bar__home-tabs': { hidden: false },
       '.gallery-bar__actions': { hidden: false },
@@ -1319,6 +1321,8 @@ test('Home names the account and drops the previous artist info button', () => {
   context.syncMobileHome();
   assert.equal(name.textContent, 'Rendref');
   assert.equal(summary.textContent, '');
+  assert.equal(metadata.hidden, true);
+  assert.equal(metadata.innerHTML, '');
   assert.deepEqual(removed, ['info']);
 });
 

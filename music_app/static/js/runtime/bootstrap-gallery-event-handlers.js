@@ -320,6 +320,9 @@ function handleGalleryBootstrapClick(event) {
     state.ui.pendingSearchClearOnBlur = false;
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = activeSearchQuery;
+    if (isLibraryHome && typeof syncMobileSearchQueryIndicator === 'function') {
+      syncMobileSearchQueryIndicator();
+    }
     closeRecentSearchPopover();
     const currentSurface = String(
       state.view?.surface?.active || state.view?.surface_request || 'albums'

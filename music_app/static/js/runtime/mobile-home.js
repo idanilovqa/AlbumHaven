@@ -46,8 +46,13 @@ function syncMobileHome() {
       bar.hidden = false;
       const name = bar.querySelector('[data-gallery-context-name]');
       const summary = bar.querySelector('[data-gallery-context-summary]');
+      const metadata = bar.querySelector('[data-gallery-context-metadata]');
       if (name) name.textContent = host.dataset.accountName || 'My music';
       if (summary) summary.textContent = '';
+      if (metadata) {
+        metadata.hidden = true;
+        metadata.innerHTML = '';
+      }
       // Owner (11-09): Home names the account, not an artist, so the previous artist's "i" never stays beside it.
       bar.querySelector('[data-artist-info-trigger]')?.remove();
     }

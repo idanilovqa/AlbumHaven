@@ -46,7 +46,10 @@ test.describe('mobile Home reset', () => {
       await mobileLayout.homeLink.click();
       await expect(mobileLayout.home).toBeVisible();
       await expect(mobileLayout.searchInput).toHaveValue('');
+      await expect(mobileLayout.searchButton).toHaveAttribute('data-has-query', 'false');
       await expect(mobileLayout.libraryButton).not.toHaveAttribute('data-search-results', /.*/);
+      await expect(page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-metadata]')).toBeHidden();
+      await expect(page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-metadata]')).toBeEmpty();
       await expect.poll(() => new URL(page.url()).searchParams.get('q') || '').toBe('');
       await expect.poll(() => treeArtists(mobileLayout)).toEqual(fullTree);
 

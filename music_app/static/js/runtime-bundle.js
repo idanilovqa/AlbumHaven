@@ -51599,6 +51599,9 @@ function handleGalleryBootstrapClick(event) {
     state.ui.pendingSearchClearOnBlur = false;
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = activeSearchQuery;
+    if (isLibraryHome && typeof syncMobileSearchQueryIndicator === 'function') {
+      syncMobileSearchQueryIndicator();
+    }
     closeRecentSearchPopover();
     const currentSurface = String(
       state.view?.surface?.active || state.view?.surface_request || 'albums'
@@ -55214,8 +55217,13 @@ function syncMobileHome() {
       bar.hidden = false;
       const name = bar.querySelector('[data-gallery-context-name]');
       const summary = bar.querySelector('[data-gallery-context-summary]');
+      const metadata = bar.querySelector('[data-gallery-context-metadata]');
       if (name) name.textContent = host.dataset.accountName || 'My music';
       if (summary) summary.textContent = '';
+      if (metadata) {
+        metadata.hidden = true;
+        metadata.innerHTML = '';
+      }
       // Owner (11-09): Home names the account, not an artist, so the previous artist's "i" never stays beside it.
       bar.querySelector('[data-artist-info-trigger]')?.remove();
     }

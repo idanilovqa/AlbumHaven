@@ -1599,7 +1599,9 @@ test('mobile Home restores the cached full Artist Tree before its request comple
     show_all_artists_sidebar_link: true,
   };
   const { context, calls } = createContext({ cachedRootView, useProductionBuildApiUrl: true });
+  let searchIndicatorSyncs = 0;
   context.usesMobilePageLayout = () => true;
+  context.syncMobileSearchQueryIndicator = () => { searchIndicatorSyncs += 1; };
   context.state.view.query = 'flower kings';
   context.state.view.artists_sidebar = [{ artist: 'The Flower Kings', count: 1 }];
 
@@ -1611,6 +1613,7 @@ test('mobile Home restores the cached full Artist Tree before its request comple
   );
   assert.equal(calls.applyViewPayload[0].payload.query, '');
   assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
+  assert.equal(searchIndicatorSyncs, 1, 'Home retires the visible mobile search marker with the query');
 });
 
 test('mobile Home leaves Loose Tracks mode and restores the full unqueried Artist Tree', () => {

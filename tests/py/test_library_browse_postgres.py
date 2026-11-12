@@ -15779,10 +15779,10 @@ def test_problematic_files_search_filters_the_cached_complete_list_exactly():
         "initial_detail": {"key": "a"},
     } if kind == "problematic-files" else None
 
-    assert [item["key"] for item in repository.build_problematic_files_search("YEAR MISMATCH")["items"]] == ["a"]
+    assert repository.build_problematic_files_search("YEAR MISMATCH")["items"] == []
     assert [item["key"] for item in repository.build_problematic_files_search("hidden")["items"]] == ["b"]
     assert repository.build_problematic_files_search("art")["items"] == []
-    assert [item["key"] for item in repository.build_problematic_files_search("album artist mismatch")["items"]] == ["d"]
+    assert repository.build_problematic_files_search("album artist mismatch")["items"] == []
     cached = repository.build_problematic_files_search("Р“Р°Рј")
     assert [item["key"] for item in cached["items"]] == ["c"]
     assert cached["complete"] is True

@@ -315,6 +315,7 @@ test('foundation validator rejects every test family losing its review-success d
   const validator = require(validatorPath);
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   for (const job of [
+    'test_android', 'test_android_instrumentation',
     'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
     'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
   ]) {
@@ -327,5 +328,29 @@ test('foundation validator rejects every test family losing its review-success d
     assertWorkflowDrift(validator, workflow,
       replaceInJob(workflow, job, /!cancelled\(\)/, 'always()'),
       /cancellable job condition/);
+  }
+});
+
+test('expensive E2E families wait for applicable foundation checks', () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const e2eJobs = ['e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci'];
+  const webFoundations = ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity'];
+  const foundations = [...webFoundations, 'test_android', 'test_android_instrumentation'];
+
+  for (const job of e2eJobs) {
+    for (const foundation of foundations) {
+      assertWorkflowDrift(validator, workflow,
+        replaceInJob(workflow, job, new RegExp(`      - ${foundation}\\r?\\n`), ''),
+        new RegExp(`${foundation} foundation dependency`));
+    }
+    for (const foundation of webFoundations) {
+      assertWorkflowDrift(validator, workflow,
+        replaceInJob(workflow, job, new RegExp(`needs\\.${foundation}\\.result == 'success'`), `needs.${foundation}.result != 'cancelled'`),
+        new RegExp(`successful ${foundation} foundation`));
+    }
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /needs\.review_scope\.outputs\.run_android != 'true'/, "needs.review_scope.outputs.run_android == 'true'"),
+      /conditional Android foundation success/);
   }
 });

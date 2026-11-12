@@ -52,12 +52,17 @@ function isDocumentationPath(filePath) {
   return lower.startsWith('docs/') || (!normalized.includes('/') && lower.endsWith('.md'));
 }
 
-// The Android shell, its future native modules, the contract fixtures its Kotlin tests share
-// with the browser, and the tests only the Android jobs run. Markdown there is documentation and
-// never needs a Gradle or emulator run.
+// Native owners, hybrid bridge/playback owners, shared contracts, and this classifier can change
+// Android behavior or test selection. Markdown under native paths remains documentation-only.
 const ANDROID_PATH_PATTERNS = Object.freeze([
   'apps/android-shell/**',
   'packages/native/**',
+  'music_app/static/js/runtime/android-bridge-client.js',
+  'music_app/static/js/runtime/playback-engine.js',
+  'music_app/static/js/runtime/player-browser-playback-integration.js',
+  'music_app/static/js/runtime/player-streaming-engine.js',
+  'music_app/static/js/runtime/player-state-persistence-helpers.js',
+  'scripts/ci/classify-pr-review-scope.cjs',
   'tests/fixtures/android-bridge/**',
   'tests/fixtures/listen-sessions-v1.json',
   'tests/fixtures/playback-protocol-v1.json',

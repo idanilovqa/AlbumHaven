@@ -124,6 +124,8 @@ function validateWorkflowContract(workflow) {
   ], 'foundation workflow', errors);
 
   const jobs = {
+    androidBuild: jobSource(workflow, 'test_android', 'test_android_instrumentation'),
+    androidInstrumentation: jobSource(workflow, 'test_android_instrumentation', 'test_js'),
     portable: jobSource(workflow, 'test_js', 'test_components'),
     components: jobSource(workflow, 'test_components', 'test_node_windows'),
     windowsNode: jobSource(workflow, 'test_node_windows', 'test_python'),
@@ -149,6 +151,32 @@ function validateWorkflowContract(workflow) {
       [/^      - review_prerequisites\r?$/m, 'review_prerequisites dependency'],
       [/^    if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/m, 'successful review prerequisite and cancellable job condition'],
     ], `${name} job`, errors);
+  }
+
+  const e2eJobs = [
+    ['Phase 7 auth', jobs.phase7Auth],
+    ['Phase 7 admin', jobs.phase7Admin],
+    ['functional', jobs.functional],
+    ['performance', jobs.performance],
+  ];
+  const webFoundations = ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity'];
+  const allFoundations = [...webFoundations, 'test_android', 'test_android_instrumentation'];
+  for (const [name, source] of e2eJobs) {
+    if (!source) continue;
+    for (const foundation of allFoundations) {
+      requirePatterns(source, [
+        [new RegExp(`^      - ${foundation}\\r?$`, 'm'), `${foundation} foundation dependency`],
+      ], `${name} job`, errors);
+    }
+    for (const foundation of webFoundations) {
+      requirePatterns(source, [
+        [new RegExp(`needs\\.${foundation}\\.result == 'success'`), `successful ${foundation} foundation`],
+      ], `${name} job`, errors);
+    }
+    requirePatterns(source, [[
+      /needs\.review_scope\.outputs\.run_android != 'true' \|\| \(needs\.test_android\.result == 'success' && needs\.test_android_instrumentation\.result == 'success'\)/,
+      'conditional Android foundation success',
+    ]], `${name} job`, errors);
   }
 
   for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {

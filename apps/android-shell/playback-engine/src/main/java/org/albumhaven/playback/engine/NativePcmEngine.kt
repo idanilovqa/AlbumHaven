@@ -188,6 +188,7 @@ class NativePcmEngine(
         /** Every frame the decoder produced, trimmed or not, for the stream's measured byte rate. */
         var decoderFrames = 0L
         var serverEos: PcmServerEvent.Eos? = null
+        var keepWhenHeard = false
         var decoderFinished = false
         var closed = false
 
@@ -667,7 +668,8 @@ class NativePcmEngine(
                 if (encoded.serverEos != null) return
                 encoded.serverEos = event
                 encoded.end()
-                keepInCache(stream, encoded)
+                // A successor prepared ahead is kept once it is heard, never when it is skipped.
+                if (stream.role == PcmRole.CURRENT) keepInCache(stream, encoded) else encoded.keepWhenHeard = true
                 finishEncodedWhenDrained(stream)
             } ?: acceptEos(stream, event)
             is PcmServerEvent.Promoted -> acceptPromoted(event)
@@ -1068,6 +1070,10 @@ class NativePcmEngine(
         continuityRing.clear()
         incoming.role = PcmRole.CURRENT
         incoming.acceptsPromotedContinuityWireRole = true
+        incoming.encoded?.takeIf { it.keepWhenHeard }?.let { encoded ->
+            encoded.keepWhenHeard = false
+            keepInCache(incoming, encoded)
+        }
         incoming.targetBufferFrames = capacityFrames(PcmRole.CURRENT)
         current = incoming
         continuity = null

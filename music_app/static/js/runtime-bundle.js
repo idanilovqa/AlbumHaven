@@ -8852,6 +8852,7 @@ function handleStreamingControl(message) {
       ? pending.requestedSeekSeconds
       : null;
     engine.pendingPromotion = null;
+    keepHeardStreamingWire(engine.roles.current);
     if (retainedSeekSeconds !== null) {
       void seekStreamingPlayback(retainedSeekSeconds);
     } else {
@@ -8875,7 +8876,7 @@ function handleStreamingControl(message) {
     if (roleState.encoded && !roleState.encoded.delivered) {
       const { wire } = roleState.encoded;
       wire.eos = message;
-      keepStreamingWire(wire, message);
+      keepStreamingWire(wire, message, roleState.role);
       for (const follower of [...wire.followers]) {
         if (follower.delivered || !streamingRoleIsLive(follower.roleState)) continue;
         follower.eos = message;
@@ -9614,6 +9615,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -9722,6 +9724,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -10280,9 +10283,16 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
 }
 
 // A whole stream from the track's first frame is kept for the next time it plays.
-function keepStreamingWire(wire, eos) {
+// Keeps a whole track once it is heard. A successor prepared ahead waits until it is promoted, so
+// a song fetched and then skipped is never kept as recently played.
+function keepStreamingWire(wire, eos, role) {
   if (wire.serverless || wire.streamStart !== 0 || !wire.bytes
       || typeof keepStreamingCachedTrack !== 'function') return;
+  if (role !== 'current') {
+    wire.keepWhenHeard = eos;
+    return;
+  }
+  wire.keepWhenHeard = null;
   keepStreamingCachedTrack(streamingTrackCacheKey(wire.track, wire.quality), {
     codec: wire.codec,
     sampleRate: streamingEngineState().sampleRate,
@@ -10292,6 +10302,11 @@ function keepStreamingWire(wire, eos) {
     table: wire.table,
     bytes: wire.bytes.slice(0, wire.size),
   });
+}
+
+function keepHeardStreamingWire(roleState) {
+  const wire = roleState?.encoded?.wire;
+  if (wire?.keepWhenHeard) keepStreamingWire(wire, wire.keepWhenHeard, 'current');
 }
 
 // Loads `track` from the cache before a role opens it, so the open itself stays synchronous.
@@ -16653,7 +16668,28 @@ function closeImageLightbox() {
   }
   const returnFocus = imageLightboxReturnFocus;
   imageLightboxReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus?.();
+  let focusTarget = returnFocus?.isConnected ? returnFocus : null;
+  if (!focusTarget && returnFocus?.getAttribute) {
+    const triggerAttribute = ['data-open-lightbox', 'data-cover-lookup-open-lightbox']
+      .find((attribute) => returnFocus.getAttribute(attribute) === '1');
+    if (triggerAttribute) {
+      const coverSrc = returnFocus.getAttribute('data-cover-src') || '';
+      const coverAlt = returnFocus.getAttribute('data-cover-alt') || '';
+      const replacements = Array.from(document.querySelectorAll(`[${triggerAttribute}="1"]`))
+        .filter((candidate) => {
+          const visibility = getComputedStyle(candidate).visibility;
+          return candidate.disabled !== true
+            && !candidate.closest('[hidden], [inert]')
+            && candidate.getClientRects().length > 0
+            && visibility !== 'hidden'
+            && visibility !== 'collapse'
+            && (candidate.getAttribute('data-cover-src') || '') === coverSrc
+            && (candidate.getAttribute('data-cover-alt') || '') === coverAlt;
+        });
+      if (replacements.length === 1) [focusTarget] = replacements;
+    }
+  }
+  focusTarget?.focus?.();
 }
 
 function closeTrackModal() {
@@ -23857,7 +23893,13 @@ async function refreshLoadedProblematicFilesAfterSaveCompletion() {
       );
     }
   }
-  await loadProblematicFiles(true, { render: false });
+  const previousCompleteLoadPromise = state.utility.completeLoadPromise;
+  const refreshPromise = loadProblematicFiles(true, { render: false });
+  const completeRefreshPromise = state.utility.completeLoadPromise;
+  if (completeRefreshPromise && completeRefreshPromise !== previousCompleteLoadPromise) {
+    completeRefreshPromise.problematicSaveTaskRefresh = true;
+  }
+  await refreshPromise;
   const utilityOverlay = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.overlay
     : null;
@@ -25017,6 +25059,12 @@ async function openUtilityModalForTrack(trackPath) {
     const summaryRequestTokenBeforePendingTasks = Number(
       state.utility.problematicSummaryRequestToken || 0,
     );
+    const pendingSummaryAtNavigationStart = state.utility.completeLoadPromise
+      || state.utility.initialLoadPromise;
+    const pendingSaveTaskSummaryRequestToken = pendingSummaryAtNavigationStart
+      ?.problematicSaveTaskRefresh
+      ? Number(pendingSummaryAtNavigationStart.problematicSummaryRequestToken || 0)
+      : 0;
     const pendingTasks = Object.values(
       state.utility.pendingProblematicSaveTasks || {},
     ).filter((entry) => (
@@ -25081,8 +25129,16 @@ async function openUtilityModalForTrack(trackPath) {
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (
       pendingTasks.length > 0
-      && Number(state.utility.problematicSummaryRequestToken || 0)
-        > summaryRequestTokenBeforePendingTasks
+      && (
+        (
+          pendingSaveTaskSummaryRequestToken > 0
+          && pendingSaveTaskSummaryRequestToken
+            === Number(state.utility.problematicSummaryRequestToken || 0)
+          && state.utility.loaded
+        )
+        || Number(state.utility.problematicSummaryRequestToken || 0)
+          > summaryRequestTokenBeforePendingTasks
+      )
     );
     const loadTrackSummary = async () => {
       const complete = loadProblematicFiles(true, { render: false });
@@ -25127,6 +25183,7 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
     let refreshedStaleDetailTarget = false;
+    let retriedCanonicalDetailTarget = false;
     if (!album.detail_loaded) {
       while (album && !album.detail_loaded) {
         const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
@@ -25141,6 +25198,14 @@ async function openUtilityModalForTrack(trackPath) {
         if (!ownsNavigation()) return;
         const detailMissing = !refreshedDetail
           && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
+        const canonicalDetailTarget = detailMissing
+          ? getProblematicAlbumForTrackPath(trackPath)
+          : null;
+        if (pendingTaskRefreshedSummary && canonicalDetailTarget && !retriedCanonicalDetailTarget) {
+          retriedCanonicalDetailTarget = true;
+          album = canonicalDetailTarget;
+          continue;
+        }
         const currentSummary = state.utility.completeLoadPromise
           || state.utility.initialLoadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
@@ -25155,7 +25220,8 @@ async function openUtilityModalForTrack(trackPath) {
               if (currentSummary && typeof currentSummary.then === 'function') {
                 await currentSummary;
                 if (!ownsNavigation()) return;
-                album = getProblematicAlbumForTrackPath(trackPath);
+                album = getProblematicAlbumForTrackPath(trackPath)
+                  || getSelectedProblematicAlbumFrom(state.utility.problematicFiles);
                 if (album) continue;
               }
               refreshedStaleDetailTarget = true;
@@ -27875,6 +27941,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
+  if (state.utility.focusedTrackPath
+      && selectedAlbum?.detail_loading_deferred
+      && !selectedAlbum?.detail_loaded) {
+    els.list.querySelector?.('.utility-list-item.is-active')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
   if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(selectedAlbum)) {
     els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
     if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {
@@ -33658,15 +33730,7 @@ function markTrackModalCoverTransitionPending(album) {
   const visual = document.querySelector('#track-modal-cover .track-modal-cover-visual');
   const image = visual?.querySelector?.('img');
   if (!visual || !image) return false;
-  image.remove();
-  visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
-  if (!visual.querySelector?.('.cover-placeholder')) {
-    const placeholder = document.createElement('span');
-    placeholder.className = 'cover-placeholder';
-    placeholder.setAttribute('aria-hidden', 'true');
-    visual.appendChild(placeholder);
-  }
   return true;
 }
 
@@ -34853,14 +34917,15 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
     }
     runs.push({ group, items: [item] });
   });
-  let prioritizedServicePreview = false;
+  // The leading card loads first, whichever provider group renders it.
+  let prioritizedLeadingPreview = false;
   return runs.map(({ group, items }) => {
     const providerAttr = group.provider
       ? ` data-cover-lookup-provider-group="${group.provider}"`
       : '';
     const cards = items.map((item) => {
-      const prioritize = group.key === 'services' && !prioritizedServicePreview;
-      if (prioritize) prioritizedServicePreview = true;
+      const prioritize = !prioritizedLeadingPreview;
+      prioritizedLeadingPreview = true;
       return buildCoverLookupCard(item, 'remote', prioritize);
     }).join('');
     return `<div class="cover-lookup-subsection-title">${group.title}</div><div class="cover-lookup-gallery"${providerAttr}>${cards}</div>`;
@@ -34930,9 +34995,13 @@ function replaceCoverLookupModalMarkup(body, markup) {
       || image?.getAttribute?.('src')
       || '',
     );
+    // Keep only a decoded image; deferred, loading, and failed nodes may never recover.
     if (
       retainedImage
       && incomingImage
+      && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
+      && retainedImage.complete === true
+      && Number(retainedImage.naturalWidth || 0) > 0
       && previewSource(retainedImage) === previewSource(incomingImage)
       && typeof incomingImage.replaceWith === 'function'
     ) {
@@ -37605,7 +37674,7 @@ async function confirmManualTagEdit() {
       showRepairAlert(
         [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
         hasCompletionWarning ? 'warning' : 'success',
-        hasCompletionWarning ? 8000 : 2000,
+        8000,
         {
           title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
         },
@@ -39672,6 +39741,7 @@ function restorePlayerState() {
     updatePlayerUi();
     const restoredRole = await restoredRolePromise;
     if (!restoredRole) return;
+    if (savedPaused) updatePlayerUi();
     if (typeof handleStreamingPlaybackWaveformReady === 'function') {
       try {
         const waveformReady = handleStreamingPlaybackWaveformReady({
@@ -42013,7 +42083,9 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   if (!albumHasDisplayCover(album)) {
     return '<div class="cover-placeholder">No cover art</div>';
   }
-  const coverPriority = options.coverPriority === 'visible' ? 'visible' : 'near';
+  const coverPriority = ['visible', 'background'].includes(options.coverPriority)
+    ? options.coverPriority
+    : 'near';
   const loadingAttribute = coverPriority === 'visible' ? 'eager' : 'lazy';
   const fetchPriorityAttribute = coverPriority === 'visible' ? 'high' : 'low';
   const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -42163,6 +42235,7 @@ class VirtualArtistGrid {
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
     this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmTimeout = 0;
     this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
@@ -42334,9 +42407,14 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
-    if (!this._albumDetailPrewarmRaf) return;
-    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
-    this._albumDetailPrewarmRaf = 0;
+    if (this._albumDetailPrewarmRaf) {
+      cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+      this._albumDetailPrewarmRaf = 0;
+    }
+    if (this._albumDetailPrewarmTimeout) {
+      clearBrowserTimeout(this._albumDetailPrewarmTimeout);
+      this._albumDetailPrewarmTimeout = 0;
+    }
   }
 
   scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
@@ -42355,15 +42433,19 @@ class VirtualArtistGrid {
       this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
         if (generation !== this._albumDetailPrewarmGeneration) return;
         this._albumDetailPrewarmRaf = 0;
-        if (
-          renderGeneration !== this._renderGeneration
-          || !this.isScrollSettled
-          || this.lastKey !== rangeKey
-          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
-        ) {
-          return;
-        }
-        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        this._albumDetailPrewarmTimeout = scheduleBrowserTimeout(() => {
+          this._albumDetailPrewarmTimeout = 0;
+          if (
+            generation !== this._albumDetailPrewarmGeneration
+            || renderGeneration !== this._renderGeneration
+            || !this.isScrollSettled
+            || this.lastKey !== rangeKey
+            || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+          ) {
+            return;
+          }
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        }, 250);
       });
     });
   }
@@ -42433,6 +42515,12 @@ class VirtualArtistGrid {
     const normalizedToken = Number(token);
     if (!force && (!normalizedToken || !this._activeCoverLoadUserActionTokens.has(normalizedToken))) {
       return false;
+    }
+    if (!force && (this._raf || this._measureRaf || this._measureTimeout || this._stabilizeRaf)) {
+      scheduleBrowserAnimationFrame(() => {
+        this.resumeSelectedArtistCoverLoadsAfterUserAction(normalizedToken);
+      });
+      return true;
     }
     if (!this._activeCoverLoadUserActionTokens.size) return false;
     if (force) {
@@ -42989,6 +43077,7 @@ class VirtualArtistGrid {
         restoreScroll();
         if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
         if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+        if (this._raf) return;
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration
@@ -43645,9 +43734,6 @@ class VirtualArtistGrid {
 
   primeVisibleCoverImages() {
     if (!(this.scrollEl instanceof HTMLElement) || !(this.containerEl instanceof HTMLElement)) {
-      return;
-    }
-    if (String(state?.view?.selected_artist || '').trim()) {
       return;
     }
     const scrollRect = this.scrollEl.getBoundingClientRect();
@@ -44325,10 +44411,13 @@ class VirtualArtistGrid {
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
-      const coverPriority = blockBottom >= Number(options.viewportTop || 0)
-        && blockTop <= Number(options.viewportBottom || 0)
+      const visible = blockBottom >= Number(options.viewportTop || 0)
+        && blockTop <= Number(options.viewportBottom || 0);
+      const coverPriority = visible
         ? 'visible'
-        : 'near';
+        : section.sectionType === 'primary' && String(state?.view?.selected_artist || '').trim()
+          ? 'background'
+          : 'near';
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
@@ -48816,6 +48905,26 @@ function scrollRootGalleryToArtist(artist) {
   });
 }
 
+function beginSidebarArtistCoverLoadSuspension() {
+  if (
+    typeof virtualGrid === 'undefined'
+    || !virtualGrid
+    || typeof virtualGrid.suspendSelectedArtistCoverLoadsForUserAction !== 'function'
+  ) return () => {};
+  const token = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+  const resume = (requestResult = true) => {
+    if (
+      requestResult === false
+      && (Boolean(state.ui?.activeViewRequestController) || Boolean(state.ui?.pendingViewRequest))
+    ) {
+      scheduleBrowserTimeout(() => resume(false), 16);
+      return;
+    }
+    virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction?.(token);
+  };
+  return resume;
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
@@ -48950,9 +49059,10 @@ function handleSidebarArtistSelectionClick(event) {
       resetScrollForUserArtistSelection: true,
     });
   }
-  fetchAndRender(buildApiUrl(nextView, {
+  const resumeCoverLoads = beginSidebarArtistCoverLoadSuspension();
+  Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
     omitSidebar: true,
-  }), true);
+  }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true));
   if (!sidebarSelectionUpdated) {
     renderSidebar();
   }

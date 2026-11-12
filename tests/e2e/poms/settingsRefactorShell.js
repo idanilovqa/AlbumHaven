@@ -98,6 +98,15 @@ export class SettingsRefactorShell extends BasePage {
     });
   }
 
+  async waitForProblematicSummarySettled() {
+    await this.waitForPageCondition(() => (
+      state.utility?.problematicFilesComplete === true
+      && state.utility?.loading !== true
+      && !state.utility?.loadPromise
+      && !state.utility?.completeLoadPromise
+    ), { timeout: 10000 });
+  }
+
   async readProblemVirtualWindow() {
     // parity-check: allow-read-only-measurement-evaluate -- observe mounted identities and native viewport coverage without mutating scroll or application state
     return this.tree.evaluate(list => {

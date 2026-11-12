@@ -3752,11 +3752,13 @@ test('terminal Problematic Files refresh does not render its prior selection dur
   const targetAlbum = {
     key: 'studio-records-5',
     name: 'Studio Records5',
-    detail_loaded: true,
+    detail_loaded: false,
     problematic_track_paths: [trackPath],
     track_paths: [trackPath],
   };
   const renderedTitles = [];
+  let detailLoads = 0;
+  let summaryLoads = 0;
   let releaseCanonicalRefresh;
   let markCanonicalRefreshStarted;
   const canonicalRefreshStarted = new Promise((resolve) => {
@@ -3784,15 +3786,27 @@ test('terminal Problematic Files refresh does not render its prior selection dur
     if (selected?.name) renderedTitles.push(selected.name);
   };
   context.openUtilityModal = () => context.renderUtilityModalContent();
-  context.loadProblematicAlbumDetail = async () => targetAlbum;
+  context.loadProblematicAlbumDetail = async () => {
+    detailLoads += 1;
+    if (detailLoads < 3) return null;
+    const hydratedAlbum = { ...targetAlbum, detail_loaded: true };
+    context.state.utility.problematicFiles = [hydratedAlbum];
+    return hydratedAlbum;
+  };
   context.loadProblematicFiles = async (force, options = {}) => {
     assert.equal(force, true);
+    summaryLoads += 1;
     const titleAtRefreshStart = previousAlbum.name;
     context.state.utility.problematicSummaryRequestToken = Number(
       context.state.utility.problematicSummaryRequestToken || 0,
     ) + 1;
+    canonicalRefreshRelease.problematicSummaryRequestToken = (
+      context.state.utility.problematicSummaryRequestToken
+    );
+    context.state.utility.completeLoadPromise = canonicalRefreshRelease;
     markCanonicalRefreshStarted();
     await canonicalRefreshRelease;
+    context.state.utility.completeLoadPromise = null;
     context.state.utility.problematicFiles = [targetAlbum];
     if (options.render !== false) renderedTitles.push(titleAtRefreshStart);
     return context.state.utility.problematicFiles;
@@ -3834,6 +3848,8 @@ test('terminal Problematic Files refresh does not render its prior selection dur
   );
   assert.equal(context.state.utility.selectedProblematicKey, targetAlbum.key);
   assert.equal(context.state.utility.problematicNavigationActiveToken, 0);
+  assert.equal(summaryLoads, 1, 'navigation must reuse the terminal post-save summary');
+  assert.equal(detailLoads, 3, 'navigation must retry canonical detail without refreshing the summary');
 });
 
 test('terminal Problematic Files refresh does not repaint stale detail while Settings is hidden', async () => {
@@ -7092,6 +7108,52 @@ test('track problem navigation waits out a stale summary before refreshing resto
   assert.deepEqual(opens, [canonicalAlbum.key]);
   assert.equal(staleDetailLoads, 2);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
+});
+
+test('track problem navigation reuses an in-flight summary before refreshing it again', async () => {
+  const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
+  const summaryAlbum = {
+    ...staleAlbum,
+    detail_loaded: false,
+    problematic_track_paths: [],
+    track_paths: [],
+  };
+  const hydratedAlbum = { ...staleAlbum, detail_loaded: true };
+  let releaseSummary;
+  const inFlightSummary = new Promise((resolve) => {
+    releaseSummary = resolve;
+  });
+  const detailLoads = [];
+  const opens = [];
+  let summaryLoads = 0;
+  staleAlbum.detail_loaded = false;
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.completeLoadPromise = inFlightSummary;
+  context.loadProblematicAlbumDetail = async (albumKey) => {
+    detailLoads.push(albumKey);
+    if (detailLoads.length === 1) return null;
+    context.state.utility.problematicFiles = [hydratedAlbum];
+    return hydratedAlbum;
+  };
+  context.loadProblematicFiles = async () => {
+    summaryLoads += 1;
+    return context.state.utility.problematicFiles;
+  };
+  context.openUtilityModal = () => {
+    opens.push(context.state.utility.selectedProblematicKey);
+  };
+
+  const navigation = context.openUtilityModalForTrack(trackPath);
+  setImmediate(() => {
+    context.state.utility.problematicFiles = [summaryAlbum];
+    context.state.utility.completeLoadPromise = null;
+    releaseSummary(context.state.utility.problematicFiles);
+  });
+  await navigation;
+
+  assert.equal(summaryLoads, 0);
+  assert.deepEqual(detailLoads, [staleAlbum.key, staleAlbum.key]);
+  assert.deepEqual(opens, [staleAlbum.key]);
 });
 
 test('track problem navigation refreshes canonical membership when the stale detail key is missing', async () => {

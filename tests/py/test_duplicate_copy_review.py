@@ -1,9 +1,13 @@
 """Pure request-projection contracts; no app/database or filesystem fixtures."""
 from copy import deepcopy
 import json
+from types import SimpleNamespace
 import unittest
 
-from music_app.services.duplicate_copy_review import project_duplicate_copy_review
+from music_app.services.duplicate_copy_review import (
+    DuplicateCopyReferenceService,
+    project_duplicate_copy_review,
+)
 
 
 def copies():
@@ -24,6 +28,52 @@ def copies():
 
 
 class DuplicateCopyReviewTests(unittest.TestCase):
+    def test_opaque_copy_reference_binds_current_paths_without_exposing_them(self):
+        service = DuplicateCopyReferenceService({
+            "hmac": {"secret": "s" * 32, "key_version": 7},
+        })
+        paths = [track["path"] for track in copies()[1]["tracks"]]
+
+        token = service.issue(library_id=5, album_key="album:key", paths=paths)
+
+        self.assertNotIn("private", token.casefold())
+        self.assertTrue(service.matches(
+            token,
+            library_id=5,
+            album_key="album:key",
+            paths=reversed(paths),
+        ))
+        self.assertFalse(service.matches(
+            token,
+            library_id=5,
+            album_key="album:key",
+            paths=[*paths, "C:\\private\\second copy\\03 added.mp3"],
+        ))
+        self.assertFalse(service.matches(
+            token,
+            library_id=6,
+            album_key="album:key",
+            paths=paths,
+        ))
+
+    def test_projection_can_attach_opaque_reference_without_disclosing_paths(self):
+        service = DuplicateCopyReferenceService({
+            "hmac": {"secret": "s" * 32, "key_version": 7},
+        })
+
+        result = project_duplicate_copy_review(
+            copies(),
+            include_paths=False,
+            copy_reference=lambda source: service.issue(
+                library_id=5,
+                album_key="album:key",
+                paths=[track["path"] for track in source["tracks"]],
+            ),
+        )
+
+        self.assertTrue(all(copy["copy_ref"].startswith("dcr1.7.") for copy in result))
+        self.assertNotIn("private", json.dumps(result).casefold())
+
     def test_redacted_projection_allowlists_fields_and_preserves_source_order(self):
         result = project_duplicate_copy_review(copies(), include_paths=False)
         self.assertEqual([r["copy_number"] for r in result], [1, 2])
@@ -121,22 +171,43 @@ class RequestBoundaryHelperTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[2] / "music_app/routes/api_read_asgi_routes.py"
         return ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
 
-    def helper(self, *, paths_allowed, projection=None):
+    def helper(self, *, paths_allowed, delete_allowed=False, projection=None):
         import ast
         from types import SimpleNamespace
         from unittest.mock import Mock
         tree = self.route_tree()
         node = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "_project_missing_album_actions_for_request")
-        allowed = Mock(return_value=SimpleNamespace(as_payload=lambda: {"library.paths.read": paths_allowed}))
+        allowed = Mock(return_value=SimpleNamespace(as_payload=lambda: {
+            "library.paths.read": paths_allowed,
+            "library.inventory.manage": delete_allowed,
+            "library.covers.delete": delete_allowed,
+        }))
         namespace = {
             "Request": object,
             "allowed_actions_for_request": allowed,
             "project_duplicate_copy_review": projection or project_duplicate_copy_review,
             "project_missing_album_actions": Mock(return_value={}),
+            "DuplicateCopyReferenceService": DuplicateCopyReferenceService,
         }
         exec(compile(ast.Module(body=[node], type_ignores=[]), "<actual request helper AST>", "exec"), namespace)
         return namespace[node.name], allowed
+
+    def test_actual_helper_exposes_copy_references_only_with_delete_capability(self):
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            config={},
+            auth_policy_config={"hmac": {"secret": "s" * 32, "key_version": 7}},
+        )), state=SimpleNamespace(current_actor=SimpleNamespace(current_library_id=5)))
+        for delete_allowed in (False, True):
+            with self.subTest(delete_allowed=delete_allowed):
+                payload = {"albums": [{"key": "release", "duplicate_sources": copies()}]}
+                helper, _ = self.helper(paths_allowed=False, delete_allowed=delete_allowed)
+
+                helper(request, payload, include_duplicate_copy_review=True)
+
+                reviews = payload["albums"][0]["duplicate_copy_review"]
+                self.assertEqual(all("copy_ref" in copy for copy in reviews), delete_allowed)
+                self.assertNotIn("private", json.dumps(reviews).casefold())
 
     def test_actual_helper_queries_path_capability_and_projects_before_redaction(self):
         for paths_allowed in (False, True):
@@ -148,9 +219,10 @@ class RequestBoundaryHelperTests(unittest.TestCase):
                 request = object()
                 calls = []
 
-                def inspect_projection(raw, *, include_paths):
+                def inspect_projection(raw, *, include_paths, copy_reference=None):
                     self.assertIs(payload["albums"][0]["duplicate_sources"], sources)
                     self.assertIs(raw, sources)
+                    self.assertIsNone(copy_reference)
                     calls.append(include_paths)
                     return project_duplicate_copy_review(raw, include_paths=include_paths)
 

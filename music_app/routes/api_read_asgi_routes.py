@@ -58,7 +58,7 @@ from music_app.services.policy_asgi import allowed_actions_for_request, require_
 from music_app.services.capability_ui import is_current_library_owner
 from music_app.services.ordered_cover_presentation import project_ordered_covers_for_request
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
-from music_app.services.duplicate_copy_review import project_duplicate_copy_review
+from music_app.services.duplicate_copy_review import DuplicateCopyReferenceService, project_duplicate_copy_review
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -124,24 +124,50 @@ def _project_missing_album_actions_for_request(
 ) -> object:
     allowed_actions = allowed_actions_for_request(
         request,
-        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch", "library.paths.read"),
+        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch", "library.covers.delete", "library.paths.read"),
     )
+    action_payload = allowed_actions.as_payload()
+    copy_reference_service = None
+    if action_payload.get("library.inventory.manage") and action_payload.get("library.covers.delete"):
+        try:
+            copy_reference_service = DuplicateCopyReferenceService({
+                **request.app.state.config,
+                **request.app.state.auth_policy_config,
+            })
+        except (AttributeError, TypeError, ValueError):
+            pass
 
     def visit(value: object) -> None:
         if isinstance(value, dict):
             if isinstance(value.get("duplicate_sources"), list):
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
                 if include_duplicate_copy_review:
+                    album_key = value.get("key")
+
+                    def copy_reference(source):
+                        tracks = source.get("tracks") if isinstance(source, dict) else None
+                        if copy_reference_service is None or not isinstance(album_key, str) or not isinstance(tracks, list):
+                            return None
+                        try:
+                            return copy_reference_service.issue(
+                                library_id=request.state.current_actor.current_library_id,
+                                album_key=album_key,
+                                paths=[track.get("path") for track in tracks if isinstance(track, dict)],
+                            )
+                        except (TypeError, ValueError, UnicodeError):
+                            return None
+
                     value["duplicate_copy_review"] = project_duplicate_copy_review(
                         value["duplicate_sources"],
-                        include_paths=bool(allowed_actions.as_payload().get("library.paths.read")),
+                        include_paths=bool(action_payload.get("library.paths.read")),
+                        copy_reference=copy_reference if copy_reference_service is not None else None,
                     )
-                if not allowed_actions.as_payload().get("library.paths.read"):
+                if not action_payload.get("library.paths.read"):
                     value["duplicate_sources"] = []
             if "suggested_edits" in value or (
                 "album_id" in value and value.get("key") and "album_artist" in value
             ):
-                value["allowed_actions"] = allowed_actions.as_payload()
+                value["allowed_actions"] = action_payload
             if value.get("inventory_status") == "missing":
                 value.update(project_missing_album_actions(value, allowed_actions))
             for nested in tuple(value.values()):

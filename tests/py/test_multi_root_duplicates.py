@@ -370,6 +370,68 @@ def test_punctuation_and_diacritic_variants_do_not_create_a_second_card():
     assert len(get_album_duplicate_sources(albums[0])) == 2
 
 
+def test_case_and_diacritic_duplicate_keeps_both_nine_track_source_tags(tmp_path):
+    original_tag = "Non Al Denaro Non all'amore Nè Al Cielo"
+    variant_tag = "Non al denaro non all'amore né al cielo"
+    tracks = [
+        _track(
+            tmp_path / folder,
+            number,
+            album=album_tag,
+            title=f"Track {number}",
+        )
+        for folder, album_tag in (
+            ("original", original_tag),
+            ("tag-variant", variant_tag),
+        )
+        for number in range(1, 10)
+    ]
+    for track in tracks:
+        track.path.parent.mkdir(parents=True, exist_ok=True)
+        track.path.write_bytes(f"sentinel:{track.path.name}".encode())
+    original_file_state = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in tmp_path.rglob("*.flac")
+    }
+    file_cache = {str(track.path): asdict(track) for track in tracks}
+    original_cache_tags = {
+        path: entry["album"]
+        for path, entry in file_cache.items()
+    }
+
+    albums = build_albums_from_file_cache(file_cache)
+
+    assert len(albums) == 1
+    sources = get_album_duplicate_sources(albums[0])
+    assert len(sources) == 2
+    assert [source["track_count"] for source in sources] == [9, 9]
+    assert [len(source["tracks"]) for source in sources] == [9, 9]
+    assert {
+        Path(source["folder_path"]): (
+            frozenset(Path(track["path"]) for track in source["tracks"]),
+            frozenset(track["album"] for track in source["tracks"]),
+        )
+        for source in sources
+    } == {
+        tmp_path / "original": (
+            frozenset((tmp_path / "original").glob("*.flac")),
+            frozenset({original_tag}),
+        ),
+        tmp_path / "tag-variant": (
+            frozenset((tmp_path / "tag-variant").glob("*.flac")),
+            frozenset({variant_tag}),
+        ),
+    }
+    assert {
+        path: entry["album"]
+        for path, entry in file_cache.items()
+    } == original_cache_tags
+    assert {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in tmp_path.rglob("*.flac")
+    } == original_file_state
+
+
 def test_incomplete_copy_uses_complete_source_for_card_and_keeps_both_sources():
     tracks = [
         _track(

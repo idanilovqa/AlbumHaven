@@ -343,9 +343,10 @@ export class GalleryActions {
     return {
       name: String(await galleryContextName.textContent() || '').trim(),
       infoLabel: await artistInfoTrigger.getAttribute('aria-label'),
-      divider: await galleryContextInlineTotal.evaluate((element) => (
-        getComputedStyle(element, '::before').content.replace(/^['"]|['"]$/gu, '')
-      )),
+      // parity-check: allow-read-only-measurement-evaluate -- read rendered divider content
+      divider: (await galleryContextInlineTotal.evaluate((element) => (
+        getComputedStyle(element, '::before').content
+      ))).replace(/^['"]|['"]$/gu, ''),
       albumCount: String(await galleryContextInlineTotal.textContent() || '').trim(),
       titleLineAligned: titleBoxes.every(overlapsNameLine),
       metadataBelowTitle: Boolean(metadata

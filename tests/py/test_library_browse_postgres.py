@@ -1761,7 +1761,7 @@ def test_global_loose_track_snapshot_keeps_its_prebuild_fingerprint(
     monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
     monkeypatch.setattr(
         browse,
-        "_problematic_inventory_fingerprint",
+        "_non_album_inventory_fingerprint",
         lambda _connection: "fingerprint-before-build",
     )
     monkeypatch.setattr(

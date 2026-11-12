@@ -6956,6 +6956,21 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
   );
   assert.equal(cached.local_covers[0].is_active, true);
   assert.equal(cached.local_covers[1].is_active, false);
+
+  context.applyCoverLookupGalleryPayload({
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Fleet Foxes/old.jpg',
+    local_covers: [{ path: 'N:/Fleet Foxes/old.jpg', is_active: true }],
+    other_art: [],
+  });
+
+  assert.equal(
+    context.state.coverLookup.modal.localCovers[0].path,
+    updatedAlbum.cover_path,
+    'the first lagging inventory read after reopen must retain the newly saved image',
+  );
+  assert.equal(context.state.coverLookup.modal.localCovers[0].is_active, true);
 });
 
 require('node:test')('accepted remote save seeds and selects its new LOCAL card on immediate notification reopen', async () => {
@@ -7006,8 +7021,9 @@ require('node:test')('accepted remote save seeds and selects its new LOCAL card 
       id: 'candidate-1',
       url: 'https://images.example/fleet-foxes.jpg',
       thumbnail_url: 'https://images.example/fleet-foxes-small.jpg',
-      width: 1200,
-      height: 1200,
+      resolution: '599x543',
+      width: 600,
+      height: 543,
       display_only: false,
     }],
   };
@@ -7040,13 +7056,19 @@ require('node:test')('accepted remote save seeds and selects its new LOCAL card 
     [originalPath, false],
   ]);
   assert.equal(cached.local_covers[0].preview_url, 'https://images.example/fleet-foxes-small.jpg');
+  assert.equal(cached.local_covers[0].resolution, '599x543');
   assert.match(
     context.buildCoverLookupCard(cached.local_covers[0], 'local'),
     /src="https:\/\/images\.example\/fleet-foxes-small\.jpg"/,
   );
+  assert.match(
+    context.buildCoverLookupCard(cached.local_covers[0], 'local'),
+    /599x543/,
+  );
 
   context.refreshCoverLookupGallery = async () => {
     assert.equal(context.state.coverLookup.modal.localCovers[0].path, downloadedPath);
+    assert.equal(context.state.coverLookup.modal.localCovers[0].resolution, '599x543');
     assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, downloadedPath);
     assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
   };

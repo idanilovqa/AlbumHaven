@@ -636,9 +636,12 @@ function updateGalleryMainControls() {
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
     // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
     const libraryWide = button.dataset.libraryWide === '1';
-    const selectedArtist = Boolean(String(state.view?.selected_artist || '').trim());
+    const selectedArtist = String(state.view?.selected_artist || '').trim();
+    const pendingArtist = String(state.ui?.pendingSidebarSelectedArtist || '').trim();
+    const artistSelectionPending = Boolean(pendingArtist && pendingArtist !== selectedArtist);
     const artistFamily = !libraryWide && selectedArtist && !String(state.view?.query || '').trim();
     const familyCountReady = artistFamily
+      && !artistSelectionPending
       && typeof hasHydratedArtistNonAlbumAvailability === 'function'
       && hasHydratedArtistNonAlbumAvailability();
     const scopePending = libraryWide

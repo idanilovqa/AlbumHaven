@@ -330,6 +330,269 @@ test('production optimistic split and re-merge keep notification and immediate t
   );
 });
 
+test('stale task polling cannot regress an active optimistic split or re-merge', async () => {
+  class TestButton {}
+  const tracks = Array.from({ length: 4 }, (_value, index) => ({
+    path: `N:/Music/DDT/Remixes/0${index + 1}.flac`,
+  }));
+  const original = { key: 'ddt::remixes', name: 'Remixes', album_artist: 'DDT', tracks };
+  const releases = [
+    { key: 'ddt::remixes', name: 'Remixes', album_artist: 'DDT', tracks: tracks.slice(2) },
+    { key: 'ddt::remixes 2', name: 'Remixes 2', album_artist: 'DDT', tracks: tracks.slice(0, 2) },
+  ];
+  const merged = {
+    ...original,
+    cover_path: 'N:/Music/DDT/Remixes/folder.jpg',
+    tracks: [...tracks],
+  };
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [{
+          id: 'remixes-task', status: 'running', progress_label: 'Searching...',
+          album: original.name, album_payload: original,
+        }],
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    mergeCoverLookupTasksWithNotifications: tasksToMerge => tasksToMerge,
+    persistCoverLookupNotificationTasks() {},
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async current => choices.push(current);
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, releases);
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'remixes-task', status: 'pending', progress_label: 'Queued',
+    album: original.name, album_payload: original,
+  }], 'refresh');
+  await context.openCoverLookupModal(original, { taskId: 'remixes-task' });
+  assert.equal(choices.length, 1, 'the stale pre-split task still opens the optimistic chooser');
+  assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Searching...');
+
+  context.recordCoverLookupOptimisticSplit(releases[1], [merged]);
+  Object.assign(context.state.coverLookup.tasks[0], {
+    current_user_cover_preview_url: '/cover?album=remixes&v=optimistic',
+    current_cover_preview_url: '/cover?album=remixes&v=current',
+    notification_action_taken: true,
+    cancel_requested: true,
+    result_kind: '',
+    created_at: '2026-11-12T12:00:00Z',
+    finished_at: '',
+    notification_completed_at: '',
+    possible_matches: [{ id: 'optimistic-candidate' }],
+    possible_match_count: 1,
+    candidate_updated_at: '2026-11-12T12:00:01Z',
+    job_kind: 'optimistic-remerge',
+    selected_candidate_id: 'optimistic-candidate',
+    updated_albums: [merged],
+  });
+  assert.equal(
+    context.state.coverLookup.tasks[0].album_payload.cover_path,
+    merged.cover_path,
+    'the optimistic re-merge updates the task payload before the next poll',
+  );
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'remixes-task', status: 'pending', progress_label: 'Queued',
+    current_user_cover_preview_url: '', notification_action_taken: false,
+    current_cover_preview_url: '/cover?album=remixes&v=stale',
+    cancel_requested: false, result_kind: 'interrupted',
+    created_at: '2026-11-12T11:00:00Z', finished_at: '2026-11-12T11:01:00Z',
+    notification_completed_at: '2026-11-12T11:01:00Z',
+    possible_matches: [{ id: 'stale-candidate' }], possible_match_count: 0,
+    candidate_updated_at: '2026-11-12T11:00:01Z', job_kind: 'stale-search',
+    selected_candidate_id: 'stale-candidate', updated_albums: [original],
+    album: original.name, album_payload: original,
+  }], 'refresh');
+  await context.openCoverLookupModal(
+    context.state.coverLookup.tasks[0].album_payload,
+    { taskId: 'remixes-task' },
+  );
+
+  assert.equal(choices.length, 1, 'the stale poll must not restore the obsolete split chooser');
+  assert.equal(context.state.coverLookup.modal.album.key, merged.key);
+  assert.equal(context.state.coverLookup.modal.album.tracks.length, tracks.length);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Searching...');
+  assert.equal(
+    context.state.coverLookup.tasks[0].album_payload.cover_path,
+    merged.cover_path,
+    'the stale pending response must not discard optimistic re-merge metadata',
+  );
+  assert.equal(
+    context.state.coverLookup.tasks[0].current_user_cover_preview_url,
+    '/cover?album=remixes&v=optimistic',
+  );
+  assert.equal(
+    context.state.coverLookup.tasks[0].current_cover_preview_url,
+    '/cover?album=remixes&v=current',
+  );
+  assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
+  assert.equal(context.state.coverLookup.tasks[0].cancel_requested, true);
+  assert.equal(context.state.coverLookup.tasks[0].result_kind, '');
+  assert.equal(context.state.coverLookup.tasks[0].created_at, '2026-11-12T12:00:00Z');
+  assert.equal(context.state.coverLookup.tasks[0].finished_at, '');
+  assert.equal(context.state.coverLookup.tasks[0].notification_completed_at, '');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks[0].possible_matches, candidate => candidate.id),
+    ['optimistic-candidate'],
+  );
+  assert.equal(context.state.coverLookup.tasks[0].possible_match_count, 1);
+  assert.equal(context.state.coverLookup.tasks[0].candidate_updated_at, '2026-11-12T12:00:01Z');
+  assert.equal(context.state.coverLookup.tasks[0].job_kind, 'optimistic-remerge');
+  assert.equal(context.state.coverLookup.tasks[0].selected_candidate_id, 'optimistic-candidate');
+  assert.equal(context.state.coverLookup.tasks[0].updated_albums[0].cover_path, merged.cover_path);
+
+  context.state.coverLookup.tasks = [{
+    id: 'reused-task',
+    status: 'running',
+    search_generation: 'generation-old',
+    created_at: '2026-11-12T11:00:00Z',
+    possible_matches: [{ id: 'old-candidate' }],
+  }];
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'reused-task',
+    status: 'pending',
+    search_generation: 'generation-new',
+    created_at: '2026-11-12T12:00:00Z',
+    possible_matches: [{ id: 'new-candidate' }],
+  }], 'refresh');
+  assert.equal(context.state.coverLookup.tasks[0].status, 'pending');
+  assert.equal(context.state.coverLookup.tasks[0].search_generation, 'generation-new');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks[0].possible_matches, candidate => candidate.id),
+    ['new-candidate'],
+    'a newer durable search generation may reuse the task id',
+  );
+
+  context.state.coverLookup.tasks = [{
+    id: 'same-generation-task', status: 'running', search_generation: 'generation-same',
+    possible_matches: [{ id: 'current-candidate' }],
+  }];
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'same-generation-task', status: 'pending', search_generation: 'generation-same',
+    possible_matches: [{ id: 'stale-candidate' }],
+  }], 'refresh');
+  assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[0].possible_matches[0].id, 'current-candidate');
+
+  for (const [currentGeneration, incomingGeneration] of [
+    ['generation-old', ''],
+    ['', 'generation-new'],
+  ]) {
+    context.state.coverLookup.tasks = [{
+      id: 'mixed-generation-task', status: 'running', search_generation: currentGeneration,
+      created_at: '2026-11-12T11:00:00Z',
+    }];
+    context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+      id: 'mixed-generation-task', status: 'pending', search_generation: incomingGeneration,
+      created_at: '2026-11-12T12:00:00Z',
+    }], 'refresh');
+    assert.equal(
+      context.state.coverLookup.tasks[0].status,
+      'pending',
+      'mixed legacy/durable generations are not proven stale',
+    );
+  }
+
+  vm.runInContext(`coverLookupPendingRemoteSaves.set('generation-save-task', {
+    saveGeneration: 'old-save-generation'
+  })`, context);
+  context.state.coverLookup.tasks = [{
+    id: 'generation-save-task', status: 'running', search_generation: 'generation-old',
+    created_at: '2026-11-12T11:00:00Z',
+  }];
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'generation-save-task', status: 'pending', search_generation: 'generation-new',
+    created_at: '2026-11-12T12:00:00Z',
+  }], 'refresh');
+  const appliedAlbums = [];
+  context.state.coverLookup.appliedTaskUpdateSignatures = {};
+  context.clearOptimisticAlbumCovers = albums => appliedAlbums.push(...albums);
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  const newGenerationTerminal = {
+    id: 'generation-save-task',
+    status: 'completed',
+    search_generation: 'generation-new',
+    save_generation: '',
+    updated_albums: [merged],
+  };
+  context.applyCoverLookupTaskUpdates(newGenerationTerminal);
+  assert.equal(
+    appliedAlbums.length,
+    1,
+    'a reused task generation must not inherit the previous generation save marker',
+  );
+
+  vm.runInContext(`coverLookupPendingRemoteSaves.set('same-generation-save-task', {
+    saveGeneration: 'active-save-generation'
+  })`, context);
+  context.state.coverLookup.tasks = [{
+    id: 'same-generation-save-task', status: 'running', search_generation: 'generation-same',
+  }];
+  context.mergeCoverLookupTaskSummaries([{
+    id: 'same-generation-save-task', status: 'pending', search_generation: 'generation-same',
+  }], 'refresh');
+  assert.equal(context.isStalePendingRemoteSaveUpdate({
+    id: 'same-generation-save-task', status: 'completed', save_generation: 'older-save-generation',
+  }), true, 'same-generation save suppression remains active');
+
+  vm.runInContext(`coverLookupPendingRemoteSaves.set('older-generation-task', {
+    saveGeneration: 'current-save-generation'
+  })`, context);
+  context.state.coverLookup.tasks = [{
+    id: 'older-generation-task', status: 'running', search_generation: 'generation-current',
+    created_at: '2026-11-12T12:00:00Z',
+  }];
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'older-generation-task', status: 'pending', search_generation: 'generation-older',
+    created_at: '2026-11-12T11:00:00Z',
+  }], 'refresh');
+  assert.equal(context.state.coverLookup.tasks[0].search_generation, 'generation-current');
+  assert.equal(context.isStalePendingRemoteSaveUpdate({
+    id: 'older-generation-task', status: 'completed', save_generation: 'older-save-generation',
+  }), true, 'an older generation cannot retire the current save marker');
+
+  for (const [currentCreatedAt, incomingCreatedAt] of [
+    ['2026-11-12T12:00:00Z', '2026-11-12T12:00:00Z'],
+    ['', '2026-11-12T13:00:00Z'],
+    ['2026-11-12T12:00:00Z', 'not-a-date'],
+  ]) {
+    context.state.coverLookup.tasks = [{
+      id: 'unproven-generation-task', status: 'running', search_generation: 'generation-current',
+      created_at: currentCreatedAt,
+    }];
+    context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+      id: 'unproven-generation-task', status: 'pending', search_generation: 'generation-other',
+      created_at: incomingCreatedAt,
+    }], 'refresh');
+    assert.equal(
+      context.state.coverLookup.tasks[0].search_generation,
+      'generation-current',
+      'equal or invalid execution timestamps cannot prove newer ownership',
+    );
+  }
+});
+
 test('split album conflict closes Cover Lookup, asks in a compact chooser, then opens the chosen release', async () => {
   class TestButton {}
   const oldAlbum = { album_id: 40, name: 'Old Album', album_artist: 'Artist' };
@@ -1290,6 +1553,122 @@ test('gallery responses cannot overwrite another album or a newer gallery reques
   requests[2]({ ok: true, json: async () => ({ ok: true, id: 'older' }) });
   await older;
   assert.deepEqual(applied, ['second', 'newer']);
+});
+
+test('latest optimistic local cover remains selected across stale gallery reconciliation', () => {
+  const context = vm.createContext({
+    document: { getElementById: () => null },
+    state: { coverLookup: { modal: { album: null } } },
+    console,
+    getAlbumRequestKey: album => album.key,
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+
+  const existingAlbum = { key: 'existing-cover' };
+  const existingGallery = {
+    local_covers: [
+      { path: '/covers/old.jpg', is_active: true },
+      { path: '/covers/existing.jpg', is_active: false },
+    ],
+    active_cover_path: '/covers/old.jpg',
+    selected_source_path: '/covers/old.jpg',
+  };
+  context.cacheCoverLookupGalleryPayload(existingAlbum, existingGallery);
+  context.cacheOptimisticLocalCoverGallery(existingAlbum, { path: '/covers/existing.jpg' });
+  const reconciledExisting = context.reconcileCoverLookupLocalInventory(
+    existingAlbum,
+    existingGallery,
+    false,
+  );
+  assert.equal(reconciledExisting.selected_source_path, '/covers/existing.jpg');
+
+  const addedAlbum = { key: 'two-added-covers' };
+  const staleGallery = {
+    local_covers: [{ path: '/covers/old.jpg', is_active: true }],
+    active_cover_path: '/covers/old.jpg',
+    selected_source_path: '/covers/old.jpg',
+  };
+  context.cacheCoverLookupGalleryPayload(addedAlbum, staleGallery);
+  context.cacheOptimisticLocalCoverGallery(addedAlbum, { path: '/covers/first-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(addedAlbum, { path: '/covers/second-new.jpg' });
+  const reconciledAdded = context.reconcileCoverLookupLocalInventory(addedAlbum, staleGallery, false);
+  assert.equal(reconciledAdded.selected_source_path, '/covers/second-new.jpg');
+  assert.deepEqual(
+    Array.from(reconciledAdded.local_covers, cover => cover.path),
+    ['/covers/second-new.jpg', '/covers/first-new.jpg', '/covers/old.jpg'],
+  );
+});
+
+test('authoritative latest cover stays selected while an older addition remains pending', () => {
+  const context = vm.createContext({
+    document: { getElementById: () => null },
+    state: { coverLookup: { modal: { album: null } } },
+    console,
+    getAlbumRequestKey: album => album.key,
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+
+  const album = { key: 'latest-confirmed-first-pending' };
+  const originalGallery = {
+    local_covers: [{ path: '/covers/old.jpg', is_active: true }],
+    active_cover_path: '/covers/old.jpg',
+    selected_source_path: '/covers/old.jpg',
+  };
+  context.cacheCoverLookupGalleryPayload(album, originalGallery);
+  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/first-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/latest-new.jpg' });
+
+  const reconciled = context.reconcileCoverLookupLocalInventory(album, {
+    ...originalGallery,
+    local_covers: [
+      { path: '/covers/latest-new.jpg', is_active: true },
+      { path: '/covers/old.jpg', is_active: false },
+    ],
+    active_cover_path: '/covers/latest-new.jpg',
+    selected_source_path: '/covers/latest-new.jpg',
+  }, true);
+
+  assert.equal(reconciled.selected_source_path, '/covers/latest-new.jpg');
+  assert.equal(
+    reconciled.local_covers.find(cover => cover.is_active)?.path,
+    '/covers/latest-new.jpg',
+  );
+  assert.ok(
+    reconciled.local_covers.some(cover => cover.path === '/covers/first-new.jpg'),
+    'the older pending addition remains visible without owning selection',
+  );
+});
+
+test('selected path echo cannot confirm an optimistic cover absent from local inventory', () => {
+  const context = vm.createContext({
+    document: { getElementById: () => null },
+    state: { coverLookup: { modal: { album: null } } },
+    console,
+    getAlbumRequestKey: album => album.key,
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+
+  const album = { key: 'delayed-selected-cover' };
+  const originalGallery = {
+    local_covers: [{ path: '/covers/old.jpg', is_active: true }],
+    active_cover_path: '/covers/old.jpg',
+    selected_source_path: '/covers/old.jpg',
+  };
+  context.cacheCoverLookupGalleryPayload(album, originalGallery);
+  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/first-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/latest-new.jpg' });
+
+  const reconciled = context.reconcileCoverLookupLocalInventory(album, {
+    ...originalGallery,
+    active_cover_path: '/covers/latest-new.jpg',
+    selected_source_path: '/covers/latest-new.jpg',
+  }, true);
+
+  assert.equal(reconciled.selected_source_path, '/covers/latest-new.jpg');
+  assert.equal(
+    reconciled.local_covers.find(cover => cover.is_active)?.path,
+    '/covers/latest-new.jpg',
+  );
 });
 
 function loadCapabilityCoverRoute(actions, { initial = false, parent = false } = {}) {

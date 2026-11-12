@@ -988,6 +988,41 @@ test('production optimistic builder preserves exact split and immediate re-merge
   );
 });
 
+test('optimistic re-merge joins the complete destination when the split card retained its runtime key', () => {
+  const context = loadHelpers();
+  const tracks = Array.from({ length: 4 }, (_value, index) => ({
+    path: `C:\\Music\\DDT\\Remixes\\0${index + 1}.flac`,
+    album: 'Remixes',
+    album_artist: 'DDT',
+    title: `Track ${index + 1}`,
+    track_number: index + 1,
+  }));
+  const original = {
+    key: 'ddt::remixes', name: 'Remixes', album_artist: 'DDT', preview_only: false, tracks,
+  };
+  const split = context.buildOptimisticUpdatedAlbumsFromEdits(original, {
+    [tracks[0].path]: { album: 'Remixes 2' },
+    [tracks[1].path]: { album: 'Remixes 2' },
+  });
+  const splitSource = split.find(album => album.name === 'Remixes');
+  const splitDestination = {
+    ...split.find(album => album.name === 'Remixes 2'),
+    key: original.key,
+  };
+  context.getIndexedAlbum = key => (key === splitSource.key ? splitSource : null);
+
+  const merged = context.buildOptimisticUpdatedAlbumsFromEdits(splitDestination, {
+    [tracks[0].path]: { album: 'Remixes' },
+    [tracks[1].path]: { album: 'Remixes' },
+  });
+
+  assert.equal(merged.length, 1);
+  assert.deepEqual(
+    Array.from(merged[0].tracks, track => track.path).sort(),
+    tracks.map(track => track.path).sort(),
+  );
+});
+
 test('blanking Album on the only track produces no optimistic gallery album', () => {
   const context = loadHelpers();
   const trackPath = 'C:\\Music\\Artist\\Only Album\\01 Only.flac';

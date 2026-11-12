@@ -682,6 +682,56 @@ function createStateForContract() {
   };
 }
 
+test('a newly selected artist disables stale Loose Tracks on first paint until its zero count settles', () => {
+  let opened = 0;
+  const button = {
+    dataset: {},
+    disabled: false,
+    setAttribute(name, value) { this[name] = value; },
+    getAttribute(name) { return this[name]; },
+  };
+  const context = loadRuntime({
+    state: {
+      view: {
+        selected_artist: 'Previous Artist',
+        query: '',
+        non_album_track_count: 2,
+        non_album_track_count_scope: 'previous-artist',
+      },
+      ui: { pendingSidebarSelectedArtist: 'Начало Века' },
+    },
+    window: {},
+    document: {
+      querySelectorAll: selector => selector === '[data-open-non-album-tracks]' ? [button] : [],
+      querySelector: () => null,
+      getElementById: () => null,
+    },
+    getVisibleNonAlbumTracks: () => [{ title: 'Stale track' }],
+    hydrateArtistNonAlbumAvailability: () => new Promise(() => {}),
+    hasHydratedArtistNonAlbumAvailability: () => true,
+    openNonAlbumModal: () => { opened += 1; },
+  });
+  context.ensureGalleryMainState = () => ({ sources: {} });
+
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'the first pending-artist paint must not inherit the previous artist count');
+  context.handleGalleryMainClick({
+    target: { closest: selector => selector === '[data-open-non-album-tracks]' ? button : null },
+    preventDefault() {},
+  });
+  assert.equal(opened, 0, 'a fast click cannot open the stale Loose Tracks collection');
+
+  context.state.view = {
+    selected_artist: 'Начало Века',
+    query: '',
+    non_album_track_count: 0,
+    non_album_track_count_scope: 'new-artist',
+  };
+  context.state.ui.pendingSidebarSelectedArtist = '';
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'the authoritative empty result stays disabled');
+});
+
 test('artist non-album tracks stay disabled until the family count is known', () => {
   const requested = [];
   const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };

@@ -662,6 +662,7 @@ function resetLibraryHomeNavigation() {
     state.gallery.mainState.familyArtists = [];
     delete state.gallery.mainState.familySelectionExplicit;
   }
+  if (typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists');
   state.ui.pendingSidebarRevealArtist = '';
   const sidebarList = document.getElementById('sidebar-list');
   if (sidebarList) {
@@ -736,6 +737,7 @@ function handleSidebarArtistSelectionClick(event) {
   state.ui.pendingSidebarAllArtistsActive = false;
   const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
   const primaryArtistChanged = String(artist || '').trim() !== currentSelectedArtist;
+  if (primaryArtistChanged && typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
   const activeSearchQuery = String(state.view?.query || '').trim();
   const previousGalleryMainState = state.gallery.mainState;
   const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep', 'compilation']);

@@ -1613,6 +1613,39 @@ test('mobile Home restores the cached full Artist Tree before its request comple
   assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
 });
 
+test('mobile Home leaves Loose Tracks mode and restores the full unqueried Artist Tree', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    artists_sidebar: [{ artist: 'Broadcast', count: 7 }, { artist: 'Mono', count: 4 }],
+    show_all_artists_sidebar_link: true,
+  };
+  const { context, calls } = createContext({ cachedRootView, useProductionBuildApiUrl: true });
+  const navigationModes = [];
+  const button = {
+    attributes: { 'data-search-results': 'true' },
+    removeAttribute(name) { delete this.attributes[name]; },
+  };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'mobile-library-button' ? button : getElementById(id);
+  context.usesMobilePageLayout = () => true;
+  context.syncLibraryNavigationMode = mode => navigationModes.push(mode);
+  context.state.ui.nonAlbumLibraryWide = true;
+  context.state.view.query = 'flower kings';
+  context.state.view.artists_sidebar = [{ artist: 'The Flower Kings', count: 1 }];
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.deepEqual(navigationModes, ['artists']);
+  assert.equal(button.attributes['data-search-results'], undefined);
+  assert.equal(context.document.getElementById('search-input').value, '');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.applyViewPayload[0].payload.artists_sidebar)),
+    cachedRootView.artists_sidebar,
+  );
+});
+
 test('mobile Home removes the Artists search-results dot left by an earlier search', () => {
   const { context } = createContext({ searchInputValue: 'DDT', useProductionBuildApiUrl: true });
   const button = {

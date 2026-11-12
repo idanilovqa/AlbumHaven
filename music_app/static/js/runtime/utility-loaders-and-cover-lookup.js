@@ -2291,9 +2291,9 @@ function inferOptimisticBlankAlbumMembership(target, tracks) {
 // Tracks moved into an album that already exists join it, so the optimistic
 // album is the merged one. Only a destination whose track list is fully known
 // can be joined; otherwise the server's answer completes it.
-function joinCompleteDestinationAlbum(bucket, sourceKey, sourceTrackPaths) {
+function joinCompleteDestinationAlbum(bucket, sourceTrackPaths) {
   const key = String(bucket?.key || '').trim().toLowerCase();
-  if (!key || key === sourceKey) return;
+  if (!key) return;
   const candidates = [
     typeof getCachedHydratedTrackModalAlbum === 'function' ? getCachedHydratedTrackModalAlbum(key) : null,
     typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null,
@@ -2511,7 +2511,7 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       groupedAlbum.key = `${baseKey}::year::${year}`;
     }
   });
-  groupedAlbums.forEach((groupedAlbum) => joinCompleteDestinationAlbum(groupedAlbum, sourceKey, sourceTrackPaths));
+  groupedAlbums.forEach((groupedAlbum) => joinCompleteDestinationAlbum(groupedAlbum, sourceTrackPaths));
 
   return groupedAlbums
     .map((bucket) => {

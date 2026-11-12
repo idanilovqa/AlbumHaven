@@ -269,6 +269,20 @@ test('local mutation claim spans image preload and releases after synchronous se
   assert.equal(h.notifications.at(-1)[1], 'error');
 });
 
+test('failed local selection restores the prior inventory selection ledger', async () => {
+  const h = harness();
+  const a = album('A');
+  await h.open(a);
+  const previousGallery = clone(h.server.get('A'));
+
+  const pending = h.context.saveLocalCoverFromLookup('/A/source.jpg');
+  await h.settle(0, 'error');
+  await pending;
+
+  const reconciled = h.context.reconcileCoverLookupLocalInventory(a, previousGallery, false);
+  assert.equal(reconciled.selected_source_path, a.cover_path);
+});
+
 test('successful local save completes when the authoritative image preload stalls', async () => {
   const h = harness(), a = album('A');
   await h.open(a);
@@ -323,6 +337,34 @@ test('a pre-mutation gallery response cannot restore the deleted cover', async (
   await stale;
   assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/settled.jpg'));
   assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/deleted.jpg'));
+});
+
+test('immediate notification reopen does not restore deleted selected art from lagging inventory', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  const fallback = { ...a, cover_path: '/A/source.jpg', cover_revision: 'A-fallback' };
+  h.server.set('A', {
+    ok: true,
+    active_cover_path: a.cover_path,
+    selected_source_path: a.cover_path,
+    local_covers: [
+      { path: a.cover_path, is_active: true },
+      { path: fallback.cover_path, is_active: false },
+    ],
+  });
+  h.requests[0].resolve({ ok: true, json: async () => ({
+    ok: true,
+    updated_albums: [fallback],
+    gallery: clone(h.server.get('A')),
+  }) });
+  await pending;
+  h.context.closeCoverLookupModal();
+
+  await h.open(fallback);
+
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === a.cover_path));
+  assert.equal(h.context.state.coverLookup.modal.activeLocalSelectionPath, fallback.cover_path);
 });
 
 test('closing without reopening settles the local deletion without a new gallery read', async () => {

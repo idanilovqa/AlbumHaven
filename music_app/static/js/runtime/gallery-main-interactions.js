@@ -224,6 +224,9 @@ function getGalleryMainContextSections() {
     : [];
   const scroll = document.getElementById('albums-scroll');
   const labelBottoms = new Map();
+  const pinchLabelBottoms = typeof virtualGrid !== 'undefined'
+    ? virtualGrid?._pinchPreview?.contextLabelBottoms
+    : null;
   if (scroll) {
     const viewportTop = scroll.getBoundingClientRect().top;
     document.querySelectorAll('[data-scroll-artist]').forEach(section => {
@@ -237,7 +240,8 @@ function getGalleryMainContextSections() {
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
     artist_musicbrainz: section.group?.artist_musicbrainz || null,
     top: Number(section.top || 0),
-    labelBottom: labelBottoms.get(galleryMainGroupArtist(section.group))
+    labelBottom: pinchLabelBottoms?.get(virtualGrid.getRenderedSectionKey(section))
+      ?? labelBottoms.get(galleryMainGroupArtist(section.group))
       ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
   })).filter((section) => section.artist);
 }

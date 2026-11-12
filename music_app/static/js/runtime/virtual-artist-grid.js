@@ -854,6 +854,15 @@ class VirtualArtistGrid {
       .map(columns => [columns, this.buildPinchLayout(columns, preview)]));
     const a = this.adjustPinchLayout(preview.layouts.get(low), preview);
     const b = high === low ? a : this.adjustPinchLayout(preview.layouts.get(high), preview);
+    preview.contextLabelBottoms = new Map();
+    preview.sections.forEach((_node, key) => {
+      const section = preview.sectionByKey.get(key);
+      if (section.kind !== 'artist') return;
+      const first = a.section(key), second = b.section(key);
+      if (!first || !second) return;
+      const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
+      preview.contextLabelBottoms.set(key, mix(first.top, second.top) + headerHeight);
+    });
     preview.cards.forEach((card, key) => {
       const first = a.point(key), second = b.point(key);
       if (!first || !second) return;

@@ -6659,7 +6659,10 @@ for (const mode of ['cards', 'covers']) {
       scrollEl.scrollTop = scrollTop;
       const albums = Array.from({ length: 500 }, (_, index) => ({ key: `pinch-${index}`, name: `Album ${index}` }));
       grid.sections = [{ kind: 'artist', sectionKey: 'pinch-draw', group: { artist: 'Pinch Artist', albums } }];
-      const preview = { mode, blocksByColumns: new Map(), headerHeights: new Map(), bodyHeights: new Map(), cards: new Map(), sections: new Map(),
+      const sectionNode = { querySelector: () => null, querySelectorAll: () => [] };
+      const preview = { mode, blocksByColumns: new Map(), headerHeights: new Map(), bodyHeights: new Map(), cards: new Map(),
+        sections: new Map([['artist:pinch-draw', sectionNode]]),
+        sectionByKey: new Map([['artist:pinch-draw', grid.sections[0]]]),
         anchor: { scrollTop, artworkFraction: .4, artworkInset: 0, artworkTrim: 0, offsetTop: 300 }, density: 3 };
       const layout = grid.buildPinchLayout(3, preview);
       const points = [...layout.cards.entries()];
@@ -6701,6 +6704,11 @@ for (const mode of ['cards', 'covers']) {
           assert.equal(anchorY, grid.sectionHeaderHeight);
         }
         assert.equal(preview.cards.size, 20, 'A draw must retain the prepared card set. Bounded mounting is covered by preparePinchPreview tests.');
+        assert.equal(
+          preview.contextLabelBottoms.get('artist:pinch-draw'),
+          grid.sectionHeaderHeight,
+          'Sticky context uses modeled pinch geometry instead of transformed DOM labels.',
+        );
       }
     });
   }

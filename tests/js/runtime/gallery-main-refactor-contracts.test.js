@@ -1867,6 +1867,36 @@ test('context sections measure actual wrapped labels and retain a virtual offscr
   assert.deepEqual(plain(context.getGalleryMainContextSections()).map(section => section.labelBottom), [268, 952]);
 });
 
+test('pinch context keeps the current artist until the modeled next label crosses the header', () => {
+  const sections = [
+    { kind: 'artist', sectionKey: 'artist:first', top: 0, group: { artist: 'First', albums: [{}, {}] } },
+    { kind: 'artist', sectionKey: 'artist:second', top: 400, group: { artist: 'Second', albums: [{}] } },
+  ];
+  const context = loadRuntime({
+    virtualGrid: {
+      sectionHeaderHeight: 52,
+      sections,
+      getRenderedSectionKey: section => section.sectionKey,
+      _pinchPreview: { contextLabelBottoms: new Map([
+        ['artist:first', 180],
+        ['artist:second', 640],
+      ]) },
+    },
+    document: {
+      getElementById: () => ({ scrollTop: 500, getBoundingClientRect: () => ({ top: 100 }) }),
+      querySelectorAll: () => [
+        { dataset: { scrollArtist: 'First' }, querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 900 }) }) },
+        { dataset: { scrollArtist: 'Second' }, querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 120 }) }) },
+      ],
+    },
+  });
+
+  const groups = plain(context.getGalleryMainContextSections());
+  assert.deepEqual(groups.map(group => group.labelBottom), [180, 640], 'temporary transformed DOM labels cannot own pinch context');
+  assert.equal(context.resolveGalleryBarContext({ scrollTop: 639, groups }).artist, 'First');
+  assert.equal(context.resolveGalleryBarContext({ scrollTop: 640, groups }).artist, 'Second');
+});
+
 test('canonical parent Cards route does not fall back to an unrelated saved Rows default', () => {
   const mainState = {};
   const context = loadRuntime({ URL,

@@ -19,8 +19,8 @@ test('ordered covers keep front art size and rear art outside the track table', 
                 <span class="album-artbox"><button class="track-modal-cover-button" type="button"></button></span>
               </div>
               <div class="album-details-cover-stack__navigation">
-                <button class="button ui-button action-button action-button--bare album-details-cover-nav album-details-cover-nav--previous" type="button">&lt;</button>
-                <button class="button ui-button action-button action-button--bare album-details-cover-nav album-details-cover-nav--next" type="button">&gt;</button>
+                <button class="button ui-button action-button action-button--bare album-details-cover-nav album-details-cover-nav--previous" type="button"><svg class="action-button__icon ui-icon" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg></button>
+                <button class="button ui-button action-button action-button--bare album-details-cover-nav album-details-cover-nav--next" type="button"><svg class="action-button__icon ui-icon" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></button>
               </div>
             </div>
           </div>
@@ -46,6 +46,12 @@ test('ordered covers keep front art size and rear art outside the track table', 
   await expect(page.locator('.album-details-cover-stack__rear.is-top')).toHaveCSS('cursor', 'pointer');
   await expect(page.locator('.album-details-cover-nav--previous')).toHaveCSS('border-left-width', '0px');
   await expect(page.locator('.album-details-cover-nav--previous')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await page.locator('.album-details-cover-nav--previous').hover();
+  await expect(page.locator('.album-details-cover-nav--previous')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(page.locator('.album-details-cover-nav--previous')).toHaveCSS('outline-style', 'none');
+  await expect(page.locator('.album-details-cover-nav--previous')).toHaveCSS('box-shadow', 'none');
+  await expect(page.locator('.album-details-cover-nav--previous')).toHaveCSS('cursor', 'pointer');
+  await expect(page.locator('.album-details-cover-nav--previous .ui-icon')).not.toHaveCSS('filter', 'none');
 });
 
 test('reduced motion keeps the ordered-cover stack static', async ({ page }) => {

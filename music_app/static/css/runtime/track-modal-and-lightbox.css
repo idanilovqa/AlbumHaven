@@ -261,7 +261,20 @@
   background: transparent;
   color: var(--text);
   pointer-events: auto;
+  cursor: pointer;
   transform: translateY(-50%);
+}
+:root .track-modal-dialog .album-details-cover-stack .album-details-cover-nav.action-button--bare:is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+  border-color: transparent !important;
+  outline: none;
+  background: transparent !important;
+  box-shadow: none;
+}
+:root .album-details-cover-nav:is(:hover, :active):not(:disabled):not([aria-disabled='true']) .ui-icon {
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.78));
+}
+:root .album-details-cover-nav:focus-visible:not(:disabled):not([aria-disabled='true']) .ui-icon {
+  filter: drop-shadow(0 0 5px var(--appearance-interaction-outline, var(--appearance-accent, #72baff))) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.78));
 }
 .album-details-cover-nav--previous { left: 2px; }
 .album-details-cover-nav--next { right: 2px; }

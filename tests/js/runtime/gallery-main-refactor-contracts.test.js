@@ -487,6 +487,8 @@ test('stored artist metadata survives the existing sticky-context projection int
   assert.match(galleryMainInteractionsSource, /buildGalleryArtistSummaryHtml\s*\(/);
   assert.equal((galleryBarTemplateSource.match(/data-gallery-context-metadata/g) || []).length, 1,
     'the shared GalleryBar macro keeps one metadata slot for the gallery context');
+  assert.match(galleryBarTemplateSource, /gallery-bar__title[\s\S]*data-gallery-context-name[\s\S]*data-gallery-context-metadata[\s\S]*data-gallery-context-artist-divider[\s\S]*<\/div><span class="gallery-bar__summary"/,
+    'the server template keeps artist metadata beside the name and information action');
   assert.match(indexTemplateSource, /gallery_bar\([^)]*gallery_context=true/);
 });
 

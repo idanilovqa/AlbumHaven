@@ -56,3 +56,156 @@ test('successful boundary keeps its configured timeout and one existing diagnost
   assert.equal(result, diagnostics);
   assert.equal(reads, 1);
 });
+
+test('playback diagnostics expose failure-safe start ownership and engine lifecycle state', async () => {
+  const { readGaplessPlaybackDiagnostics } = await import(helperUrl);
+  const page = {
+    evaluate: async (readDiagnostics) => {
+      globalThis.getStreamingPlaybackSnapshot = () => ({
+        mode: 'starting',
+        sampleRate: 48000,
+        diagnostics: {},
+      });
+      globalThis.state = {
+        player: {
+          ownership: {
+            activeClaim: { token: 'must-not-leak' },
+            blockedReason: '',
+            lockStatus: 'owned',
+            requestVersion: 6,
+          },
+          streaming: {
+            context: { state: 'running' },
+            lifecycleEpoch: 4,
+            pendingPromotion: { streamId: 11 },
+            pendingSeek: { kind: 'replacement' },
+            pendingTransportRecovery: { attempt: 1 },
+            roles: {
+              current: {
+                firstFrameNotified: false,
+                generation: 9,
+                streamId: 10,
+                track: { path: 'must-not-leak' },
+              },
+              continuity: null,
+            },
+            socket: { readyState: 0 },
+            startRequestId: 12,
+            stopPromise: Promise.resolve(),
+          },
+        },
+      };
+      try {
+        return readDiagnostics();
+      } finally {
+        delete globalThis.getStreamingPlaybackSnapshot;
+        delete globalThis.state;
+      }
+    },
+  };
+
+  const diagnostics = await readGaplessPlaybackDiagnostics(page);
+
+  assert.deepEqual(diagnostics.engineLifecycle, {
+    audioContextState: 'running',
+    lifecycleEpoch: 4,
+    pendingPromotion: true,
+    pendingSeek: true,
+    pendingStop: true,
+    pendingTransportRecovery: true,
+    playerCurrentPresent: false,
+    socketReadyState: 0,
+    startRequestId: 12,
+  });
+  assert.deepEqual(diagnostics.ownership, {
+    activeClaim: true,
+    blockedReason: '',
+    lockStatus: 'owned',
+    requestVersion: 6,
+  });
+  assert.deepEqual(diagnostics.roleDiagnostics.current, {
+    eosReceived: false,
+    firstFrameNotified: false,
+    generation: 9,
+    initialCreditDeferred: false,
+    metadataAccepted: false,
+    provisionalTotalFrames: 0,
+    streamId: 10,
+    targetBufferFrames: 0,
+    timelineStartFrame: 0,
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostics), /must-not-leak/);
+});
+
+test('streaming diagnostics observer preserves initial-start lifecycle transitions', async () => {
+  const { createStreamingReplacementDiagnosticsObserver } = await import(helperUrl);
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  let sampleInterval;
+
+  globalThis.getStreamingPlaybackSnapshot = () => ({
+    mode: 'starting',
+    diagnostics: {},
+  });
+  globalThis.state = {
+    player: {
+      ownership: {
+        activeClaim: { token: 'must-not-leak' },
+        lockStatus: 'owned',
+        requestVersion: 2,
+      },
+      streaming: {
+        context: { state: 'running' },
+        lifecycleEpoch: 3,
+        roles: { current: null, continuity: null },
+        socket: { readyState: 0 },
+        startRequestId: 4,
+      },
+    },
+  };
+  globalThis.setInterval = callback => {
+    sampleInterval = callback;
+    return 17;
+  };
+  globalThis.clearInterval = intervalId => assert.equal(intervalId, 17);
+
+  const page = {
+    evaluateHandle: async createObserver => {
+      const observer = createObserver();
+      return {
+        evaluate: async finishObserver => finishObserver(observer),
+        dispose: async () => {},
+      };
+    },
+  };
+
+  try {
+    const observer = await createStreamingReplacementDiagnosticsObserver(page);
+    globalThis.state.player.streaming.startRequestId = 5;
+    globalThis.state.player.streaming.stopPromise = Promise.resolve();
+    sampleInterval();
+    const samples = await observer.finish();
+
+    assert.deepEqual(samples.at(-1).engineLifecycle, {
+      audioContextState: 'running',
+      lifecycleEpoch: 3,
+      pendingStop: true,
+      pendingTransportRecovery: false,
+      playerCurrentPresent: false,
+      socketReadyState: 0,
+      startRequestId: 5,
+    });
+    assert.deepEqual(samples.at(-1).ownership, {
+      activeClaim: true,
+      blockedReason: '',
+      lockStatus: 'owned',
+      requestVersion: 2,
+    });
+    assert.doesNotMatch(JSON.stringify(samples), /must-not-leak/);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+    delete globalThis.getStreamingPlaybackSnapshot;
+    delete globalThis.state;
+  }
+});

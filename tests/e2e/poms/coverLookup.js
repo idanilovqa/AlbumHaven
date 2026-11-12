@@ -258,6 +258,7 @@ export class CoverLookup extends BasePage {
       let baseline;
       let busyButtonSeen = false;
       let startedStatusSeen = false;
+      let toastSeen = false;
       let settledFrames = 0;
       let sampledFrames = 0;
       const delta = { height: 0, width: 0, x: 0, y: 0 };
@@ -282,7 +283,10 @@ export class CoverLookup extends BasePage {
             (candidate) => candidate.querySelector('.on-page-alert__message')
               ?.textContent?.trim() === 'Cover search started.',
           );
-          if (modal && progress?.getBoundingClientRect().height > 0 && toast) {
+          const runningLayoutVisible = modal && progress?.getBoundingClientRect().height > 0;
+          if (runningLayoutVisible && !toast && !baseline) baseline = modal.getBoundingClientRect();
+          if (runningLayoutVisible && toast) {
+            toastSeen = true;
             const style = getComputedStyle(toast);
             const settled = toast.classList.contains('is-visible')
               && style.opacity === '1'
@@ -310,7 +314,7 @@ export class CoverLookup extends BasePage {
               });
               return;
             }
-          } else if (baseline) {
+          } else if (baseline && toastSeen) {
             finish({ error: 'Running progress or toast disappeared during entrance measurement.' });
             return;
           }

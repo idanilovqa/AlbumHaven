@@ -40,7 +40,9 @@ test('alerts wrap adjacent actions and lightbox closure restores focus without c
   assert.match(alertCss, /\.on-page-alert__actions\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap/s);
   assert.match(lightbox, /let imageLightboxReturnFocus = null/);
   const closeLightbox = lightbox.match(/function closeImageLightbox\(\)[^]*?\n\}/)?.[0] || '';
-  assert.match(closeLightbox, /const returnFocus = imageLightboxReturnFocus[^]*if \(returnFocus\?\.isConnected\) returnFocus\.focus\?\.\(\)/);
+  assert.match(closeLightbox, /const returnFocus = imageLightboxReturnFocus[^]*let focusTarget = returnFocus\?\.isConnected \? returnFocus : null/);
+  assert.match(closeLightbox, /'data-open-lightbox', 'data-cover-lookup-open-lightbox'[^]*if \(replacements\.length === 1\) \[focusTarget\] = replacements/);
+  assert.match(closeLightbox, /focusTarget\?\.focus\?\.\(\)/);
   assert.doesNotMatch(closeLightbox, /closeCoverLookupModal\s*\(/);
 });
 

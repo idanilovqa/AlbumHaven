@@ -194,7 +194,9 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   if (!albumHasDisplayCover(album)) {
     return '<div class="cover-placeholder">No cover art</div>';
   }
-  const coverPriority = options.coverPriority === 'visible' ? 'visible' : 'near';
+  const coverPriority = ['visible', 'background'].includes(options.coverPriority)
+    ? options.coverPriority
+    : 'near';
   const loadingAttribute = coverPriority === 'visible' ? 'eager' : 'lazy';
   const fetchPriorityAttribute = coverPriority === 'visible' ? 'high' : 'low';
   const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -344,6 +346,7 @@ class VirtualArtistGrid {
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
     this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmTimeout = 0;
     this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
@@ -515,9 +518,14 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
-    if (!this._albumDetailPrewarmRaf) return;
-    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
-    this._albumDetailPrewarmRaf = 0;
+    if (this._albumDetailPrewarmRaf) {
+      cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+      this._albumDetailPrewarmRaf = 0;
+    }
+    if (this._albumDetailPrewarmTimeout) {
+      clearBrowserTimeout(this._albumDetailPrewarmTimeout);
+      this._albumDetailPrewarmTimeout = 0;
+    }
   }
 
   scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
@@ -536,15 +544,19 @@ class VirtualArtistGrid {
       this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
         if (generation !== this._albumDetailPrewarmGeneration) return;
         this._albumDetailPrewarmRaf = 0;
-        if (
-          renderGeneration !== this._renderGeneration
-          || !this.isScrollSettled
-          || this.lastKey !== rangeKey
-          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
-        ) {
-          return;
-        }
-        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        this._albumDetailPrewarmTimeout = scheduleBrowserTimeout(() => {
+          this._albumDetailPrewarmTimeout = 0;
+          if (
+            generation !== this._albumDetailPrewarmGeneration
+            || renderGeneration !== this._renderGeneration
+            || !this.isScrollSettled
+            || this.lastKey !== rangeKey
+            || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+          ) {
+            return;
+          }
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        }, 250);
       });
     });
   }
@@ -614,6 +626,12 @@ class VirtualArtistGrid {
     const normalizedToken = Number(token);
     if (!force && (!normalizedToken || !this._activeCoverLoadUserActionTokens.has(normalizedToken))) {
       return false;
+    }
+    if (!force && (this._raf || this._measureRaf || this._measureTimeout || this._stabilizeRaf)) {
+      scheduleBrowserAnimationFrame(() => {
+        this.resumeSelectedArtistCoverLoadsAfterUserAction(normalizedToken);
+      });
+      return true;
     }
     if (!this._activeCoverLoadUserActionTokens.size) return false;
     if (force) {
@@ -1170,6 +1188,7 @@ class VirtualArtistGrid {
         restoreScroll();
         if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
         if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+        if (this._raf) return;
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration
@@ -1851,9 +1870,6 @@ class VirtualArtistGrid {
     if (!(this.scrollEl instanceof HTMLElement) || !(this.containerEl instanceof HTMLElement)) {
       return;
     }
-    if (String(state?.view?.selected_artist || '').trim()) {
-      return;
-    }
     const scrollRect = this.scrollEl.getBoundingClientRect();
     let promotedCoverCount = 0;
     this.containerEl.querySelectorAll('.cover img').forEach((image) => {
@@ -2531,10 +2547,13 @@ class VirtualArtistGrid {
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
-      const coverPriority = blockBottom >= Number(options.viewportTop || 0)
-        && blockTop <= Number(options.viewportBottom || 0)
+      const visible = blockBottom >= Number(options.viewportTop || 0)
+        && blockTop <= Number(options.viewportBottom || 0);
+      const coverPriority = visible
         ? 'visible'
-        : 'near';
+        : section.sectionType === 'primary' && String(state?.view?.selected_artist || '').trim()
+          ? 'background'
+          : 'near';
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (

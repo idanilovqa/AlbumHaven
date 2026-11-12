@@ -212,7 +212,10 @@ export async function exerciseProblematicNativeJumps({ page, shell, capture, exp
     await expect.poll(async () => Boolean(await capture.detail(item.key))).toBe(true);
     const expected = problemDetailExpectation(await capture.detail(item.key));
     await expect(shell.heading).toHaveText(expected.title);
-    if (expected.renderedPaths.length) await shell.detailTrackByPath(expected.renderedPaths[0]).scrollIntoViewIfNeeded();
+    if (expected.renderedPaths.length) {
+      await shell.waitForProblematicSummarySettled();
+      await shell.detailTrackByPath(expected.renderedPaths[0]).scrollIntoViewIfNeeded();
+    }
     await expect(async () => {
       expectProblematicRenderedIdentity(await shell.readProblemSelectionEvidence(), item, expected, requireTracks);
     }).toPass({ timeout: 10000 });

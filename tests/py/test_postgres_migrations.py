@@ -465,10 +465,11 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     migration_numbers = [int(name[:4]) for name in migration_names]
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    assert set(migration_numbers) == set(range(1, 122)) | set(range(171, 178))
-    duplicates = {number for number in migration_numbers if migration_numbers.count(number) > 1}
-    assert duplicates == {104, 105, 106, 107}
-    assert migration_names[-91:] == [
+    # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
+    # but no two migrations ever share a number.
+    assert len(set(migration_numbers)) == len(migration_numbers)
+    assert migration_names[-92:] == [
+        "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -532,13 +533,9 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0102_narrow_synthetic_unknown_album_identity_guard.sql",
         "0103_repair_synthetic_unknown_cover_task_identities.sql",
         "0104_create_playback_claims.sql",
-        "0104_preserve_cover_notification_order.sql",
         "0105_add_playback_claim_handoffs.sql",
-        "0105_index_cover_notification_track_sets.sql",
         "0106_create_android_artifact_access.sql",
-        "0106_index_accent_insensitive_artist_search.sql",
         "0107_add_android_device_key_signer.sql",
-        "0107_add_local_cover_inventory.sql",
         "0108_add_scoped_relation_projection.sql",
         "0109_add_incremental_gallery_membership.sql",
         "0110_journal_gallery_metadata_changes.sql",
@@ -553,6 +550,10 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0119_create_cover_mutation_revisions.sql",
         "0120_create_deleted_loose_track_removal_function.sql",
         "0121_create_non_album_track_snapshots.sql",
+        "0122_preserve_cover_notification_order.sql",
+        "0123_index_cover_notification_track_sets.sql",
+        "0124_index_accent_insensitive_artist_search.sql",
+        "0125_add_local_cover_inventory.sql",
         "0171_create_musicbrainz_artist_enrichment.sql",
         "0172_add_musicbrainz_artist_discogs_link.sql",
         "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",

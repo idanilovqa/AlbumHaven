@@ -1797,6 +1797,30 @@ test('handleSidebarArtistSelectionClick closes the mobile drawer before loading 
   }]);
 });
 
+test('sidebar artist navigation suspends old gallery covers until the selected view renders', async () => {
+  let finishRequest;
+  const { context, calls } = createContext({
+    fetchAndRenderResult: new Promise((resolve) => {
+      finishRequest = resolve;
+    }),
+  });
+
+  context.handleSidebarArtistSelectionClick(createSidebarArtistEvent('Broadcast').event);
+
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+
+  finishRequest(true);
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.resumeSelectedArtistCoverLoadsAfterUserAction)),
+    [9],
+  );
+});
+
 test('all-artists cover suspension survives a queued production view request', async () => {
   const { context, calls } = createContext({ fetchAndRenderResult: false });
   const { event } = createAllArtistsEvent();
@@ -4259,7 +4283,10 @@ test('sidebar navigation releases every suspension owned by an abandoned search 
 
   assert.equal(context.state.ui.pendingSearchCommitTimer, 0);
   assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
-  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.resumeSelectedArtistCoverLoadsAfterUserAction)),
+    [9, 10],
+  );
   assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }]);
 });
 

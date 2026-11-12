@@ -8259,6 +8259,7 @@ def _selected_artist_family_context_from_state(
         projection_artist,
         connect=connect,
         connection=connection,
+        include_alias_maps=alias_to_canonical is None or canonical_to_aliases is None,
     )
     postgres_alias_to_canonical = {
         str(alias or "").strip(): str(canonical or "").strip()
@@ -8274,22 +8275,17 @@ def _selected_artist_family_context_from_state(
         for canonical, aliases in dict(postgres_family_projection.get("canonical_to_aliases") or {}).items()
         if str(canonical or "").strip()
     }
-    effective_alias_to_canonical = {
-        str(alias or "").strip(): str(canonical or "").strip()
-        for alias, canonical in dict(alias_to_canonical or postgres_alias_to_canonical).items()
-        if str(alias or "").strip() and str(canonical or "").strip()
-    }
-    effective_canonical_to_aliases = {
-        str(canonical or "").strip(): [
-            str(alias or "").strip()
-            for alias in list(aliases or [])
-            if str(alias or "").strip()
-        ]
-        for canonical, aliases in dict(
-            canonical_to_aliases or postgres_canonical_to_aliases
-        ).items()
-        if str(canonical or "").strip()
-    }
+    # Caller maps are already normalized; copying the complete projection blocks search.
+    effective_alias_to_canonical = (
+        alias_to_canonical
+        if alias_to_canonical is not None
+        else postgres_alias_to_canonical
+    )
+    effective_canonical_to_aliases = (
+        canonical_to_aliases
+        if canonical_to_aliases is not None
+        else postgres_canonical_to_aliases
+    )
     postgres_family_artists = list(postgres_family_projection.get("family_artists") or [])
     postgres_projection_loaded = bool(postgres_family_projection.get("loaded"))
     family_artists = (

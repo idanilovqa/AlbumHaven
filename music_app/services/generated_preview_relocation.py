@@ -51,6 +51,7 @@ class GeneratedPreviewRelocationWorker:
         self._cleanup_pending: tuple[str, str] | None = None
         self._cleanup_checked_at_start = False
         self._next_cleanup_at = 0.0
+        self._discovered_operation_id: str | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -133,8 +134,15 @@ class GeneratedPreviewRelocationWorker:
                 if self._on_state is not None:
                     self._on_state(state)
                 return False
-            if self._discover_inventory is not None:
+            if (
+                self._discover_inventory is not None
+                and self._discovered_operation_id != operation_id
+            ):
                 discovered_count = self._discover_inventory()
+                self._discovered_operation_id = operation_id
+            else:
+                discovered_count = 0
+            if self._discover_inventory is not None:
                 staged_count = self._repository.stage_inventory(operation_id=operation_id)
                 self._logger.info(
                     "Generated preview relocation staged inventory.",

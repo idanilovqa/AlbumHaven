@@ -32,8 +32,9 @@ export function readAppliedGalleryProjectionSnapshot(target = {}) {
   const view = state.view || {};
   const expectedArtist = String(target.artist || '').trim();
   const expectedAlbum = String(target.album || '').trim();
+  const compactTarget = Boolean(expectedArtist || expectedAlbum);
   const compactGroups = (groups) => {
-    if (!expectedArtist && !expectedAlbum) return groups;
+    if (!compactTarget) return groups;
     return (Array.isArray(groups) ? groups : []).flatMap((group) => {
       const artist = String(group?.artist || group?.artist_display || '').trim();
       if (expectedArtist && artist !== expectedArtist) return [];
@@ -933,7 +934,7 @@ export class GalleryPage extends BasePage {
     const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
     const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
       && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
- if (idle && observation.bootstrapPresenceEligible === false && !rootContinuation) return null;
+    if (idle && observation.bootstrapPresenceEligible === false && !rootContinuation) return null;
     if (idle || rootContinuation) {
       const bootstrap = await this.readProductionBootstrapPayload();
       const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
@@ -953,7 +954,7 @@ export class GalleryPage extends BasePage {
     }
     const initiallyBusy = initialObservation.activeRequestCount > 0
       || initialObservation.pendingPayloadReadCount > 0;
- let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
+    let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
       && !initialObservation.latestFullPayload && !initiallyBusy
       ? await this.readProductionBootstrapPayload()
       : null;
@@ -969,24 +970,11 @@ export class GalleryPage extends BasePage {
       || bootstrapPayload?.startup_payload?.first_paint_view
       || bootstrapPayload?.initial_view
       || null;
-    const input = this.page.locator('#search-input');
-    const inputQuery = await input.count() ? await input.inputValue() : '';
-    const expectedQuery = expected.query === undefined
-      ? String(inputQuery || '').trim()
-      : String(expected.query || '').trim();
     const expectedArtist = String(expected.artist || '').trim();
     const expectedAlbum = String(expected.album || '').trim();
     const canReadAppliedProjection = typeof this.page.evaluate === 'function'
       || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
-    const readAppliedProjection = () => (
-      expectedQuery && !fullProjection && typeof this.page.evaluate === 'function'
-        ? this.readAppliedAlbumTargetProjection({
-          artist: expectedArtist,
-          album: expectedAlbum,
-        })
-        : this.readAppliedGalleryProjection()
-    );
-    const readDomState = async () => {
+    const readLocatorDomState = async () => {
       const [attachedMatch, loaderVisible, attachedArtists] = await Promise.all([
         this.albumCard.detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum).count().then(count => count > 0),
         this.libraryLoader.isVisible(),
@@ -1011,6 +999,20 @@ export class GalleryPage extends BasePage {
         spinnerVisible,
       };
     };
+    const input = this.page.locator('#search-input');
+    const inputQuery = await input.count() ? await input.inputValue() : '';
+    const expectedQuery = expected.query === undefined
+      ? String(inputQuery || '').trim()
+      : String(expected.query || '').trim();
+    const readAppliedProjection = () => (
+      expectedQuery && !fullProjection && typeof this.page.evaluate === 'function'
+        ? this.readAppliedAlbumTargetProjection({
+          artist: expectedArtist,
+          album: expectedAlbum,
+          query: expectedQuery,
+        })
+        : this.readAppliedGalleryProjection()
+    );
     const [projection, initialDom] = await Promise.all([
       canReadAppliedProjection ? readAppliedProjection() : Promise.resolve({
         ...(payload || {}),
@@ -1020,7 +1022,7 @@ export class GalleryPage extends BasePage {
         locationQuery: new URL(this.page.url()).searchParams.get('q') || '',
         locationArtist: new URL(this.page.url()).searchParams.get('artist') || '',
       }),
-      readDomState(),
+      readLocatorDomState(),
     ]);
     const targetLocation = new URL(this.page.url());
     const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
@@ -1050,7 +1052,7 @@ export class GalleryPage extends BasePage {
     );
     const [finalProjection, finalDom] = await Promise.all([
       canReadAppliedProjection ? readAppliedProjection() : Promise.resolve(projection),
-      readDomState(),
+      readLocatorDomState(),
     ]);
     const finalAttachedMatch = finalDom.attachedMatch;
     const finalAttachedArtists = finalDom.attachedArtists;

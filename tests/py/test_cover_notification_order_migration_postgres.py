@@ -10,7 +10,7 @@ import pytest
 from tests.e2e.support import isolatedPostgres
 
 
-MIGRATION = Path(__file__).resolve().parents[2] / "migrations/postgres/0104_preserve_cover_notification_order.sql"
+MIGRATION = Path(__file__).resolve().parents[2] / "migrations/postgres/0122_preserve_cover_notification_order.sql"
 
 
 def test_notification_order_migration_is_row_local_and_unprivileged():

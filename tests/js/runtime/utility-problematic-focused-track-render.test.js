@@ -347,9 +347,15 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
     detail_loading_deferred: true,
   };
   const loadCalls = [];
+  const scrollCalls = [];
   const elements = {
     overlay: {},
-    list: { innerHTML: '' },
+    list: {
+      innerHTML: '',
+      querySelector() {
+        return { scrollIntoView: (options) => scrollCalls.push(options) };
+      },
+    },
     detail: { innerHTML: '' },
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
@@ -360,7 +366,7 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
     state: {
       utility: {
         activeTab: 'problematic-files',
-        focusedTrackPath: '',
+        focusedTrackPath: 'C:/Music/edited.flac',
         loading: false,
         problematicFiles: [selectedAlbum],
         searchQuery: '',
@@ -381,6 +387,8 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
   context.renderProblematicFiles();
 
   assert.deepEqual(loadCalls, []);
+  assert.equal(scrollCalls.length, 1);
+  assert.equal(scrollCalls[0].block, 'nearest');
   assert.match(elements.detail.innerHTML, /Loading selected problematic album/);
 });
 

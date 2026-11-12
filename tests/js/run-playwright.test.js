@@ -3760,6 +3760,40 @@ test('managed isolated restart controller discards stale control messages at sta
   }
 });
 
+test('managed isolated restart controller ignores only a missing request between existence check and read', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-replaced-'));
+  const controller = _private.createManagedIsolatedAppRestartController({
+    childEnv: {},
+    ownedIsolatedTempRoot: ownedRoot,
+    initialChild: createFakeChildProcess(5660),
+    ports: [4320, 4322],
+    autoStart: false,
+  });
+  const requestPath = path.join(controller.controlDirectory, 'restart-request.json');
+  fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'replaced-request' }));
+  const originalReadFileSync = fs.readFileSync;
+  let readErrorCode = 'ENOENT';
+  fs.readFileSync = (filename, ...args) => {
+    if (path.resolve(filename) === path.resolve(requestPath)) {
+      const error = new Error('Request was replaced before it could be read.');
+      error.code = readErrorCode;
+      throw error;
+    }
+    return originalReadFileSync(filename, ...args);
+  };
+
+  try {
+    assert.equal(await controller.processPendingRequest(), false);
+    assert.equal(controller.getFailure(), null);
+    readErrorCode = 'EACCES';
+    await assert.rejects(controller.processPendingRequest(), { code: 'EACCES' });
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    await controller.close();
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
 test('managed restart control accepts only the shard-owned prepared profile root', () => {
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-profile-control-'));
   const profileRoot = path.join(

@@ -675,6 +675,26 @@ function resetLibraryHomeNavigation() {
   if (galleryScroll) galleryScroll.scrollTop = 0;
 }
 
+function beginSidebarArtistCoverLoadSuspension() {
+  if (
+    typeof virtualGrid === 'undefined'
+    || !virtualGrid
+    || typeof virtualGrid.suspendSelectedArtistCoverLoadsForUserAction !== 'function'
+  ) return () => {};
+  const token = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+  const resume = (requestResult = true) => {
+    if (
+      requestResult === false
+      && (Boolean(state.ui?.activeViewRequestController) || Boolean(state.ui?.pendingViewRequest))
+    ) {
+      scheduleBrowserTimeout(() => resume(false), 16);
+      return;
+    }
+    virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction?.(token);
+  };
+  return resume;
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
@@ -809,9 +829,10 @@ function handleSidebarArtistSelectionClick(event) {
       resetScrollForUserArtistSelection: true,
     });
   }
-  fetchAndRender(buildApiUrl(nextView, {
+  const resumeCoverLoads = beginSidebarArtistCoverLoadSuspension();
+  Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
     omitSidebar: true,
-  }), true);
+  }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true));
   if (!sidebarSelectionUpdated) {
     renderSidebar();
   }

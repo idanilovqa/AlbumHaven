@@ -1189,15 +1189,8 @@ function markTrackModalCoverTransitionPending(album, optimisticSrc = '') {
     image.src = optimisticSrc;
     return true;
   }
-  image.remove();
   visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
-  if (!visual.querySelector?.('.cover-placeholder')) {
-    const placeholder = document.createElement('span');
-    placeholder.className = 'cover-placeholder';
-    placeholder.setAttribute('aria-hidden', 'true');
-    visual.appendChild(placeholder);
-  }
   return true;
 }
 
@@ -2429,14 +2422,15 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
     }
     runs.push({ group, items: [item] });
   });
-  let prioritizedServicePreview = false;
+  // The leading card loads first, whichever provider group renders it.
+  let prioritizedLeadingPreview = false;
   return runs.map(({ group, items }) => {
     const providerAttr = group.provider
       ? ` data-cover-lookup-provider-group="${group.provider}"`
       : '';
     const cards = items.map((item) => {
-      const prioritize = group.key === 'services' && !prioritizedServicePreview;
-      if (prioritize) prioritizedServicePreview = true;
+      const prioritize = !prioritizedLeadingPreview;
+      prioritizedLeadingPreview = true;
       return buildCoverLookupCard(item, 'remote', prioritize);
     }).join('');
     return `<div class="cover-lookup-subsection-title">${group.title}</div><div class="cover-lookup-gallery"${providerAttr}>${cards}</div>`;
@@ -2517,9 +2511,13 @@ function replaceCoverLookupModalMarkup(body, markup) {
       || image?.getAttribute?.('src')
       || '',
     );
+    // Keep only a decoded image; deferred, loading, and failed nodes may never recover.
     if (
       retainedImage
       && incomingImage
+      && !retainedImage.hasAttribute?.('data-cover-lookup-deferred-src')
+      && retainedImage.complete === true
+      && Number(retainedImage.naturalWidth || 0) > 0
       && previewSource(retainedImage) === previewSource(incomingImage)
       && typeof incomingImage.replaceWith === 'function'
     ) {

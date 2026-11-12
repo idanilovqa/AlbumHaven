@@ -11,6 +11,26 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('gapless boundary waits for replacement continuity traffic before sampling controls', () => {
+  const spec = readRepoFile('tests/e2e/performance/gaplessPlayback.spec.js');
+  const boundaryStep = spec.slice(
+    spec.indexOf("'Capture the same-quantum lossless boundary from the production worklet'"),
+    spec.indexOf("stepLogger.step('Honor a visible near-end seek"),
+  );
+  const replacementWait = boundaryStep.indexOf("path: replacement.path");
+  const settledDiagnostics = boundaryStep.indexOf(
+    'const settledDiagnostics = await readGaplessPlaybackDiagnostics(page)',
+  );
+  const controlSnapshot = boundaryStep.indexOf('traffic.snapshotSince(0)');
+
+  assert.ok(replacementWait >= 0);
+  assert.ok(settledDiagnostics >= 0);
+  assert.ok(controlSnapshot >= 0);
+  assert.ok(replacementWait < settledDiagnostics);
+  assert.ok(settledDiagnostics < controlSnapshot);
+  assert.match(boundaryStep, /expect\(settledDiagnostics\.continuityStreamId\)/);
+});
+
 class PlaybackEvidencePage extends EventEmitter {
   async waitForFunction() {}
 }
@@ -2070,4 +2090,20 @@ test('cover lookup times the first decoded candidate before Spotify save setup',
     spec,
     /candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
   );
+});
+
+test('generated preview storage timings start at search submission', () => {
+  const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
+  const relocation = spec.slice(
+    spec.indexOf("stepLogger.step('Relocate to custom storage"),
+    spec.indexOf('await galleryActions.clickAlbumDetailsByAlbumName(ALBUM)'),
+  );
+
+  assert.match(
+    relocation,
+    /recordSubmissionBoundary\(\)\s*\{\s*searchSubmittedAt = performance\.now\(\);\s*\}/,
+  );
+  assert.match(relocation, /galleryReadyMs = performance\.now\(\) - searchSubmittedAt/);
+  assert.match(relocation, /firstDecodedCoverMs = performance\.now\(\) - searchSubmittedAt/);
+  assert.doesNotMatch(relocation, /searchStartedAt/);
 });

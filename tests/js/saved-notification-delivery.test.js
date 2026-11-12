@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 function savedEditor(overlap = { rendered: true, withinViewport: true, overlaps: [] }) {
@@ -94,6 +96,92 @@ function timedToast(...recorded) {
 }
 
 const PLACED = { rendered: true, withinViewport: true, overlaps: [] };
+
+test('status delivery installs its Status-gated recorder before navigation', () => {
+  const helperSource = fs.readFileSync(
+    path.join(__dirname, '..', 'e2e', 'helpers', 'savedNotificationDelivery.js'),
+    'utf8',
+  );
+  const recorderStart = helperSource.indexOf('recordRepairAlertPresentations');
+  const navigationStart = helperSource.indexOf('beforeNavigation?.()');
+
+  assert.ok(recorderStart >= 0 && recorderStart < navigationStart, helperSource);
+  assert.match(helperSource, /recordRepairAlertPresentations\(\{\s*surfaceSelector:\s*'#library-loader'/u);
+});
+
+test('status delivery cleans up recording failures and restores only after Status opens', () => {
+  const helperSource = fs.readFileSync(
+    path.join(__dirname, '..', 'e2e', 'helpers', 'savedNotificationDelivery.js'),
+    'utf8',
+  );
+  const statusClicked = helperSource.indexOf('await scan.scanPage.openStatusPage.click()');
+  const restoreEnabled = helperSource.indexOf('restoreRequired = true');
+  const restoreGuard = helperSource.indexOf('if (!restoreRequired)');
+  const backNavigation = helperSource.indexOf('await scan.clickBack()');
+
+  assert.ok(statusClicked >= 0 && statusClicked < restoreEnabled, helperSource);
+  assert.ok(restoreEnabled < restoreGuard && restoreGuard < backNavigation, helperSource);
+  assert.match(
+    helperSource,
+    /try\s*\{\s*await tagEditor\.stopRecordingRepairAlertPresentations\(presentations\);\s*\}\s*catch \(cleanupError\) \{[\s\S]*?deliveryError = deliveryError/u,
+  );
+});
+
+test('the presentation recorder ignores Gallery and captures the same toast when Status activates', async () => {
+  const { inspectRepairAlert } = await import('../e2e/poms/tagEditor.js');
+  const observers = [];
+  const surface = { hidden: true };
+  const alert = {
+    classList: { contains: value => value === 'is-visible' },
+    contains: () => false,
+    getBoundingClientRect: () => ({ left: 10, top: 10, right: 210, bottom: 70, width: 200, height: 60 }),
+    querySelector: () => ({ textContent: 'Tag changes saved.' }),
+  };
+  const previous = {
+    MutationObserver: global.MutationObserver,
+    document: global.document,
+    getComputedStyle: global.getComputedStyle,
+    innerHeight: global.innerHeight,
+    innerWidth: global.innerWidth,
+  };
+
+  global.MutationObserver = class {
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    disconnect() {}
+    observe(target) { this.target = target; }
+  };
+  global.document = {
+    elementsFromPoint: () => [],
+    querySelector: selector => (selector === '#library-loader' ? surface : null),
+    querySelectorAll: () => [],
+  };
+  global.getComputedStyle = () => ({ display: 'block', opacity: '1', visibility: 'visible' });
+  global.innerHeight = 800;
+  global.innerWidth = 1200;
+
+  try {
+    const presentations = inspectRepairAlert(alert, {
+      messageSelector: '#repair-alert-message',
+      surfaceSelector: '#library-loader',
+    });
+    assert.deepEqual(Array.from(presentations), []);
+
+    surface.hidden = false;
+    observers.find(observer => observer.target === surface).callback();
+    assert.deepEqual(Array.from(presentations), [{ message: 'Tag changes saved.', ...PLACED }]);
+    presentations.stop();
+
+    global.document.querySelector = () => null;
+    const missingSurfacePresentations = inspectRepairAlert(alert, {
+      messageSelector: '#repair-alert-message',
+      surfaceSelector: '#library-loader',
+    });
+    assert.deepEqual(Array.from(missingSurfacePresentations), []);
+    missingSurfacePresentations.stop();
+  } finally {
+    Object.assign(global, previous);
+  }
+});
 
 test('a timed saved toast recorded while shown is confirmed without clicking and closes on its own', async () => {
   const { confirmTimedSavedNotification } = await import('../e2e/helpers/savedNotificationDelivery.js');

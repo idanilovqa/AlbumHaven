@@ -51,7 +51,7 @@ def test_sql_artist_eligibility_uses_indexed_folded_names():
 
 
 def test_artist_accent_migration_is_additive_and_indexed():
-    sql = (Path(__file__).resolve().parents[2] / "migrations/postgres/0106_index_accent_insensitive_artist_search.sql").read_text(encoding="utf-8")
+    sql = (Path(__file__).resolve().parents[2] / "migrations/postgres/0124_index_accent_insensitive_artist_search.sql").read_text(encoding="utf-8")
     assert "immutable" in sql
     assert 'collate "und-x-icu"' in sql
     assert "then 'casefold' else 'lower'" in sql

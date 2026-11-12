@@ -241,6 +241,16 @@ test('performance foundations are written only after shared shard PostgreSQL pro
   assert.match(shardRunner, /foundation-version-manifest-performance-\$target\.json/);
 });
 
+test('performance Windows runners expand the IPv4 dynamic port range before browser work', () => {
+  const job = performanceJobSource();
+  const portRangeStep = stepContaining(job, 'Expand Windows IPv4 dynamic port range');
+  assert.match(
+    portRangeStep,
+    /netsh\s+interface\s+ipv4\s+set\s+dynamicport\s+tcp\s+start=10000\s+num=55535/i,
+  );
+  assert.ok(job.indexOf(portRangeStep) < job.indexOf('- name: Validate performance matrix ownership'));
+});
+
 test('Windows jobs and foundation manifests provision one exact cross-platform Chrome build', () => {
   const expectedChrome = '151.0.7922.138';
   assert.equal(EXPECTED.windowsChrome, expectedChrome);

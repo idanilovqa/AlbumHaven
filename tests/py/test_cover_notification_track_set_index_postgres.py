@@ -10,7 +10,7 @@ from music_app.services.cover_lookup_tasks_postgres import _load_reusable_notifi
 from tests.e2e.support import isolatedPostgres
 
 
-MIGRATION = Path(__file__).resolve().parents[2] / "migrations/postgres/0105_index_cover_notification_track_sets.sql"
+MIGRATION = Path(__file__).resolve().parents[2] / "migrations/postgres/0123_index_cover_notification_track_sets.sql"
 
 
 def test_track_set_index_migration_keeps_hash_as_prefilter_only():

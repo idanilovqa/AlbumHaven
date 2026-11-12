@@ -4973,7 +4973,7 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
       tracks: [],
     });
 
-    assert.match(markup, new RegExp(`<div class="rating-row" data-rating-value="${rating}">`));
+    assert.match(markup, new RegExp(`<div class="rating-row" data-rating-value="${rating}" data-rating-maximum="10">`));
     assert.match(
       markup,
       new RegExp(`<div class="stars" role="img" aria-label="Album rating ${rating}/10">`),

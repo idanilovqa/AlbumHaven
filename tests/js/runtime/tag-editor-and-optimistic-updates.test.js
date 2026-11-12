@@ -3070,6 +3070,12 @@ test('manual tag edit keeps the editor closed after an immediate rolled-back per
     'Source changed during the tag edit. Retry with the preserved values.',
   );
   assert.deepEqual(clearedOptimisticSplits, [optimisticSplit]);
+
+  clearedOptimisticSplits.length = 0;
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  context.state.tagEditor = { album, tracks: album.tracks, values };
+  await context.confirmManualTagEdit();
+  assert.deepEqual(clearedOptimisticSplits, [], 'an older failed request cannot undo a newer cover merge');
 });
 
 test('manual tag edit keeps the editor closed after a logged physical write failure', async () => {

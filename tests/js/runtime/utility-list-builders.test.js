@@ -6156,6 +6156,16 @@ test('watchSaveTask keeps Edit Tags closed after a late failure and exposes Log 
   assert.equal(alerts[0][1], 'error');
   assert.equal(alerts[0][2], null);
   assert.equal(alerts[0][3].logHistoryLink, true);
+
+  clearedOptimisticSplits.length = 0;
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  await context.watchSaveTask('superseded-failed-tag-task', {
+    originalAlbum,
+    tagEditorDraft,
+    tagEditMutationClaim: { generation: 1 },
+    coverLookupOptimisticSplit,
+  });
+  assert.deepEqual(clearedOptimisticSplits, [], 'an older failure cannot roll back newer cover topology');
 });
 
 test('watchSaveTask refreshes the compensated authoritative view before surfacing a failed tag edit', async () => {

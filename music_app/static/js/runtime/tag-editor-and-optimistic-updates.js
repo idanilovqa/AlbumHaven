@@ -1031,7 +1031,11 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
-    if (coverLookupOptimisticSplit && typeof clearCoverLookupOptimisticSplit === 'function') {
+    if (
+      coverLookupOptimisticSplit
+      && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
+      && typeof clearCoverLookupOptimisticSplit === 'function'
+    ) {
       clearCoverLookupOptimisticSplit(coverLookupOptimisticSplit);
     }
     pendingProblematicEntry.settle();

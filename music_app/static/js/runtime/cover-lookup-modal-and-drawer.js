@@ -3530,9 +3530,10 @@ const coverLookupSplitChoiceByTask = new Map();
 
 function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const originalPaths = getAlbumTrackPaths(originalAlbum);
-  if (originalPaths.size < 2) return null;
+  if (!originalPaths.size) return null;
+  const candidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
   const releasesByPaths = new Map();
-  (Array.isArray(updatedAlbums) ? updatedAlbums : []).forEach((album) => {
+  candidates.forEach((album) => {
     const paths = getAlbumTrackPaths(album);
     if (
       paths.size > 0
@@ -3547,21 +3548,69 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   });
   const releases = Array.from(releasesByPaths.values());
   const coveredPaths = new Set(releases.flatMap((album) => Array.from(getAlbumTrackPaths(album))));
-  if (releases.length < 2 || coveredPaths.size !== originalPaths.size) return null;
+  const isSplit = originalPaths.size >= 2
+    && releases.length >= 2
+    && coveredPaths.size === originalPaths.size;
   const taskIds = [];
-  (state.coverLookup.tasks || []).forEach((task) => {
+  const replacedTasks = [];
+  const removedSplits = [];
+  const removedChoices = [];
+  const nextTasks = (state.coverLookup.tasks || []).map((task) => {
     const taskPaths = getAlbumTrackPaths(task?.album_payload);
-    if (
+    const taskId = String(task?.id || '');
+    if (isSplit && (
       task?.id
       && taskPaths.size === originalPaths.size
       && Array.from(taskPaths).every((path) => originalPaths.has(path))
-    ) {
-      const taskId = String(task.id);
+    )) {
       coverLookupSplitReleasesByTask.set(taskId, releases);
       taskIds.push(taskId);
+      return task;
     }
+    const knownSplit = coverLookupSplitReleasesByTask.get(taskId);
+    const knownSplitPaths = new Set(
+      (knownSplit || []).flatMap((album) => Array.from(getAlbumTrackPaths(album))),
+    );
+    const replacement = candidates.find((album) => {
+      const paths = getAlbumTrackPaths(album);
+      const coversOriginal = Array.from(originalPaths).every((path) => paths.has(path));
+      const coversTask = taskPaths.size > 0
+        && Array.from(taskPaths).every((path) => paths.has(path));
+      const coversKnownSplit = knownSplitPaths.size > 0
+        && Array.from(knownSplitPaths).every((path) => paths.has(path));
+      return coversOriginal && (coversTask || coversKnownSplit);
+    });
+    if (!taskId || !replacement) return task;
+    if (knownSplit) {
+      removedSplits.push([taskId, knownSplit]);
+      coverLookupSplitReleasesByTask.delete(taskId);
+    }
+    if (coverLookupSplitChoiceByTask.has(taskId)) {
+      removedChoices.push([taskId, coverLookupSplitChoiceByTask.get(taskId)]);
+      coverLookupSplitChoiceByTask.delete(taskId);
+    }
+    const optimisticTask = {
+      ...task,
+      artist: String(replacement.album_artist || task.artist || ''),
+      album: String(replacement.name || task.album || ''),
+      year: replacement.year ?? task.year,
+      album_payload: replacement,
+    };
+    replacedTasks.push({ taskId, previousTask: task, optimisticTask });
+    taskIds.push(taskId);
+    return optimisticTask;
   });
-  return taskIds.length ? { taskIds, releases } : null;
+  if (!taskIds.length) return null;
+  if (replacedTasks.length) {
+    state.coverLookup.tasks = nextTasks;
+    if (typeof persistCoverLookupNotificationTasks === 'function') {
+      persistCoverLookupNotificationTasks(state.coverLookup.tasks || []);
+    }
+    if (typeof renderCoverLookupDrawer === 'function') {
+      renderCoverLookupDrawer({ taskIds, preserveInteraction: false });
+    }
+  }
+  return { taskIds, releases, replacedTasks, removedSplits, removedChoices };
 }
 
 function clearCoverLookupOptimisticSplit(recordedSplit) {
@@ -3570,6 +3619,47 @@ function clearCoverLookupOptimisticSplit(recordedSplit) {
       coverLookupSplitReleasesByTask.delete(taskId);
     }
   });
+  let restoredTask = false;
+  (recordedSplit?.replacedTasks || []).forEach(({ taskId, previousTask, optimisticTask }) => {
+    state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+      if (String(task?.id || '') !== taskId) return task;
+      const stillShowsOptimisticAlbum = task === optimisticTask
+        || findCoverLookupAlbumReplacement(
+          task?.album_payload,
+          [optimisticTask.album_payload],
+        ) === optimisticTask.album_payload;
+      if (!stillShowsOptimisticAlbum) return task;
+      restoredTask = true;
+      return {
+        ...task,
+        artist: previousTask.artist,
+        album: previousTask.album,
+        year: previousTask.year,
+        album_payload: previousTask.album_payload,
+      };
+    });
+  });
+  (recordedSplit?.removedSplits || []).forEach(([taskId, releases]) => {
+    if (!coverLookupSplitReleasesByTask.has(taskId)) {
+      coverLookupSplitReleasesByTask.set(taskId, releases);
+    }
+  });
+  (recordedSplit?.removedChoices || []).forEach(([taskId, choice]) => {
+    if (!coverLookupSplitChoiceByTask.has(taskId)) {
+      coverLookupSplitChoiceByTask.set(taskId, choice);
+    }
+  });
+  if (restoredTask) {
+    if (typeof persistCoverLookupNotificationTasks === 'function') {
+      persistCoverLookupNotificationTasks(state.coverLookup.tasks || []);
+    }
+    if (typeof renderCoverLookupDrawer === 'function') {
+      renderCoverLookupDrawer({
+        taskIds: recordedSplit.taskIds || [],
+        preserveInteraction: false,
+      });
+    }
+  }
 }
 
 function handleCoverLookupSplitResponse(releases) {
@@ -3927,7 +4017,17 @@ async function startCoverLookupForAlbum(album, options = {}) {
       throw new Error(data.error || 'Failed to start cover lookup');
     }
     console.log('[AlbumHaven][CoverLookup] Start lookup response.', data);
-    const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
+    const acceptedTask = data.task && typeof data.task === 'object'
+      ? (String(data.task.status || '').toLowerCase() === 'pending'
+        ? {
+          ...data.task,
+          status: 'running',
+          result_kind: '',
+          progress_label: 'Searching...',
+          started_at: data.task.started_at || new Date().toISOString(),
+        }
+        : data.task)
+      : null;
     if (acceptedTask?.id) {
       const acceptedTaskId = String(acceptedTask.id);
       const existingTasks = state.coverLookup.tasks || [];

@@ -108,6 +108,31 @@ test('saving the second artbox posts slot 1 and updates Album Details', async ()
   assert.equal(calls.renders, 1);
 });
 
+test('saving the second artbox updates the hydrated Album Details cache used on reopen', () => {
+  let cachedAlbum = testimony();
+  const second = {
+    slot: 1,
+    source_kind: 'local',
+    cover_path: 'N:\\Music\\Dragonland\\Holy War\\cover-existing-1.jpg',
+  };
+  const { context } = load({
+    context: {
+      cacheHydratedTrackModalAlbum(_key, album) {
+        cachedAlbum = album;
+      },
+    },
+  });
+  context.state.modalReleases = [{ ...testimony(), album_id: 742056 }];
+
+  context.applyAlbumAdditionalArtworks(testimony().key, [second]);
+  context.state.modalReleases = [cachedAlbum];
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getAlbumAdditionalArtwork(cachedAlbum))),
+    second,
+  );
+});
+
 test('Album Details link row shows only known Discogs and MusicBrainz release pages', () => {
   const context = vm.createContext({ URL, escapeHtml: (value) => String(value ?? '').replaceAll('"', '&quot;') });
   vm.runInContext(read('album-details-components.js'), context);

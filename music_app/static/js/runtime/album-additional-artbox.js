@@ -156,8 +156,15 @@ async function quickSearchAlbumAdditionalArtbox() {
 function applyAlbumAdditionalArtworks(albumKey, artworks) {
   const key = String(albumKey || '');
   const list = Array.isArray(artworks) ? artworks : [];
+  let updatedRelease = null;
   for (const release of state.modalReleases || []) {
-    if (String(release?.key || '') === key) release.additional_artworks = list;
+    if (String(release?.key || '') === key) {
+      release.additional_artworks = list;
+      updatedRelease ||= release;
+    }
+  }
+  if (updatedRelease && typeof cacheHydratedTrackModalAlbum === 'function') {
+    cacheHydratedTrackModalAlbum(key, updatedRelease);
   }
   if (getAlbumAdditionalArtwork({ additional_artworks: list }) && albumAdditionalArtboxState.pendingAlbumKey === key) {
     clearPendingAlbumAdditionalArtbox();

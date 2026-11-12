@@ -183,6 +183,73 @@ test('an optimistic album split sends its existing notification straight to the 
   assert.equal(overlay.hidden, false);
 });
 
+test('an optimistic re-merge replaces a split notification with the current merged album', async () => {
+  class TestButton {}
+  const firstPath = 'N:/Music/Artist/Album/01.flac';
+  const secondPath = 'N:/Music/Artist/Album/02.flac';
+  const oldAlbum = { album_id: 40, tracks: [{ path: firstPath }, { path: secondPath }] };
+  const releases = [
+    { key: 'artist::first release', name: 'First Release', tracks: [{ path: firstPath }] },
+    { key: 'artist::second release', name: 'Second Release', tracks: [{ path: secondPath }] },
+  ];
+  const mergedAlbum = {
+    key: 'artist::merged release',
+    name: 'Merged Release',
+    tracks: [{ path: firstPath }, { path: secondPath }],
+  };
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const persisted = [];
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [{ id: 'split-task', album: 'Old Album', album_payload: oldAlbum }],
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    persistCoverLookupNotificationTasks: tasks => persisted.push(tasks),
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async current => choices.push(current);
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(oldAlbum, releases);
+  const optimisticMerge = context.recordCoverLookupOptimisticSplit(releases[0], [mergedAlbum]);
+  await context.openCoverLookupModal(
+    context.state.coverLookup.tasks[0].album_payload,
+    { taskId: 'split-task' },
+  );
+
+  assert.deepEqual(choices, [], 'the obsolete split chooser is removed immediately');
+  assert.equal(context.state.coverLookup.modal.album.key, mergedAlbum.key);
+  assert.equal(context.state.coverLookup.tasks[0].album, mergedAlbum.name);
+  assert.equal(persisted.length, 1, 'the optimistic notification target is persisted');
+
+  context.state.coverLookup.tasks[0] = {
+    ...context.state.coverLookup.tasks[0],
+    status: 'running',
+    progress_label: 'Searching providers...',
+  };
+  context.clearCoverLookupOptimisticSplit(optimisticMerge);
+  assert.equal(context.state.coverLookup.tasks[0].album_payload.album_id, oldAlbum.album_id);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'running', 'rollback keeps newer task progress');
+  await context.openCoverLookupModal(oldAlbum, { taskId: 'split-task' });
+  assert.equal(choices.length, 1, 'rollback restores the prior split chooser');
+});
+
 test('split album conflict closes Cover Lookup, asks in a compact chooser, then opens the chosen release', async () => {
   class TestButton {}
   const oldAlbum = { album_id: 40, name: 'Old Album', album_artist: 'Artist' };
@@ -1110,6 +1177,8 @@ test('retry immediately queues the existing notification without adding another 
 
   assert.equal(context.state.coverLookup.tasks.length, 1);
   assert.equal(context.state.coverLookup.tasks[0].id, interruptedTask.id);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Searching...');
 });
 
 

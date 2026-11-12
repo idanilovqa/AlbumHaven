@@ -2697,6 +2697,7 @@ async function watchSaveTask(taskId, context = {}) {
       if (data.status === 'failed') {
         if (
           context.coverLookupOptimisticSplit
+          && !mutationWasSuperseded()
           && typeof clearCoverLookupOptimisticSplit === 'function'
         ) {
           clearCoverLookupOptimisticSplit(context.coverLookupOptimisticSplit);

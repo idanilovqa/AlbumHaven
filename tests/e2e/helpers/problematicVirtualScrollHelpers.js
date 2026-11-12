@@ -143,6 +143,11 @@ export function observeProblematicDetails(page) {
     async summary() {
       await settle();
       if (!summary) {
+        // Let a complete response queued behind a bounded first page reach the listener.
+        await new Promise(resolve => setImmediate(resolve));
+        await settle();
+      }
+      if (!summary) {
         const response = await authenticatedPageGet(page, '/utilities/problematic-files');
         assert.equal(response.ok(), true, 'Fallback problematic summary request must succeed');
         const payload = await response.json();

@@ -245,6 +245,16 @@ test('a complete bounded first page counts as the complete summary', async () =>
   await capture.dispose();
 });
 
+test('summary waits for the complete response after a bounded first page', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage(); const capture = observeProblematicDetails(page);
+  page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
+  const summary = capture.summary();
+  setImmediate(() => page.emit('/utilities/problematic-files', { items: [{ key: 'first' }, { key: 'second' }] }));
+  assert.deepEqual((await summary).map(item => item.key), ['first', 'second']);
+  await capture.dispose();
+});
+
 function navigationRecords() {
   return [{ detailRender: false, detailRenderCount: 0, activeKey: 'chosen', detailTitle: '', detailText: '', mutation: 'list spacers' },
     { detailRender: true, detailRenderCount: 1, activeKey: 'chosen', selectedKey: 'chosen', runtimeKey: 'chosen', selectedRowMounted: true, detailMutation: false, detailTitle: 'Chosen album', detailText: 'Track' },

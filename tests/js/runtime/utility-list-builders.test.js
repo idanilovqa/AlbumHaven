@@ -7094,6 +7094,52 @@ test('track problem navigation waits out a stale summary before refreshing resto
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
 });
 
+test('track problem navigation reuses an in-flight summary before refreshing it again', async () => {
+  const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
+  const summaryAlbum = {
+    ...staleAlbum,
+    detail_loaded: false,
+    problematic_track_paths: [],
+    track_paths: [],
+  };
+  const hydratedAlbum = { ...staleAlbum, detail_loaded: true };
+  let releaseSummary;
+  const inFlightSummary = new Promise((resolve) => {
+    releaseSummary = resolve;
+  });
+  const detailLoads = [];
+  const opens = [];
+  let summaryLoads = 0;
+  staleAlbum.detail_loaded = false;
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.completeLoadPromise = inFlightSummary;
+  context.loadProblematicAlbumDetail = async (albumKey) => {
+    detailLoads.push(albumKey);
+    if (detailLoads.length === 1) return null;
+    context.state.utility.problematicFiles = [hydratedAlbum];
+    return hydratedAlbum;
+  };
+  context.loadProblematicFiles = async () => {
+    summaryLoads += 1;
+    return context.state.utility.problematicFiles;
+  };
+  context.openUtilityModal = () => {
+    opens.push(context.state.utility.selectedProblematicKey);
+  };
+
+  const navigation = context.openUtilityModalForTrack(trackPath);
+  setImmediate(() => {
+    context.state.utility.problematicFiles = [summaryAlbum];
+    context.state.utility.completeLoadPromise = null;
+    releaseSummary(context.state.utility.problematicFiles);
+  });
+  await navigation;
+
+  assert.equal(summaryLoads, 0);
+  assert.deepEqual(detailLoads, [staleAlbum.key, staleAlbum.key]);
+  assert.deepEqual(opens, [staleAlbum.key]);
+});
+
 test('track problem navigation refreshes canonical membership when the stale detail key is missing', async () => {
   const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
   const canonicalAlbum = {

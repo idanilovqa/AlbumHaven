@@ -563,7 +563,9 @@ export async function createStreamingReplacementDiagnosticsObserver(page) {
       const snapshot = typeof getStreamingPlaybackSnapshot === 'function'
         ? getStreamingPlaybackSnapshot()
         : null;
-      const engine = typeof state === 'undefined' ? null : state.player?.streaming;
+      const player = typeof state === 'undefined' ? null : state.player;
+      const engine = player?.streaming;
+      const ownership = player?.ownership;
       const diagnostics = snapshot?.diagnostics || {};
       const value = {
         activeRoles: [...(diagnostics.activeRoles || [])],
@@ -572,8 +574,23 @@ export async function createStreamingReplacementDiagnosticsObserver(page) {
         currentStreamId: Number(engine?.roles?.current?.streamId || 0),
         currentTime: Number(snapshot?.currentTime || 0),
         elapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        engineLifecycle: {
+          audioContextState: String(engine?.context?.state || ''),
+          lifecycleEpoch: Number(engine?.lifecycleEpoch || 0),
+          pendingStop: Boolean(engine?.stopPromise),
+          pendingTransportRecovery: Boolean(engine?.pendingTransportRecovery),
+          playerCurrentPresent: Boolean(player?.current),
+          socketReadyState: Number(engine?.socket?.readyState ?? -1),
+          startRequestId: Number(engine?.startRequestId || 0),
+        },
         inFlightFrames: { ...(diagnostics.inFlightFrames || {}) },
         mode: String(snapshot?.mode || ''),
+        ownership: {
+          activeClaim: Boolean(ownership?.activeClaim),
+          blockedReason: String(ownership?.blockedReason || ''),
+          lockStatus: String(ownership?.lockStatus || ''),
+          requestVersion: Number(ownership?.requestVersion || 0),
+        },
         pendingPromotionStreamId: Number(engine?.pendingPromotion?.streamId || 0),
         pendingSeek: engine?.pendingSeek ? {
           currentStreamId: Number(engine.pendingSeek.currentStreamId || 0),
@@ -589,8 +606,10 @@ export async function createStreamingReplacementDiagnosticsObserver(page) {
         bufferedFrames: value.bufferedFrames,
         continuityStreamId: value.continuityStreamId,
         currentStreamId: value.currentStreamId,
+        engineLifecycle: value.engineLifecycle,
         inFlightFrames: value.inFlightFrames,
         mode: value.mode,
+        ownership: value.ownership,
         pendingPromotionStreamId: value.pendingPromotionStreamId,
         pendingSeek: value.pendingSeek,
         underruns: value.underruns,
@@ -888,9 +907,12 @@ export async function readGaplessPlaybackDiagnostics(page) {
     const snapshot = getStreamingPlaybackSnapshot();
     const streaming = state.player?.streaming || {};
     const diagnostics = snapshot.diagnostics || {};
+    const ownership = state.player?.ownership || {};
     const sampleRate = Number(snapshot.sampleRate);
     const roleDiagnostics = role => role ? {
       streamId: Number(role.streamId || 0),
+      generation: Number(role.generation || 0),
+      firstFrameNotified: Boolean(role.firstFrameNotified),
       metadataAccepted: Boolean(role.metadataAccepted),
       eosReceived: Boolean(role.eosReceived),
       initialCreditDeferred: Boolean(role.initialCreditDeferred),
@@ -945,6 +967,23 @@ export async function readGaplessPlaybackDiagnostics(page) {
       },
       pendingPromotionStreamId: Number(streaming.pendingPromotion?.streamId || 0),
       pendingPromotionPresent: Boolean(streaming.pendingPromotion),
+      engineLifecycle: {
+        audioContextState: String(streaming.context?.state || ''),
+        lifecycleEpoch: Number(streaming.lifecycleEpoch || 0),
+        pendingPromotion: Boolean(streaming.pendingPromotion),
+        pendingSeek: Boolean(streaming.pendingSeek),
+        pendingStop: Boolean(streaming.stopPromise),
+        pendingTransportRecovery: Boolean(streaming.pendingTransportRecovery),
+        playerCurrentPresent: Boolean(state.player?.current),
+        socketReadyState: Number(streaming.socket?.readyState ?? -1),
+        startRequestId: Number(streaming.startRequestId || 0),
+      },
+      ownership: {
+        activeClaim: Boolean(ownership.activeClaim),
+        blockedReason: String(ownership.blockedReason || ''),
+        lockStatus: String(ownership.lockStatus || ''),
+        requestVersion: Number(ownership.requestVersion || 0),
+      },
       pcmEvidence: diagnostics.pcmEvidence ? { ...diagnostics.pcmEvidence } : null,
       renderedPcmEvidence: diagnostics.renderedPcmEvidence
         ? { ...diagnostics.renderedPcmEvidence }

@@ -25191,7 +25191,8 @@ async function openUtilityModalForTrack(trackPath) {
               if (currentSummary && typeof currentSummary.then === 'function') {
                 await currentSummary;
                 if (!ownsNavigation()) return;
-                album = getProblematicAlbumForTrackPath(trackPath);
+                album = getProblematicAlbumForTrackPath(trackPath)
+                  || getSelectedProblematicAlbumFrom(state.utility.problematicFiles);
                 if (album) continue;
               }
               refreshedStaleDetailTarget = true;

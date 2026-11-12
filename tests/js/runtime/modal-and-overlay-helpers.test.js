@@ -2566,7 +2566,7 @@ test('Mark As A Version saves the changed selection in the background: link, unl
   ]);
 });
 
-test('Loose Tracks is a side panel mode: its Custom Collections tree replaces the artist tree', () => {
+test('library navigation modes still switch between Artists and Custom Collections explicitly', () => {
   const { context } = loadHelper();
   const heading = new FakeElement('navigation-tree-heading');
   const collections = new FakeElement('sidebar-collections');
@@ -2611,6 +2611,55 @@ test('Loose Tracks is a side panel mode: its Custom Collections tree replaces th
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
   assert.equal(compactLooseTracks.getAttribute('aria-current'), '');
   assert.equal(compactLooseTracks.classList.contains('is-selected'), false);
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
+});
+
+test('desktop Loose Tracks keeps the expanded Artist Tree while selecting its compact action', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const rail = new FakeElement('shell-navigation-rail');
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  [main, rail, heading, collections, artists].forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
+  const selected = [];
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-navigation-mode]') return [artistsMode, collectionsMode];
+    if (selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]') return [compactLooseTracks];
+    return [];
+  };
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.state.ui.nonAlbumLibraryWide = true;
+  const overlay = new FakeElement('non-album-modal');
+  overlay.classList.toggle = (token, force) => {
+    if (force) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  const dialog = new FakeElement();
+  overlay.querySelector = (selector) => selector === '.non-album-modal-dialog' ? dialog : null;
+
+  context.setNonAlbumPagePresentation(overlay, true);
+
+  assert.equal(heading.textContent, 'Artists');
+  assert.equal(collections.hidden, true);
+  assert.equal(artists.hidden, false);
+  assert.equal(rail.getAttribute('data-library-navigation-mode'), 'artists');
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(collectionsMode.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactLooseTracks.getAttribute('aria-current'), 'page');
+  assert.equal(compactLooseTracks.classList.contains('is-selected'), true);
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
 });
 

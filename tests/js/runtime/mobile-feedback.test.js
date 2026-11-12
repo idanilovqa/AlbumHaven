@@ -810,9 +810,9 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
   context.URLSearchParams = URLSearchParams;
   const descriptor = { kind: 'album', albumKey: 'one' };
   for (const [view, expected] of [
-    [{ surface: { active: 'albums' } }, '/?surface=albums'],
+    [{ surface: { active: 'albums' } }, '/albums'],
     [{ surface: { active: 'home' } }, '/'],
-    [{ surface: { active: 'albums' }, all_artists_active: true }, '/?surface=albums&all_artists=1'],
+    [{ surface: { active: 'albums' }, all_artists_active: true }, '/albums?all_artists=1'],
   ]) {
     const url = context.buildUrl(view);
     assert.equal(url, expected);
@@ -1301,4 +1301,133 @@ test('Home names the account and drops the previous artist info button', () => {
   assert.equal(name.textContent, 'Rendref');
   assert.equal(summary.textContent, '');
   assert.deepEqual(removed, ['info']);
+});
+
+test('Loose Tracks reapplies surface and navigation ownership across the mobile breakpoint', () => {
+  function node(attributes = {}) {
+    const classes = new Set();
+    return {
+      hidden: false,
+      inert: false,
+      dataset: {},
+      slot: 'desktop',
+      attributes: { ...attributes },
+      classList: {
+        contains: name => classes.has(name),
+        add: name => classes.add(name),
+        remove: name => classes.delete(name),
+        toggle(name, force) {
+          if (force) classes.add(name);
+          else classes.delete(name);
+        },
+      },
+      getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      removeAttribute(name) { delete this.attributes[name]; },
+      appendChild() {},
+    };
+  }
+
+  const ids = [
+    'shell-main-surface', 'mobile-page-header', 'mobile-page-outlet', 'mobile-back-button',
+    'mobile-library-button', 'mobile-page-title', 'mobile-page-summary',
+    'mobile-settings-actions', 'mobile-settings-button',
+  ];
+  const nodes = Object.fromEntries(ids.map(id => [id, node()]));
+  const surface = nodes['non-album-modal'] = node();
+  const dialog = node({ role: 'dialog', 'aria-modal': 'true' });
+  surface.querySelector = selector => selector === '.non-album-modal-dialog' ? dialog : null;
+  const originalParent = node();
+  surface.parentElement = originalParent;
+  nodes['mobile-page-outlet'].appendChild = element => {
+    element.parentElement = nodes['mobile-page-outlet'];
+    element.slot = 'mobile';
+  };
+  nodes['shell-main-surface'].appendChild = element => {
+    element.parentElement = nodes['shell-main-surface'];
+    element.slot = 'main';
+  };
+  const body = node();
+  const presentationCalls = [];
+  const context = load('mobile-navigation.js', {
+    document: {
+      body,
+      title: 'Album Haven',
+      getElementById: id => nodes[id] || null,
+      querySelectorAll: () => [],
+    },
+    window: { innerWidth: 390 },
+    originalParent,
+    setNonAlbumPagePresentation: (element, open, navigationActive = open) => {
+      presentationCalls.push([element, open, navigationActive]);
+      const page = open && context.window.innerWidth > 900 && !element.classList.contains('is-mobile-page');
+      element.classList.toggle('non-album-modal--page', page);
+      if (page) nodes['shell-main-surface'].appendChild(element);
+      if (page) {
+        dialog.setAttribute('role', 'region');
+        dialog.removeAttribute('aria-modal');
+      } else if (!element.classList.contains('is-mobile-page')) {
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+      }
+    },
+  });
+  context.syncMobileAlbumHeader = () => {};
+  context.syncMobileLoopHeader = () => {};
+  vm.runInContext(`
+    mobilePageState.pages.push({ kind: 'non-album', title: 'Loose Tracks', libraryWide: true });
+    mobilePageState.originals.set('non-album', {
+      dialog: document.getElementById('non-album-modal').querySelector('.non-album-modal-dialog'),
+      role: 'dialog', modal: 'true', label: null,
+      placeholder: { before(element) { element.parentElement = originalParent; element.slot = 'desktop'; } },
+    });
+  `, context);
+
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('is-mobile-page'), true);
+  assert.equal(surface.classList.contains('non-album-modal--page'), false);
+  assert.equal(surface.parentElement, nodes['mobile-page-outlet']);
+  assert.equal(surface.slot, 'mobile');
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), null);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
+
+  context.window.innerWidth = 1440;
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('is-mobile-page'), false);
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.equal(surface.parentElement, nodes['shell-main-surface']);
+  assert.equal(surface.slot, 'main');
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), null);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
+
+  context.window.innerWidth = 390;
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('is-mobile-page'), true);
+  assert.equal(surface.classList.contains('non-album-modal--page'), false);
+  assert.equal(surface.parentElement, nodes['mobile-page-outlet']);
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), null);
+
+  context.window.innerWidth = 1440;
+  vm.runInContext("mobilePageState.pages.push({ kind: 'album', title: 'Child album' })", context);
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.equal(surface.parentElement, nodes['shell-main-surface']);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, false]);
+
+  vm.runInContext('mobilePageState.pages.pop()', context);
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
+
+  vm.runInContext(`
+    mobilePageState.pages.length = 0;
+    mobilePageState.pages.push({ kind: 'non-album', title: 'Artist Loose Tracks', libraryWide: false });
+  `, context);
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.equal(surface.parentElement, nodes['shell-main-surface']);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
 });

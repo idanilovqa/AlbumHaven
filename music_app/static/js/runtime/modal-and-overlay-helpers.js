@@ -658,7 +658,7 @@ function closeNonAlbumPageOnTreeNavigation(event) {
 }
 
 // Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
-function setNonAlbumPagePresentation(overlay, open) {
+function setNonAlbumPagePresentation(overlay, open, navigationActive = open) {
   const main = document.getElementById('shell-main-surface');
   const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
     && !overlay.classList.contains('is-mobile-page');
@@ -673,12 +673,22 @@ function setNonAlbumPagePresentation(overlay, open) {
     if (page) { dialog.setAttribute('role', 'region'); dialog.removeAttribute('aria-modal'); }
     else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
   }
-  syncLibraryNavigationMode(Boolean(open && state.ui.nonAlbumLibraryWide) ? 'collections' : 'artists');
+  const libraryWideOpen = Boolean(navigationActive && state.ui.nonAlbumLibraryWide);
+  syncNonAlbumNavigationPresentation(libraryWideOpen, Boolean(page));
   return Boolean(page);
 }
 
-// The side panel has two modes: Artists (the artist tree) and Loose Tracks (the Custom Collections tree,
-// holding Loose Tracks today and custom collections later). Library-wide Loose Tracks open = Loose Tracks mode.
+function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
+  syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
+  if (page && libraryWideOpen) {
+    document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
+      button.classList.add('is-selected');
+      button.setAttribute('aria-current', 'page');
+    });
+  }
+}
+
+// Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
 function syncLibraryNavigationMode(mode) {
   const collections = mode === 'collections';
   document.querySelectorAll('[data-navigation-mode]').forEach((button) => {

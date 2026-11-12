@@ -38,6 +38,16 @@ function syncMobilePageShell() {
     setMobilePagePresentation(kind, mobile);
     if (element) { element.hidden = mobile && kind !== active?.kind; element.inert = mobile && kind !== active?.kind; }
   }
+  const retainedPage = mobilePageState.pages.at(-1);
+  const retainedNonAlbumPage = mobilePageState.pages.find((page) => page.kind === 'non-album');
+  const nonAlbumSurface = document.getElementById(MOBILE_PAGE_KINDS['non-album']);
+  if (nonAlbumSurface && typeof setNonAlbumPagePresentation === 'function') {
+    setNonAlbumPagePresentation(
+      nonAlbumSurface,
+      Boolean(retainedNonAlbumPage),
+      retainedPage?.kind === 'non-album',
+    );
+  }
   if (active) {
     document.getElementById('mobile-page-title').textContent = active.title;
     const summary = document.getElementById('mobile-page-summary');

@@ -510,9 +510,12 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
   const content = copies.map((copy, copyIndex) => {
     const copyLabel = `Copy ${copy.copy_number}`;
     const deleteButton = canDelete && copy.copy_ref
-      ? ButtonComponent.renderButton({
-        label: 'Delete', variant: 'secondary', size: 'small',
-        className: 'confirm-modal-danger duplicate-copy-review__delete',
+      ? ButtonComponent.renderActionButton({
+        icon: 'delete',
+        semantic: 'destructive',
+        ariaLabel: `Permanently delete ${copyLabel} folder`,
+        title: `Permanently delete ${copyLabel} folder`,
+        className: 'duplicate-copy-review__delete',
         attributes: {
           'data-delete-duplicate-copy': String(copy.copy_number),
           'data-copy-ref': String(copy.copy_ref),

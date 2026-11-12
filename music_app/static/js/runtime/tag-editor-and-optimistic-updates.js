@@ -2072,14 +2072,14 @@ function browseTrackModalSelectedCover(value, options = {}) {
     albumKey: getTrackModalAlbumRequestKey(album),
     index,
   };
-  renderTrackModalRelease(album);
-  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
+  renderTrackModalRelease(album, { coverOnly: true });
   return true;
 }
 
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  const coverOnly = arguments[1]?.coverOnly === true;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
     ? buildAlbumArtboxHtml
     : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
@@ -2134,7 +2134,7 @@ function renderTrackModalRelease(album) {
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
   ).trim().toLowerCase();
-  if (els.header) {
+  if (!coverOnly && els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
@@ -2147,15 +2147,15 @@ function renderTrackModalRelease(album) {
     });
     els = getTrackModalElements();
   }
-  if (els.folder) {
+  if (!coverOnly && els.folder) {
     els.folder.dataset.album = '';
     els.folder.dataset.albumKey = resolvedAlbumKey;
   }
-  if (els.editTags) {
+  if (!coverOnly && els.editTags) {
     els.editTags.dataset.album = '';
     els.editTags.dataset.albumKey = resolvedAlbumKey;
   }
-  if (els.missingWarning) {
+  if (!coverOnly && els.missingWarning) {
     els.missingWarning.hidden = !albumMissing;
     els.missingWarning.innerHTML = albumMissing
       ? buildMissingAlbumDetailsHtml({
@@ -2303,6 +2303,7 @@ function renderTrackModalRelease(album) {
   if (typeof bindAlbumDetailsCoverStackPointer === 'function') {
     bindAlbumDetailsCoverStackPointer(els.cover.querySelector?.('.album-details-cover-stack'));
   }
+  if (coverOnly) return;
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;

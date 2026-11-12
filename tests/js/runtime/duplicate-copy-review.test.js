@@ -9,7 +9,7 @@ const escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replace
 function load() {
   const context = { escapeHtml, console };
   context.window = context;
-  context.ButtonComponent = { renderButton: ({ label, className = '', attributes = {} }) => (
+  context.ButtonComponent = { ...require('../../../music_app/static/js/button-component.js'), renderButton: ({ label, className = '', attributes = {} }) => (
     `<button class="${className}" ${Object.entries(attributes).map(([key, value]) => `${key}="${escapeHtml(value)}"`).join(' ')}>${label}</button>`
   ) };
   vm.createContext(context);
@@ -51,7 +51,7 @@ test('review renders real escaped DTO metadata in collapsed native disclosures w
   assert.doesNotMatch(html, /RAW_PRIVATE_CANARY|RAW_TRACK_CANARY|<button\b|<audio\b|<a\b|onclick=|data-(?:delete|play|edit|open-folder)/i);
 });
 
-test('review shows Delete only for exact referenced copies with both delete actions', () => {
+test('review uses the shared destructive icon only for exact referenced copies with both delete actions', () => {
   const c = load();
   const input = album();
   input.key = 'album:key';
@@ -64,6 +64,9 @@ test('review shows Delete only for exact referenced copies with both delete acti
   assert.equal((html.match(/data-delete-duplicate-copy=/g) || []).length, 2);
   assert.match(html, /data-copy-ref="dcr1\.7\.first"/);
   assert.match(html, /data-copy-ref="dcr1\.7\.second"/);
+  assert.match(html, /action-button--destructive/);
+  assert.match(html, /aria-label="Permanently delete Copy 2 folder"/);
+  assert.doesNotMatch(html, />Delete<\/button>/);
   for (const actions of [
     { 'library.inventory.manage': false, 'library.covers.delete': true },
     { 'library.inventory.manage': true, 'library.covers.delete': false },

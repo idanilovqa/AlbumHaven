@@ -160,6 +160,8 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
   };
   context.fetch = async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
+    assert.equal(context.state.coverLookup.modal.album.selected_covers_loaded, true);
+    assert.equal(context.state.coverLookup.modal.album.selected_covers.length, 2);
     attempt += 1;
     if (attempt === 1) {
       return {
@@ -185,6 +187,8 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
   };
 
   assert.equal(await context.saveOrderedCoverSelection(), false);
+  assert.equal(context.state.coverLookup.modal.album.selected_covers_loaded, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.coverLookup.modal.album.selected_covers)), []);
   assert.equal(context.state.coverLookup.modal.orderedCoverMutationId, calls[0].body.mutation_id);
   assert.equal(await context.saveOrderedCoverSelection(), true);
 
@@ -234,6 +238,8 @@ require('node:test')('Cover Lookup cards show saved order and dim only unselecte
   assert.match(selected, /cover-lookup-art-check[^>]*>1</);
   assert.doesNotMatch(selected, /is-selection-limited/);
   assert.match(limited, /is-selection-limited/);
+  assert.match(limited, /aria-disabled="true"/);
+  assert.match(limited, /tabindex="-1"/);
   assert.doesNotMatch(limited, /cover-lookup-art-check/);
 });
 
@@ -321,7 +327,9 @@ require('node:test')('selection sync numbers selected cards and marks only remai
     return {
       classes,
       getAttribute(name) { return name === 'data-cover-selection-key' ? key : ''; },
-      setAttribute() {},
+      attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; },
+      removeAttribute(name) { delete this.attributes[name]; },
       classList: { toggle(name, value) { value ? classes.add(name) : classes.delete(name); } },
       querySelector(selector) {
         if (selector === '.cover-lookup-art-check') return check;
@@ -359,20 +367,38 @@ require('node:test')('selection sync numbers selected cards and marks only remai
   assert.equal(selected.label.textContent, 'Selected 1');
   assert.equal(limited.check, null);
   assert.equal(limited.classes.has('is-selection-limited'), true);
+  assert.equal(limited.attributes['aria-disabled'], 'true');
+  assert.equal(limited.attributes.tabindex, '-1');
 });
 
-require('node:test')('selection limit slightly dims cards without disabling them', () => {
+require('node:test')('selection limit uses the card-local disabled treatment', () => {
   const css = fs.readFileSync(path.join(
     __dirname,
     '../../../music_app/static/css/runtime/cover-lookup-modal.css',
   ), 'utf8');
   assert.match(
     css,
-    /\.cover-lookup-art-card\.is-selection-limited\s*\{[^}]*opacity:\s*0\.[6-8][0-9]?;[^}]*\}/s,
+    /\.cover-lookup-art-card\.is-selection-limited\s*\{[^}]*opacity:\s*0\.38;[^}]*filter:\s*grayscale\(0\.85\)[^}]*cursor:\s*not-allowed;[^}]*\}/s,
   );
-  assert.doesNotMatch(
-    css,
-    /\.cover-lookup-art-card\.is-selection-limited\s*\{[^}]*(?:pointer-events:\s*none|cursor:\s*not-allowed)/s,
+});
+
+require('node:test')('saved ordered covers seed synchronously before the refresh request', () => {
+  const context = loadRuntime();
+  const album = {
+    selected_covers_loaded: true,
+    selected_covers_revision: 9,
+    selected_covers: [
+      { selection_id: 'front', kind: 'local', path: 'C:/Music/Album/front.jpg', image_url: '/cover/front' },
+      { selection_id: 'back', kind: 'local', path: 'C:/Music/Album/back.jpg', image_url: '/cover/back' },
+    ],
+  };
+
+  assert.equal(context.seedOrderedCoverSelectionFromAlbum(album), true);
+  assert.equal(context.state.coverLookup.modal.orderedSelectionLoaded, true);
+  assert.equal(context.state.coverLookup.modal.orderedCoversRevision, 9);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.state.coverLookup.modal.orderedCoverSelections.map(item => item.reference))),
+    [{ selection_id: 'front' }, { selection_id: 'back' }],
   );
 });
 

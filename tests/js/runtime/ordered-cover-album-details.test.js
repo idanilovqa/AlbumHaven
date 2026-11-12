@@ -34,7 +34,7 @@ function loadRuntime() {
     imageUrl: slot.image_url || '',
     unavailable: slot.unavailable === true || !slot.image_url,
   }));
-  context.renderTrackModalRelease = (value) => renders.push(value.key);
+  context.renderTrackModalRelease = (value, options) => renders.push([value.key, options]);
   context.syncMobileAlbumComposition = () => {};
   return { album, context, renders };
 }
@@ -50,7 +50,11 @@ test('Album Details cover browsing wraps without changing saved order', () => {
   assert.equal(context.browseTrackModalSelectedCover(-1), true);
   assert.equal(context.getTrackModalSelectedCoverIndex(album), 2);
   assert.deepEqual(album.selected_covers.map((slot) => slot.selection_id), savedOrder);
-  assert.deepEqual(renders, ['album-1', 'album-1', 'album-1']);
+  assert.deepEqual(JSON.parse(JSON.stringify(renders)), [
+    ['album-1', { coverOnly: true }],
+    ['album-1', { coverOnly: true }],
+    ['album-1', { coverOnly: true }],
+  ]);
 });
 
 test('rear-cover activation selects its exact saved slot and different albums default to primary', () => {

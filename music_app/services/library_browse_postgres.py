@@ -3888,6 +3888,10 @@ class PostgresLibraryBrowseRepository:
         }
 
         def load_rows(active_connection: Any) -> list[object]:
+            if normalized_album_key:
+                # Detail lookup must use the physical-parent expression index on large libraries.
+                active_connection.execute("SET LOCAL enable_seqscan = off")
+
             def execute(build_sql: Callable[[bool], str], params: Mapping[str, object]) -> Any:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
@@ -6708,10 +6712,15 @@ def _problematic_album_summary_payload(
     album_scope_reasons: list[str] | None = None,
     track_problem_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object] | None:
+    resolved_track_problem_rows = (
+        track_problem_rows
+        if track_problem_rows is not None
+        else _problematic_track_problem_rows(album, include_repair_metadata=False)
+    )
     reasons = _problematic_surviving_reasons(
         album,
         album_scope_reasons=album_scope_reasons,
-        track_problem_rows=track_problem_rows,
+        track_problem_rows=resolved_track_problem_rows,
     )
     repair_preview = _problematic_encoding_repair_preview(album, include_preview_rows=False)
     if (
@@ -6728,6 +6737,9 @@ def _problematic_album_summary_payload(
         for track in album.get("tracks") or []
         if isinstance(track, Mapping) and str(track.get("path") or "")
     ]
+    problematic_track_paths = {
+        str(row.get("path") or "") for row in resolved_track_problem_rows
+    }
     payload = {
         "key": str(album.get("key") or ""),
         "name": str(album.get("name") or ""),
@@ -6768,7 +6780,8 @@ def _problematic_album_summary_payload(
         "search_text": "\n".join(
             str(track.get("title") or "")
             for track in tracks
-            if str(track.get("title") or "").strip()
+            if str(track.get("path") or "") in problematic_track_paths
+            and str(track.get("title") or "").strip()
         ),
         "detail_loaded": False,
     }

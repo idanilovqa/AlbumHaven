@@ -194,6 +194,11 @@
   --album-cover-pointer-rotation: 0deg;
   position: relative;
   padding-block: 12px;
+  animation: album-details-cover-settle 180ms ease-out;
+}
+@keyframes album-details-cover-settle {
+  from { opacity: 0.86; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .album-details-cover-stack__front {
   position: relative;
@@ -283,6 +288,7 @@
   height: 18px;
 }
 @media (prefers-reduced-motion: reduce) {
+  .album-details-cover-stack { animation: none; }
   .album-details-cover-stack__rear {
     transition: none;
   }

@@ -531,7 +531,9 @@
   box-shadow: none;
 }
 .cover-lookup-art-card.is-selection-limited {
-  opacity: 0.72;
+  opacity: 0.38;
+  filter: grayscale(0.85) saturate(0.35);
+  cursor: not-allowed;
 }
 .cover-lookup-art-card.is-suggested {
   border-color: var(--appearance-success, var(--success, #52d7aa));

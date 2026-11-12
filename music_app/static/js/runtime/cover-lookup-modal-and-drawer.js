@@ -1170,6 +1170,65 @@ function orderedCoverAlbumId(album) {
   return Number.isInteger(albumId) && albumId > 0 ? albumId : 0;
 }
 
+function orderedCoverSlotsFromSelections(album, selections) {
+  const existing = new Map((Array.isArray(album?.selected_covers) ? album.selected_covers : [])
+    .map((slot) => [String(slot?.selection_id || slot?.selectionId || ''), slot]));
+  return (Array.isArray(selections) ? selections : []).map((entry, index) => {
+    const reference = entry?.reference || {};
+    const selectionId = String(reference.selection_id || `pending-${index + 1}`);
+    const retained = existing.get(selectionId);
+    const candidate = (state.coverLookup.modal.possibleMatches || [])
+      .find((item) => String(item?.id || '') === String(reference.candidate_id || ''));
+    const imageUrl = String(
+      retained?.image_url
+      || retained?.imageUrl
+      || (reference.kind === 'local' && reference.path ? buildCoverUrl(reference.path) : '')
+      || candidate?.url
+      || candidate?.thumbnail_url
+      || '',
+    );
+    return {
+      ...(retained || {}),
+      selection_id: selectionId,
+      image_url: imageUrl,
+      unavailable: !imageUrl,
+    };
+  });
+}
+
+function applyOrderedCoverSlotsToAlbum(album, slots, revision, loaded = true) {
+  if (!album) return;
+  const albumId = orderedCoverAlbumId(album);
+  const aliases = [album, ...(state.modalReleases || [])].filter((candidate, index, items) => (
+    candidate && items.indexOf(candidate) === index && (
+      candidate === album
+      || (albumId && orderedCoverAlbumId(candidate) === albumId)
+      || (album?.key && candidate?.key === album.key)
+    )
+  ));
+  aliases.forEach((candidate) => {
+    candidate.selected_covers = slots.map((slot) => ({ ...slot }));
+    candidate.selected_covers_loaded = loaded;
+    if (albumId) candidate.selected_covers_album_id = albumId;
+    if (revision !== undefined) candidate.selected_covers_revision = Math.max(0, Number(revision) || 0);
+  });
+  const current = state.modalReleases?.[state.modalReleaseIndex] || null;
+  if (current && aliases.includes(current) && typeof renderTrackModalRelease === 'function') {
+    renderTrackModalRelease(current);
+  }
+}
+
+function seedOrderedCoverSelectionFromAlbum(album) {
+  if (album?.selected_covers_loaded !== true || !Array.isArray(album.selected_covers)) return false;
+  const selections = album.selected_covers.map(orderedCoverSelectionEntry).filter(Boolean);
+  state.coverLookup.modal.orderedCoverSelections = selections;
+  state.coverLookup.modal.orderedSelectionMode = selections.length > 1;
+  state.coverLookup.modal.orderedCoversRevision = Math.max(0, Number(album.selected_covers_revision || 0) || 0);
+  state.coverLookup.modal.orderedCoverBaseline = orderedCoverSelectionSignature(selections);
+  state.coverLookup.modal.orderedSelectionLoaded = true;
+  return true;
+}
+
 async function loadOrderedCoverSelectionForAlbum(album) {
   const albumId = orderedCoverAlbumId(album);
   if (!albumId) return false;
@@ -1190,6 +1249,14 @@ async function loadOrderedCoverSelectionForAlbum(album) {
     state.coverLookup.modal.orderedCoverMutationId = '';
     state.coverLookup.modal.orderedCoverBaseline = orderedCoverSelectionSignature(selections);
     state.coverLookup.modal.orderedSelectionLoaded = true;
+    const libraryId = Number(album.selected_covers_library_id || 0);
+    const slots = (Array.isArray(data.selected_covers) ? data.selected_covers : []).map((item) => ({
+      ...item,
+      ...(libraryId > 0 && item?.selection_id && !item?.image_url ? {
+        image_url: selectedCoverImageUrl(libraryId, albumId, item.selection_id),
+      } : {}),
+    }));
+    applyOrderedCoverSlotsToAlbum(album, slots, state.coverLookup.modal.orderedCoversRevision);
     syncCoverLookupSelectionUi();
     return true;
   } catch (error) {
@@ -1214,8 +1281,13 @@ async function saveOrderedCoverSelection() {
     ? modal.orderedCoverSelections : [];
   if (!albumId || !selections.length || modal.saving) return false;
   const mutationId = String(modal.orderedCoverMutationId || crypto.randomUUID());
+  const previousSlots = Array.isArray(album.selected_covers)
+    ? album.selected_covers.map((slot) => ({ ...slot })) : [];
+  const previousLoaded = album.selected_covers_loaded === true;
+  const previousRevision = album.selected_covers_revision;
   modal.orderedCoverMutationId = mutationId;
   modal.saving = true;
+  applyOrderedCoverSlotsToAlbum(album, orderedCoverSlotsFromSelections(album, selections), modal.orderedCoversRevision);
   syncCoverLookupSaveButton();
   try {
     const response = await fetch(`/albums/${albumId}/selected-covers`, {
@@ -1236,10 +1308,8 @@ async function saveOrderedCoverSelection() {
         image_url: selectedCoverImageUrl(libraryId, albumId, item.selection_id),
       } : {}),
     }));
-    album.selected_covers = saved;
-    album.selected_covers_loaded = true;
+    applyOrderedCoverSlotsToAlbum(album, saved, data.selected_covers_revision);
     album.selected_covers_album_id = albumId;
-    album.selected_covers_revision = Math.max(0, Number(data.selected_covers_revision || 0) || 0);
     modal.orderedCoversRevision = album.selected_covers_revision;
     modal.orderedCoverSelections = selections.map((entry, index) => ({
       key: entry.key,
@@ -1250,6 +1320,7 @@ async function saveOrderedCoverSelection() {
     closeCoverLookupModal();
     return true;
   } catch (error) {
+    applyOrderedCoverSlotsToAlbum(album, previousSlots, previousRevision, previousLoaded);
     console.error('[AlbumHaven][CoverLookup] Failed to save ordered cover selection.', error);
     if (typeof showToast === 'function') {
       showToast(error.message || 'Failed to save cover selection.', 'error', 3200);
@@ -1276,6 +1347,13 @@ function syncCoverLookupSelectionUi() {
       card.classList.toggle('is-active', selected);
       card.classList.toggle('is-selection-limited', limitReached && !selected);
       card.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      if (limitReached && !selected) {
+        card.setAttribute('aria-disabled', 'true');
+        card.setAttribute('tabindex', '-1');
+      } else {
+        card.removeAttribute('aria-disabled');
+        card.setAttribute('tabindex', '0');
+      }
       let check = card.querySelector('.cover-lookup-art-check');
       if (selected && !check) {
         check = document.createElement('span');
@@ -2544,9 +2622,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
+  const selectionLimited = orderedLimitReached && !isActive;
   const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
-    : 'role="button" tabindex="0"';
+    : `role="button" tabindex="${selectionLimited ? '-1' : '0'}"${selectionLimited ? ' aria-disabled="true"' : ''}`;
   const fallbackPreviewHtml = `
     <span class="cover-lookup-art-preview-fallback">
       <img src="${previewFallbackImageUrl}" alt="Remote preview unavailable" loading="eager" decoding="async">
@@ -3700,6 +3779,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.orderedCoverMutationId = '';
   state.coverLookup.modal.orderedCoverBaseline = '[]';
   state.coverLookup.modal.orderedSelectionLoaded = false;
+  seedOrderedCoverSelectionFromAlbum(album);
   state.coverLookup.modal.suppressOrderedSelectionClickKey = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
   state.coverLookup.modal.currentReleases = [];

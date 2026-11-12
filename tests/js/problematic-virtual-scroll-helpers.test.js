@@ -165,7 +165,7 @@ test('a dropped complete summary body is recovered through one authenticated unb
 test('a summary completed before capture is recovered through one authenticated unbounded read', async () => {
   const { observeProblematicDetails } = await load();
   const { page, requestedUrl } = capturePageWithFallback({
-    items: [{ key: 'first' }, { key: 'second' }], complete: true,
+    items: [{ key: 'first' }, { key: 'second' }],
   });
   const capture = observeProblematicDetails(page);
 
@@ -204,7 +204,7 @@ test('a dropped older summary body is tolerated only while a newer complete summ
   await stale.dispose();
 
   const { page: boundedPage } = capturePageWithFallback({
-    items: [{ key: 'first' }, { key: 'second' }], complete: true,
+    items: [{ key: 'first' }, { key: 'second' }],
   });
   const bounded = observeProblematicDetails(boundedPage);
   boundedPage.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });

@@ -1295,7 +1295,7 @@ require('node:test')('accepted remote save keeps its finished card in place with
     status: 'running',
     progress: 92,
     progress_label: 'Saving selected cover art...',
-    job_kind: 'save_remote_selection',
+    job_contract: { job_kind: 'save_remote_selection' },
   }], 'active');
   context.state.coverLookup.tasks = merged;
   context.state.coverLookup.notificationCounts = {
@@ -1306,7 +1306,7 @@ require('node:test')('accepted remote save keeps its finished card in place with
   context.renderCoverLookupDrawer();
 
   assert.deepEqual(Array.from(merged, (task) => task.id), before.map((task) => task.id));
-  assert.match(bodyElement.innerHTML, /Garip[\s\S]*>Saving art…</);
+  assert.match(bodyElement.innerHTML, /Garip[\s\S]*>Downloading</);
   assert.doesNotMatch(bodyElement.innerHTML, /Garip[\s\S]*>Searching</);
   assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task="garip"/);
   assert.equal(context.document.getElementById('cover-lookup-drawer-summary').textContent, '3 finished');
@@ -6849,6 +6849,212 @@ require('node:test')('optimistic cover changes keep cached LOCAL cards for immed
   }
 });
 
+require('node:test')('accepted remote save seeds and selects its new LOCAL card on immediate notification reopen', async () => {
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
+  const overlay = {
+    hidden: true,
+    classList: { toggle() {} },
+    toggleAttribute() {},
+    removeAttribute() {},
+  };
+  const album = {
+    key: 'fleet-foxes',
+    tracks: [{ path: 'N:/Music/Fleet Foxes/01.flac' }],
+  };
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    deepCloneJson: value => JSON.parse(JSON.stringify(value)),
+    buildCoverUrl: () => '/cover/local',
+    escapeHtml: value => String(value ?? ''),
+    getAlbumPathSignature: () => 'fleet-foxes',
+    getAlbumRequestKey: value => String(value?.key || ''),
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': new TestButton(),
+      }[id] || null),
+    },
+    showToast: () => {},
+  });
+  const originalPath = 'N:/Music/Fleet Foxes/original.jpg';
+  const downloadedPath = 'N:/Music/Fleet Foxes/cover.jpg';
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_inventory_complete: true,
+    active_cover_path: originalPath,
+    selected_source_path: originalPath,
+    local_covers: [{ path: originalPath, is_active: true }],
+    other_art: [],
+  });
+  context.state.coverLookup.tasks = [{ id: 'fleet-save', status: 'completed' }];
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'fleet-save',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{
+      id: 'candidate-1',
+      url: 'https://images.example/fleet-foxes.jpg',
+      thumbnail_url: 'https://images.example/fleet-foxes-small.jpg',
+      width: 1200,
+      height: 1200,
+      display_only: false,
+    }],
+  };
+  context.closeCoverLookupModal = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {};
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      optimistic_cover_path: downloadedPath,
+      task: {
+        id: 'fleet-save',
+        status: 'running',
+        save_generation: 'fleet-save-generation',
+        job_contract: { job_kind: 'save_remote_selection' },
+      },
+    }),
+  });
+
+  await context.saveRemoteCoverFromLookup();
+
+  const cached = context.cachedCoverLookupGalleryPayload(album);
+  assert.equal(cached.selected_source_path, downloadedPath);
+  assert.deepEqual(Array.from(cached.local_covers, item => [item.path, item.is_active]), [
+    [downloadedPath, true],
+    [originalPath, false],
+  ]);
+  assert.equal(cached.local_covers[0].preview_url, 'https://images.example/fleet-foxes-small.jpg');
+  assert.match(
+    context.buildCoverLookupCard(cached.local_covers[0], 'local'),
+    /src="https:\/\/images\.example\/fleet-foxes-small\.jpg"/,
+  );
+
+  context.refreshCoverLookupGallery = async () => {
+    assert.equal(context.state.coverLookup.modal.localCovers[0].path, downloadedPath);
+    assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, downloadedPath);
+    assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
+  };
+  await context.openCoverLookupModal(album, { taskId: 'fleet-save' });
+});
+
+require('node:test')('failed accepted remote save restores the previously cached LOCAL selection', async () => {
+  const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Music/Fleet Foxes/01.flac' }] };
+  const originalGallery = {
+    ok: true,
+    local_inventory_complete: true,
+    active_cover_path: 'N:/Music/Fleet Foxes/original.jpg',
+    selected_source_path: 'N:/Music/Fleet Foxes/original.jpg',
+    local_covers: [{ path: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
+    other_art: [],
+  };
+  const context = loadHelper({
+    deepCloneJson: value => JSON.parse(JSON.stringify(value)),
+    getAlbumPathSignature: () => 'fleet-foxes',
+    getAlbumRequestKey: value => String(value?.key || ''),
+    showToast: () => {},
+  });
+  context.cacheCoverLookupGalleryPayload(album, originalGallery);
+  context.state.coverLookup.tasks = [{ id: 'fleet-save', status: 'completed' }];
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'fleet-save',
+    selectedRemoteId: 'candidate-1',
+    possibleMatches: [{ id: 'candidate-1', url: 'https://images.example/fleet.jpg', display_only: false }],
+  };
+  context.closeCoverLookupModal = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      optimistic_cover_path: 'N:/Music/Fleet Foxes/cover.jpg',
+      task: { id: 'fleet-save', status: 'running', save_generation: 'new-save' },
+    }),
+  });
+
+  await context.saveRemoteCoverFromLookup();
+  context.applyCoverLookupTaskUpdates({
+    id: 'fleet-save', status: 'failed', save_generation: 'new-save', message: 'Download failed.',
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.cachedCoverLookupGalleryPayload(album))),
+    originalGallery,
+  );
+});
+
+require('node:test')('an unowned remote save cannot mutate the cached LOCAL gallery', () => {
+  const album = { key: 'fleet-foxes' };
+  const originalGallery = {
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Music/Fleet Foxes/original.jpg',
+    local_covers: [{ path: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
+    other_art: [],
+  };
+  const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
+  context.cacheCoverLookupGalleryPayload(album, originalGallery);
+
+  const previous = context.cacheOptimisticRemoteCoverGallery(
+    album,
+    { url: 'https://images.example/unowned.jpg' },
+    'N:/Music/Fleet Foxes/cover.jpg',
+    '',
+  );
+
+  assert.equal(previous, null);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.cachedCoverLookupGalleryPayload(album))),
+    originalGallery,
+  );
+});
+
+require('node:test')('failed older save cannot roll back a newer optimistic cached LOCAL selection', () => {
+  const album = { key: 'fleet-foxes' };
+  const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
+  context.state.coverLookup.modal.album = null;
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Music/Fleet Foxes/original.jpg',
+    local_covers: [{ path: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
+    other_art: [],
+  });
+  const beforeOlderSave = context.cacheOptimisticRemoteCoverGallery(
+    album,
+    { url: 'https://images.example/older.jpg' },
+    'N:/Music/Fleet Foxes/older.jpg',
+    'older-save',
+  );
+  context.cacheOptimisticRemoteCoverGallery(
+    album,
+    { url: 'https://images.example/newer.jpg' },
+    'N:/Music/Fleet Foxes/newer.jpg',
+    'newer-save',
+  );
+
+  context.restoreCoverLookupGalleryAfterRemoteSaveFailure(
+    album,
+    { previousGallery: beforeOlderSave },
+    'older-save',
+  );
+
+  const cached = context.cachedCoverLookupGalleryPayload(album);
+  assert.equal(cached.selected_source_path, 'N:/Music/Fleet Foxes/newer.jpg');
+  assert.equal(cached.local_covers[0].pending_remote_save_task_id, 'newer-save');
+});
+
 require('node:test')('reopening Cover Lookup renders its cached gallery before refreshing', async () => {
   class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = { hidden: true, classList: { toggle() {} } };
@@ -6941,7 +7147,7 @@ require('node:test')('actioned terminal notifications render source-neutral Art 
       notification_action_taken: false, artist: 'Artist', album: 'Early choice',
     },
     {
-      id: 'early-provider-save', status: 'running', job_kind: 'save_remote_selection',
+      id: 'early-provider-save', status: 'running', job_contract: { job_kind: 'save_remote_selection' },
       notification_action_taken: false, artist: 'Artist', album: 'Early save',
     },
   ];
@@ -6951,7 +7157,7 @@ require('node:test')('actioned terminal notifications render source-neutral Art 
   assert.equal((bodyElement.innerHTML.match(/Art chosen/g) || []).length, 3);
   assert.equal((bodyElement.innerHTML.match(/No covers found/g) || []).length, 1);
   assert.match(bodyElement.innerHTML, /Early choice/);
-  assert.match(bodyElement.innerHTML, /Saving art…/);
+  assert.match(bodyElement.innerHTML, /Downloading/);
   assert.doesNotMatch(bodyElement.innerHTML, /Lookup failed|Canceled/);
 });
 

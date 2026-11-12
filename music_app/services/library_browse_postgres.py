@@ -106,7 +106,7 @@ _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
 # Built Problematic Files first pages, by limit, until the complete list is cached.
 _PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
-_PROBLEMATIC_LOOSE_TRACKS_KEY = "loose-source::all"
+_PROBLEMATIC_LOOSE_TRACKS_KEY_PREFIX = "loose-source::"
 _PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY = "_loose_tracks_detail"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
@@ -125,6 +125,22 @@ _UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
 _UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
 _UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
+
+
+def _problematic_loose_tracks_folder_path(private_path: object) -> str:
+    normalized = str(private_path or "").strip().replace("\\", "/").strip("/")
+    return normalized.rpartition("/")[0]
+
+
+def _problematic_loose_tracks_key(root_id: object, private_path: object) -> str:
+    folder_path = _problematic_loose_tracks_folder_path(private_path)
+    identity = f"{str(root_id or '').strip()}\0{folder_path}".casefold()
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return f"{_PROBLEMATIC_LOOSE_TRACKS_KEY_PREFIX}{digest}"
+
+
+def _is_problematic_loose_tracks_key(value: object) -> bool:
+    return str(value or "").startswith(_PROBLEMATIC_LOOSE_TRACKS_KEY_PREFIX)
 # Candidate album ids per (cache key, generation); one whole-library pass
 # serves both the bounded first page and searches before the list completes.
 _PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
@@ -3236,21 +3252,11 @@ class PostgresLibraryBrowseRepository:
             "view_data_source": _SOURCE_TELEMETRY,
         }
         if limit is None and include_initial_detail:
-            loose_tracks_album = next((
-                album
-                for item, album in projected_items
-                if item.get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY
-            ), None)
-            if loose_tracks_album is not None:
-                if (initial_detail or {}).get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY:
-                    payload[_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] = initial_detail
-                else:
-                    loose_tracks_album["_suggestion_aliases"] = self._load_relation_alias_maps(
-                        connection=connection
-                    ).get("alias_to_canonical", {})
-                    payload[_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] = (
-                        _problematic_album_detail_payload(loose_tracks_album)
-                    )
+            initial_key = str((initial_detail or {}).get("key") or "")
+            if _is_problematic_loose_tracks_key(initial_key):
+                payload[_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] = {
+                    initial_key: initial_detail,
+                }
         return payload
 
     def build_problematic_album_payload_by_track_paths(
@@ -3329,9 +3335,14 @@ class PostgresLibraryBrowseRepository:
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
         normalized_album_key = str(album_key or "")
-        if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+        if _is_problematic_loose_tracks_key(normalized_album_key):
             cached = self._get_cached_utility_projection("problematic-files", copy_payload=False)
-            cached_detail = (cached or {}).get(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY)
+            cached_details = (cached or {}).get(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY)
+            cached_detail = (
+                cached_details.get(normalized_album_key)
+                if isinstance(cached_details, Mapping)
+                else None
+            )
             if isinstance(cached_detail, Mapping):
                 return deepcopy(cached_detail)
         missing_albums = _missing_album_projection_payloads(
@@ -4173,7 +4184,7 @@ class PostgresLibraryBrowseRepository:
 
             def standalone_rows() -> list[object]:
                 cached_paths: set[str] | None = None
-                if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+                if _is_problematic_loose_tracks_key(normalized_album_key):
                     cached_payloads = []
                     complete = self._get_cached_utility_projection(
                         "problematic-files", copy_payload=False,
@@ -4191,7 +4202,7 @@ class PostgresLibraryBrowseRepository:
                         item = next((
                             item for item in payload.get("items") or []
                             if isinstance(item, Mapping)
-                            and item.get("key") == _PROBLEMATIC_LOOSE_TRACKS_KEY
+                            and item.get("key") == normalized_album_key
                         ), None)
                         paths = {
                             str(path).strip()
@@ -4212,24 +4223,28 @@ class PostgresLibraryBrowseRepository:
                     entry = dict(_row_json_mapping(row.get("file_entry")))
                     if row.get("album_id") is not None or not entry.get("local_album_membership_problem"):
                         continue
-                    key = _PROBLEMATIC_LOOSE_TRACKS_KEY
+                    private_path = row.get("private_path")
+                    key = _problematic_loose_tracks_key(row.get("root_id"), private_path)
                     if normalized_album_key is not None and key != normalized_album_key:
                         continue
-                    row.update(album_key=key, file_private_path=row.get("private_path"),
+                    row.update(album_key=key, file_private_path=private_path,
                                track_title=row.get("title") or entry.get("title"),
                                track_artist_name=entry.get("artist") or row.get("artist_name"),
                                file_library_root_id=row.get("root_id"),
                                file_library_root_category=row.get("library_root_category"),
-                               album_title=entry.get("album") or "Loose Tracks",
+                               album_title="Loose Tracks",
                                album_release_year=entry.get("year"),
                                album_metadata={"album_artist": entry.get("album_artist") or entry.get("artist") or "Unknown Artist"},
+                               loose_track_folder_path=_problematic_loose_tracks_folder_path(private_path),
+                               loose_track_artist=entry.get("artist") or entry.get("album_artist"),
+                               loose_track_album=entry.get("album"),
                                file_size=row.get("file_size_bytes"),
                                file_local_album_membership_problem=entry["local_album_membership_problem"],
                                file_mixed_album_folder=entry["local_album_membership_problem"] == "Mixed album metadata in one folder")
                     standalone.append(row)
                 return standalone
 
-            if normalized_album_key == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+            if _is_problematic_loose_tracks_key(normalized_album_key):
                 return standalone_rows()
             if use_selected_album_ids:
                 if not selected_album_ids:
@@ -5344,6 +5359,9 @@ def _row_album_identity(
     separate_release_keys: set[str] | None = None,
     base_key: str | None = None,
 ) -> tuple[object, str, object]:
+    persisted_album_key = str(row_payload.get("album_key") or "").strip()
+    if _is_problematic_loose_tracks_key(persisted_album_key):
+        return persisted_album_key, persisted_album_key, None
     resolved_metadata = (
         metadata
         if metadata is not None
@@ -5941,6 +5959,15 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "_persisted_album_key": persisted_album_key,
                 "name": str(row_payload.get("album_title") or "").strip(),
                 "album_artist": str(metadata.get("album_artist") or artist_display).strip(),
+                "loose_track_folder_path": str(
+                    row_payload.get("loose_track_folder_path") or ""
+                ).strip(),
+                "loose_track_artist": str(
+                    row_payload.get("loose_track_artist") or ""
+                ).strip(),
+                "loose_track_album": str(
+                    row_payload.get("loose_track_album") or ""
+                ).strip(),
                 "artists": [str(artist or "").strip() for artist in artists if str(artist or "").strip()],
                 "is_compilation": bool(metadata.get("is_compilation")),
                 "cover_path": row_payload.get("album_cover_path"),
@@ -5980,6 +6007,13 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
             albums[album_identity] = album
             seen_track_paths_by_album[album_identity] = set()
         else:
+            for field in (
+                "loose_track_folder_path",
+                "loose_track_artist",
+                "loose_track_album",
+            ):
+                if not album.get(field) and row_payload.get(field):
+                    album[field] = str(row_payload[field]).strip()
             album["_ignored_repair_keys"].update(ignored_repair_keys)
             album["_separate_release_keys"].update(separate_release_keys)
             album["_duplicate_candidate"] = bool(
@@ -6825,7 +6859,7 @@ def _track_order_issue_reason(issue: Mapping[str, object]) -> str:
 
 
 def _track_order_issues(album: Mapping[str, object]) -> list[dict[str, object]]:
-    if str(album.get("key") or "") == _PROBLEMATIC_LOOSE_TRACKS_KEY:
+    if _is_problematic_loose_tracks_key(album.get("key")):
         return []
     cached_issues = album.get("_track_order_issues")
     if isinstance(cached_issues, list):
@@ -7255,7 +7289,7 @@ def _problematic_search_album_ids_sql() -> str:
 
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
 _PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
-_PROBLEMATIC_SNAPSHOT_VERSION = 4
+_PROBLEMATIC_SNAPSHOT_VERSION = 5
 
 
 def _problematic_inventory_fingerprint(connection: Any) -> str:
@@ -7376,6 +7410,11 @@ def _problematic_album_summary_payload(
         "key": str(album.get("key") or ""),
         "name": str(album.get("name") or ""),
         "album_artist": str(album.get("album_artist") or ""),
+        "loose_track_folder_path": str(
+            album.get("loose_track_folder_path") or ""
+        ),
+        "loose_track_artist": str(album.get("loose_track_artist") or ""),
+        "loose_track_album": str(album.get("loose_track_album") or ""),
         "artists": list(album.get("artists") or []),
         "is_compilation": bool(album.get("is_compilation")),
         "cover_path": album.get("cover_path") or None,

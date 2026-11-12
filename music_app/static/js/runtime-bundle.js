@@ -19396,13 +19396,21 @@ function getProblematicAlbumNavigationOptions(album, selected) {
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
+  const looseTrackFolder = String(album.loose_track_folder_path || '').trim();
+  const subtitle = looseTrackFolder
+    ? [
+        looseTrackFolder,
+        String(album.loose_track_artist || '').trim(),
+        String(album.loose_track_album || '').trim(),
+      ].filter(Boolean).join(' · ')
+    : displayArtist;
   const displayYear = String(album.year || '').trim();
   const artworkSource = buildAlbumDisplayCoverUrl(album);
   const artworkLabel = `Artwork for ${displayName}`;
   const artworkHtml = buildUtilityAlbumArtbox(album, { label: artworkLabel, source: artworkSource });
   return {
       variant: 'wide', action: true, key: album.key, selected, label: displayName,
-      subtitle: displayArtist, year: displayYear, artworkHtml, artworkSource, artworkLabel,
+      subtitle, year: displayYear, artworkHtml, artworkSource, artworkLabel,
       count: album.track_count ?? (Array.isArray(album.tracks) ? album.tracks.length : null), countHidden: true,
       attributes: { 'data-problematic-album-key': album.key },
   };
@@ -35377,7 +35385,7 @@ function isActionedCoverLookupNotification(task) {
 
 function isCoverLookupSavePending(task) {
   return ['pending', 'running'].includes(String(task?.status || ''))
-    && String(task?.job_kind || '') === 'save_remote_selection';
+    && String(task?.job_kind || task?.job_contract?.job_kind || '') === 'save_remote_selection';
 }
 
 function isActiveCoverLookupSearchTask(task) {
@@ -36334,7 +36342,7 @@ function renderCoverLookupDrawer({
         ? task.possible_matches.filter(isSelectableRemoteCoverCandidate).length
         : 0;
     const statusLabel = savePending
-      ? 'Saving art…'
+      ? 'Downloading'
       : artChosen
       ? 'Art chosen'
       : status === 'failed'
@@ -36601,7 +36609,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : buildCoverUrl(item?.path || '', {
+      : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', {
         size: 480,
         revision: item?.cover_revision,
       });
@@ -36611,7 +36619,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.url || item?.thumbnail_url || '', `full:saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
+      : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
   const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
@@ -37639,6 +37647,11 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   if (isStalePendingRemoteSaveUpdate(task)) return;
   if (pendingRemoteSave && ['failed', 'canceled'].includes(taskStatus)) {
     coverLookupPendingRemoteSaves.delete(taskId);
+    restoreCoverLookupGalleryAfterRemoteSaveFailure(
+      pendingRemoteSave.previousAlbum,
+      pendingRemoteSave,
+      taskId,
+    );
     if (
       pendingRemoteSave.optimisticCover
       && state.coverLookup.optimisticAlbumCovers[pendingRemoteSave.signature] === pendingRemoteSave.optimisticCover
@@ -37700,6 +37713,67 @@ function cacheCoverLookupGalleryPayload(album, gallery) {
 function cachedCoverLookupGalleryPayload(album) {
   const cached = coverLookupGalleryCache.get(buildCoverLookupGalleryCacheKey(album));
   return cached ? JSON.parse(JSON.stringify(cached)) : null;
+}
+
+function cacheOptimisticRemoteCoverGallery(album, selectedMatch, coverPath, taskId) {
+  const normalizedPath = String(coverPath || '').trim();
+  const marker = String(taskId || '').trim();
+  if (!normalizedPath || !marker) return null;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const localCovers = Array.isArray(previousGallery?.local_covers)
+    ? previousGallery.local_covers : [];
+  const filename = normalizedPath.split(/[\\/]/).pop() || 'cover.jpg';
+  const optimisticCover = {
+    path: normalizedPath,
+    filename,
+    is_active: true,
+    preview_url: String(selectedMatch?.thumbnail_url || selectedMatch?.url || '').trim(),
+    width: Number(selectedMatch?.width || 0) || null,
+    height: Number(selectedMatch?.height || 0) || null,
+    pending_remote_save_task_id: marker,
+  };
+  cacheCoverLookupGalleryPayload(album, {
+    ...(previousGallery || { ok: true, other_art: [] }),
+    local_inventory_available: true,
+    local_inventory_complete: previousGallery?.local_inventory_complete === true,
+    active_cover_path: normalizedPath,
+    selected_source_path: normalizedPath,
+    remote_cover: null,
+    local_covers: [
+      optimisticCover,
+      ...localCovers
+        .filter((cover) => String(cover?.path || '') !== normalizedPath)
+        .map((cover) => ({ ...cover, is_active: false })),
+    ],
+  });
+  return previousGallery;
+}
+
+function restoreCoverLookupGalleryAfterRemoteSaveFailure(album, pendingRemoteSave, taskId) {
+  const currentGallery = cachedCoverLookupGalleryPayload(album);
+  const currentSelectionPath = String(
+    currentGallery?.selected_source_path || currentGallery?.active_cover_path || '',
+  );
+  const ownsCurrentGallery = currentGallery?.local_covers?.some((cover) => (
+    String(cover?.path || '') === currentSelectionPath
+    && String(cover?.pending_remote_save_task_id || '') === String(taskId || '')
+  ));
+  if (!ownsCurrentGallery) return;
+  if (pendingRemoteSave.previousGallery) {
+    cacheCoverLookupGalleryPayload(album, pendingRemoteSave.previousGallery);
+  } else {
+    invalidateCoverLookupGalleryCache(album);
+  }
+  if (buildCoverLookupGalleryCacheKey(state.coverLookup.modal.album)
+      !== buildCoverLookupGalleryCacheKey(album)) return;
+  if (pendingRemoteSave.previousGallery) {
+    applyCoverLookupGalleryPayload(pendingRemoteSave.previousGallery);
+  } else {
+    state.coverLookup.modal.localCovers = (state.coverLookup.modal.localCovers || []).filter((cover) => (
+      String(cover?.pending_remote_save_task_id || '') !== String(taskId || '')
+    ));
+    state.coverLookup.modal.activeLocalSelectionPath = String(album?.cover_path || '');
+  }
 }
 
 function invalidateCoverLookupGalleryCache(album) {
@@ -38514,7 +38588,14 @@ async function saveRemoteCoverFromLookup() {
     const optimisticCoverPath = String(data.optimistic_cover_path || '').trim();
     if (optimisticEntry?.[1]) optimisticEntry[1].coverPath = optimisticCoverPath;
     const acceptedTaskId = String(data.task?.id || taskId || '').trim();
+    let previousGallery = null;
     if (acceptedTaskId && selectedMatch) {
+      previousGallery = cacheOptimisticRemoteCoverGallery(
+        album,
+        selectedMatch,
+        optimisticCoverPath,
+        acceptedTaskId,
+      );
       const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
       if (acceptedTask) {
         const optimisticPreviewUrl = String(
@@ -38542,6 +38623,7 @@ async function saveRemoteCoverFromLookup() {
         previousOptimisticCover: optimisticEntry
           ? previousOptimisticCovers[optimisticEntry[0]]
           : undefined,
+        previousGallery,
         saveGeneration: String(data.task?.save_generation || ''),
       });
       markCoverLookupTaskActionTaken(acceptedTaskId, optimisticAlbum || album, { persist: false });

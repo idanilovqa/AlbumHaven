@@ -59,6 +59,9 @@ def test_separate_release_summary_key_resolves_composite_persisted_credit(monkey
 
         def execute(self, sql, params=None):
             sql = " ".join(sql.split())
+            if sql == "SET LOCAL enable_seqscan = off":
+                self.result = []
+                return self
             if "album_ids" in (params or {}):
                 selected.extend(params["album_ids"])
                 self.result = [row for row in rows if row["album_id"] in params["album_ids"]]

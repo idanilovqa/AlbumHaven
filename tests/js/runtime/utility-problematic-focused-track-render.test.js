@@ -114,6 +114,7 @@ test('problematic-file render scrolls the focused track row into view determinis
       return { top: 40, bottom: 200 };
     },
     querySelector(selector) {
+      if (selector === 'img[data-gallery-cover-src]') return null;
       selectorCalls.push(selector);
       return selector === `[data-problematic-track-path="${escapedTrackPath}"]`
         ? focusedTrackMatch

@@ -11683,10 +11683,12 @@ def test_problematic_file_entry_preserves_disc_total_and_subtitle():
     assert entry["disc_subtitle"] == "Bonus"
 
 
-def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypatch):
+def test_problematic_loose_tracks_group_by_folder_and_reuse_cached_paths(monkeypatch):
     from music_app.services.library_browse_postgres import (
         PostgresLibraryBrowseRepository,
-        _PROBLEMATIC_LOOSE_TRACKS_KEY,
+        _problematic_album_projection_payloads,
+        _problematic_album_summary_payload,
+        _problematic_loose_tracks_key,
     )
 
     repository = PostgresLibraryBrowseRepository(
@@ -11701,20 +11703,32 @@ def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypa
             "title": title,
             "file_entry": {
                 "artist": artist,
+                "album": album,
                 "title": title,
                 "local_album_membership_problem": "Mixed album metadata in one folder",
             },
         }
-        for root_id, path, artist, title in (
-            ("main", "Main/Loose/one.flac", "First Artist", "One"),
-            ("downloads", "Downloads/Loose/two.flac", "Second Artist", "Two"),
+        for root_id, path, artist, album, title in (
+            ("main", "Main/Loose/one.flac", "First Artist", "First Album", "One"),
+            ("main", "Main/Loose/two.flac", "First Artist", "First Album", "Two"),
+            ("downloads", "Downloads/Loose/three.flac", "Second Artist", "", "Three"),
         )
     ]
+    main_key = _problematic_loose_tracks_key("main", "Main/Loose/one.flac")
+    assert main_key == _problematic_loose_tracks_key(
+        "main", "main/loose/two.flac"
+    )
+    downloads_key = _problematic_loose_tracks_key(
+        "downloads", "Downloads/Loose/three.flac"
+    )
+    assert main_key != downloads_key
+    assert "Main/Loose" not in main_key
     requested_paths = []
 
     def load_candidates(**options):
-        requested_paths.append(set(options.get("private_paths") or []))
-        return rows
+        paths = set(options.get("private_paths") or [])
+        requested_paths.append(paths)
+        return [row for row in rows if not paths or row["private_path"] in paths]
 
     monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", load_candidates)
     monkeypatch.setattr(
@@ -11722,30 +11736,52 @@ def test_problematic_loose_tracks_share_one_card_and_reuse_cached_paths(monkeypa
         "_get_cached_utility_projection",
         lambda kind, **_options: {
             "items": [{
-                "key": _PROBLEMATIC_LOOSE_TRACKS_KEY,
-                "track_paths": [row["private_path"] for row in rows],
+                "key": main_key,
+                "track_paths": ["Main/Loose/one.flac"],
             }],
         } if kind == "problematic-files" else None,
     )
+    empty_cursor = type("Cursor", (), {"fetchall": lambda *_args: []})()
+    connection = type(
+        "Connection", (), {"execute": lambda *_args, **_kwargs: empty_cursor}
+    )()
 
     result = repository._load_problematic_file_rows(
-        album_key=_PROBLEMATIC_LOOSE_TRACKS_KEY,
-        connection=object(),
+        album_key=main_key,
+        connection=connection,
     )
 
-    assert {row["album_key"] for row in result} == {_PROBLEMATIC_LOOSE_TRACKS_KEY}
-    assert {row["file_private_path"] for row in result} == {
-        "Main/Loose/one.flac",
-        "Downloads/Loose/two.flac",
+    assert {row["album_key"] for row in result} == {main_key}
+    assert {row["file_private_path"] for row in result} == {"Main/Loose/one.flac"}
+    assert requested_paths == [{"Main/Loose/one.flac"}]
+
+    all_rows = repository._load_problematic_file_rows(connection=connection)
+    assert {row["album_key"] for row in all_rows} == {main_key, downloads_key}
+    assert {row["loose_track_folder_path"] for row in all_rows} == {
+        "Main/Loose",
+        "Downloads/Loose",
     }
-    assert requested_paths == [{"Main/Loose/one.flac", "Downloads/Loose/two.flac"}]
+    summaries = [
+        summary
+        for album in _problematic_album_projection_payloads(all_rows)
+        if (summary := _problematic_album_summary_payload(album)) is not None
+    ]
+    assert len(summaries) == 2
+    main_summary = next(item for item in summaries if item["key"] == main_key)
+    assert main_summary["track_count"] == 2
+    assert main_summary["loose_track_folder_path"] == "Main/Loose"
+    assert main_summary["loose_track_artist"] == "First Artist"
+    assert main_summary["loose_track_album"] == "First Album"
 
 
 def test_problematic_loose_tracks_do_not_infer_album_track_order_gaps():
     from music_app.services import library_browse_postgres as browse
 
+    folder_key = browse._problematic_loose_tracks_key(
+        "main", "Main/Loose/one.flac"
+    )
     assert browse._track_order_issues({
-        "key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY,
+        "key": folder_key,
         "tracks": [
             {"path": "Main/Loose/one.flac", "track_number": 1},
             {"path": "Main/Loose/three.flac", "track_number": 3},
@@ -11761,15 +11797,18 @@ def test_problematic_loose_tracks_detail_reuses_cached_projection(monkeypatch):
         connect=lambda _database_url: None,
     )
     cache_key = repository._utility_projection_cache_key("problematic-files")
+    folder_key = browse._problematic_loose_tracks_key(
+        "main", "Main/Loose/one.flac"
+    )
     detail = {
-        "key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY,
+        "key": folder_key,
         "detail_loaded": True,
         "tracks": [{"path": "Main/Loose/one.flac"}],
     }
     with browse._UTILITY_PROJECTION_CACHE_LOCK:
         browse._UTILITY_PROJECTION_CACHE[cache_key] = {
-            "items": [{"key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY}],
-            browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY: detail,
+            "items": [{"key": folder_key}],
+            browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY: {folder_key: detail},
         }
     monkeypatch.setattr(
         repository,
@@ -11779,7 +11818,7 @@ def test_problematic_loose_tracks_detail_reuses_cached_projection(monkeypatch):
 
     try:
         assert repository.build_problematic_file_detail_payload(
-            browse._PROBLEMATIC_LOOSE_TRACKS_KEY
+            folder_key
         ) == detail
         assert browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY not in (
             repository.build_problematic_files_payload()
@@ -11797,14 +11836,18 @@ def test_problematic_loose_tracks_detail_is_private_but_persisted_with_snapshot(
         connect=lambda _database_url: None,
     )
     cache_key = repository._utility_projection_cache_key("problematic-files")
-    detail = {"key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY, "detail_loaded": True}
+    folder_key = browse._problematic_loose_tracks_key(
+        "main", "Main/Loose/one.flac"
+    )
+    detail = {"key": folder_key, "detail_loaded": True}
+    details = {folder_key: detail}
     snapshot = {}
     monkeypatch.setattr(
         repository,
         "_build_problematic_files_payload_uncached",
         lambda: {
-            "items": [{"key": browse._PROBLEMATIC_LOOSE_TRACKS_KEY}],
-            browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY: detail,
+            "items": [{"key": folder_key}],
+            browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY: details,
             browse._SNAPSHOT_FINGERPRINT_KEY: "fingerprint",
         },
     )
@@ -11820,9 +11863,9 @@ def test_problematic_loose_tracks_detail_is_private_but_persisted_with_snapshot(
     try:
         payload = repository.build_problematic_files_payload()
         assert browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY not in payload
-        assert snapshot[browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] == detail
+        assert snapshot[browse._PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] == details
         assert repository.build_problematic_file_detail_payload(
-            browse._PROBLEMATIC_LOOSE_TRACKS_KEY
+            folder_key
         ) == detail
     finally:
         with browse._UTILITY_PROJECTION_CACHE_LOCK:
@@ -15953,7 +15996,7 @@ def test_problematic_files_snapshot_version_is_required_for_normal_serving(monke
     }
 
 
-def test_problematic_files_snapshot_version_3_is_rejected_after_search_semantics_change(monkeypatch):
+def test_problematic_files_snapshot_version_4_is_rejected_after_loose_track_grouping_change(monkeypatch):
     from contextlib import contextmanager
     from types import SimpleNamespace
 
@@ -15962,7 +16005,7 @@ def test_problematic_files_snapshot_version_3_is_rejected_after_search_semantics
     snapshot = {
         "items": [{"key": "album", "search_text": "clean hidden track"}],
         browse._SNAPSHOT_FINGERPRINT_KEY: "current",
-        browse._PROBLEMATIC_SNAPSHOT_VERSION_KEY: 3,
+        browse._PROBLEMATIC_SNAPSHOT_VERSION_KEY: 4,
     }
 
     class Connection:

@@ -326,6 +326,29 @@ for (const kind of ['problematic', 'loops']) {
   });
 }
 
+test('problematic loose-track card subtext shows folder artist and album metadata', () => {
+  const { context } = harness();
+  const base = {
+    ...album,
+    key: 'loose-source::private-hash',
+    name: 'Loose Tracks',
+    loose_track_folder_path: 'Main/Loose',
+    loose_track_artist: 'First Artist',
+  };
+
+  assert.equal(
+    context.getProblematicAlbumNavigationOptions({
+      ...base,
+      loose_track_album: 'First Album',
+    }, false).subtitle,
+    'Main/Loose · First Artist · First Album',
+  );
+  assert.equal(
+    context.getProblematicAlbumNavigationOptions(base, false).subtitle,
+    'Main/Loose · First Artist',
+  );
+});
+
 test('S01/S03 live Settings template removes redundant visible shell and sidebar headings', () => {
   const template = read('music_app/templates/partials/primary-modals.html').split('<div class="tag-editor-modal"')[0];
   assert.doesNotMatch(template, /<h2[^>]*>Utilities<\/h2>/);

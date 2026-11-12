@@ -629,14 +629,9 @@ function updateGalleryMainChrome() {
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
-    // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
+    // Artist headers stay two lines: name, info, genre; then count and country.
     name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
-    summary.hidden = true;
-    summary.textContent = '';
-    if (inlineTotal) {
-      inlineTotal.hidden = false;
-      inlineTotal.textContent = galleryMainPlural(context.albumCount, 'album');
-    }
+    summary.innerHTML = buildGalleryArtistSummaryHtml(context.albumCount, context.artist_musicbrainz);
     if (metadata) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);

@@ -18635,3 +18635,27 @@ def test_album_sql_projects_active_cue_tracks_and_hides_their_whole_image_rows()
     assert "cue_source_kind" in detail_sql
     assert "not exists" in detail_sql
 
+
+def test_problematic_projection_uses_cue_corrected_track_position():
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_projection_payloads,
+    )
+
+    row = _normal_problematic_product_row(
+        album_key="cue-artist::cue-album",
+        album_title="CUE Album",
+    )
+    row.update(
+        file_private_path=r"D:\Music\CUE Artist\CUE Album\album.flac",
+        track_key="cue-track-1",
+        track_title="Logical track",
+        disc_number=1,
+        track_number=1,
+        cue_metadata_correction={"disc_number": 2, "track_number": 7},
+    )
+
+    track = _problematic_album_projection_payloads([row])[0]["tracks"][0]
+
+    assert track["disc_number"] == 2
+    assert track["track_number"] == 7
+

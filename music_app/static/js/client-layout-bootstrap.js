@@ -105,10 +105,10 @@
       : 'follow_sidebar';
     globalObject.__ALBUM_HAVEN_CLIENT_LAYOUT__ = layout;
     root.dataset.clientLayoutPending = 'true';
-    root.style.setProperty('--compact-rail-width', layout.artistTreeFolded ? '64px' : '240px');
+    root.style.setProperty('--compact-rail-width', layout.artistTreeFolded ? '64px' : '320px');
     root.style.setProperty('--compact-player-width', ['rail_play', 'rail_artbox'].includes(layout.compactPlayerPresentation)
       ? '64px'
-      : layout.compactPlayerPresentation === 'floating' ? '96px' : '240px');
+      : layout.compactPlayerPresentation === 'floating' ? '96px' : '320px');
     root.setAttribute('data-compact-player-style', layout.compactPlayerStyle);
     root.setAttribute('data-docked-compact-player-behavior', layout.dockedCompactPlayerBehavior);
     root.setAttribute('data-docked-compact-player-regular-style', String(appearance.docked_compact_player_regular_style === true));

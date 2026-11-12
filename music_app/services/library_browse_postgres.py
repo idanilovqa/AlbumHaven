@@ -5251,6 +5251,7 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
         album["_file_entries"].append(file_entry)
         duplicate_count = _coerce_int_or_default(row_payload.get("duplicate_file_count"), 1)
         album["_duplicate_file_counts"][track_path] = duplicate_count
+        cue_metadata = _row_json_mapping(row_payload.get("cue_metadata_correction"))
         album["tracks"].append(
             {
                 "key": str(row_payload.get("track_key") or "").strip(),

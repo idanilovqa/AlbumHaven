@@ -662,7 +662,7 @@ class VirtualArtistGrid {
           y += this.subsectionLabelHeight;
         } else {
           const row = block.albums;
-          const inset = (width - row.length * cardWidth - (row.length - 1) * this.columnGap) / 2;
+          const inset = 0;
           const modeledRow = { top: y, height: cardWidth, keys: [], bodyHeights: [] };
           row.forEach((album, index) => {
             const cardKey = `${key}\u0000${getAlbumCardNodeIdentity(album)}`;
@@ -2852,11 +2852,9 @@ class VirtualArtistGrid {
         && blockTop <= Number(options.viewportBottom || 0)
         ? 'visible'
         : 'near';
-      const centerMobileCards = window.innerWidth <= 900
-        && ['cards', 'covers'].includes(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
-      const rowColumns = centerMobileCards ? Math.min(this.columns, block.albums.length) : this.columns;
+      const rowColumns = this.columns;
       return `
-        <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(rowColumns, this.cardTrackWidth)};justify-content:${centerMobileCards ? 'center' : 'start'};">
+        <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(rowColumns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
             renderAlbumHtml(album, { coverPriority, displayMode: state?.gallery?.mainState?.view })
           )).join('') : ''}

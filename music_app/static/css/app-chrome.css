@@ -1,12 +1,12 @@
 @property --compact-player-width {
   syntax: "<length>";
   inherits: true;
-  initial-value: 240px;
+  initial-value: 320px;
 }
 @property --compact-rail-width {
   syntax: "<length>";
   inherits: true;
-  initial-value: 240px;
+  initial-value: 320px;
 }
 :root {
   --compact-motion-duration: 420ms;
@@ -28,7 +28,7 @@
   --app-muted: #97a6bb;
   --app-active: #1b3047;
   --app-bar-height: 56px;
-  --app-sidebar-width: 240px;
+  --app-sidebar-width: 320px;
   --app-surface-radius: 14px;
   --app-page-header-top: 6px;
   --app-page-inline: 24px;
@@ -43,7 +43,7 @@
   background: var(--app-chrome);
 }
 .shell-layout { height: calc(100dvh - var(--player-height)); }
-.shell-layout { --app-sidebar-width: var(--compact-rail-width, 240px); }
+.shell-layout { --app-sidebar-width: var(--compact-rail-width, 320px); }
 .shell-layout.is-artist-tree-folded .app-bar-brand { margin-left: 0; justify-self: center; }
 .settings-host.settings-shell { height: 100dvh; }
 #app-shell ~ .settings-host.settings-shell { height: calc(100dvh - var(--player-height)); }
@@ -165,8 +165,8 @@
 .shell-navigation-rail.is-transitioning { overflow-y: hidden; }
 .shell-navigation-rail.is-expanding { position: relative; }
 .shell-navigation-rail.is-expanding #artist-tree-expanded {
-  width: 212px;
-  min-width: 212px;
+  width: 292px;
+  min-width: 292px;
   pointer-events: none;
   animation: artist-tree-content-reveal var(--compact-motion-duration) var(--compact-motion-easing) both;
 }
@@ -212,6 +212,11 @@
 .library-navigation-body #sidebar-list { min-width: 0; }
 .mobile-tree-edge-anchor { display: none; }
 .shell-navigation-rail .artist-link { border-color: transparent; }
+.shell-navigation-rail .artist-link .artist-name-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .shell-navigation-rail .artist-link:hover { background: #ffffff07; }
 .shell-navigation-rail .artist-link.active { background: var(--app-active); }
 .shell-navigation-rail-backdrop { display: none; }

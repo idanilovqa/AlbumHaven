@@ -214,10 +214,15 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
     context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
   };
   context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
+  let renderedOptions = null;
   context.window.NavigationTree = {
-    renderItem: ({ label, count, attributes }) => (
+    renderItem: (options) => {
+      renderedOptions = options;
+      const { label, count, attributes } = options;
+      return (
       `<button data-open-custom-collection="${attributes['data-open-custom-collection']}">${label}:${count}</button>`
-    ),
+      );
+    },
   };
 
   await context.setLibraryNavigationMode('custom-collections');
@@ -225,7 +230,25 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
   assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
   assert.equal(navigationHeading.textContent, 'Custom Collections');
   assert.equal(artistList.innerHTML, '<button data-open-custom-collection="Night">Night:2</button>');
+  assert.equal(renderedOptions.variant, 'panel');
+  assert.equal(renderedOptions.key, 'Night');
+  assert.equal(renderedOptions.selected, false);
   assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
+});
+
+test('custom collections mode marks the open collection selected', async () => {
+  const { context } = loadHelper();
+  context.state.ui.nonAlbumCollectionName = 'Night';
+  context.hydrateDeferredNonAlbumTracks = async () => {};
+  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
+  let renderedOptions = null;
+  context.window.NavigationTree = {
+    renderItem(options) { renderedOptions = options; return '<button>Night</button>'; },
+  };
+
+  await context.setLibraryNavigationMode('custom-collections');
+
+  assert.equal(renderedOptions.selected, true);
 });
 
 test('library navigation delegates modes and exact collection detail without per-row listeners', () => {
@@ -234,6 +257,7 @@ test('library navigation delegates modes and exact collection detail without per
   context.setLibraryNavigationMode = mode => { calls.push(['mode', mode]); };
   context.openNonAlbumModal = options => { calls.push(['collection', options]); };
   context.closeArtistsDrawer = options => { calls.push(['close', options]); };
+  context.window.NavigationTree = { setSelection: (list, key) => calls.push(['selection', list?.id, key]) };
   context.isArtistsDrawerMobileViewport = () => true;
   let prevented = 0;
   const event = target => ({ target, preventDefault() { prevented += 1; } });
@@ -247,6 +271,7 @@ test('library navigation delegates modes and exact collection detail without per
   })), true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ['mode', 'custom-collections'],
+    ['selection', null, 'Night'],
     ['collection', { libraryWide: true, collectionName: 'Night' }],
     ['close', { restoreFocus: false }],
   ]);
@@ -339,6 +364,32 @@ test('mobile mode rail hides to a tappable anchor and reveals from an intentiona
   assert.equal(context.state.ui.mobileLibraryModeRailVisible, true);
   assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), false);
   assert.equal(modeRailAnchor.hidden, true);
+});
+
+test('pointer mode selection releases focus so the mobile rail can hide', () => {
+  const { context, pendingTimers } = loadHelper({ isMobile: true });
+  context.state.ui.artistsDrawerOpen = true;
+  context.setLibraryNavigationMode = async () => 'artists';
+  let blurred = 0;
+  const mode = { getAttribute: () => 'artists', blur() { blurred += 1; } };
+
+  context.handleLibraryNavigationClick({
+    detail: 1,
+    target: { closest: selector => selector === '[data-library-navigation-mode]' ? mode : null },
+    preventDefault() {},
+  });
+
+  assert.equal(blurred, 1);
+  assert.equal(pendingTimers.size, 1);
+});
+
+test('navigation tree rows stay on one line and expose the edge anchor chevron', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'), 'utf8');
+  const template = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'), 'utf8');
+
+  assert.match(css, /\.shell-navigation-rail \.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*nowrap;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
+  assert.match(css, /--app-sidebar-width:\s*320px/);
+  assert.match(template, /mobile-tree-edge-anchor[\s\S]*&rsaquo;/);
 });
 
 {

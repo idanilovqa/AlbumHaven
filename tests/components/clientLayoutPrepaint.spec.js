@@ -42,7 +42,7 @@ test('saved tree, player, and gallery scale are applied before content becomes v
         <script id="appearance-bootstrap" type="application/json">{"compact_player_style":"docked","docked_compact_player_behavior":"follow_sidebar"}</script>
         <style>
           html[data-client-layout-pending="true"] body { visibility: hidden; }
-          #app-shell { display:grid; grid-template-columns:var(--compact-rail-width,240px) 1fr; }
+          #app-shell { display:grid; grid-template-columns:var(--compact-rail-width,320px) 1fr; }
           #albums-scroll { width:1000px; }
         </style>
         <script src="/client-layout-bootstrap.js"></script>
@@ -97,7 +97,7 @@ test('hidden startup gallery uses its settled main-surface width before reveal',
       <html><head>
         <style>
           html[data-client-layout-pending="true"] body { visibility: hidden; }
-          #app-shell { display:grid; grid-template-columns:var(--compact-rail-width,240px) 1fr; }
+          #app-shell { display:grid; grid-template-columns:var(--compact-rail-width,320px) 1fr; }
           #shell-main-surface { box-sizing:border-box; width:1000px; padding:0 20px; }
           #albums-scroll { width:100%; }
           [hidden] { display:none !important; }

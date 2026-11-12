@@ -6623,7 +6623,7 @@ test('first touch scroll advances semantic ownership before it starts pagination
 
 // Continuous mobile pinch uses the real virtual layout owner and its existing data order.
 for (const mode of ['cards', 'covers']) {
-  test(`mobile ${mode} pinch endpoint layouts center full and partial rows without overflowing`, () => {
+  test(`mobile ${mode} pinch endpoint layouts left-pack full and partial rows without overflowing`, () => {
     const { context, scrollEl } = createRuntimeContext();
     const grid = vm.runInContext('virtualGrid', context);
     scrollEl.clientWidth = 390;
@@ -6644,8 +6644,7 @@ for (const mode of ['cards', 'covers']) {
       for (const points of rows.values()) {
         assert.ok(points.length <= columns);
         const left = Math.min(...points.map(point => point.x));
-        const right = Math.max(...points.map(point => point.x + point.width));
-        assert.ok(Math.abs((left + right) / 2 - 193) <= .001, 'The occupied full or partial row is centered.');
+        assert.equal(left, 0, 'Every full or partial row starts at the left edge.');
       }
       assert.equal([...rows.keys()][0], grid.sectionHeaderHeight, 'No empty row is introduced before the first album.');
     }

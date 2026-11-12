@@ -74,8 +74,11 @@ function renderCustomCollectionNavigation(collections) {
   list.innerHTML = collections.length
     ? collections.map(({ name, count }) => window.NavigationTree.renderItem({
       action: true,
+      variant: 'panel',
+      key: name,
       label: name,
       count,
+      selected: String(state.ui?.nonAlbumCollectionName || '').trim() === name,
       attributes: { 'data-open-custom-collection': name },
     })).join('')
     : '<p class="utility-empty-state compact">No Custom Collections yet.</p>';
@@ -116,7 +119,10 @@ function handleLibraryNavigationClick(event) {
   const modeButton = event.target.closest?.('[data-library-navigation-mode]');
   if (modeButton) {
     event.preventDefault();
-    if (isArtistsDrawerMobileViewport()) setMobileLibraryModeRailVisible(true);
+    if (isArtistsDrawerMobileViewport()) {
+      setMobileLibraryModeRailVisible(true);
+      if (Number(event.detail || 0) > 0) modeButton.blur?.();
+    }
     void setLibraryNavigationMode(modeButton.getAttribute('data-library-navigation-mode'));
     return true;
   }
@@ -125,6 +131,10 @@ function handleLibraryNavigationClick(event) {
   event.preventDefault();
   const collectionName = String(collectionButton.getAttribute('data-open-custom-collection') || '').trim();
   if (!collectionName) return true;
+  window.NavigationTree?.setSelection?.(
+    document.getElementById('sidebar-list'),
+    collectionName,
+  );
   openNonAlbumModal({ libraryWide: true, collectionName });
   if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
   return true;
@@ -248,7 +258,7 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (expandedTree) expandedTree.hidden = isFolded;
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
   if (list) list.hidden = isFolded;
-  document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '240px');
+  document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '320px');
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
 }

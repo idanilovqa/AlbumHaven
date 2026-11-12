@@ -47,6 +47,20 @@ test('head capture forwards the rendered default before choosing startup rail wi
   assert.equal(properties.get('--compact-rail-width'), '64px');
 });
 
+test('head capture uses the expanded navigation width before first paint', () => {
+  const properties = new Map();
+  const context = vm.createContext({
+    innerWidth: 1200,
+    document: {
+      documentElement: { dataset: {}, style: { setProperty: (key, value) => properties.set(key, value) }, setAttribute() {} },
+      getElementById: () => null,
+    },
+  });
+  vm.runInContext(fs.readFileSync(bootstrapPath, 'utf8'), context);
+  context.AlbumHavenClientLayoutBootstrap.capture({ defaultCollapsed: false });
+  assert.equal(properties.get('--compact-rail-width'), '320px');
+});
+
 test('captures saved tree, compact player, and gallery scale before markup paints', () => {
   const bootstrap = loadBootstrap();
   const storage = new Map([

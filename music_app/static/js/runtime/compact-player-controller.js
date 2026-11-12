@@ -205,7 +205,7 @@ function syncDockedCompactPresentation(els = compactPlayerElements()) {
     }
   }
   document.documentElement.style.setProperty('--compact-player-width',
-    floating ? '96px' : rail ? '64px' : '240px');
+    floating ? '96px' : rail ? '64px' : '320px');
   syncDockedCompactGeometry();
   if (floating) {
     if (!compactPlayerPosition) resetCompactPlayerPosition();

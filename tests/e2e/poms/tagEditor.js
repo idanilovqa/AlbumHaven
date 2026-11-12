@@ -44,18 +44,21 @@ function inspectRepairAlert(alert, messageSelector) {
   if (!messageSelector) return measure();
   const presentations = [];
   let shown = false;
+  const capture = () => {
+    if (!alert.classList.contains('is-visible')) return;
+    const message = String(alert.querySelector(messageSelector)?.textContent || '').trim();
+    presentations.push({ message, ...measure() });
+  };
   const record = () => {
     const visible = alert.classList.contains('is-visible');
-    if (visible && !shown) {
-      const message = String(alert.querySelector(messageSelector)?.textContent || '').trim();
-      presentations.push({ message, ...measure() });
-    }
+    if (visible && !shown) capture();
     shown = visible;
   };
   const observer = new MutationObserver(record);
   observer.observe(alert, { attributes: true, attributeFilter: ['class'] });
   record();
   // The alert node outlives the delivery, so the caller stops observing once it has read the list.
+  presentations.capture = capture;
   presentations.stop = () => observer.disconnect();
   return presentations;
 }
@@ -169,6 +172,11 @@ export class TagEditor extends BasePage {
   async recordRepairAlertPresentations() {
     // parity-check: allow-read-only-measurement-evaluate -- observe the alert's class without changing it and measure each presentation
     return this.repairAlert.evaluateHandle(inspectRepairAlert, this.repairAlertMessageSelector);
+  }
+
+  async captureRepairAlertPresentation(presentations) {
+    // parity-check: allow-read-only-measurement-evaluate -- remeasure the visible alert after surrounding layout changes
+    await presentations.evaluate((list) => list.capture());
   }
 
   async stopRecordingRepairAlertPresentations(presentations) {

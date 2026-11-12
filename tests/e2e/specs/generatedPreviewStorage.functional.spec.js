@@ -213,20 +213,20 @@ test(
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
-    let searchSubmittedAt = 0;
-    await searchToolbarActions.search(ARTIST, {
-      submitWithEnter: true,
-      recordSubmissionBoundary() {
-        searchSubmittedAt = performance.now();
-      },
-    });
+        let searchSubmittedAt = 0;
+        await searchToolbarActions.search(ARTIST, {
+          submitWithEnter: true,
+          recordSubmissionBoundary() {
+            searchSubmittedAt = performance.now();
+          },
+        });
         await searchToolbarActions.waitForQuery(ARTIST);
         await galleryActions.waitForAlbumVisible(ALBUM);
-    const galleryReadyMs = performance.now() - searchSubmittedAt;
+        const galleryReadyMs = performance.now() - searchSubmittedAt;
         const cover = galleryActions.albumCoverByName(ALBUM);
         // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered image to decode
         await cover.evaluate(waitForDisplayedImageDecode);
-    const firstDecodedCoverMs = performance.now() - searchSubmittedAt;
+        const firstDecodedCoverMs = performance.now() - searchSubmittedAt;
         const galleryReady = expectTimingBudget(
           expect,
           galleryReadyMs,

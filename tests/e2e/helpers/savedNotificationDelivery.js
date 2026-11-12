@@ -36,7 +36,10 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
       const presentations = await tagEditor.recordRepairAlertPresentations();
       try {
         await scan.scanPage.openStatusPage.click();
+        // Navigation changes overlap geometry without mutating the alert, so sample both transition boundaries.
+        await tagEditor.captureRepairAlertPresentation(presentations);
         await scan.waitForVisible({ timeout });
+        await tagEditor.captureRepairAlertPresentation(presentations);
         await scan.waitForDedicatedPageVisible({ timeout });
         await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
       } finally {

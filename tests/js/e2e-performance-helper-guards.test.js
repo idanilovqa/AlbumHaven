@@ -2087,3 +2087,19 @@ test('cover lookup times the first decoded candidate before Spotify save setup',
     /candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
   );
 });
+
+test('generated preview storage timings start at search submission', () => {
+  const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
+  const relocation = spec.slice(
+    spec.indexOf("stepLogger.step('Relocate to custom storage"),
+    spec.indexOf('await galleryActions.clickAlbumDetailsByAlbumName(ALBUM)'),
+  );
+
+  assert.match(
+    relocation,
+    /recordSubmissionBoundary\(\)\s*\{\s*searchSubmittedAt = performance\.now\(\);\s*\}/,
+  );
+  assert.match(relocation, /galleryReadyMs = performance\.now\(\) - searchSubmittedAt/);
+  assert.match(relocation, /firstDecodedCoverMs = performance\.now\(\) - searchSubmittedAt/);
+  assert.doesNotMatch(relocation, /searchStartedAt/);
+});

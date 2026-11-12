@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.2 - 2026-11-12
+
+- Added MusicBrainz artist identity for album artists: each artist is matched on album evidence (titles, track titles, track counts and lengths), never on a name alone, and an album that certainly matches one MusicBrainz artist gives that artist its identity. The tags themselves never change.
+- Shown matched artists with their MusicBrainz name, links to MusicBrainz and Discogs, country and genres in the Gallery and the artist info panel. Artists matched under another name say how they are tagged, and a name shared by several MusicBrainz artists lists each one with its albums.
+- Added MusicBrainz artist repairs to Problematic Files ("MBID: Unconfirmed match", "Multiple matches", "Not found", "Metadata pending") with suggested artists, owner confirmation, and filters available from the first page.
+- Imported file ratings when the watcher publishes an album, flagged "File rating mismatch" in Problematic Files, and showed a bonus disc's own rating on its disc heading.
+- Retired album rows that a track move or rescan leaves empty, carrying ratings and other owner decisions to the album that replaces them.
+- Fixed album details occasionally failing on the first open after a search, and sped up Problematic Files first-page loading and duplicate checks.
+- Added Android release promotion tooling and builds on the image with NDK 27.3, and made hosted reviews opt-in for trusted pull requests.
+
 ## 0.11.1 - 2026-11-10
 
 - The song cache keeps a song once it is heard, not when it was only fetched ahead and then skipped (web and Android).

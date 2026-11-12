@@ -519,6 +519,7 @@ test('visible cover priming promotes scheduler work discovered after transient l
   const { context, scrollEl } = createRuntimeContext();
   Object.setPrototypeOf(scrollEl, context.HTMLElement.prototype);
   const virtualGrid = vm.runInContext('virtualGrid', context);
+  context.state.view.selected_artist = 'Neal Morse';
   const images = Array.from({ length: 5 }, (_value, index) => {
     const image = new context.HTMLImageElement();
     image.setAttribute('data-production-cover-src', `/cover?path=visible-after-layout-${index}`);
@@ -2497,6 +2498,48 @@ test('row measurement reconciliation retains the settled scroll render owner', (
   assert.equal(diagnostics.latestRender.renderGeneration, diagnostics.latestScroll.renderGeneration);
 });
 
+test('settled scroll restore does not supersede a newer pending scroll render owner', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 985;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.captureScrollAnchor = () => ({ albumKey: 'measured-scroll-album' });
+  virtualGrid.restoreScrollAnchor = () => { scrollEl.scrollTop = 566; };
+  scrollEl.scrollTop = 603;
+  virtualGrid.setGroups(
+    [{
+      artist: 'Measured Scroll Artist',
+      artist_display: 'Measured Scroll Artist',
+      albums: [{
+        key: 'measured-scroll-album',
+        name: 'Measured Scroll Album',
+        album_artist: 'Measured Scroll Artist',
+        tracks: [],
+      }],
+    }],
+    [],
+    null,
+    { preserveScroll: true },
+  );
+  const scrollRestoreFrameId = virtualGrid._scrollRestoreRaf;
+  scrollEl.scrollTop = 566;
+  virtualGrid.onScroll();
+  const scrollRenderFrameId = virtualGrid._raf;
+  scheduledFrames.get(scrollRestoreFrameId)();
+  scheduledFrames.get(scrollRenderFrameId)();
+
+  const diagnostics = context.__ALBUM_HAVEN_VIRTUAL_GRID__;
+  assert.equal(diagnostics.latestScroll.renderRafOwner, scrollRenderFrameId);
+  assert.equal(diagnostics.latestRender.renderRafOwner, scrollRenderFrameId);
+});
+
 test('same-viewport rerenders retain the settled scroll render owner', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -2727,6 +2770,27 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.equal(virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(firstToken), false);
   assert.equal(context.galleryCoverSchedulerResumes, 1);
 }
+
+test('cover suspension remains until pending grid settlement finishes', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  const token = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+  virtualGrid._measureTimeout = 7;
+
+  assert.equal(virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(token), true);
+  assert.equal(context.galleryCoverSchedulerResumes, 0);
+  assert.equal(scheduledFrames.length, 1);
+
+  virtualGrid._measureTimeout = null;
+  scheduledFrames.shift()();
+
+  assert.equal(context.galleryCoverSchedulerResumes, 1);
+});
 
 {
   const { context } = createRuntimeContext();
@@ -3182,14 +3246,34 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.deepEqual(
     context.visibleTrackModalAlbumDetailPrewarmCalls,
     [],
-    'visible-detail scanning must wait until the second animation frame',
+    'visible-detail scanning must wait through the immediate post-render frame',
   );
   scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  assert.deepEqual(
+    context.visibleTrackModalAlbumDetailPrewarmCalls,
+    [],
+    'automatic detail requests must not compete with immediate follow-up navigation',
+  );
+  const firstDeferredPrewarm = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(firstDeferredPrewarm.delay, 250);
+
+  virtualGrid.setGroups(groups, [], null, {});
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  const currentDeferredPrewarm = context.__scheduledBrowserTimeouts.at(-1);
+  assert.notEqual(currentDeferredPrewarm.id, firstDeferredPrewarm.id);
+  assert.ok(
+    context.clearedBrowserTimeouts.includes(firstDeferredPrewarm.id),
+    'a replacement render must cancel stale speculative detail work',
+  );
+  firstDeferredPrewarm.callback();
+  assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, []);
+  currentDeferredPrewarm.callback();
   assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, [{
     container: virtualGrid.containerEl,
     scroll: virtualGrid.scrollEl,
     limit: 2,
-  }], 'a settled render should schedule the bounded visible-detail prewarm after paint');
+  }], 'a settled render should prewarm only after navigation stays quiescent');
 
   context.queueTrackModalAlbumDetailsPrewarm = (albumKey) => {
     events.push(`prewarm:${albumKey}`);
@@ -3200,7 +3284,7 @@ test('scroll render timer completes a pending frame when animation frames are st
   scheduledFrames.splice(0).forEach(({ callback }) => callback());
   scheduledFrames.splice(0).forEach(({ callback }) => callback());
   assert.deepEqual(context.queuedTrackModalAlbumDetailPrewarms, []);
-  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 2);
+  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 1);
   assert.deepEqual(events, [], 'rendering must not speculate album-detail requests without user intent');
 
   assert.equal(
@@ -4143,6 +4227,10 @@ test('switching Cards to No info invalidates mounted card markup without replaci
     'buildAlbumCardCoverHtml({ key: "bi2-2", name: "Горизонт событий", album_artist: "БИ-2", cover_path: "covers/2.jpg", tracks: [] }, { coverPriority: "near" })',
     context,
   );
+  const backgroundCoverHtml = vm.runInContext(
+    'buildAlbumCardCoverHtml({ key: "bi2-3", name: "Луна-парк", album_artist: "БИ-2", cover_path: "covers/3.jpg", tracks: [] }, { coverPriority: "background" })',
+    context,
+  );
 
   assert.match(visibleCoverHtml, /loading="eager"/);
   assert.match(visibleCoverHtml, /fetchpriority="high"/);
@@ -4153,6 +4241,30 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   assert.match(nearCoverHtml, /loading="lazy"/);
   assert.match(nearCoverHtml, /data-gallery-cover-priority="near"/);
   assert.match(nearCoverHtml, /data-gallery-cover-src="/);
+  assert.match(backgroundCoverHtml, /loading="lazy"/);
+  assert.match(backgroundCoverHtml, /fetchpriority="low"/);
+  assert.match(backgroundCoverHtml, /data-gallery-cover-priority="background"/);
+  context.state.view.selected_artist = 'БИ-2';
+  context.__selectedPrioritySection = {
+    kind: 'artist',
+    sectionKey: 'primary:БИ-2:0',
+    sectionType: 'primary',
+    top: 0,
+    blocksHeight: 1100,
+    blockOffsets: [0, 800],
+    blockHeights: [300, 300],
+    blocksData: [
+      { kind: 'albums', albums: [{ key: 'visible', name: 'Visible', album_artist: 'БИ-2', cover_path: 'covers/visible.jpg', tracks: [] }] },
+      { kind: 'albums', albums: [{ key: 'offscreen', name: 'Offscreen', album_artist: 'БИ-2', cover_path: 'covers/offscreen.jpg', tracks: [] }] },
+    ],
+    group: { artist: 'БИ-2', artist_display: 'БИ-2', albums: [] },
+  };
+  const selectedArtistHtml = vm.runInContext(
+    'virtualGrid.renderSection(__selectedPrioritySection, 0, 400, { viewportTop: 0, viewportBottom: 400 })',
+    context,
+  );
+  assert.match(selectedArtistHtml, /data-gallery-cover-priority="visible"/);
+  assert.match(selectedArtistHtml, /data-gallery-cover-priority="background"/);
   assert.match(
     galleryCssSource,
     /\.album-card \.cover img\[data-cover-visual-state="pending"\] \{ visibility: hidden; \}/,

@@ -162,6 +162,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
+  if (state.utility.focusedTrackPath
+      && selectedAlbum?.detail_loading_deferred
+      && !selectedAlbum?.detail_loaded) {
+    els.list.querySelector?.('.utility-list-item.is-active')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
   if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(selectedAlbum)) {
     els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
     if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {

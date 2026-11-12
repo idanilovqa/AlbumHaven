@@ -337,6 +337,7 @@ function restorePlayerState() {
     updatePlayerUi();
     const restoredRole = await restoredRolePromise;
     if (!restoredRole) return;
+    if (savedPaused) updatePlayerUi();
     if (typeof handleStreamingPlaybackWaveformReady === 'function') {
       try {
         const waveformReady = handleStreamingPlaybackWaveformReady({

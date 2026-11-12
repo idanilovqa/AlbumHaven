@@ -934,11 +934,82 @@ test('S05 lightbox wraps Tab and Shift+Tab inside its enabled controls', () => {
 });
 
 test('S05 closing artwork never restores focus to a detached trigger', () => {
-  const { context, trigger } = lightboxFocusHarness();
+  const { context, close, trigger } = lightboxFocusHarness();
   context.openImageLightbox('/cover.png', 'Test artwork');
   trigger.isConnected = false;
   trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
   assert.doesNotThrow(() => context.closeImageLightbox());
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S04 closing artwork restores focus to one equivalent replacement trigger', () => {
+  const { context, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('replacement-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.hidden = false;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, replacement);
+});
+
+test('S04 closing artwork does not restore focus to a hidden replacement trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('hidden-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S04 closing artwork does not restore focus to a visually hidden replacement trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('visually-hidden-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.hidden = false;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+  const getComputedStyle = context.getComputedStyle;
+  context.getComputedStyle = (element) => (
+    element === replacement ? { visibility: 'hidden' } : getComputedStyle(element)
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, close);
 });
 
 async function flushAlbumDetailsHydration() {

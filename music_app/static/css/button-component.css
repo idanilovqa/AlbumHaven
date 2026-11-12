@@ -341,7 +341,12 @@ box-shadow: none !important;
 
 /* Shared dropdown control: positions a neutral chevron against the control, not its label. */
 .ui-dropdown-control { position: relative; width: 100%; cursor: pointer; }
-.ui-dropdown-control > input { cursor: pointer; }
+.ui-dropdown-control > input { width: 100%; }
+:root .ui-dropdown-control > input:not(:disabled):not([readonly]) { cursor: pointer; }
+.ui-dropdown-control:has(> input:disabled),
+.ui-dropdown-control > input:disabled { cursor: not-allowed; }
+.ui-dropdown-control:has(> input[readonly]),
+.ui-dropdown-control > input[readonly] { cursor: default; }
 .ui-dropdown-control::after {
   content: '';
   position: absolute;

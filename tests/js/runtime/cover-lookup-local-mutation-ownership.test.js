@@ -339,6 +339,26 @@ test('a pre-mutation gallery response cannot restore the deleted cover', async (
   assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/deleted.jpg'));
 });
 
+test('a successful deletion cannot restore the deleted cover as unknown other art', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  h.requests[0].resolve({ ok: true, json: async () => ({
+    ok: true,
+    updated_albums: [{ ...a, cover_path: '/A/settled.jpg', cover_revision: 'A-settled' }],
+    gallery: {
+      ok: true,
+      local_covers: [{ path: '/A/settled.jpg', is_active: true }],
+      other_art: [{ path: a.cover_path, resolution: 'Unknown' }],
+    },
+  }) });
+  await pending;
+
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === a.cover_path));
+  assert.ok(!h.context.state.coverLookup.modal.otherArt.some(card => card.path === a.cover_path));
+});
+
 test('immediate notification reopen does not restore deleted selected art from lagging inventory', async () => {
   const h = harness(), a = album('A');
   await h.open(a);

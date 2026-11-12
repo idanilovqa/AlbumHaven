@@ -3398,9 +3398,13 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   const mutation = coverLookupLocalInventoryMutations.get(key);
   if (!mutation || !Array.isArray(gallery?.local_covers)) return gallery;
   let localCovers = gallery.local_covers.slice();
+  let otherArt = Array.isArray(gallery.other_art) ? gallery.other_art.slice() : [];
   const hasIncomingPath = path => localCovers.some((cover) => coverLookupLocalPathMatches(cover?.path, path));
   mutation.deletedPaths.forEach((path) => {
-    if (hasIncomingPath(path)) localCovers = localCovers.filter((cover) => !coverLookupLocalPathMatches(cover?.path, path));
+    if (hasIncomingPath(path) || otherArt.some((cover) => coverLookupLocalPathMatches(cover?.path, path))) {
+      localCovers = localCovers.filter((cover) => !coverLookupLocalPathMatches(cover?.path, path));
+      otherArt = otherArt.filter((cover) => !coverLookupLocalPathMatches(cover?.path, path));
+    }
     else if (confirmLocalInventory) mutation.deletedPaths.delete(path);
   });
   const selectedPath = String(gallery.selected_source_path || gallery.active_cover_path || '');
@@ -3430,6 +3434,7 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   return {
     ...gallery,
     local_covers: localCovers,
+    other_art: otherArt,
     ...(optimisticSelectedPath ? {
       active_cover_path: optimisticSelectedPath,
       selected_source_path: optimisticSelectedPath,

@@ -157,9 +157,13 @@ def append_measured(adapter, entry, *, account_id, library_id, connection=None):
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
         path = str(item.get("path") or item.get("track_ref") or "")
         claimed = str((item.get("canonical_match") or {}).get("library_track_id") or "")
-        track = connection.execute("""select t.id,t.track_key from library.local_tracks t
-            join library.local_track_files f on f.track_id=t.id
-            where t.library_id=%s and f.private_path=%s""", (library_id, path)).fetchone()
+        if claimed and not path:
+            track = connection.execute("""select t.id,t.track_key from library.local_tracks t
+                where t.library_id=%s and t.id=%s""", (library_id, claimed)).fetchone()
+        else:
+            track = connection.execute("""select t.id,t.track_key from library.local_tracks t
+                join library.local_track_files f on f.track_id=t.id
+                where t.library_id=%s and f.private_path=%s""", (library_id, path)).fetchone()
         if track is None or (claimed and claimed != str(track["id"])):
             raise MeasuredListenError("Listen track does not belong to the current library")
         current = connection.execute("""select * from integration.listen_history

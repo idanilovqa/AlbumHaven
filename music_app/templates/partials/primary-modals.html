@@ -60,6 +60,13 @@
           </div>
         </aside>
         <form class="tag-editor-form" id="tag-editor-form">
+          <div class="tag-editor-view-tabs" id="tag-editor-view-tabs" hidden></div>
+          <div class="tag-editor-cue-alert" id="tag-editor-cue-alert" hidden></div>
+          <section class="tag-editor-cue-structure" id="tag-editor-cue-structure" aria-label="CUE structure" hidden>
+            <label>INDEX 01<input id="tag-editor-cue-index-01" type="text" inputmode="numeric" placeholder="00:00:00" data-cue-field="index_01"></label>
+            <label>End<input id="tag-editor-cue-end" type="text" inputmode="numeric" placeholder="00:00:00" data-cue-field="end"></label>
+            <div class="tag-editor-cue-indexes" id="tag-editor-cue-indexes"></div>
+          </section>
           <div class="tag-editor-artwork" id="tag-editor-artwork"></div>
           <label>Artist<input type="text" data-tag-field="artist"></label>
           <label>Album Artist<input type="text" data-tag-field="album_artist"></label>
@@ -91,7 +98,7 @@
           >Auto-number</button>
         </div>
         <button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-close-tag-editor="1">Cancel</button>
-        <button class="button ui-button ui-button--primary ui-button--medium" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" id="tag-editor-apply" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
       </div>
     </div>
   </div>

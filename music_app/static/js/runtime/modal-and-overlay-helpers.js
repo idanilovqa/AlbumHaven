@@ -1815,10 +1815,16 @@ function getTagEditorElements() {
     list: document.getElementById('tag-editor-track-list'),
     form: document.getElementById('tag-editor-form'),
     artwork: document.getElementById('tag-editor-artwork'),
+    viewTabs: document.getElementById('tag-editor-view-tabs'),
+    cueAlert: document.getElementById('tag-editor-cue-alert'),
+    cueStructure: document.getElementById('tag-editor-cue-structure'),
+    cueIndex01: document.getElementById('tag-editor-cue-index-01'),
+    cueEnd: document.getElementById('tag-editor-cue-end'),
+    cueIndexes: document.getElementById('tag-editor-cue-indexes'),
     autoNumberButton: document.getElementById('tag-editor-auto-number'),
     autoNumberStatus: document.getElementById('tag-editor-auto-number-status'),
     albumInput: document.getElementById('tag-editor-album'),
-    applyButton: document.querySelector('[data-open-tag-edit-confirm="1"]'),
+    applyButton: document.getElementById('tag-editor-apply'),
   };
 }
 

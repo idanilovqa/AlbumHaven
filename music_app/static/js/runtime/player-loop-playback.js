@@ -355,7 +355,7 @@ async function playTrackFromPayload(track, options = {}) {
   if (pendingClaim === false) return false;
   let streamTrack = track;
   if (shouldAutoplay
-    && String(track?.mediaRef || track?.media_ref || '')
+    && String(track?.mediaRef || track?.media_ref || track?.cueSegmentRef || track?.cue_segment_ref || '')
     && !(track.playbackRef && Date.parse(track.playbackRefExpiresAt || '') > Date.now())) {
     if (pendingClaim !== true && !await pendingClaim) return false;
     if (selectionToken !== playerTrackSelectionToken) return false;
@@ -421,7 +421,7 @@ async function playTrackFromPayload(track, options = {}) {
     }
   }
   if (shouldAutoplay) {
-    beginStreamingPlayerListenSession(track, startSeconds);
+    beginStreamingPlayerListenSession(streamTrack, startSeconds);
   }
   updatePlayerUi();
   return true;
@@ -1161,6 +1161,7 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     src,
     path: trackPath,
     mediaRef: btn.getAttribute('data-media-ref') || '',
+    cueSegmentRef: btn.getAttribute('data-cue-segment-ref') || '',
     playbackRef: btn.getAttribute('data-playback-ref') || '',
     playbackRefExpiresAt: btn.getAttribute('data-playback-ref-expires-at') || '',
     title: btn.getAttribute('data-track-title') || 'Track',

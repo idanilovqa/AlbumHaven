@@ -610,6 +610,37 @@ test('path-free browse tracks reuse their bounded reference and resume it only a
   }]);
 });
 
+test('CUE logical tracks request a segment reference without exposing a source path', async () => {
+  const requests = [];
+  const { context } = loadHelper({
+    fetch: async (url, options = {}) => {
+      const body = JSON.parse(options.body);
+      requests.push({ url, body });
+      return jsonResponse({
+        protocol: 1,
+        expiresAt: '2099-01-02T00:00:00Z',
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'cue-playback-ref' }],
+      });
+    },
+  });
+
+  const prepared = await context.playbackOwnershipTrack({
+    path: 'cue:logical-track',
+    cueSegmentRef: 'cue:logical-track',
+    title: 'Logical CUE track',
+  });
+
+  assert.equal(prepared.track.playbackRef, 'cue-playback-ref');
+  assert.deepEqual(requests, [{
+    url: '/playback/refs',
+    body: {
+      protocol: 1,
+      tracks: [{ clientKey: 'local-tab', cueSegmentRef: 'cue:logical-track' }],
+    },
+  }]);
+  assert.equal(JSON.stringify(requests).includes('source_path'), false);
+});
+
 test('path-free playback prefers a newly issued row reference over an expired previous reference', async () => {
   const requests = [];
   const { context } = loadHelper({

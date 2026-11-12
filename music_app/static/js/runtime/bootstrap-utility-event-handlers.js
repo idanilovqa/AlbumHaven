@@ -6,6 +6,57 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  const tagEditorView = event.target.closest('#tag-editor-view-tabs [data-in-page-tab]');
+  if (tagEditorView) {
+    event.preventDefault();
+    setTagEditorView(tagEditorView.getAttribute('data-in-page-tab'));
+    return;
+  }
+  const applyCueCorrection = event.target.closest('[data-apply-cue-correction="1"]');
+  if (applyCueCorrection) {
+    event.preventDefault();
+    applyCueCorrection.disabled = true;
+    void applyCueStructureDraft().catch((error) => {
+      if (!state.tagEditor) return;
+      state.tagEditor.cueError = error.message;
+      renderTagEditor({ preserveTrackList: true });
+    });
+    return;
+  }
+  const applyCueMetadata = event.target.closest('[data-apply-cue-metadata="1"]');
+  if (applyCueMetadata) {
+    event.preventDefault();
+    applyCueMetadata.disabled = true;
+    void applyCueMetadataDrafts().catch((error) => {
+      if (!state.tagEditor) return;
+      state.tagEditor.cueError = error.message;
+      renderTagEditor({ preserveTrackList: true });
+    });
+    return;
+  }
+  const restoreCue = event.target.closest('[data-restore-cue-correction="1"]');
+  if (restoreCue) {
+    event.preventDefault();
+    const tagEditor = state.tagEditor;
+    const kind = tagEditor.activeView === 'cue' ? 'boundary' : 'metadata';
+    const identity = getTagEditorFocusedPath();
+    void restoreCueCorrection(kind, identity)
+      .then(() => loadCueEditorState(tagEditor))
+      .then(() => {
+        if (kind !== 'metadata') return;
+        tagEditor.values = Object.fromEntries(tagEditor.tracks.map(track => [
+          getTagEditorTrackIdentity(track),
+          getTrackTagInitialValues(track, tagEditor.album),
+        ]));
+        renderTagEditor();
+      })
+      .catch((error) => {
+        if (!state.tagEditor) return;
+        state.tagEditor.cueError = error.message;
+        renderTagEditor({ preserveTrackList: true });
+      });
+    return;
+  }
   if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
@@ -1036,6 +1087,18 @@ function handleUtilityBootstrapInput(event) {
     return;
   }
   if (handleLibrarySettingsInput(event)) {
+    return;
+  }
+  const cueInput = event.target.closest('#tag-editor-form [data-cue-field]');
+  if (cueInput) {
+    try {
+      updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value);
+      state.tagEditor.cueError = '';
+    } catch (error) {
+      state.tagEditor.cueDraft = null;
+      state.tagEditor.cueError = error.message;
+      renderTagEditor({ preserveTrackList: true });
+    }
     return;
   }
   const autoNumberStartInput = event.target.closest('#tag-editor-auto-number-start');

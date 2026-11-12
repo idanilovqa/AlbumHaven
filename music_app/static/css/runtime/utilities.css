@@ -1714,7 +1714,7 @@
   width: 14px;
   height: 14px;
   flex: 0 0 14px;
-  color: #8ac8ff;
+  color: #050505;
 }
 .tag-editor-track-pending svg {
   width: 100%;
@@ -1728,6 +1728,22 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   padding: 14px;
+}
+.tag-editor-view-tabs,
+.tag-editor-cue-alert,
+.tag-editor-cue-structure {
+  grid-column: 1 / -1;
+}
+.tag-editor-cue-structure {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.tag-editor-cue-structure[hidden] { display: none; }
+.tag-editor-cue-indexes {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 .tag-editor-artwork {
   grid-column: 1 / -1;

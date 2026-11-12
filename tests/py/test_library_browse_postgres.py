@@ -741,6 +741,9 @@ def test_selected_artist_album_payload_projects_pathless_cue_track():
         cue_segment_ref="cue:logical",
         cue_source_kind="external",
         duration_seconds=2,
+        cue_metadata_correction={"title": "Corrected title", "artist": "Corrected artist"},
+        cue_effective_start_frame=75,
+        cue_effective_end_frame=300,
     )
 
     track = browse._selected_artist_album_payloads([row], "Artist")[0]["tracks"][0]
@@ -748,7 +751,9 @@ def test_selected_artist_album_payload_projects_pathless_cue_track():
     assert track["path"] is None
     assert track["cue_segment_ref"] == "cue:logical"
     assert track["source_kind"] == "external"
-    assert track["duration_seconds"] == 2
+    assert track["title"] == "Corrected title"
+    assert track["artist"] == "Corrected artist"
+    assert track["duration_seconds"] == 3
 
 
 def test_selected_artist_browse_preserves_split_albums_in_one_folder():
@@ -18605,6 +18610,7 @@ def test_album_sql_projects_active_cue_tracks_and_hides_their_whole_image_rows()
         assert "active_cue_program.library_id = active_cue_media.library_id" in sql
     for sql in (detail_sql, selected_sql):
         assert "case when library.cue_programs.id is null then library.local_track_files.metadata" in sql
+    assert "c.base_program_id = library.cue_programs.id" in selected_sql
     assert "cue_segment_ref" in detail_sql
     assert "cue_source_kind" in detail_sql
     assert "not exists" in detail_sql

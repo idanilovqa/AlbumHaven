@@ -18,6 +18,7 @@ from music_app.services.library_roots import (
 )
 from music_app.services.metadata import read_metadata_for_file
 from music_app.services.move_planner import build_move_availability_payload
+from music_app.services.cue_move_guard import CueMoveDependencyError, validate_cue_bundle_move
 from music_app.services.move_tasks import build_move_follow_up, build_move_response
 from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
 from music_app.services.separate_releases import load_separate_release_keys
@@ -102,6 +103,11 @@ def execute_album_move(
         for album in list(st.get("albums", []) or [])
         if str(getattr(album, "key", "") or "")
     }
+
+    try:
+        validate_cue_bundle_move(config, source_folder)
+    except CueMoveDependencyError as error:
+        raise AlbumMoveError(str(error), status_code=409) from error
 
     try:
         destination_folder.parent.mkdir(parents=True, exist_ok=True)

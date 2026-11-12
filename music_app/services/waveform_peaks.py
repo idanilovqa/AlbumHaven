@@ -226,20 +226,43 @@ async def build_waveform_peaks(
     *,
     bins: int,
     cancel_event: asyncio.Event,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
+    sample_rate: int | None = None,
 ) -> WaveformPeaks:
     if bins < 1:
         raise ValueError("waveform bin count must be positive")
 
+    segment_values = (start_frame, end_frame, sample_rate)
+    segment_requested = any(value is not None for value in segment_values)
+    if segment_requested and (
+        not all(isinstance(value, int) for value in segment_values)
+        or start_frame < 0
+        or end_frame <= start_frame
+        or sample_rate <= 0
+    ):
+        raise ValueError("waveform segment bounds must be complete and ascending")
+
     executable = resolve_ffmpeg_executable()
     if not executable:
         raise RuntimeError("ffmpeg executable is unavailable")
-    duration_seconds = await asyncio.to_thread(_audio_duration_seconds, path)
+    duration_seconds = (
+        (end_frame - start_frame) / sample_rate
+        if segment_requested
+        else await asyncio.to_thread(_audio_duration_seconds, path)
+    )
     from music_app.services.mp3_gapless import ignored_mp3_gapless_info
 
     gapless = await ignored_mp3_gapless_info(path, executable, cancel_event=cancel_event)
-    sample_filter = f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}"
+    sample_filters: list[str] = []
     if gapless is not None:
-        sample_filter = f"{gapless.decode_filters()[1]},{sample_filter}"
+        sample_filters.append(gapless.decode_filters()[1])
+    if segment_requested:
+        sample_filters.append(
+            f"atrim=start_sample={start_frame}:end_sample={end_frame}"
+        )
+    sample_filters.append(f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}")
+    sample_filter = ",".join(sample_filters)
     frames_per_bin = max(
         1,
         math.ceil(
@@ -453,8 +476,14 @@ class WaveformPeaksRegistry:
         bins: int,
         cancel_event: asyncio.Event,
         cache_identity: dict[str, object] | None,
+        segment: dict[str, int],
     ) -> WaveformPeaks:
-        peaks = await self._builder(path, bins=bins, cancel_event=cancel_event)
+        peaks = await self._builder(
+            path,
+            bins=bins,
+            cancel_event=cancel_event,
+            **segment,
+        )
         repository = self._cache_repository
         if repository is None or cache_identity is None or cancel_event.is_set():
             return peaks
@@ -470,12 +499,35 @@ class WaveformPeaksRegistry:
             _LOGGER.warning("Waveform peak cache write failed: %s", error)
         return peaks
 
-    async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+    async def run(
+        self,
+        path: Path,
+        *,
+        bins: int,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
+        sample_rate: int | None = None,
+    ) -> WaveformPeaks:
         async with self._lock:
             if self._shutting_down:
                 raise WaveformPeaksBusyError("waveform peak job already active")
+        segment_values = (start_frame, end_frame, sample_rate)
+        segment_requested = any(value is not None for value in segment_values)
+        if segment_requested and not all(
+            isinstance(value, int) for value in segment_values
+        ):
+            raise ValueError("waveform segment bounds must be complete")
+        segment = (
+            {
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "sample_rate": sample_rate,
+            }
+            if segment_requested
+            else {}
+        )
         cache_identity: dict[str, object] | None = None
-        if self._cache_repository is not None:
+        if self._cache_repository is not None and not segment_requested:
             try:
                 cache_identity = self._cache_identity(path, bins=bins)
             except OSError as error:
@@ -510,6 +562,7 @@ class WaveformPeaksRegistry:
                     bins=bins,
                     cancel_event=cancel_event,
                     cache_identity=cache_identity,
+                    segment=segment,
                 )
             )
             self._active_cancel_event = cancel_event

@@ -1,7 +1,8 @@
 function buildAlbumTrackPlayButtonHtml(track = {}) {
   const trackPath = String(track.path || '');
   const mediaRef = String(track.mediaRef || track.media_ref || '');
-  const trackIdentity = trackPath || mediaRef;
+  const cueSegmentRef = String(track.cueSegmentRef || track.cue_segment_ref || '');
+  const trackIdentity = trackPath || mediaRef || cueSegmentRef;
   const playbackRef = String(track.playbackRef || track.playback_ref || '');
   const playbackRefExpiresAt = String(track.playbackRefExpiresAt || track.playback_ref_expires_at || '');
   const title = String(track.playbackTitle || track.title || 'Track');
@@ -17,13 +18,17 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   });
   const source = trackPath
     ? `/track?path=${encodeURIComponent(trackPath)}`
-    : `/track?ref=${encodeURIComponent(mediaRef)}`;
-  return `<button class="play-track-button album-track-table__play" data-src="${source}" data-track-path="${escapeHtml(trackIdentity)}"${mediaRef ? ` data-media-ref="${escapeHtml(mediaRef)}"` : ''}${playbackRef ? ` data-playback-ref="${escapeHtml(playbackRef)}"` : ''}${playbackRefExpiresAt ? ` data-playback-ref-expires-at="${escapeHtml(playbackRefExpiresAt)}"` : ''} data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
+    : mediaRef
+      ? `/track?ref=${encodeURIComponent(mediaRef)}`
+      : `/track?cue=${encodeURIComponent(cueSegmentRef)}`;
+  return `<button class="play-track-button album-track-table__play" data-src="${source}" data-track-path="${escapeHtml(trackIdentity)}"${mediaRef ? ` data-media-ref="${escapeHtml(mediaRef)}"` : ''}${cueSegmentRef ? ` data-cue-segment-ref="${escapeHtml(cueSegmentRef)}"` : ''}${playbackRef ? ` data-playback-ref="${escapeHtml(playbackRef)}"` : ''}${playbackRefExpiresAt ? ` data-playback-ref-expires-at="${escapeHtml(playbackRefExpiresAt)}"` : ''} data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const trackPath = String(track.path || '');
-  const trackIdentity = trackPath || String(track.mediaRef || track.media_ref || '');
+  const trackIdentity = trackPath || String(
+    track.mediaRef || track.media_ref || track.cueSegmentRef || track.cue_segment_ref || '',
+  );
   const classes = ['album-track-table__row'];
   if (track.isCurrent) classes.push('album-track-table__row--current');
   if (track.isPlaying) classes.push('album-track-table__row--playing');

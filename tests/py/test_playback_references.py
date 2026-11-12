@@ -16,6 +16,7 @@ class _Cursor:
 class _Connection:
     def __init__(self, rows):
         self._rows = rows
+        self.queries = []
 
     def __enter__(self):
         return self
@@ -24,6 +25,7 @@ class _Connection:
         return None
 
     def execute(self, sql, params):
+        self.queries.append(sql)
         if "library.library_memberships" in sql:
             return _Cursor({"library_id": params[1]})
         identity = params[1]
@@ -77,8 +79,11 @@ def test_cue_segment_reference_resolves_an_immutable_authorized_boundary_snapsho
         library_relationships=(SimpleNamespace(library_id=23),),
     )
 
+    resolved_sample_rate = [44_100]
+
     class Connection(_Connection):
         def execute(self, sql, params):
+            self.queries.append(sql)
             if "library.library_memberships" in sql:
                 return _Cursor({"library_id": params[1]})
             if "cue_issue_segment" in sql:
@@ -92,27 +97,34 @@ def test_cue_segment_reference_resolves_an_immutable_authorized_boundary_snapsho
                 return _Cursor({
                     "track_id": params[1], "program_id": params[2],
                     "media_source_id": params[3], "private_path": str(media),
-                    "root_path": str(root), "sample_rate": 44100,
+                    "root_path": str(root), "sample_rate": resolved_sample_rate[0],
                     "revision_sha256": "a" * 64,
                 })
             return super().execute(sql, params)
 
+    connection = Connection([])
     service = PlaybackReferenceService(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused",
          "hmac": {"secret": "x" * 32, "key_version": 1}},
-        connect=lambda _url: Connection([]),
+        connect=lambda _url: connection,
     )
 
     issued = service.issue_batch(actor, [{"clientKey": "cue-1", "cueSegmentRef": "cue:logical"}])
+    assert any("library.cue_corrections" in query for query in connection.queries)
+    assert any("c.base_program_id = s.program_id" in query for query in connection.queries)
     playback_ref = issued["tracks"][0]["playbackRef"]
+    resolved_sample_rate[0] = 48_000
 
     assert "resumeToken" not in issued["tracks"][0]
     assert service.resolve_segment(actor, playback_ref) == {
         "source_path": media,
-        "start_frame": 75,
-        "end_frame": 225,
+        "start_frame": 44_100,
+        "end_frame": 132_300,
         "sample_rate": 44100,
         "revision_sha256": "a" * 64,
         "track_id": 41,
+    }
+    assert service.resolve_listen_identity(actor, playback_ref) == {
+        "library_track_id": "41",
     }
     assert service.resolve(actor, playback_ref) == media

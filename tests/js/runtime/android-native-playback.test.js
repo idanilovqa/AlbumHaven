@@ -146,6 +146,24 @@ test('a negotiated native shell routes a start through one reference batch and a
   assert.equal(api.getAndroidNativePlaybackClientId(), handshakePayload.playback.clientId);
 });
 
+test('Android requests bounded references for pathless CUE queue items', async () => {
+  const { context, fetches } = createHarness();
+  const cueTracks = [{
+    path: 'cue:logical-track',
+    cueSegmentRef: 'cue:logical-track',
+    title: 'Logical CUE track',
+  }];
+
+  const refs = await context.requestAndroidNativePlaybackRefs(cueTracks, 0);
+
+  assert.equal(refs[0].playbackRef, 'opaque-ref-0');
+  assert.deepEqual(fetches[0].body.tracks, [{
+    clientKey: fetches[0].body.tracks[0].clientKey,
+    cueSegmentRef: 'cue:logical-track',
+  }]);
+  assert.equal(JSON.stringify(fetches[0].body).includes('source_path'), false);
+});
+
 test('the album year reaches only an album-details-capable shell', async () => {
   const dated = tracks.map(track => ({ ...track, year: '1999' }));
   const current = createHarness();

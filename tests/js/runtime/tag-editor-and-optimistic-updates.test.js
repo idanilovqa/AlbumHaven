@@ -77,6 +77,133 @@ test('summary tag editor hydrates only the latest requested album and preserves 
   await denied;
   assert.equal(opened.length, 1);
 });
+
+test('openTagEditor keys a pathless CUE track by its opaque logical identity', () => {
+  const cueTrack = { cue_segment_ref: 'cue:logical-track', title: 'Logical CUE track' };
+  const overlay = { hidden: true, setAttribute() {} };
+  const context = vm.createContext({
+    state: { tagEditor: {} },
+    document: {
+      body: { classList: { add() {} } },
+      getElementById() { return null; },
+    },
+    getTagEditorElements: () => ({ overlay, list: {}, form: {}, applyButton: {} }),
+    bindOverlayPointerOrigin() {},
+    albumRequiresHydration: () => false,
+    getTagEditorTracks: () => [cueTrack],
+    orderAlbumTracks: tracks => tracks,
+    getTagEditorTrackIdentity: track => String(track.cue_segment_ref || track.path || ''),
+    getTrackTagInitialValues: track => ({ title: track.title }),
+    claimTagEditViewMutation: () => null,
+    settleTagEditViewMutation() {},
+    scheduleBrowserAnimationFrame() {},
+  });
+  vm.runInContext(helperSource, context);
+
+  context.openTagEditor({ name: 'CUE Album', tracks: [cueTrack] }, { tracksMode: 'all' });
+
+  assert.deepEqual(Array.from(context.state.tagEditor.selectedPaths), ['cue:logical-track']);
+  assert.equal(context.state.tagEditor.anchorPath, 'cue:logical-track');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.tagEditor.values)), {
+    'cue:logical-track': { title: 'Logical CUE track' },
+  });
+});
+
+test('CUE editor loads path-free structure into the existing Tag Editor session', async () => {
+  const context = vm.createContext({
+    fetch: async (url) => {
+      assert.equal(url, '/utilities/cue-editor?cue_segment_ref=cue%3Atrack-1');
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            base_revision_sha256: 'a'.repeat(64),
+            tracks: [{
+              cue_segment_ref: 'cue:track-1',
+              title: 'Track One',
+              cue_structure: {
+                base_revision_sha256: 'a'.repeat(64),
+                start_frame: 0,
+                end_frame: 900,
+                internal_indexes: [],
+              },
+            }],
+          };
+        },
+      };
+    },
+    renderTagEditor() {},
+  });
+  vm.runInContext(helperSource, context);
+  const session = {
+    tracks: [{ cue_segment_ref: 'cue:track-1', title: 'Track One' }],
+    activeView: 'tags',
+  };
+  context.state = { tagEditor: session };
+
+  await context.loadCueEditorState(session);
+
+  assert.equal(session.cueLoaded, true);
+  assert.equal(session.tracks[0].cue_structure.start_frame, 0);
+  assert.equal('path' in session.tracks[0], false);
+});
+
+test('CUE structure apply uses the shared correction endpoint and keeps the revision', async () => {
+  const requests = [];
+  const context = vm.createContext({
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, async json() { return { ok: true, correction_id: 9 }; } };
+    },
+  });
+  vm.runInContext(helperSource, context);
+
+  await context.submitCueStructureCorrection({
+    cue_segment_ref: 'cue:track-2',
+    base_revision_sha256: 'a'.repeat(64),
+    start_frame: 1050,
+  });
+
+  assert.deepEqual(requests, [{
+    url: '/utilities/cue-corrections',
+    body: {
+      action: 'apply',
+      kind: 'boundary',
+      cue_segment_ref: 'cue:track-2',
+      base_revision_sha256: 'a'.repeat(64),
+      start_frame: 1050,
+    },
+  }]);
+});
+
+test('pathless CUE metadata applies through database corrections instead of media writes', async () => {
+  const requests = [];
+  const context = vm.createContext({
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, async json() { return { ok: true, correction_id: 10 }; } };
+    },
+  });
+  vm.runInContext(helperSource, context);
+
+  await context.submitCueMetadataCorrection({
+    cue_segment_ref: 'cue:track-1',
+    base_revision_sha256: 'a'.repeat(64),
+    fields: { title: 'Corrected title' },
+  });
+
+  assert.deepEqual(requests[0], {
+    url: '/utilities/cue-corrections',
+    body: {
+      action: 'apply',
+      kind: 'metadata',
+      cue_segment_ref: 'cue:track-1',
+      base_revision_sha256: 'a'.repeat(64),
+      fields: { title: 'Corrected title' },
+    },
+  });
+});
 const albumUiComponentSources = [
   'gallery-main-components.js',
   'alert-components.js',
@@ -114,6 +241,15 @@ test('Edit Tags exposes separate total-disc and disc-title fields', () => {
   assert.match(primaryModalsTemplate, /data-tag-field="disc_subtitle"/);
 });
 
+test('Edit Tags reuses its dialog, list, footer, shared tabs, and alert host for CUE structure', () => {
+  assert.equal((primaryModalsTemplate.match(/id="tag-editor-modal"/g) || []).length, 1);
+  assert.equal((primaryModalsTemplate.match(/id="tag-editor-track-list"/g) || []).length, 1);
+  assert.equal((primaryModalsTemplate.match(/id="tag-editor-footer"/g) || []).length, 1);
+  assert.match(primaryModalsTemplate, /id="tag-editor-view-tabs"/);
+  assert.match(primaryModalsTemplate, /id="tag-editor-cue-alert"/);
+  assert.match(primaryModalsTemplate, /id="tag-editor-cue-structure"/);
+});
+
 test('Edit Tags exposes Album Type separately from Edition', () => {
   assert.match(primaryModalsTemplate, /<label>Album Type<input[^>]+data-tag-field="album_type"/);
   assert.match(primaryModalsTemplate, /<label>Edition<input[^>]+data-tag-field="edition"/);
@@ -123,6 +259,9 @@ function loadHelper(albums, overrides = {}) {
   const context = {
     console,
     ButtonComponent,
+    getTagEditorTrackIdentity(track) {
+      return String(track?.path || track?.cue_segment_ref || track?.cueSegmentRef || '');
+    },
     claimTagEditViewMutation(album, editedPaths, updates) {
       return { album, editedPaths, updates };
     },
@@ -296,6 +435,18 @@ test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeco
   });
 
   assert.equal(payload.durationSeconds, 123.5);
+});
+
+test('buildPlayerTrackPayload keeps pathless CUE identity in the ordinary queue payload', () => {
+  const context = loadHelper([]);
+  const payload = context.buildPlayerTrackPayload({
+    cue_segment_ref: 'cue:logical-track',
+    title: 'Logical CUE track',
+  });
+
+  assert.equal(payload.path, 'cue:logical-track');
+  assert.equal(payload.cueSegmentRef, 'cue:logical-track');
+  assert.equal(payload.src, '/track?cue=cue%3Alogical-track');
 });
 
 test('track modal play button exposes numeric duration seconds', () => {

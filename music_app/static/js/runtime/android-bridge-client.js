@@ -331,8 +331,11 @@ function androidNativeText(value) {
 // one `queueGroup`: Android's previous and next stay inside it, as the web's do.
 function androidNativeQueueWindow(track) {
   let queue = state.player.playbackQueue;
-  const tracks = (Array.isArray(queue?.tracks) ? queue.tracks : []).filter(item => item?.path);
-  const start = tracks.findIndex(item => String(item.path) === String(track.path));
+  const tracks = (Array.isArray(queue?.tracks) ? queue.tracks : [])
+    .filter(item => androidNativeReferenceIdentity(item));
+  const start = tracks.findIndex(
+    item => androidNativeReferenceIdentity(item) === androidNativeReferenceIdentity(track),
+  );
   if (start < 0) return { items: [track], groups: [0], currentIndex: 0 };
   const following = tracks.slice(start + 1, start + ANDROID_NATIVE_QUEUE_LIMIT);
   // Following tracks keep their place first; earlier ones fill what the limit leaves.
@@ -346,7 +349,9 @@ function androidNativeQueueWindow(track) {
     queue = resolveNextPlaybackContextQueue(queue);
     if (!queue || albums.has(String(queue.albumRef || ''))) break;
     albums.add(String(queue.albumRef || ''));
-    const next = (Array.isArray(queue.tracks) ? queue.tracks : []).filter(item => item?.path)
+    const next = (Array.isArray(queue.tracks) ? queue.tracks : []).filter(item => (
+      item?.path || item?.cueSegmentRef || item?.cue_segment_ref
+    ))
       .slice(0, ANDROID_NATIVE_QUEUE_LIMIT - items.length);
     items.push(...next);
     groups.push(...next.map(() => albums.size - 1));
@@ -359,17 +364,26 @@ function cachedAndroidNativePlaybackRef(path) {
   return cached && cached.expiresAtMs - Date.now() > ANDROID_NATIVE_REFERENCE_REUSE_MARGIN_MS ? cached : null;
 }
 
+function androidNativeReferenceIdentity(item) {
+  return String(item?.cueSegmentRef || item?.cue_segment_ref || item?.path || '');
+}
+
 // One bounded batch for the references not already held, immediately before the queue reaches
 // Android; a partial batch never does. Each entry is `{ playbackRef, resumeToken }`; the resume
 // token is null when the server issued none. The server prepares the tracks in the order asked,
 // so the one about to play goes first, then those after it, then those before.
 async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
-  const refs = items.map(item => cachedAndroidNativePlaybackRef(String(item.path)));
-  const missing = items.map((item, index) => ({ index, path: String(item.path) }))
+  const refs = items.map(item => cachedAndroidNativePlaybackRef(androidNativeReferenceIdentity(item)));
+  const missing = items.map((item, index) => ({ index, item, identity: androidNativeReferenceIdentity(item) }))
     .filter(({ index }) => !refs[index])
     .sort((a, b) => (a.index < currentIndex) - (b.index < currentIndex) || a.index - b.index);
   if (!missing.length) return refs;
-  const tracks = missing.map(({ path }) => ({ clientKey: createAndroidBridgeMessageId(), path }));
+  const tracks = missing.map(({ item }) => ({
+    clientKey: createAndroidBridgeMessageId(),
+    ...(item.cueSegmentRef || item.cue_segment_ref
+      ? { cueSegmentRef: String(item.cueSegmentRef || item.cue_segment_ref) }
+      : { path: String(item.path) }),
+  }));
   const response = await fetch('/playback/refs', {
     method: 'POST', credentials: 'same-origin', cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
@@ -390,12 +404,12 @@ async function requestAndroidNativePlaybackRefs(items, currentIndex = 0) {
     return { playbackRef: issued.playbackRef, resumeToken };
   });
   const expiresAtMs = Date.parse(result.expiresAt);
-  missing.forEach(({ index, path }, position) => {
+  missing.forEach(({ index, identity }, position) => {
     refs[index] = issuedRefs[position];
     if (!(expiresAtMs > Date.now())) return;
     const cache = androidNativePlayback.refs;
-    cache.delete(path);
-    cache.set(path, { ...issuedRefs[position], expiresAtMs });
+    cache.delete(identity);
+    cache.set(identity, { ...issuedRefs[position], expiresAtMs });
     if (cache.size > ANDROID_NATIVE_REFERENCE_CACHE_LIMIT) cache.delete(cache.keys().next().value);
   });
   return refs;
@@ -478,7 +492,7 @@ async function startAndroidNativePlaybackTrack(track, {
   native.ownerIntent = Boolean(autoplay);
   const queueWindow = androidNativeQueueWindow(track);
   // A refused reference may be stale; the retry asks for fresh ones.
-  if (referenceRetry) queueWindow.items.forEach(item => native.refs.delete(String(item.path)));
+  if (referenceRetry) queueWindow.items.forEach(item => native.refs.delete(androidNativeReferenceIdentity(item)));
   let payload;
   let first;
   try {
@@ -527,6 +541,9 @@ function androidNativeStoredTrack(track) {
   return {
     src: String(track.src || ''),
     path: String(track.path || ''),
+    ...(track.cueSegmentRef || track.cue_segment_ref
+      ? { cueSegmentRef: String(track.cueSegmentRef || track.cue_segment_ref) }
+      : {}),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
     ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
@@ -561,7 +578,7 @@ function readAndroidNativeAttachment(live) {
   const tracks = Array.isArray(record?.tracks) ? record.tracks : [];
   if (!live.clientId || record?.clientId !== live.clientId || record.queueRevision !== live.queueRevision) return null;
   if (!Number.isInteger(live.currentIndex) || !tracks[live.currentIndex]
-      || !tracks.every(track => track?.path && track.src)) return null;
+      || !tracks.every(track => androidNativeReferenceIdentity(track) && track.src)) return null;
   return tracks;
 }
 

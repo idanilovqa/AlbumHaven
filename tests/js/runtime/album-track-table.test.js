@@ -146,6 +146,18 @@ test('AlbumTrackTable uses an opaque member identity without inventing another t
   assert.doesNotMatch(html, /data-cdt-column="path"/);
 });
 
+test('AlbumTrackTable carries opaque CUE identity through the shared play button', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ tracks: [{ cue_segment_ref: 'cue:logical-track', title: 'Logical CUE track' }] }],
+  });
+
+  assert.match(html, /data-track-row-path="cue:logical-track"/);
+  assert.match(html, /data-cue-segment-ref="cue:logical-track"/);
+  assert.match(html, /data-src="\/track\?cue=cue%3Alogical-track"/);
+  assert.doesNotMatch(html, /data-cdt-column="path"/);
+});
+
 test('AlbumTrackTable reserves a headerless problem column immediately before Length', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

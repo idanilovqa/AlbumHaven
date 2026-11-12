@@ -238,10 +238,12 @@ async function playbackOwnershipTrack(track, previous = null) {
   }
   if (!playbackRef) {
     const opaque = Boolean(track.mediaRef);
+    const cueSegmentRef = String(track.cueSegmentRef || track.cue_segment_ref || '');
     const refs = await playbackOwnershipRequest('POST', opaque ? '/playback/refs/resume' : '/playback/refs', {
       protocol: 1,
       tracks: [{ clientKey: getPlaybackOwnershipTabId(),
-        ...(opaque ? { resumeToken: track.mediaRef } : { path: track.path }) }],
+        ...(opaque ? { resumeToken: track.mediaRef }
+          : cueSegmentRef ? { cueSegmentRef } : { path: track.path }) }],
     });
     if (refs.protocol !== 1 || refs.tracks?.length !== 1 || !refs.tracks[0].playbackRef) {
       throw new Error('Playback reference is unavailable.');

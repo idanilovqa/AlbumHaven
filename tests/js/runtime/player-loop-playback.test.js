@@ -1144,6 +1144,40 @@ test('playTrackFromPayload starts streaming while server ownership is asked for'
   assert.equal(pauses, 0);
 });
 
+test('CUE playback waits for its segment reference before opening the shared stream', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  const streamingStarts = [];
+  const listenStarts = [];
+  const ownership = { activeClaim: null };
+  const { context } = loadHelper({
+    canStartPlaybackInThisTab: () => claim,
+    getPlaybackOwnershipState: () => ownership,
+    startStreamingTrack: async (track) => { streamingStarts.push(track); },
+    resumeListenSessionPlayback: (track) => {
+      listenStarts.push(track);
+      return Promise.resolve(null);
+    },
+  });
+  const track = {
+    path: 'cue:logical-track',
+    cueSegmentRef: 'cue:logical-track',
+    src: '/track?cue=cue%3Alogical-track',
+    title: 'Logical CUE track',
+  };
+
+  const pendingStart = context.playTrackFromPayload(track, { autoplay: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(streamingStarts, []);
+
+  ownership.activeClaim = { track: { playbackRef: 'cue-playback-ref' } };
+  resolveClaim(true);
+
+  assert.equal(await pendingStart, true);
+  assert.equal(streamingStarts[0].playbackRef, 'cue-playback-ref');
+  assert.equal(listenStarts[0].playbackRef, 'cue-playback-ref');
+});
+
 test('a refused claim pauses the instantly started track', async () => {
   const streamingStarts = [];
   let pauses = 0;

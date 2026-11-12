@@ -93,6 +93,95 @@ test('shared tag-editor list shows a title instead of an opaque member identity'
   }), '01 Track.flac');
 });
 
+test('shared tag-editor identity keeps pathless CUE tracks selectable and editable', () => {
+  const context = loadHelpers();
+  const cueTrack = {
+    cue_segment_ref: 'cue:logical-track',
+    title: 'Logical CUE track',
+    album: 'CUE Album',
+  };
+  const album = {
+    name: 'CUE Album',
+    tracks: [cueTrack],
+    selected_track_paths: ['cue:logical-track'],
+  };
+
+  assert.equal(context.getTagEditorTrackIdentity(cueTrack), 'cue:logical-track');
+  assert.deepEqual(Array.from(context.getTagEditorTracks(album, 'selected')), [cueTrack]);
+  context.state = {
+    tagEditor: {
+      tracks: [cueTrack],
+      selectedPaths: ['cue:logical-track'],
+      anchorPath: 'cue:logical-track',
+    },
+  };
+  assert.deepEqual(Array.from(context.getSelectedTagEditorPaths([cueTrack])), ['cue:logical-track']);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildChangedTagEditorUpdates(album, [cueTrack], {
+      'cue:logical-track': {
+        ...context.getTrackTagInitialValues(cueTrack, album),
+        title: 'Corrected title',
+      },
+    }))),
+    { 'cue:logical-track': { title: 'Corrected title' } },
+  );
+});
+
+test('shared tag-editor keeps the CUE format label separate from pending state', () => {
+  const context = loadHelpers();
+
+  assert.equal(context.getTagEditorTrackFormat({
+    cue_segment_ref: 'cue:logical-track',
+  }), 'CUE');
+});
+
+test('CUE prior-track End and next-track INDEX 01 produce one shared boundary correction', () => {
+  const context = loadHelpers();
+  const tracks = [
+    {
+      cue_segment_ref: 'cue:track-1',
+      cue_structure: { base_revision_sha256: 'a'.repeat(64), start_frame: 0, end_frame: 900 },
+    },
+    {
+      cue_segment_ref: 'cue:track-2',
+      cue_structure: { base_revision_sha256: 'a'.repeat(64), start_frame: 900, end_frame: 1800 },
+    },
+  ];
+
+  const fromPriorEnd = context.buildCueBoundaryCorrection(
+    tracks,
+    'cue:track-1',
+    'end',
+    '00:14:00',
+  );
+  const fromNextStart = context.buildCueBoundaryCorrection(
+    tracks,
+    'cue:track-2',
+    'index_01',
+    '00:14:00',
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(fromPriorEnd)), {
+    cue_segment_ref: 'cue:track-2',
+    base_revision_sha256: 'a'.repeat(64),
+    start_frame: 1050,
+  });
+  assert.deepEqual(fromPriorEnd, fromNextStart);
+  assert.equal(context.formatCueTimecode(1050), '00:14:00');
+  assert.throws(() => context.buildCueBoundaryCorrection(
+    tracks,
+    'cue:track-1',
+    'end',
+    '00:14:75',
+  ), /timecode/i);
+  assert.throws(() => context.buildCueBoundaryCorrection(
+    [{ ...tracks[0], cue_structure: { start_frame: 0, end_frame: 900 } }, tracks[1]],
+    'cue:track-1',
+    'index_01',
+    '00:01:00',
+  ), /revision/i);
+});
+
 test('selected track mode filters the shared Edit Tags input without reordering it', () => {
   const context = loadHelpers();
   const album = {

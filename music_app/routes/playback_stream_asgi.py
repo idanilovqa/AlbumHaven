@@ -112,6 +112,7 @@ async def playback_waveform(
             status_code=400,
         )
     loop_scope = await saved_loop_scope(request) if requested_loop_id else None
+    segment: dict[str, int] = {}
     if loop_scope is not None:
         resolved_path = resolve_loop_media_path(
             request.app.state.config,
@@ -121,11 +122,25 @@ async def playback_waveform(
     elif requested_reference:
         try:
             service = PlaybackReferenceService(playback_config(request))
-            resolved_path = await run_playback_io(
-                service.resolve,
-                request.state.current_actor,
-                requested_reference,
-            )
+            try:
+                resolved_segment = await run_playback_io(
+                    service.resolve_segment,
+                    request.state.current_actor,
+                    requested_reference,
+                )
+            except PlaybackContractError:
+                resolved_path = await run_playback_io(
+                    service.resolve,
+                    request.state.current_actor,
+                    requested_reference,
+                )
+            else:
+                resolved_path = resolved_segment["source_path"]
+                segment = {
+                    "start_frame": resolved_segment["start_frame"],
+                    "end_frame": resolved_segment["end_frame"],
+                    "sample_rate": resolved_segment["sample_rate"],
+                }
         except PlaybackContractError:
             resolved_path = None
     else:
@@ -173,7 +188,7 @@ async def playback_waveform(
                 )
 
     if cachedOnly == "1":
-        if loop_scope is not None:
+        if loop_scope is not None or segment:
             return Response(status_code=204)
         try:
             peaks = await request.app.state.waveform_peaks_registry.get_cached(
@@ -196,6 +211,7 @@ async def playback_waveform(
         request.app.state.waveform_peaks_registry.run(
             resolved_path,
             bins=bins,
+            **segment,
         )
     )
     disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))
@@ -293,6 +309,7 @@ def _metadata_event(
     *,
     role: str,
     encoded: dict[str, object] | None = None,
+    timeline_origin: int = 0,
 ) -> dict[str, object]:
     return {
         **(encoded or {}),
@@ -303,8 +320,8 @@ def _metadata_event(
         "sampleRate": metadata.sample_rate,
         "channels": metadata.channels,
         "provisionalTotalFrames": metadata.provisional_total_frames,
-        "requestedStartFrame": metadata.requested_start_frame,
-        "timelineStartFrame": metadata.timeline_start_frame,
+        "requestedStartFrame": metadata.requested_start_frame - timeline_origin,
+        "timelineStartFrame": metadata.timeline_start_frame - timeline_origin,
     }
 
 
@@ -375,6 +392,7 @@ class _PlaybackStream:
     generation: int
     stream_id: int
     role: str
+    timeline_origin: int = 0
     sequence: int = 0
     credit_task: asyncio.Task[None] | None = None
     timing: _OpenTiming | None = None
@@ -512,7 +530,10 @@ class _PlaybackPcmConnection:
                     "streamId": stream.stream_id,
                     "role": stream.role,
                     "emittedFrames": stream.decoder.emitted_frames,
-                    "authoritativeTotalFrames": metadata.authoritative_total_frames,
+                    "authoritativeTotalFrames": (
+                        metadata.authoritative_total_frames - stream.timeline_origin
+                        if metadata.authoritative_total_frames is not None else None
+                    ),
                 }
             )
             self._completed_streams_by_role[stream.role] = (
@@ -781,13 +802,25 @@ class _PlaybackPcmConnection:
             return await self._reject_open(CLOSE_INVALID_CONTROL)
 
         timing = _OpenTiming(generation, stream_id, role, received_at)
+        segment = None
         if "path" in control and "playbackRef" in control:
             return await self._reject_open(CLOSE_INVALID_CONTROL)
         if "playbackRef" in control:
             try:
                 service = PlaybackReferenceService(playback_config(self._websocket))
-                resolved_path = await run_playback_io(service.resolve,
-                    self._websocket.state.current_actor, control["playbackRef"])
+                try:
+                    segment = await run_playback_io(
+                        service.resolve_segment,
+                        self._websocket.state.current_actor,
+                        control["playbackRef"],
+                    )
+                    resolved_path = segment["source_path"]
+                except PlaybackContractError:
+                    resolved_path = await run_playback_io(
+                        service.resolve,
+                        self._websocket.state.current_actor,
+                        control["playbackRef"],
+                    )
             except PlaybackContractError:
                 return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
         else:
@@ -802,6 +835,19 @@ class _PlaybackPcmConnection:
             )
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+        timeline_origin = 0
+        end_frame = None
+        if segment is not None:
+            timeline_origin = segment["start_frame"]
+            segment_frames = segment["end_frame"] - timeline_origin
+            if start_frame >= segment_frames:
+                return await self._reject_open(CLOSE_INVALID_CONTROL)
+            start_frame += timeline_origin
+            end_frame = segment["end_frame"]
+            sample_rate = segment["sample_rate"]
+            duration = segment_frames / segment["sample_rate"]
+            raw_codecs = []
+            quality = "original"
         timing.resolved_at = time.monotonic()
 
         generations = {stream.generation for stream in self._streams_by_id.values()}
@@ -830,6 +876,7 @@ class _PlaybackPcmConnection:
             start_frame=start_frame,
             sample_rate=sample_rate,
             provisional_duration_seconds=float(duration),
+            end_frame=end_frame,
         )
         try:
             decoder = await open_encoded_stream(
@@ -871,6 +918,7 @@ class _PlaybackPcmConnection:
             generation=generation,
             stream_id=stream_id,
             role=role,
+            timeline_origin=timeline_origin,
             timing=timing,
         )
         self._completed_streams_by_role.pop(role, None)
@@ -882,7 +930,12 @@ class _PlaybackPcmConnection:
         if self._closed:
             return False
         await self._send_json(
-            _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
+            _metadata_event(
+                decoder.metadata,
+                role=role,
+                encoded=_encoded_fields(decoder),
+                timeline_origin=timeline_origin,
+            )
         )
         if isinstance(decoder, EncodedStream):
             self._grant_credit(stream, INITIAL_ENCODED_CREDIT_BYTES)

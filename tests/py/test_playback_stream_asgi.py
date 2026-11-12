@@ -373,6 +373,9 @@ def test_waveform_route_resolves_a_bounded_playback_reference(
         def __init__(self, _config):
             pass
 
+        def resolve_segment(self, _actor, _token):
+            raise playback_stream_asgi.PlaybackContractError(403)
+
         def resolve(self, actor, token):
             resolved.append((actor, token))
             return media_path
@@ -402,6 +405,59 @@ def test_waveform_route_resolves_a_bounded_playback_reference(
 
     assert status == 200
     assert resolved[0][1] == "opaque-playback-ref"
+    assert decode_json(body)["sampleCount"] == 280
+
+
+def test_waveform_route_propagates_cue_segment_bounds_without_whole_file_cache(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class ReferenceServiceDouble:
+        def __init__(self, _config):
+            pass
+
+        def resolve_segment(self, _actor, token):
+            assert token == "opaque-segment"
+            return {
+                "source_path": media_path,
+                "start_frame": 44_100,
+                "end_frame": 132_300,
+                "sample_rate": 44_100,
+                "revision_sha256": "a" * 64,
+                "track_id": 41,
+            }
+
+        def resolve(self, *_args):
+            raise AssertionError("CUE waveform fell back to whole-file resolution")
+
+    class RegistryDouble:
+        async def get_cached(self, *_args, **_kwargs):
+            raise AssertionError("CUE segment reused the whole-file cache")
+
+        async def run(self, path: Path, *, bins: int, **segment):
+            assert path == media_path
+            assert bins == 280
+            assert segment == {
+                "start_frame": 44_100,
+                "end_frame": 132_300,
+                "sample_rate": 44_100,
+            }
+            return WaveformPeaks(left=(0.25,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    monkeypatch.setattr(playback_stream_asgi, "PlaybackReferenceService", ReferenceServiceDouble)
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"playbackRef": "opaque-segment"},
+    )
+
+    assert status == 200
     assert decode_json(body)["sampleCount"] == 280
 
 
@@ -1372,6 +1428,191 @@ def test_pcm_socket_opens_same_origin_authorized_current_role_with_exact_metadat
 
         assert len(decoder_factory.instances) == 1
         assert decoder_factory.instances[0].cancel_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_opens_cue_segment_with_relative_seek_and_exclusive_end(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    segment = {
+        "source_path": media_path,
+        "start_frame": 44_100,
+        "end_frame": 132_300,
+        "sample_rate": 44_100,
+        "revision_sha256": "a" * 64,
+        "track_id": 41,
+    }
+    reference_calls = []
+
+    class SegmentReferenceService:
+        def __init__(self, _config):
+            pass
+
+        def resolve_segment(self, _actor, playback_ref):
+            assert playback_ref == "opaque-segment"
+            reference_calls.append("segment")
+            return segment
+
+        def resolve(self, _actor, playback_ref):
+            assert playback_ref == "opaque-segment"
+            reference_calls.append("file")
+            return media_path
+
+    encoded_codecs = []
+
+    async def no_encoded_segment(_command, *, codecs, quality):
+        encoded_codecs.append((codecs, quality))
+        return None
+
+    monkeypatch.setattr(playback_stream_asgi, "PlaybackReferenceService", SegmentReferenceService)
+    monkeypatch.setattr(playback_stream_asgi, "open_encoded_stream", no_encoded_segment)
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            command = open_command(
+                media_path,
+                playbackRef="opaque-segment",
+                startFrame=22_050,
+                sampleRate=48_000,
+                durationSeconds=99,
+                codecs=["mp3"],
+            )
+            command.pop("path")
+            await socket.send_json(command)
+
+            assert await socket.receive_json() == {
+                "type": "metadata",
+                "generation": 1,
+                "streamId": 1,
+                "role": "current",
+                "sampleRate": 44_100,
+                "channels": 2,
+                "provisionalTotalFrames": 88_200,
+                "requestedStartFrame": 22_050,
+                "timelineStartFrame": 22_050,
+            }
+
+        decoder_command = decoder_factory.instances[0].command
+        assert decoder_command.path == media_path
+        assert decoder_command.sample_rate == 44_100
+        assert decoder_command.start_frame == 66_150
+        assert decoder_command.end_frame == 132_300
+        assert decoder_command.provisional_duration_seconds == 2
+        assert encoded_codecs == [(frozenset(), "original")]
+        assert reference_calls == ["segment"]
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_rejects_seek_at_cue_segment_end(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    class SegmentReferenceService:
+        def __init__(self, _config):
+            pass
+
+        def resolve_segment(self, _actor, _playback_ref):
+            return {
+                "source_path": media_path,
+                "start_frame": 44_100,
+                "end_frame": 132_300,
+                "sample_rate": 44_100,
+                "revision_sha256": "a" * 64,
+                "track_id": 41,
+            }
+
+    monkeypatch.setattr(playback_stream_asgi, "PlaybackReferenceService", SegmentReferenceService)
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            command = open_command(
+                media_path,
+                playbackRef="opaque-segment",
+                startFrame=88_200,
+            )
+            command.pop("path")
+            await socket.send_json(command)
+            assert await socket.receive_close() == 4400
+
+        assert decoder_factory.instances == []
+
+    asyncio.run(scenario())
+
+
+def test_cue_segment_eos_uses_track_relative_authoritative_total(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    class SegmentReferenceService:
+        def __init__(self, _config):
+            pass
+
+        def resolve_segment(self, _actor, _playback_ref):
+            return {
+                "source_path": media_path,
+                "start_frame": 10,
+                "end_frame": 12,
+                "sample_rate": 44_100,
+                "revision_sha256": "a" * 64,
+                "track_id": 41,
+            }
+
+    monkeypatch.setattr(playback_stream_asgi, "PlaybackReferenceService", SegmentReferenceService)
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            command = open_command(
+                media_path,
+                playbackRef="opaque-segment",
+                startFrame=1,
+                sampleRate=44_100,
+            )
+            command.pop("path")
+            await socket.send_json(command)
+            assert (await socket.receive_json())["timelineStartFrame"] == 1
+
+            decoder = decoder_factory.instances[0]
+            chunks = iter((
+                PcmChunk(frame_count=1, pcm=struct.pack("<ff", 0.2, -0.2)),
+                PcmChunk(frame_count=0, pcm=b""),
+            ))
+
+            async def read_to_segment_end(*, max_frames, delivery_role=None):
+                chunk = next(chunks)
+                if chunk.frame_count:
+                    decoder.outstanding_credit_frames -= chunk.frame_count
+                    decoder.emitted_frames += chunk.frame_count
+                return chunk
+
+            decoder.read_credited_frames = read_to_segment_end
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 2}
+            )
+            assert_pcm_message(
+                await socket.receive_bytes(),
+                generation=1,
+                stream_id=1,
+                role="current",
+                sequence=0,
+                frame_count=1,
+            )
+            assert await socket.receive_json() == {
+                "type": "eos",
+                "generation": 1,
+                "streamId": 1,
+                "role": "current",
+                "emittedFrames": 1,
+                "authoritativeTotalFrames": 2,
+            }
 
     asyncio.run(scenario())
 

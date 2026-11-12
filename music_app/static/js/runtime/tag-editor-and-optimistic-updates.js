@@ -1,5 +1,133 @@
 let tagEditorCleanupGeneration = 0;
 
+function cueEditorTrackIdentity(track) {
+  return typeof getTagEditorTrackIdentity === 'function'
+    ? getTagEditorTrackIdentity(track)
+    : String(track?.path || track?.cue_segment_ref || track?.cueSegmentRef || '');
+}
+
+async function loadCueEditorState(tagEditor = state.tagEditor) {
+  const cueTrack = (tagEditor?.tracks || []).find(track => (
+    track?.cue_segment_ref || track?.cueSegmentRef
+  ));
+  const identity = cueEditorTrackIdentity(cueTrack);
+  if (!identity || typeof fetch !== 'function') return null;
+  const response = await fetch(`/utilities/cue-editor?cue_segment_ref=${encodeURIComponent(identity)}`, {
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json' },
+  });
+  const payload = await response.json();
+  if (!response.ok || payload?.ok !== true || !Array.isArray(payload.tracks)) {
+    throw new Error(payload?.error || 'Unable to load CUE structure.');
+  }
+  if (state.tagEditor !== tagEditor) return null;
+  const priorTracks = new Map((tagEditor.tracks || []).map(track => [cueEditorTrackIdentity(track), track]));
+  tagEditor.tracks = payload.tracks.map(track => ({
+    ...(priorTracks.get(cueEditorTrackIdentity(track)) || {}),
+    ...track,
+  }));
+  tagEditor.cueLoaded = true;
+  tagEditor.cueBaseRevision = String(payload.base_revision_sha256 || '');
+  tagEditor.canEditCueStructure = payload.can_edit_structure === true;
+  tagEditor.cueError = '';
+  if (typeof renderTagEditor === 'function') renderTagEditor();
+  return payload;
+}
+
+async function submitCueCorrection(kind, correction) {
+  const response = await fetch('/utilities/cue-corrections', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ action: 'apply', kind, ...correction }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload?.ok !== true) {
+    throw new Error(payload?.error || 'Unable to apply CUE correction.');
+  }
+  return payload;
+}
+
+function submitCueStructureCorrection(correction) {
+  return submitCueCorrection('boundary', correction);
+}
+
+function submitCueMetadataCorrection(correction) {
+  return submitCueCorrection('metadata', correction);
+}
+
+async function restoreCueCorrection(kind, cueSegmentRef) {
+  const response = await fetch('/utilities/cue-corrections', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      action: 'restore',
+      kind,
+      cue_segment_ref: cueSegmentRef,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload?.ok !== true) {
+    throw new Error(payload?.error || 'Unable to restore CUE correction.');
+  }
+  return payload;
+}
+
+function setTagEditorView(view) {
+  if (!state.tagEditor) return;
+  state.tagEditor.activeView = view === 'cue' && state.tagEditor.cueLoaded ? 'cue' : 'tags';
+  renderTagEditor();
+}
+
+function updateCueStructureDraft(field, value) {
+  const tracks = state.tagEditor?.tracks || [];
+  const identity = typeof getTagEditorFocusedPath === 'function'
+    ? getTagEditorFocusedPath()
+    : cueEditorTrackIdentity(tracks[0]);
+  const correction = buildCueBoundaryCorrection(tracks, identity, field, value);
+  state.tagEditor.cueDraft = correction;
+  renderTagEditor({ preserveTrackList: true });
+  return correction;
+}
+
+async function applyCueStructureDraft() {
+  const tagEditor = state.tagEditor;
+  if (!tagEditor?.cueDraft) return false;
+  await submitCueStructureCorrection(tagEditor.cueDraft);
+  tagEditor.cueDraft = null;
+  await loadCueEditorState(tagEditor);
+  return true;
+}
+
+async function applyCueMetadataDrafts() {
+  const tagEditor = state.tagEditor;
+  if (!tagEditor) return false;
+  const updates = buildChangedTagEditorUpdates(
+    tagEditor.album,
+    tagEditor.tracks || [],
+    tagEditor.values || {},
+  );
+  const corrections = Object.entries(updates).map(([identity, fields]) => {
+    const track = tagEditor.tracks.find(item => cueEditorTrackIdentity(item) === identity);
+    return {
+      cue_segment_ref: identity,
+      base_revision_sha256: track?.cue_structure?.base_revision_sha256
+        || tagEditor.cueBaseRevision,
+      fields,
+    };
+  });
+  if (!corrections.length) return false;
+  await Promise.all(corrections.map(submitCueMetadataCorrection));
+  await loadCueEditorState(tagEditor);
+  tagEditor.values = Object.fromEntries(tagEditor.tracks.map(track => [
+    cueEditorTrackIdentity(track),
+    getTrackTagInitialValues(track, tagEditor.album),
+  ]));
+  renderTagEditor();
+  return true;
+}
+
 const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
@@ -269,15 +397,15 @@ function openTagEditor(album, options = {}) {
   }
   const values = {};
   tracks.forEach((track) => {
-    const path = String(track.path || '');
+    const path = getTagEditorTrackIdentity(track);
     values[path] = getTrackTagInitialValues(track, album);
   });
   settleTagEditorSessionMutationClaim();
   const tagEditor = {
     album,
     tracks,
-    selectedPaths: [String(tracks[0].path || '')].filter(Boolean),
-    anchorPath: String(tracks[0].path || ''),
+    selectedPaths: [getTagEditorTrackIdentity(tracks[0])].filter(Boolean),
+    anchorPath: getTagEditorTrackIdentity(tracks[0]),
     dragSelecting: false,
     dragAnchorPath: '',
     reorder: null,
@@ -290,6 +418,13 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
+  if (tracks.some(track => track?.cue_segment_ref || track?.cueSegmentRef)) {
+    loadCueEditorState(tagEditor).catch((error) => {
+      if (state.tagEditor !== tagEditor) return;
+      tagEditor.cueError = error.message;
+      if (typeof renderTagEditor === 'function') renderTagEditor();
+    });
+  }
   const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
   if (folderLoadButton) {
     folderLoadButton.disabled = false;
@@ -2386,9 +2521,12 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
     const componentTracks = group.tracks.map((track, index) => {
-      const src = `/track?path=${encodeURIComponent(track.path)}`;
+      const cueSegmentRef = String(track.cue_segment_ref || track.cueSegmentRef || '');
+      const trackPath = String(track.path || cueSegmentRef);
+      const src = track.path
+        ? `/track?path=${encodeURIComponent(track.path)}`
+        : `/track?cue=${encodeURIComponent(cueSegmentRef)}`;
       const duration = formatTrackDuration(track.duration_seconds);
-      const trackPath = String(track.path || '');
       const isCurrentTrack = currentTrackPath && currentTrackPath === trackPath;
       const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
       const currentTimeDisplay = isCurrentTrack
@@ -2400,6 +2538,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
       return {
         path: trackPath,
+        ...(cueSegmentRef ? { cueSegmentRef } : {}),
         src,
         title: displayTitle,
         playbackTitle: String(track.title || '').trim(),
@@ -2452,9 +2591,14 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
 
 function buildPlayerTrackPayload(track, album = null) {
   if (!track) return null;
+  const cueSegmentRef = String(track.cue_segment_ref || track.cueSegmentRef || '');
+  const trackPath = String(track.path || cueSegmentRef);
   return {
-    src: `/track?path=${encodeURIComponent(track.path)}`,
-    path: String(track.path || ''),
+    src: track.path
+      ? `/track?path=${encodeURIComponent(track.path)}`
+      : `/track?cue=${encodeURIComponent(cueSegmentRef)}`,
+    path: trackPath,
+    ...(cueSegmentRef ? { cueSegmentRef } : {}),
     title: track.title || 'Track',
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
@@ -2490,7 +2634,9 @@ function buildQueueTracksForAlbum(album, startingTrackPath = '') {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   const grouped = groupAlbumTracks(tracks);
   const matchingGroup = grouped.groups.find((group) => (
-    Array.isArray(group.tracks) && group.tracks.some((track) => String(track.path || '') === String(startingTrackPath || ''))
+    Array.isArray(group.tracks) && group.tracks.some((track) => String(
+      track.path || track.cue_segment_ref || track.cueSegmentRef || '',
+    ) === String(startingTrackPath || ''))
   ));
   const fallbackGroup = grouped.groups.find((group) => Array.isArray(group.tracks) && group.tracks.length);
   const queueTracks = Array.isArray((matchingGroup || fallbackGroup)?.tracks)

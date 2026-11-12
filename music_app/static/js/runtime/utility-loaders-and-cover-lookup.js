@@ -1734,6 +1734,62 @@ function hideRepairProgressOverlay() {
   }
 }
 
+function getTagEditorTrackIdentity(track) {
+  return String(track?.path || track?.cue_segment_ref || track?.cueSegmentRef || '');
+}
+
+function getTagEditorTrackFormat(track) {
+  if (track?.cue_segment_ref || track?.cueSegmentRef) return 'CUE';
+  return getFileTypeFromPath(getTagEditorTrackIdentity(track));
+}
+
+function parseCueTimecode(value) {
+  const match = String(value || '').trim().match(/^(\d+):(\d{2}):(\d{2})$/);
+  if (!match) throw new Error('Invalid CUE timecode.');
+  const [, minutes, seconds, frames] = match.map(Number);
+  if (seconds > 59 || frames > 74) throw new Error('Invalid CUE timecode.');
+  return ((minutes * 60) + seconds) * 75 + frames;
+}
+
+function formatCueTimecode(value) {
+  const totalFrames = Number(value);
+  if (!Number.isInteger(totalFrames) || totalFrames < 0) return '';
+  const minutes = Math.floor(totalFrames / (60 * 75));
+  const seconds = Math.floor(totalFrames / 75) % 60;
+  const frames = totalFrames % 75;
+  return [minutes, seconds, frames].map(part => String(part).padStart(2, '0')).join(':');
+}
+
+function buildCueBoundaryCorrection(tracks, trackIdentity, field, value) {
+  const cueTracks = Array.isArray(tracks) ? tracks : [];
+  const selectedIndex = cueTracks.findIndex(
+    track => getTagEditorTrackIdentity(track) === String(trackIdentity || ''),
+  );
+  const targetIndex = field === 'end' ? selectedIndex + 1 : selectedIndex;
+  if (!['end', 'index_01'].includes(field) || selectedIndex < 0 || targetIndex >= cueTracks.length) {
+    throw new Error('CUE boundary is not editable.');
+  }
+  const target = cueTracks[targetIndex];
+  const targetIdentity = getTagEditorTrackIdentity(target);
+  const baseRevision = String(target?.cue_structure?.base_revision_sha256 || '');
+  if (!targetIdentity || !/^[0-9a-f]{64}$/.test(baseRevision)) {
+    throw new Error('CUE revision is unavailable.');
+  }
+  const startFrame = parseCueTimecode(value);
+  const priorStart = targetIndex > 0
+    ? Number(cueTracks[targetIndex - 1]?.cue_structure?.start_frame)
+    : -1;
+  const targetEnd = Number(target?.cue_structure?.end_frame);
+  if (startFrame <= priorStart || !Number.isFinite(targetEnd) || startFrame >= targetEnd) {
+    throw new Error('Invalid CUE boundary order.');
+  }
+  return {
+    cue_segment_ref: targetIdentity,
+    base_revision_sha256: baseRevision,
+    start_frame: startFrame,
+  };
+}
+
 function getTagEditorTracks(album, mode = 'problematic') {
   const tracks = Array.isArray(album?.tracks) ? album.tracks : [];
   if (mode === 'all') return tracks;
@@ -1743,13 +1799,13 @@ function getTagEditorTracks(album, mode = 'problematic') {
         .map(path => String(path || ''))
         .filter(Boolean),
     );
-    return tracks.filter(track => selectedPaths.has(String(track?.path || '')));
+    return tracks.filter(track => selectedPaths.has(getTagEditorTrackIdentity(track)));
   }
   const problemPaths = new Set((Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [])
     .map((row) => String(row.path || ''))
     .filter(Boolean));
   if (!problemPaths.size) return tracks;
-  return tracks.filter((track) => problemPaths.has(String(track.path || '')));
+  return tracks.filter((track) => problemPaths.has(getTagEditorTrackIdentity(track)));
 }
 
 function getTrackTagInitialValues(track, album) {
@@ -1782,7 +1838,7 @@ function getTrackTagInitialValues(track, album) {
 function buildChangedTagEditorUpdates(album, tracks, valuesByPath) {
   const updates = {};
   (tracks || []).forEach((track) => {
-    const path = String(track?.path || '');
+    const path = getTagEditorTrackIdentity(track);
     if (!path) return;
     const currentValues = valuesByPath?.[path];
     if (!currentValues || typeof currentValues !== 'object') return;
@@ -2076,13 +2132,17 @@ function syncTagEditorPendingChanges() {
     state.tagEditor.values || {},
   );
   const pendingPaths = new Set(Object.keys(pending));
+  if (state.tagEditor.cueDraft?.cue_segment_ref) {
+    pendingPaths.add(String(state.tagEditor.cueDraft.cue_segment_ref));
+  }
   if (els.albumInput) {
     els.albumInput.removeAttribute('aria-invalid');
     els.albumInput.removeAttribute('aria-describedby');
   }
   if (els.applyButton) {
-    els.applyButton.disabled = pendingPaths.size === 0
-      || !syncTagEditorCollectionFields();
+    els.applyButton.disabled = state.tagEditor.activeView === 'cue'
+      ? !state.tagEditor.cueDraft
+      : pendingPaths.size === 0 || !syncTagEditorCollectionFields();
   }
   els.list?.querySelectorAll('[data-tag-editor-track]').forEach((button) => {
     const path = String(button.getAttribute('data-tag-editor-track') || '');
@@ -2384,7 +2444,7 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
 }
 
 function getSelectedTagEditorPaths(tracks) {
-  const validPaths = new Set((tracks || []).map((track) => String(track.path || '')).filter(Boolean));
+  const validPaths = new Set((tracks || []).map(getTagEditorTrackIdentity).filter(Boolean));
   let selectedPaths = Array.isArray(state.tagEditor.selectedPaths)
     ? state.tagEditor.selectedPaths.map((path) => String(path || '')).filter((path) => validPaths.has(path))
     : [];
@@ -2392,7 +2452,7 @@ function getSelectedTagEditorPaths(tracks) {
     selectedPaths = [String(state.tagEditor.selectedPath)];
   }
   if (!Array.isArray(state.tagEditor.selectedPaths) && !selectedPaths.length && tracks.length) {
-    selectedPaths = [String(tracks[0].path || '')].filter(Boolean);
+    selectedPaths = [getTagEditorTrackIdentity(tracks[0])].filter(Boolean);
   }
   state.tagEditor.selectedPaths = selectedPaths;
   state.tagEditor.selectedPath = selectedPaths[0] || '';
@@ -2400,7 +2460,7 @@ function getSelectedTagEditorPaths(tracks) {
 }
 
 function getTagEditorTrackDisplayName(track) {
-  const path = String(track?.path || '');
+  const path = getTagEditorTrackIdentity(track);
   const title = String(track?.title || '').trim();
   if (String(track?.media_ref || track?.mediaRef || '').trim()) return title || 'Track';
   return path.split(/[\\/]/).pop() || title || path;
@@ -2408,11 +2468,11 @@ function getTagEditorTrackDisplayName(track) {
 
 function getTagEditorTrackPathAt(index) {
   const track = (state.tagEditor.tracks || [])[index];
-  return String(track?.path || '');
+  return getTagEditorTrackIdentity(track);
 }
 
 function getTagEditorTrackIndex(path) {
-  return (state.tagEditor.tracks || []).findIndex((track) => String(track.path || '') === String(path || ''));
+  return (state.tagEditor.tracks || []).findIndex((track) => getTagEditorTrackIdentity(track) === String(path || ''));
 }
 
 function getTagEditorRangePaths(startPath, endPath) {
@@ -2431,7 +2491,7 @@ function getTagEditorRangePaths(startPath, endPath) {
 
 function setTagEditorSelectedPaths(paths, anchorPath = '') {
   const seen = new Set();
-  const validPaths = new Set((state.tagEditor.tracks || []).map((track) => String(track.path || '')).filter(Boolean));
+  const validPaths = new Set((state.tagEditor.tracks || []).map(getTagEditorTrackIdentity).filter(Boolean));
   const selectedPaths = (paths || [])
     .map((path) => String(path || ''))
     .filter((path) => path && validPaths.has(path) && !seen.has(path) && seen.add(path));
@@ -2491,13 +2551,13 @@ function renderTagEditorArtwork(selectedPaths) {
 
 function getTagEditorFocusedPath() {
   const tracks = state.tagEditor?.tracks || [];
-  const knownPaths = new Set(tracks.map((track) => String(track.path || '')).filter(Boolean));
+  const knownPaths = new Set(tracks.map(getTagEditorTrackIdentity).filter(Boolean));
   const anchorPath = String(state.tagEditor?.anchorPath || '');
   if (knownPaths.has(anchorPath)) return anchorPath;
   const selectedPath = (state.tagEditor?.selectedPaths || [])
     .map((path) => String(path || ''))
     .find((path) => knownPaths.has(path));
-  return selectedPath || String(tracks[0]?.path || '');
+  return selectedPath || getTagEditorTrackIdentity(tracks[0]);
 }
 
 function normalizeTagEditorPathKey(path) {
@@ -2620,6 +2680,92 @@ function renderTagEditor(options = {}) {
 
   const selectedPaths = getSelectedTagEditorPaths(tracks);
   const selectedPathSet = new Set(selectedPaths);
+  const cueTrack = tracks.find(track => track?.cue_segment_ref || track?.cueSegmentRef);
+  const cueLoaded = Boolean(cueTrack && state.tagEditor.cueLoaded);
+  const cueEnabled = cueLoaded && state.tagEditor.canEditCueStructure
+    && (typeof matchMedia !== 'function' || matchMedia('(min-width: 769px)').matches);
+  const activeView = cueEnabled && state.tagEditor.activeView === 'cue' ? 'cue' : 'tags';
+  state.tagEditor.activeView = activeView;
+  if (els.viewTabs) {
+    els.viewTabs.hidden = !cueEnabled;
+    els.viewTabs.innerHTML = cueEnabled ? buildInPageTabsHtml({
+      id: 'tag-editor-view-tabs-control',
+      label: 'Edit Tags views',
+      selectedKey: activeView,
+      tabs: [
+        { key: 'tags', label: 'Tags' },
+        { key: 'cue', label: 'CUE structure' },
+      ],
+    }) : '';
+  }
+  const showCue = activeView === 'cue';
+  if (els.cueStructure) els.cueStructure.hidden = !showCue;
+  if (els.artwork) els.artwork.hidden = showCue;
+  els.form.querySelectorAll('[data-tag-field]').forEach((input) => {
+    const fieldHost = input.closest('label, .tag-editor-exception-field');
+    if (fieldHost) fieldHost.hidden = showCue;
+  });
+  if (els.cueAlert) {
+    const focusedTrack = tracks.find(
+      track => getTagEditorTrackIdentity(track) === getTagEditorFocusedPath(),
+    );
+    const canRestore = activeView === 'cue'
+      ? focusedTrack?.cue_boundary_corrected
+      : focusedTrack?.cue_metadata_corrected;
+    const message = state.tagEditor.cueError
+      || 'Display only stores CUE corrections in this library. Source files are not changed.';
+    els.cueAlert.hidden = !cueLoaded;
+    els.cueAlert.innerHTML = cueLoaded ? buildOnPageAlertHtml({
+      severity: state.tagEditor.cueError ? 'error' : 'warning',
+      title: state.tagEditor.cueError ? 'CUE structure unavailable' : 'Display only',
+      message,
+      actionsHtml: canRestore
+        ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
+        : '',
+    }) : '';
+  }
+  if (showCue) {
+    const focusedIdentity = getTagEditorFocusedPath();
+    const focusedIndex = tracks.findIndex(track => getTagEditorTrackIdentity(track) === focusedIdentity);
+    const focusedTrack = tracks[focusedIndex] || tracks[0];
+    const nextTrack = tracks[focusedIndex + 1];
+    const draft = state.tagEditor.cueDraft;
+    if (els.cueIndex01) {
+      const startFrame = draft?.cue_segment_ref === getTagEditorTrackIdentity(focusedTrack)
+        ? draft.start_frame : focusedTrack?.cue_structure?.start_frame;
+      els.cueIndex01.value = formatCueTimecode(startFrame);
+      els.cueIndex01.disabled = !focusedTrack?.cue_structure;
+    }
+    if (els.cueEnd) {
+      const endFrame = draft?.cue_segment_ref === getTagEditorTrackIdentity(nextTrack)
+        ? draft.start_frame : nextTrack?.cue_structure?.start_frame;
+      els.cueEnd.value = formatCueTimecode(endFrame);
+      els.cueEnd.disabled = !nextTrack?.cue_structure;
+    }
+    if (els.cueIndexes) {
+      const indexes = Array.isArray(focusedTrack?.cue_structure?.internal_indexes)
+        ? focusedTrack.cue_structure.internal_indexes : [];
+      els.cueIndexes.textContent = indexes.length
+        ? indexes.map(index => `INDEX ${String(index.number).padStart(2, '0')} - ${formatCueTimecode(index.frame)}`).join(' | ')
+        : 'No additional indexes';
+    }
+  }
+  if (els.applyButton) {
+    if (showCue) {
+      els.applyButton.removeAttribute('data-open-tag-edit-confirm');
+      els.applyButton.removeAttribute('data-apply-cue-metadata');
+      els.applyButton.setAttribute('data-apply-cue-correction', '1');
+      els.applyButton.disabled = !state.tagEditor.cueDraft;
+    } else if (cueLoaded) {
+      els.applyButton.removeAttribute('data-open-tag-edit-confirm');
+      els.applyButton.removeAttribute('data-apply-cue-correction');
+      els.applyButton.setAttribute('data-apply-cue-metadata', '1');
+    } else {
+      els.applyButton.removeAttribute('data-apply-cue-correction');
+      els.applyButton.removeAttribute('data-apply-cue-metadata');
+      els.applyButton.setAttribute('data-open-tag-edit-confirm', '1');
+    }
+  }
 
   if (els.subtitle) {
     els.subtitle.textContent = `${album.tag_editor_title || album.name || 'Album'} - ${tracks.length} file${tracks.length === 1 ? '' : 's'} in editor - ${selectedPaths.length} selected`;
@@ -2638,7 +2784,7 @@ function renderTagEditor(options = {}) {
   const canPreserveTrackList = existingTrackButtons.length === tracks.length
     && tracks.every((track, index) => (
       String(existingTrackButtons[index]?.getAttribute('data-tag-editor-track') || '')
-      === String(track.path || '')
+      === getTagEditorTrackIdentity(track)
     ));
   if (canPreserveTrackList) {
     existingTrackButtons.forEach((button) => {
@@ -2650,8 +2796,8 @@ function renderTagEditor(options = {}) {
     });
   } else {
     const rows = tracks.map((track) => {
-      const path = String(track.path || '');
-      const fileType = getFileTypeFromPath(path);
+      const path = getTagEditorTrackIdentity(track);
+      const fileType = getTagEditorTrackFormat(track);
       const filename = getTagEditorTrackDisplayName(track);
       return `
         <div class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" role="listitem" data-tag-editor-track="${escapeHtml(path)}" title="${escapeHtml(filename)}">

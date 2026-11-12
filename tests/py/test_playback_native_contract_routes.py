@@ -2,8 +2,10 @@
 
 import asyncio
 import hashlib
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from music_app.routes import playback_control_asgi
 from music_app.services.auth_session_csrf import issue_session_csrf
@@ -11,6 +13,46 @@ from music_app.services.current_actor import CurrentActor
 from tests.py.asgi_testing import decode_json, run_asgi_request
 from tests.py.test_playback_stream_asgi import decoder_factory, media_path, open_command, playback_app
 from tests.py.asgi_websocket_testing import websocket_session
+
+
+def test_logical_playback_reference_becomes_track_identity_without_source_path(monkeypatch):
+    request = SimpleNamespace(state=SimpleNamespace(current_actor=object()))
+
+    async def allowed(_request):
+        return None
+
+    async def call(_request, callback):
+        class Service:
+            def resolve_listen_identity(self, _actor, playback_ref):
+                assert playback_ref == "opaque-segment"
+                return {"library_track_id": "41"}
+
+        return callback(Service())
+
+    monkeypatch.setattr(playback_control_asgi, "require_action", lambda _action: allowed)
+    monkeypatch.setattr(playback_control_asgi, "reference_call", call)
+
+    resolved = asyncio.run(playback_control_asgi.resolve_listen_track(request, {
+        "playbackRef": "opaque-segment",
+        "title": "Logical track",
+    }))
+
+    assert resolved == {
+        "title": "Logical track",
+        "canonical_match": {"library_track_id": "41"},
+    }
+
+
+def test_pathless_client_claim_without_playback_reference_is_rejected():
+    request = SimpleNamespace(state=SimpleNamespace(current_actor=object()))
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(playback_control_asgi.resolve_listen_track(request, {
+            "canonical_match": {"library_track_id": "41"},
+            "title": "Forged logical track",
+        }))
+
+    assert getattr(caught.value, "status_code", None) == 400
 
 
 @pytest.mark.parametrize("method,path", [

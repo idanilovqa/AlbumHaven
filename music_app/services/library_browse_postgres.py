@@ -5251,8 +5251,8 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "track_ref": str(row_payload.get("track_key") or "").strip(),
                 "path": track_path,
                 "title": str(row_payload.get("track_title") or "").strip(),
-                "disc_number": row_payload.get("disc_number"),
-                "track_number": row_payload.get("track_number"),
+                "disc_number": cue_metadata.get("disc_number", row_payload.get("disc_number")),
+                "track_number": cue_metadata.get("track_number", row_payload.get("track_number")),
                 "duration_seconds": _coerce_duration_seconds(row_payload.get("duration_seconds")),
                 "exception_type": file_entry["exception_type"],
             }
@@ -7979,25 +7979,36 @@ def _selected_artist_album_payloads(
         if track_identity and track_identity not in track_ids_by_album[album_identity]:
             duration_seconds = _coerce_duration_seconds(row_payload.get("duration_seconds"))
             track_metadata = _row_json_mapping(row_payload.get("track_metadata"))
+            cue_metadata = _row_json_mapping(row_payload.get("cue_metadata_correction"))
+            cue_start_frame = _coerce_int(row_payload.get("cue_effective_start_frame"))
+            cue_end_frame = _coerce_int(row_payload.get("cue_effective_end_frame"))
+            if (
+                row_payload.get("cue_segment_ref")
+                and cue_start_frame is not None
+                and cue_end_frame is not None
+                and cue_end_frame > cue_start_frame
+            ):
+                duration_seconds = (cue_end_frame - cue_start_frame) / 75
             track_ids_by_album[album_identity].add(track_identity)
             track_payload = {
                 "key": track_key,
                 "track_ref": track_key,
                 "cue_segment_ref": row_payload.get("cue_segment_ref"),
                 "source_kind": row_payload.get("cue_source_kind"),
-                "title": str(row_payload.get("track_title") or "").strip(),
+                "title": str(cue_metadata.get("title") or row_payload.get("track_title") or "").strip(),
                 "artist": str(
-                    file_entry.get("artist")
+                    cue_metadata.get("artist")
+                    or file_entry.get("artist")
                     or track_metadata.get("artist")
                     or row_payload.get("track_artist_name")
                     or album.get("album_artist")
                     or artist_display
                 ).strip(),
-                "album_artist": str(album.get("album_artist") or artist_display).strip(),
-                "album": str(album.get("name") or "").strip(),
+                "album_artist": str(cue_metadata.get("album_artist") or album.get("album_artist") or artist_display).strip(),
+                "album": str(cue_metadata.get("album") or album.get("name") or "").strip(),
                 "secondary_credit": str(track_metadata.get("secondaryCredit") or "").strip(),
-                "genre": str(file_entry.get("genre") or "").strip(),
-                "year": file_entry.get("year", album.get("year")),
+                "genre": str(cue_metadata.get("genre") or file_entry.get("genre") or "").strip(),
+                "year": cue_metadata.get("year", file_entry.get("year", album.get("year"))),
                 "cover_path": album.get("cover_path"),
                 "cover_revision": album.get("cover_revision"),
                 "disc_number": row_payload.get("disc_number"),
@@ -8006,7 +8017,7 @@ def _selected_artist_album_payloads(
                 "disc_subtitle": file_entry.get("disc_subtitle"),
                 "track_number": row_payload.get("track_number"),
                 "duration_seconds": duration_seconds,
-                "duration_display": format_duration(duration_seconds),
+                "duration_display": format_duration(round(duration_seconds)),
                 "path": row_payload.get("file_private_path"),
                 "track_scrobble_count": int(row_payload.get("track_scrobble_count") or 0),
                 "track_preference_overlay": {
@@ -8986,13 +8997,51 @@ def _selected_artist_sql() -> str:
           coalesce(artist_genres.names, array[]::text[]) as artist_genres,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
-          library.local_tracks.title as track_title,
+            coalesce(
+                (select c.payload->'fields'->>'title'
+                 from library.cue_corrections c
+                 where c.library_id = library.local_tracks.library_id
+                   and c.track_id = library.local_tracks.id
+                   and c.base_program_id = library.cue_programs.id
+                   and c.correction_kind = 'metadata' and c.status = 'active'
+                 order by c.updated_at desc, c.id desc limit 1),
+                library.local_tracks.title
+            ) as track_title,
           library.local_tracks.disc_number,
           library.local_tracks.track_number,
           library.local_tracks.duration_seconds,
           case when library.cue_programs.id is not null
             then library.local_tracks.track_key end as cue_segment_ref,
           library.cue_programs.source_kind as cue_source_kind,
+            (select c.payload->'fields'
+             from library.cue_corrections c
+             where c.library_id = library.local_tracks.library_id
+               and c.track_id = library.local_tracks.id
+               and c.base_program_id = library.cue_programs.id
+               and c.correction_kind = 'metadata' and c.status = 'active'
+             order by c.updated_at desc, c.id desc limit 1) as cue_metadata_correction,
+            coalesce(
+                (select (c.payload->>'start_frame')::bigint
+                 from library.cue_corrections c
+                 where c.library_id = library.local_tracks.library_id
+                   and c.track_id = library.local_tracks.id
+                   and c.base_program_id = library.cue_programs.id
+                   and c.correction_kind = 'boundary' and c.status = 'active'
+                 order by c.updated_at desc, c.id desc limit 1),
+                library.cue_track_segments.start_frame
+            ) as cue_effective_start_frame,
+            coalesce(
+                (select (c.payload->>'start_frame')::bigint
+                 from library.cue_track_segments next_segment
+                 join library.cue_corrections c on c.track_id = next_segment.track_id
+                 where next_segment.program_id = library.cue_track_segments.program_id
+                   and next_segment.program_ordinal = library.cue_track_segments.program_ordinal + 1
+                   and c.library_id = library.local_tracks.library_id
+                   and c.base_program_id = library.cue_programs.id
+                   and c.correction_kind = 'boundary' and c.status = 'active'
+                 order by c.updated_at desc, c.id desc limit 1),
+                library.cue_track_segments.end_frame
+            ) as cue_effective_end_frame,
           case when library.cue_programs.id is null
             then library.local_track_files.private_path end as file_private_path,
           case when library.cue_programs.id is null
@@ -9213,7 +9262,16 @@ def _album_detail_sql() -> str:
           end as cover_candidate_snapshot,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
-          library.local_tracks.title as track_title,
+            coalesce(
+                (select c.payload->'fields'->>'title'
+                 from library.cue_corrections c
+                 where c.library_id = library.local_tracks.library_id
+                   and c.track_id = library.local_tracks.id
+                   and c.base_program_id = library.cue_programs.id
+                   and c.correction_kind = 'metadata' and c.status = 'active'
+                 order by c.updated_at desc, c.id desc limit 1),
+                library.local_tracks.title
+            ) as track_title,
           library.local_tracks.metadata as track_metadata,
           track_artists.name as track_artist_name,
           library.local_tracks.disc_number,
@@ -9222,6 +9280,35 @@ def _album_detail_sql() -> str:
           case when library.cue_programs.id is not null
             then library.local_tracks.track_key end as cue_segment_ref,
           library.cue_programs.source_kind as cue_source_kind,
+            (select c.payload->'fields'
+             from library.cue_corrections c
+             where c.library_id = library.local_tracks.library_id
+               and c.track_id = library.local_tracks.id
+               and c.base_program_id = library.cue_programs.id
+               and c.correction_kind = 'metadata' and c.status = 'active'
+             order by c.updated_at desc, c.id desc limit 1) as cue_metadata_correction,
+            coalesce(
+                (select (c.payload->>'start_frame')::bigint
+                 from library.cue_corrections c
+                 where c.library_id = library.local_tracks.library_id
+                   and c.track_id = library.local_tracks.id
+                   and c.base_program_id = library.cue_programs.id
+                   and c.correction_kind = 'boundary' and c.status = 'active'
+                 order by c.updated_at desc, c.id desc limit 1),
+                library.cue_track_segments.start_frame
+            ) as cue_effective_start_frame,
+            coalesce(
+                (select (c.payload->>'start_frame')::bigint
+                 from library.cue_track_segments next_segment
+                 join library.cue_corrections c on c.track_id = next_segment.track_id
+                 where next_segment.program_id = library.cue_track_segments.program_id
+                   and next_segment.program_ordinal = library.cue_track_segments.program_ordinal + 1
+                   and c.library_id = library.local_tracks.library_id
+                   and c.base_program_id = library.cue_programs.id
+                   and c.correction_kind = 'boundary' and c.status = 'active'
+                 order by c.updated_at desc, c.id desc limit 1),
+                library.cue_track_segments.end_frame
+            ) as cue_effective_end_frame,
           case when library.cue_programs.id is null
             then library.local_track_files.private_path end as file_private_path,
           case when library.cue_programs.id is null

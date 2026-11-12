@@ -137,15 +137,18 @@ function canScrobbleListenSession(session) {
 function buildNowPlayingPayload(track, session = null) {
   if (!track) return null;
   const activeSession = session || state.player.listenSession;
+  const isCueTrack = Boolean(track.cueSegmentRef || track.cue_segment_ref);
   return {
     ...buildMeasuredCompletionFields(activeSession),
     ...(typeof getPlaybackClaimContext === 'function' ? getPlaybackClaimContext() : {}),
-    path: String(track.path || ''),
+    ...(isCueTrack
+      ? { playbackRef: String(track.playbackRef || '') }
+      : { path: String(track.path || '') }),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
     album: String(track.album || ''),
     album_artist: String(track.artist || ''),
-    cover_path: String(track.coverPath || ''),
+    ...(!isCueTrack ? { cover_path: String(track.coverPath || '') } : {}),
     duration_seconds: Math.round((Number(activeSession?.duration_seconds || getPlayerPlaybackSnapshot().duration || 0) || 0) * 1000) / 1000,
     started_at: String(activeSession?.started_at || isoNow()),
     started_at_unix: Number(activeSession?.started_at_unix || unixNowSeconds()) || unixNowSeconds(),

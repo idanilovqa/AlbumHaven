@@ -61,6 +61,21 @@ function loadHelper(overrides = {}, prependSource = '') {
   return { context, fetchCalls, beaconCalls };
 }
 
+test('CUE listen payload uses its authenticated reference and omits the source identity', () => {
+  const { context } = loadHelper();
+  const payload = context.buildNowPlayingPayload({
+    path: 'cue:logical-track',
+    cueSegmentRef: 'cue:logical-track',
+    playbackRef: 'cue-playback-ref',
+    title: 'Logical CUE track',
+    coverPath: 'private-cover-path',
+  });
+
+  assert.equal(payload.playbackRef, 'cue-playback-ref');
+  assert.equal('path' in payload, false);
+  assert.equal('cover_path' in payload, false);
+});
+
 test('audible measured frames qualify an open listen before pause or completion exactly once', async () => {
   const track = { path: 'signal.flac', title: 'Signal', artist: 'Artist' };
   const { context, fetchCalls } = loadHelper({

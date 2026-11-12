@@ -38,6 +38,7 @@ from music_app.routes.web_asgi import _etag_matches, _not_modified_response, _no
 from music_app.services.app_logging import log_app_event
 from music_app.services.client_surfaces import resolve_client_surface_class
 from music_app.services.capability_ui import is_current_library_owner
+from music_app.services.cue_corrections import CueCorrectionError, CueCorrectionService
 from music_app.services.foobar_integrations import build_foobar_help_payload, build_foobar_integration_payload
 from music_app.services.lastfm import (
     LastfmError,
@@ -179,6 +180,49 @@ def _json_response(value: ResponseValue) -> JSONResponse:
         payload, status_code = value
         return JSONResponse(payload, status_code=status_code)
     return JSONResponse(value)
+
+
+@router.get("/utilities/cue-editor")
+async def utilities_cue_editor(request: Request) -> JSONResponse:
+    await require_action("library.files.edit_tags")(request)
+    try:
+        payload = await run_in_threadpool(
+            CueCorrectionService(_app_config(request)).load_editor,
+            actor=request.state.current_actor,
+            cue_segment_ref=request.query_params.get("cue_segment_ref"),
+        )
+    except CueCorrectionError as error:
+        return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+    return JSONResponse({"ok": True, **payload}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/utilities/cue-corrections")
+async def utilities_cue_corrections(request: Request) -> JSONResponse:
+    await require_action("library.files.edit_tags")(request)
+    payload = await _json_payload(request)
+    if payload is None:
+        return JSONResponse({"ok": False, "error": "Invalid payload"}, status_code=400)
+    action = payload.pop("action", None)
+    service = CueCorrectionService(_app_config(request))
+    try:
+        if action == "apply":
+            result = await run_in_threadpool(
+                service.apply,
+                actor=request.state.current_actor,
+                payload=payload,
+            )
+        elif action == "restore":
+            result = await run_in_threadpool(
+                service.restore,
+                actor=request.state.current_actor,
+                cue_segment_ref=payload.get("cue_segment_ref"),
+                kind=payload.get("kind"),
+            )
+        else:
+            raise CueCorrectionError("Invalid CUE correction action.")
+    except CueCorrectionError as error:
+        return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 def _invalid_payload_response(error: str = "Invalid payload", status_code: int = 400) -> tuple[JsonDict, int]:

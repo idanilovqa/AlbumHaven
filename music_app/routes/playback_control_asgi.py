@@ -292,16 +292,23 @@ async def require_playback_claim(request, payload):
 
 
 async def resolve_listen_track(request, payload):
-    """A listen write names its track by the browser's `path` or by a native `playbackRef`, never both.
+    """A listen write names its track by path or an authenticated playback reference, never both.
 
-    A reference resolves exactly as a PCM open does and becomes the inventory path the browser
-    sends for the same track, so the stored listen is identical. `cover_path` is never stored.
+    Physical references become the browser's inventory path. Logical references become the
+    ordinary track ID; the physical CUE image path is never attributed. `cover_path` is never stored.
     """
     if "playbackRef" not in payload:
+        if "canonical_match" in payload and not payload.get("path") and not payload.get("track_ref"):
+            raise HTTPException(400, "Invalid playback request.")
         return payload
-    if "path" in payload or "cover_path" in payload:
+    if "path" in payload or "cover_path" in payload or "canonical_match" in payload:
         raise HTTPException(400, "Invalid playback request.")
     await require_action("library.media.read")(request)
-    path = await reference_call(request, lambda service: service.resolve_library_path(
+    identity = await reference_call(request, lambda service: service.resolve_listen_identity(
         request.state.current_actor, payload["playbackRef"]))
-    return {**{key: value for key, value in payload.items() if key != "playbackRef"}, "path": path}
+    resolved = {key: value for key, value in payload.items() if key != "playbackRef"}
+    if "library_track_id" in identity:
+        resolved["canonical_match"] = identity
+    else:
+        resolved.update(identity)
+    return resolved

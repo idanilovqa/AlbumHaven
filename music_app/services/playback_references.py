@@ -106,13 +106,33 @@ class PlaybackReferenceService:
     def _segment(connection, library_id, *, track_key):
         row = connection.execute(
             """/* cue_issue_segment */
-            select s.track_id, s.program_id, s.media_source_id, s.start_frame, s.end_frame,
+            select s.track_id, s.program_id, s.media_source_id,
+                   coalesce((boundary.payload->>'start_frame')::bigint, s.start_frame) as start_frame,
+                   coalesce((next_boundary.payload->>'start_frame')::bigint, s.end_frame) as end_frame,
                    m.private_path, m.sample_rate, p.revision_sha256, r.root_path
             from library.cue_track_segments s
             join library.local_tracks t on t.id = s.track_id
             join library.cue_programs p on p.id = s.program_id
             join library.cue_media_sources m on m.id = s.media_source_id
             join library.library_roots r on r.id = m.library_root_id
+            left join lateral (
+                select c.payload from library.cue_corrections c
+                where c.library_id = t.library_id and c.track_id = t.id
+                  and c.base_program_id = s.program_id
+                  and c.correction_kind = 'boundary' and c.status = 'active'
+                order by c.updated_at desc, c.id desc limit 1
+            ) boundary on true
+            left join library.cue_track_segments next_segment
+              on next_segment.program_id = s.program_id
+             and next_segment.program_ordinal = s.program_ordinal + 1
+            left join lateral (
+                select c.payload from library.cue_corrections c
+                where c.library_id = t.library_id
+                  and c.track_id = next_segment.track_id
+                  and c.base_program_id = next_segment.program_id
+                  and c.correction_kind = 'boundary' and c.status = 'active'
+                order by c.updated_at desc, c.id desc limit 1
+            ) next_boundary on true
             where t.library_id = %s and t.track_key = %s
               and p.library_id = t.library_id and p.is_active is true and p.is_valid is true
               and m.library_id = t.library_id and r.library_id = t.library_id and r.is_active is true""",
@@ -124,6 +144,22 @@ class PlaybackReferenceService:
             {}, row["private_path"], configured_root_paths=[Path(row["root_path"])]
         )
         if resolved is None:
+            raise PlaybackContractError(404)
+        sample_rate = row["sample_rate"]
+        start_frame = row["start_frame"]
+        end_frame = row["end_frame"]
+        if (
+            type(sample_rate) is not int
+            or sample_rate < 1
+            or type(start_frame) is not int
+            or type(end_frame) is not int
+            or start_frame < 0
+            or end_frame <= start_frame
+        ):
+            raise PlaybackContractError(404)
+        row["start_frame"] = round(start_frame * sample_rate / 75)
+        row["end_frame"] = round(end_frame * sample_rate / 75)
+        if row["end_frame"] <= row["start_frame"]:
             raise PlaybackContractError(404)
         row["media_path"] = Path(resolved)
         return row
@@ -176,7 +212,8 @@ class PlaybackReferenceService:
     def _segment_reference(self, library_id, row, expires):
         return self._sign(_REFERENCE_DOMAIN, [
             1, self._version, library_id, 2, row["track_id"], row["program_id"],
-            row["media_source_id"], row["start_frame"], row["end_frame"], int(expires.timestamp()),
+            row["media_source_id"], row["start_frame"], row["end_frame"],
+            row["sample_rate"], int(expires.timestamp()),
         ])
 
     def exchange_resume_tokens(self, actor, tracks):
@@ -269,7 +306,10 @@ class PlaybackReferenceService:
         kind, values = self._verified_reference(actor, playback_ref)
         if kind != "segment":
             raise PlaybackContractError(403)
-        _, _, library_id, _, track_id, program_id, media_source_id, start_frame, end_frame, _ = values
+        (
+            _, _, library_id, _, track_id, program_id, media_source_id,
+            start_frame, end_frame, sample_rate, _,
+        ) = values
         with self._connect(self._database_url) as connection:
             require_playback_membership(connection, actor)
             row = connection.execute(
@@ -295,7 +335,7 @@ class PlaybackReferenceService:
                 "source_path": Path(resolved),
                 "start_frame": start_frame,
                 "end_frame": end_frame,
-                "sample_rate": row["sample_rate"],
+                "sample_rate": sample_rate,
                 "revision_sha256": row["revision_sha256"],
                 "track_id": track_id,
             }
@@ -303,6 +343,13 @@ class PlaybackReferenceService:
     def resolve_library_path(self, actor, playback_ref):
         """The inventory path the browser names the same track by, so listen history is identical."""
         return self._resolve_file(actor, playback_ref)["private_path"]
+
+    def resolve_listen_identity(self, actor, playback_ref):
+        """The authenticated inventory identity for an ordinary or logical-track listen."""
+        kind, _values = self._verified_reference(actor, playback_ref)
+        if kind == "segment":
+            return {"library_track_id": str(self.resolve_segment(actor, playback_ref)["track_id"])}
+        return {"path": self._resolve_file(actor, playback_ref)["private_path"]}
 
     def _resolve_file(self, actor, playback_ref):
         kind, values = self._verified_reference(actor, playback_ref)
@@ -315,14 +362,21 @@ class PlaybackReferenceService:
 
     def _verified_reference(self, actor, playback_ref):
         _, library_id = playback_scope(actor)
-        for kind, length in (("segment", 10), ("file", 5)):
+        for kind, length in (("segment", 11), ("file", 5)):
             try:
                 values = self._verified(_REFERENCE_DOMAIN, playback_ref, length)
             except (ValueError, TypeError, UnicodeError):
                 continue
             if values[2] != library_id or values[-1] <= self._clock().timestamp():
                 continue
-            if kind == "segment" and values[3] == 2 and all(value >= 0 for value in values[4:9]):
+            if (
+                kind == "segment"
+                and values[3] == 2
+                and all(value > 0 for value in values[4:7])
+                and values[7] >= 0
+                and values[8] > values[7]
+                and values[9] > 0
+            ):
                 return kind, values
             if kind == "file" and values[3] > 0:
                 return kind, values

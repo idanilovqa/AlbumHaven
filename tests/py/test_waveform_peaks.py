@@ -145,6 +145,41 @@ def test_build_waveform_peaks_returns_exact_finite_stereo_max_abs_bins_without_r
     asyncio.run(scenario())
 
 
+def test_build_waveform_peaks_analyzes_only_the_requested_pcm_segment(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        aggregate_records, _left, _right = _stereo_bin_fixture()
+        process = FakeProcess(stdout=FakeStream(aggregate_records))
+        calls: list[ProcessCall] = []
+        monkeypatch.setattr(
+            waveform_peaks.asyncio,
+            "create_subprocess_exec",
+            _process_factory(process, calls),
+        )
+        monkeypatch.setattr(
+            waveform_peaks,
+            "_audio_duration_seconds",
+            lambda _path: pytest.fail("segment analysis must not probe whole-file duration"),
+        )
+
+        await build_waveform_peaks(
+            (tmp_path / "cue-image.flac").resolve(),
+            bins=BIN_COUNT,
+            cancel_event=asyncio.Event(),
+            start_frame=44_100,
+            end_frame=132_300,
+            sample_rate=44_100,
+        )
+
+        decoder_contract = " ".join(str(value) for value in calls[0][0])
+        trim = "atrim=start_sample=44100:end_sample=132300"
+        assert trim in decoder_contract
+        assert decoder_contract.index(trim) < decoder_contract.index(
+            f"aresample={waveform_peaks.WAVEFORM_ANALYSIS_SAMPLE_RATE}"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_build_waveform_peaks_bounds_decoder_aggregation_output_by_bins_not_track_duration(
     tmp_path,
     monkeypatch,

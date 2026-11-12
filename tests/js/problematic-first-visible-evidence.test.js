@@ -200,11 +200,34 @@ test('PF first-visible predicate rejects hidden, covered, inactive and temporary
   assert.equal(scenario({ populated: false, loading: false }), true);
 });
 
-test('PF bounded-page evidence requires the first-page filter and album before completion', async () => {
+test('PF bounded-page evidence captures the first response and survives later completion', async () => {
   const { UtilityProblematicFilesActions } = await importFile('actions/utilityProblematicFilesActions.js');
   let predicate;
   let expected;
+  let boundedPredicate;
+  let boundedExpected;
+  let boundedRequests = 0;
+  const visibleWaits = [];
+  const visibleLocator = (label) => ({
+    waitFor: async (options) => visibleWaits.push([label, options]),
+  });
   const action = new UtilityProblematicFilesActions({
+    page: {
+      waitForResponse: async (matches) => {
+        const response = {
+          url: () => 'http://localhost/utilities/problematic-files?limit=50',
+          request: () => ({ method: () => 'GET' }),
+          ok: () => true,
+          json: async () => ({
+            complete: false,
+            items: [{ name: 'Album Rating Contract', problem_reasons: ['MBID: Unconfirmed match'] }],
+          }),
+        };
+        assert.equal(matches(response), true);
+        boundedRequests += 1;
+        return response;
+      },
+    },
     modalSelector: '#utility-modal',
     activeTabSelector: '[data-utility-tab][aria-selected="true"]',
     listItemSelector: '[data-problematic-album-key]',
@@ -213,13 +236,57 @@ test('PF bounded-page evidence requires the first-page filter and album before c
     detailTitleSelector: '#utility-problematic-detail-title',
     listEmptyStateSelector: '#utility-problematic-list .utility-empty-state',
     detailEmptyStateSelector: '#utility-problematic-detail .utility-empty-state',
-    searchSection: { problemFilterOptionSelector: '[data-problem-filter-value]' },
+    searchSection: {
+      problemFilterOptionSelector: '[data-problem-filter-value]',
+      filterOptionByValue(problemType) {
+        assert.equal(problemType, 'MBID: Unconfirmed match');
+        return visibleLocator('filter');
+      },
+    },
+    listItemByTitle(albumTitle) {
+      assert.equal(albumTitle, 'Album Rating Contract');
+      return visibleLocator('artist');
+    },
     waitForPageCondition: async (callback, _options, argument) => {
-      predicate = callback;
-      expected = argument;
+      if (!argument.modalSelector) {
+        boundedPredicate = callback;
+        boundedExpected = argument;
+      } else {
+        predicate = callback;
+        expected = argument;
+      }
     },
   });
   await action.waitForBoundedPageEvidence('MBID: Unconfirmed match', 'Album Rating Contract');
+  assert.equal(boundedRequests, 1, 'bounded-page evidence must include the actual first response');
+  const boundedRow = {
+    getClientRects: () => [{}],
+    querySelector: () => ({ textContent: boundedExpected.albumTitle }),
+  };
+  const boundedOption = {
+    getAttribute: (name) => name === 'data-problem-filter-value' ? boundedExpected.problemType : null,
+  };
+  const boundedVisible = (complete = false) => vm.runInNewContext(
+    `(${boundedPredicate.toString()})(expected)`,
+    {
+      expected: boundedExpected,
+      state: { utility: { problematicFilesComplete: complete } },
+      document: {
+        querySelectorAll: (selector) => selector === boundedExpected.filterOptionSelector
+          ? [boundedOption] : [boundedRow],
+      },
+    },
+  );
+  assert.equal(boundedVisible(false), true, 'bounded response must be rendered while incomplete');
+  assert.equal(boundedVisible(true), false, 'later complete rendering is not bounded-page evidence');
+  assert.deepEqual(visibleWaits, [
+    ['filter', { state: 'visible', timeout: 60000 }],
+    ['artist', { state: 'visible', timeout: 60000 }],
+  ]);
+  await action.waitForFirstVisible({
+    problemType: 'MBID: Unconfirmed match',
+    albumTitle: 'Album Rating Contract',
+  });
 
   const evaluate = ({
     complete = false,
@@ -286,7 +353,7 @@ test('PF bounded-page evidence requires the first-page filter and album before c
   );
 
   assert.equal(evaluate(), true);
-  assert.equal(evaluate({ complete: true }), false);
+  assert.equal(evaluate({ complete: true }), true, 'later completion cannot erase captured first-page evidence');
   assert.equal(evaluate({ filter: false }), false);
   assert.equal(evaluate({ filterVisible: false }), false);
   assert.equal(evaluate({ album: false }), false);

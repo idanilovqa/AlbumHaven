@@ -29,9 +29,12 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.listEmptyState = page.locator(this.listEmptyStateSelector).first();
     this.detailEmptyState = page.locator('#utility-problematic-detail .utility-empty-state').first();
     this.detailTitle = page.locator(this.detailTitleSelector).first();
+    this.artistDetailSelector = '#utility-problematic-detail [data-musicbrainz-artist-problem]';
     this.detailScroller = page.locator(this.detailScrollerSelector).first();
     this.detailArtist = page.locator('#utility-problematic-detail .utility-detail-meta').first();
-    this.detailLinks = this.mainBody.detail.locator('a[href]');
+    this.detailLinks = this.mainBody.detail.locator(
+      'a[href], [data-open-musicbrainz-url]',
+    );
     this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
       '#utility-problematic-detail .alert-label[data-problem-exclusion-reason], '

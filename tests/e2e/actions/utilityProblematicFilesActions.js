@@ -58,7 +58,6 @@ export class UtilityProblematicFilesActions {
       const activeTab = modal?.querySelector(expected.activeTabSelector);
       if (!visible(activeTab) || activeTab.getAttribute('data-utility-tab') !== 'problematic-files') return false;
       if (expected.problemType) {
-        if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
         const filter = Array.from(modal.querySelectorAll(expected.filterOptionSelector))
           .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
         const album = Array.from(modal.querySelectorAll(expected.listItemSelector)).find((item) => {
@@ -91,11 +90,42 @@ export class UtilityProblematicFilesActions {
   }
 
   async waitForBoundedPageEvidence(problemType, albumTitle, options = {}) {
-    await this.waitForFirstVisible({
+    const timeout = options.timeout || 60000;
+    const rendered = this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
+      if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
+      const filter = Array.from(document.querySelectorAll(expected.filterOptionSelector))
+        .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
+      const item = Array.from(document.querySelectorAll(expected.listItemSelector)).find((candidate) => {
+        const title = String(candidate.querySelector(expected.listItemTitleSelector)?.textContent || '').trim();
+        return title === expected.albumTitle || title.startsWith(`${expected.albumTitle} / `);
+      });
+      return Boolean(filter && item && item.getClientRects().length);
+    }, { timeout }, {
       albumTitle,
       problemType,
-      timeout: options.timeout || 60000,
+      filterOptionSelector: this.utilityProblematicFilesTab.searchSection.problemFilterOptionSelector,
+      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
+      listItemTitleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
     });
+    const responsePromise = this.utilityProblematicFilesTab.page.waitForResponse((candidate) => {
+      const url = new URL(candidate.url());
+      return candidate.ok()
+        && candidate.request().method() === 'GET'
+        && url.pathname === '/utilities/problematic-files'
+        && url.searchParams.has('limit');
+    }, { timeout });
+    const [response] = await Promise.all([responsePromise, rendered]);
+    const payload = await response.json();
+    assert.equal(payload.complete, false, 'Expected the first bounded Problematic Files response.');
+    const item = payload.items?.find((candidate) => String(candidate?.name || '') === albumTitle);
+    assert.ok(item, `Expected ${albumTitle} in the first bounded Problematic Files response.`);
+    assert.ok(item.problem_reasons?.includes(problemType), `Expected ${problemType} on ${albumTitle}.`);
+    await Promise.all([
+      this.utilityProblematicFilesTab.searchSection.filterOptionByValue(problemType)
+        .waitFor({ state: 'visible', timeout }),
+      this.utilityProblematicFilesTab.listItemByTitle(albumTitle)
+        .waitFor({ state: 'visible', timeout }),
+    ]);
   }
 
   async openProblemFilterMenu(options = {}) {
@@ -389,7 +419,9 @@ export class UtilityProblematicFilesActions {
   async readSelectedDetailLinks() {
     const links = await this.utilityProblematicFilesTab.detailLinks.all();
     return (await Promise.all(links.map(async (link) => (
-      await link.isVisible() ? link.getAttribute('href') : null
+      await link.isVisible()
+        ? (await link.getAttribute('href')) || link.getAttribute('data-open-musicbrainz-url')
+        : null
     )))).filter(Boolean);
   }
 
@@ -418,8 +450,13 @@ export class UtilityProblematicFilesActions {
       if (expected.key && String(selectedAlbum?.key || '') !== expected.key) {
         return false;
       }
-      if (selectedAlbum && selectedAlbum.detail_loaded === false) {
+      if (selectedAlbum?.entity_kind !== 'artist' && selectedAlbum?.detail_loaded === false) {
         return false;
+      }
+      if (selectedAlbum?.entity_kind === 'artist') {
+        const artistDetail = document.querySelector(expected.artistDetailSelector);
+        if (String(artistDetail?.getAttribute('data-musicbrainz-artist-problem') || '')
+            !== String(selectedAlbum.local_artist_id || '')) return false;
       }
       const detailTitle = (document.querySelector(expected.detailTitleSelector)?.textContent || '').trim();
       if (!detailTitle) {
@@ -432,6 +469,7 @@ export class UtilityProblematicFilesActions {
       key: expectedKey,
       title: expectedTitle,
       activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
+      artistDetailSelector: this.utilityProblematicFilesTab.artistDetailSelector,
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
     });
   }

@@ -124,7 +124,7 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
     await stepLogger.step('MBD1-37: the panel lists both same-named bands with their albums and links', async () => {
       await fixture.splitArtist(LEAD, [
         { mbid: MBID.leadUk, name: LEAD, disambiguation: 'UK band',
-          albums: ['Functional Fixture Album 248', 'Functional Fixture Album 249'] },
+          albums: ['Compilation Lead Solo', 'Functional Fixture Album 249'] },
         { mbid: MBID.leadSweden, name: LEAD, disambiguation: 'Swedish band', albums: ['Functional Fixture Album 250'] },
       ]);
       await openArtist({ galleryActions, searchToolbarActions }, LEAD);
@@ -154,7 +154,7 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
     await stepLogger.step('Delivery 1.1: a person and the same-named band they belong to are one artist', async () => {
       await fixture.restore();
       await fixture.personWithBand(LEAD,
-        { mbid: MBID.person, name: LEAD, kind: 'Person', albums: ['Functional Fixture Album 248'] },
+        { mbid: MBID.person, name: LEAD, kind: 'Person', albums: ['Compilation Lead Solo'] },
         { mbid: MBID.band, name: LEAD, disambiguation: 'the band', albums: ['Functional Fixture Album 249'] });
       await openArtist({ galleryActions, searchToolbarActions }, LEAD);
       await galleryActions.openArtistInfoPanel();

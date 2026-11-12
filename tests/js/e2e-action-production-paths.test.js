@@ -6002,6 +6002,7 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
   const originalDocument = global.document;
   const originalGetSelected = global.getSelectedProblematicAlbum;
   try {
+    let artistDetailVisible = false;
     global.state = { utility: { selectedProblematicKey: 'neal morse::?' } };
     global.document = {
       querySelector(selector) {
@@ -6011,12 +6012,18 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
         if (selector === '#utility-problematic-detail .utility-detail-title') {
           return { textContent: '?' };
         }
+        if (selector === '#utility-problematic-detail [data-musicbrainz-artist-problem]') {
+          return artistDetailVisible
+            ? { getAttribute: () => '7' }
+            : null;
+        }
         return null;
       },
     };
     global.getSelectedProblematicAlbum = () => ({ key: 'neal morse::?', detail_loaded: true });
     const actions = new UtilityProblematicFilesActions({
       activeListItemSelector: '[data-problematic-album-key].is-active',
+      artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
       detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
       async waitForPageCondition(callback, options, argument) {
         assert.equal(options.timeout, 4321);
@@ -6024,9 +6031,23 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
           key: 'neal morse::?',
           title: '?',
           activeListItemSelector: '[data-problematic-album-key].is-active',
+          artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
           detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
         });
         assert.equal(callback(argument), true);
+        global.getSelectedProblematicAlbum = () => ({
+          key: 'neal morse::?',
+          entity_kind: 'artist',
+          local_artist_id: 7,
+          detail_loaded: false,
+        });
+        assert.equal(callback(argument), false, 'stale detail cannot satisfy artist selection');
+        artistDetailVisible = true;
+        assert.equal(
+          callback(argument),
+          true,
+          'matching visible artist detail is authoritative even though its summary row remains unloaded',
+        );
       },
     });
 

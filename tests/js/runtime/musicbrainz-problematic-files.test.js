@@ -223,6 +223,42 @@ test('provider unavailable shows retry status and Retry now without candidate se
   assert.ok(requests.some(([method, url]) => method === 'POST' && url === '/api/musicbrainz/artists/7/retry'));
 });
 
+test('persisted read-only artist detail disables unavailable mutations', () => {
+  const item = artistItem();
+  const { context } = loadContext({ item });
+  item.musicbrainz_ui = { selectedMbid: GERMAN, validated: { artist_mbid: GERMAN } };
+
+  item.musicbrainz_detail = detail({ actions_available: false });
+  let html = context.buildMusicBrainzArtistProblemDetail(item);
+  assert.match(html.match(/<button[^>]*data-musicbrainz-assign="1"[^>]*>/)[0], /disabled/);
+
+  item.musicbrainz_detail = detail({
+    actions_available: false,
+    problem_reason_code: 'musicbrainz_artist_metadata_conflict',
+    unresolved_reason: 'MBID: Metadata conflict',
+    artist_mbid: TRANCE,
+  });
+  html = context.buildMusicBrainzArtistProblemDetail(item);
+  assert.match(html.match(/<button[^>]*data-musicbrainz-keep-current="1"[^>]*>/)[0], /disabled/);
+
+  item.musicbrainz_detail = detail({
+    actions_available: false,
+    problem_reason_code: 'musicbrainz_artist_not_found',
+    unresolved_reason: 'MBID: Not found',
+    candidates: [],
+  });
+  html = context.buildMusicBrainzArtistProblemDetail(item);
+  assert.match(html.match(/<input[^>]*data-musicbrainz-manual-artist="1"[^>]*>/)[0], /disabled/);
+
+  item.musicbrainz_detail = detail({
+    actions_available: false,
+    problem_reason_code: 'musicbrainz_provider_retry_exhausted',
+    unresolved_reason: 'MusicBrainz: Provider unavailable',
+  });
+  html = context.buildMusicBrainzArtistProblemDetail(item);
+  assert.match(html.match(/<button[^>]*data-musicbrainz-retry="1"[^>]*>/)[0], /disabled/);
+});
+
 test('external links open only exact MusicBrainz pages', () => {
   const { context, requests } = loadContext({ item: artistItem() });
   const click = (url) => context.handleMusicBrainzArtistProblemEvent({ type: 'click', preventDefault() {}, target: {

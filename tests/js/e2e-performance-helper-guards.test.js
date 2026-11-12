@@ -11,6 +11,26 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('gapless boundary waits for replacement continuity traffic before sampling controls', () => {
+  const spec = readRepoFile('tests/e2e/performance/gaplessPlayback.spec.js');
+  const boundaryStep = spec.slice(
+    spec.indexOf("'Capture the same-quantum lossless boundary from the production worklet'"),
+    spec.indexOf("stepLogger.step('Honor a visible near-end seek"),
+  );
+  const replacementWait = boundaryStep.indexOf("path: replacement.path");
+  const settledDiagnostics = boundaryStep.indexOf(
+    'const settledDiagnostics = await readGaplessPlaybackDiagnostics(page)',
+  );
+  const controlSnapshot = boundaryStep.indexOf('traffic.snapshotSince(0)');
+
+  assert.ok(replacementWait >= 0);
+  assert.ok(settledDiagnostics >= 0);
+  assert.ok(controlSnapshot >= 0);
+  assert.ok(replacementWait < settledDiagnostics);
+  assert.ok(settledDiagnostics < controlSnapshot);
+  assert.match(boundaryStep, /expect\(settledDiagnostics\.continuityStreamId\)/);
+});
+
 class PlaybackEvidencePage extends EventEmitter {
   async waitForFunction() {}
 }

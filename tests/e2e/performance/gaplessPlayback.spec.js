@@ -118,6 +118,13 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       },
     });
 
+    await traffic.waitForControl({
+      type: 'open',
+      role: 'continuity',
+      path: replacement.path,
+    });
+    const settledDiagnostics = await readGaplessPlaybackDiagnostics(page);
+
     const controls = traffic.snapshotSince(0);
     const opens = controls.filter((control) => control.type === 'open');
     const promotion = controls.find((control) => control.type === 'promote');
@@ -136,16 +143,16 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
     expect(replacementOpen?.streamId).not.toBe(opens[0]?.streamId);
     expect(replacementOpen?.streamId).not.toBe(opens[1]?.streamId);
     expect(controls.indexOf(replacementOpen)).toBeGreaterThan(controls.indexOf(promotion));
-    expect(diagnostics.currentStreamId).toBe(continuityOpen.streamId);
-    expect(diagnostics.continuityStreamId).toBe(replacementOpen.streamId);
-    expect(diagnostics.activeRoles).toEqual(['current', 'continuity']);
+    expect(settledDiagnostics.currentStreamId).toBe(continuityOpen.streamId);
+    expect(settledDiagnostics.continuityStreamId).toBe(replacementOpen.streamId);
+    expect(settledDiagnostics.activeRoles).toEqual(['current', 'continuity']);
     expect(
-      diagnostics.bufferedFrames.current + diagnostics.inFlightFrames.current,
-    ).toBeLessThanOrEqual(diagnostics.currentCapacityFrames);
+      settledDiagnostics.bufferedFrames.current + settledDiagnostics.inFlightFrames.current,
+    ).toBeLessThanOrEqual(settledDiagnostics.currentCapacityFrames);
     expect(
-      diagnostics.bufferedFrames.continuity + diagnostics.inFlightFrames.continuity,
-    ).toBeLessThanOrEqual(diagnostics.continuityCapacityFrames);
-    gaplessPlaybackReport.recordBoundary({ diagnostics, controls });
+      settledDiagnostics.bufferedFrames.continuity + settledDiagnostics.inFlightFrames.continuity,
+    ).toBeLessThanOrEqual(settledDiagnostics.continuityCapacityFrames);
+    gaplessPlaybackReport.recordBoundary({ diagnostics, settledDiagnostics, controls });
 
     await stepLogger.step('Honor a visible near-end seek, move its waveform cursor, and keep playing into queued-next', async () => {
       const nearEndEventMark = traffic.eventMark();

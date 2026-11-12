@@ -184,13 +184,8 @@ _AKA = re.compile(r"^\s*(?:aka|a\.k\.a\.?|also known as)\s*[:\-]?\s*", re.IGNORE
 
 
 def group_title_keys(group: dict[str, object], artist_names: tuple[str, ...] = ()) -> set[str]:
-    """A release group's title keys, with the alternative title MusicBrainz keeps in its
-    comment (Celeste's 'aka “Principe di un giorno”', Pražský výběr's "Straka v hrsti")."""
-    keys = title_keys(group.get("title"), artist_names)
-    comment = str(group.get("disambiguation") or "").strip()
-    if comment:
-        keys |= title_keys(_AKA.sub("", comment).strip("“”\"'«»„ "), artist_names)
-    return keys
+    """A release group's official title keys; comment titles are ranked separately."""
+    return title_keys(group.get("title"), artist_names)
 
 
 def _words_by_script(text: str) -> dict[str, list[str]]:
@@ -302,8 +297,22 @@ def ranked_title_matches(local_title: object, groups: list[tuple[dict, set[str]]
     before one that only contains it (a "Workin', Relaxin', Steamin'" compilation)."""
     local = title_keys(local_title, artist_names)
     local_folded = fold(local_title)
-    matches = [(group, agreement) for group, keys in groups
-               if (agreement := _agreement(local, local_title, keys, group.get("title")))]
+    matches = []
+    for group, keys in groups:
+        agreements = []
+        official = _agreement(local, local_title, keys, group.get("title"))
+        if official:
+            agreements.append(official)
+        comment = str(group.get("disambiguation") or "").strip()
+        comment_title = _AKA.sub("", comment).strip("“”\"'«»„ ")
+        comment_agreement = _agreement(
+            local, local_title, title_keys(comment_title, artist_names), comment_title
+        ) if comment_title else None
+        if comment_agreement:
+            # Unstructured comments may be descriptors; only explicit aliases keep their rank.
+            agreements.append(comment_agreement if _AKA.match(comment) else "partial")
+        if agreements:
+            matches.append((group, min(agreements, key=TITLE_RANK.__getitem__)))
     return sorted(matches, key=lambda item: (TITLE_RANK[item[1]], fold(item[0].get("title")) != local_folded))
 
 

@@ -11,8 +11,10 @@ from music_app.services.musicbrainz_evidence import (
     album_signals,
     candidate_name_keys,
     decide,
+    group_title_keys,
     name_keys,
     name_relation,
+    ranked_title_matches,
     title_agreement,
     title_keys,
 )
@@ -379,6 +381,20 @@ def test_a_typo_or_partial_title_counts_only_with_a_matching_tracklist():
     for title in ("typo", "partial"):
         assert album_level(title, {"year", "track_count"}) is None
         assert album_level(title, {"track_list", "track_count"}) == "strong"
+
+
+@pytest.mark.parametrize(("local", "title", "comment"), [
+    ("Live", "Unrelated", "live"),
+    ("Recorded in New York", "Unrelated", "recorded in New York"),
+    ("Recorded New York", "Recorded Old York", "Recorded New York"),
+])
+def test_a_release_group_comment_is_not_exact_title_evidence_without_tracks(local, title, comment):
+    group = {"title": title, "disambiguation": comment}
+
+    matches = ranked_title_matches(local, [(group, group_title_keys(group))])
+
+    assert matches == [(group, "partial")]
+    assert album_level(matches[0][1], {"year", "track_count"}) is None
 
 
 def test_mojibake_tags_compare_with_their_repaired_text():

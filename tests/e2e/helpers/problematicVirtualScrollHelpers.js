@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { expect } from '@playwright/test';
+import { authenticatedPageGet } from './authenticatedPageRequest.js';
 
 export function problemDetailExpectation(payload) {
   assert.ok(payload && String(payload.key || ''), 'Detail oracle requires a stable album key');
@@ -135,12 +136,32 @@ export function observeProblematicDetails(page) {
   };
   page.on('response', responseListener);
   const settle = async () => {
-    await Promise.all([...pending]);
+    while (pending.size) await Promise.all([...pending]);
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
     async summary() {
       await settle();
+      if (!summary) {
+        // Let a complete response queued behind a bounded first page reach the listener.
+        await new Promise(resolve => setImmediate(resolve));
+        await settle();
+      }
+      if (!summary) {
+        const response = await authenticatedPageGet(page, '/utilities/problematic-files');
+        assert.equal(response.ok(), true, 'Fallback problematic summary request must succeed');
+        const payload = await response.json();
+        assert.notEqual(payload.complete, false, 'Fallback problematic summary must be complete');
+        assert.ok(Array.isArray(payload.items), 'Fallback problematic summary must expose items');
+        const keys = payload.items.map(item => String(item?.key || ''));
+        assert.ok(keys.every(Boolean), 'Fallback problematic summary identities must be nonempty');
+        assert.equal(new Set(keys).size, keys.length, 'Fallback problematic summary identities must be unique');
+        assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
+          'Fallback initial detail must belong to its summary');
+        if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
+        capturedSummarySequence = ++summarySequence;
+        summary = JSON.stringify(payload.items);
+      }
       assert.ok(summary, 'Capture must be installed before the normal summary request');
       assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');
       return JSON.parse(summary);

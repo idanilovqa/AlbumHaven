@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -138,6 +139,11 @@ class CoverPreviewBackfill:
         recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
         if recorder is None:
             return 0
+
+        def handle_walk_error(error: OSError) -> None:
+            if not isinstance(error, FileNotFoundError):
+                raise error
+
         recorded = 0
         for source_path, cover_revision in self._load_cover_paths():
             for cache_root in (
@@ -146,8 +152,14 @@ class CoverPreviewBackfill:
             ):
                 if not cache_root.is_dir():
                     continue
-                for preview_path in cache_root.rglob("*"):
-                    if preview_path.is_file():
+                for directory, _subdirectories, filenames in os.walk(
+                    cache_root,
+                    onerror=handle_walk_error,
+                ):
+                    for filename in filenames:
+                        preview_path = Path(directory) / filename
+                        if not preview_path.is_file():
+                            continue
                         recorder(source_path, preview_path)
                         recorded += 1
             if self._data_dir and cover_revision:

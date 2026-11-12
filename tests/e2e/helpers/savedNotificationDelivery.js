@@ -21,33 +21,54 @@ export async function confirmTimedSavedNotification(tagEditor, presentations, ex
   await expect(tagEditor.repairAlert).toBeHidden({ timeout });
 }
 
-export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, autoDismisses, beforeNavigation }) {
-  const appBar = new AppBarActions(new AppBar(tagEditor.page));
-  const scan = new ScanPageActions(new ScanPage(tagEditor.page));
-  await expect(tagEditor.overlay).toBeHidden({ timeout });
-  await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
-  const previous = await tagEditor.readLibraryReturnState();
-  await beforeNavigation?.();
-  await appBar.openStatusMenu();
+export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, {
+  timeout,
+  autoDismisses,
+  beforeNavigation,
+  presentations: prearmedPresentations = null,
+}) {
+  let scan;
+  let previous;
+  let presentations = prearmedPresentations;
   let deliveryError;
+  let restoreRequired = false;
   try {
+    const appBar = new AppBarActions(new AppBar(tagEditor.page));
+    scan = new ScanPageActions(new ScanPage(tagEditor.page));
+    await expect(tagEditor.overlay).toBeHidden({ timeout });
+    await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
+    previous = await tagEditor.readLibraryReturnState();
+    if (autoDismisses && !presentations) {
+      presentations = await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' });
+    }
+    await beforeNavigation?.();
+    await appBar.openStatusMenu();
     await scan.scanPage.openStatusPage.click();
+    restoreRequired = true;
     await scan.waitForVisible({ timeout });
     if (autoDismisses) {
-      // Placement is judged on Status, where these cases assert it; recording starts there.
-      const presentations = await tagEditor.recordRepairAlertPresentations();
-      try {
-        await scan.waitForDedicatedPageVisible({ timeout });
-        await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
-      } finally {
-        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
-      }
+      await scan.waitForDedicatedPageVisible({ timeout });
+      await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
     } else {
       await scan.waitForDedicatedPageVisible({ timeout });
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }
   } catch (error) {
     deliveryError = error;
+  } finally {
+    if (presentations) {
+      try {
+        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+      } catch (cleanupError) {
+        deliveryError = deliveryError
+          ? new AggregateError([deliveryError, cleanupError], 'Saved notification delivery and recorder cleanup failed')
+          : cleanupError;
+      }
+    }
+  }
+  if (!restoreRequired) {
+    if (deliveryError) throw deliveryError;
+    return;
   }
   try {
     await scan.clickBack();

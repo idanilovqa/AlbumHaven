@@ -23899,7 +23899,13 @@ async function refreshLoadedProblematicFilesAfterSaveCompletion() {
       );
     }
   }
-  await loadProblematicFiles(true, { render: false });
+  const previousCompleteLoadPromise = state.utility.completeLoadPromise;
+  const refreshPromise = loadProblematicFiles(true, { render: false });
+  const completeRefreshPromise = state.utility.completeLoadPromise;
+  if (completeRefreshPromise && completeRefreshPromise !== previousCompleteLoadPromise) {
+    completeRefreshPromise.problematicSaveTaskRefresh = true;
+  }
+  await refreshPromise;
   const utilityOverlay = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.overlay
     : null;
@@ -25059,6 +25065,12 @@ async function openUtilityModalForTrack(trackPath) {
     const summaryRequestTokenBeforePendingTasks = Number(
       state.utility.problematicSummaryRequestToken || 0,
     );
+    const pendingSummaryAtNavigationStart = state.utility.completeLoadPromise
+      || state.utility.initialLoadPromise;
+    const pendingSaveTaskSummaryRequestToken = pendingSummaryAtNavigationStart
+      ?.problematicSaveTaskRefresh
+      ? Number(pendingSummaryAtNavigationStart.problematicSummaryRequestToken || 0)
+      : 0;
     const pendingTasks = Object.values(
       state.utility.pendingProblematicSaveTasks || {},
     ).filter((entry) => (
@@ -25123,8 +25135,16 @@ async function openUtilityModalForTrack(trackPath) {
     const summaryWasLoaded = state.utility.loaded;
     const pendingTaskRefreshedSummary = (
       pendingTasks.length > 0
-      && Number(state.utility.problematicSummaryRequestToken || 0)
-        > summaryRequestTokenBeforePendingTasks
+      && (
+        (
+          pendingSaveTaskSummaryRequestToken > 0
+          && pendingSaveTaskSummaryRequestToken
+            === Number(state.utility.problematicSummaryRequestToken || 0)
+          && state.utility.loaded
+        )
+        || Number(state.utility.problematicSummaryRequestToken || 0)
+          > summaryRequestTokenBeforePendingTasks
+      )
     );
     const loadTrackSummary = async () => {
       const complete = loadProblematicFiles(true, { render: false });
@@ -25169,6 +25189,7 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
     let refreshedStaleDetailTarget = false;
+    let retriedCanonicalDetailTarget = false;
     if (!album.detail_loaded) {
       while (album && !album.detail_loaded) {
         const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
@@ -25183,6 +25204,14 @@ async function openUtilityModalForTrack(trackPath) {
         if (!ownsNavigation()) return;
         const detailMissing = !refreshedDetail
           && Number(state.utility.problematicDetailRequestToken || 0) === detailOwner;
+        const canonicalDetailTarget = detailMissing
+          ? getProblematicAlbumForTrackPath(trackPath)
+          : null;
+        if (pendingTaskRefreshedSummary && canonicalDetailTarget && !retriedCanonicalDetailTarget) {
+          retriedCanonicalDetailTarget = true;
+          album = canonicalDetailTarget;
+          continue;
+        }
         const currentSummary = state.utility.completeLoadPromise
           || state.utility.initialLoadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
@@ -25197,7 +25226,8 @@ async function openUtilityModalForTrack(trackPath) {
               if (currentSummary && typeof currentSummary.then === 'function') {
                 await currentSummary;
                 if (!ownsNavigation()) return;
-                album = getProblematicAlbumForTrackPath(trackPath);
+                album = getProblematicAlbumForTrackPath(trackPath)
+                  || getSelectedProblematicAlbumFrom(state.utility.problematicFiles);
                 if (album) continue;
               }
               refreshedStaleDetailTarget = true;
@@ -37653,7 +37683,7 @@ async function confirmManualTagEdit() {
       showRepairAlert(
         [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
         hasCompletionWarning ? 'warning' : 'success',
-        hasCompletionWarning ? 8000 : 2000,
+        8000,
         {
           title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
         },

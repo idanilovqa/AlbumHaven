@@ -253,6 +253,13 @@ export class CoverLookup extends BasePage {
       let settledFrames = 0;
       let sampledFrames = 0;
       const delta = { height: 0, width: 0, x: 0, y: 0 };
+      const findStartedToast = () => Array.from(document.querySelectorAll(toastSelector)).findLast(
+        (candidate) => candidate.querySelector('.on-page-alert__message')
+          ?.textContent?.trim() === 'Cover search started.',
+      );
+      const initialModal = document.querySelector(modalSelector);
+      const startedToastAlreadyPresent = Boolean(findStartedToast());
+      if (initialModal && !startedToastAlreadyPresent) baseline = initialModal.getBoundingClientRect();
       const result = new Promise((resolve) => {
         finish = (value) => {
           cancelAnimationFrame(frame);
@@ -260,6 +267,10 @@ export class CoverLookup extends BasePage {
           resolve(value);
         };
         const sample = () => {
+          if (startedToastAlreadyPresent) {
+            finish({ error: 'Cover search started toast was already present before observation.' });
+            return;
+          }
           const modal = document.querySelector(modalSelector);
           const progress = modal?.querySelector('.cover-lookup-search-progress');
           const findBetterButton = document.querySelector(findBetterButtonSelector);
@@ -270,10 +281,7 @@ export class CoverLookup extends BasePage {
           );
           startedStatusSeen = startedStatusSeen
             || String(modalStatus?.textContent || '').includes('Cover search started.');
-          const toast = Array.from(document.querySelectorAll(toastSelector)).findLast(
-            (candidate) => candidate.querySelector('.on-page-alert__message')
-              ?.textContent?.trim() === 'Cover search started.',
-          );
+          const toast = findStartedToast();
           const runningLayoutVisible = modal && progress?.getBoundingClientRect().height > 0;
           if (runningLayoutVisible && !toast && !baseline) baseline = modal.getBoundingClientRect();
           if (runningLayoutVisible && toast) {
@@ -295,7 +303,7 @@ export class CoverLookup extends BasePage {
             }
             sampledFrames += 1;
             settledFrames = settled ? settledFrames + 1 : 0;
-            if (settledFrames >= 2) {
+            if (settledFrames >= 2 && sampledFrames >= 3) {
               finish({
                 busyButtonSeen,
                 delta,

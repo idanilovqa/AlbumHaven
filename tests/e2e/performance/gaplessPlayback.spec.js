@@ -81,9 +81,41 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
 
     let continuityOpen = null;
     await stepLogger.step('Select the outgoing row and observe production streaming roles', async () => {
-      const selected = await trackModalActions.playTrackAt(0);
-      expect(selected.path).toBe(outgoing.path);
-      await globalPlayerActions.waitForCurrentTrack({ path: outgoing.path, trackTitle: outgoing.title });
+      const initialStartDiagnostics = await createStreamingReplacementDiagnosticsObserver(page);
+      try {
+        const selected = await trackModalActions.playTrackAt(0);
+        expect(selected.path).toBe(outgoing.path);
+        await globalPlayerActions.waitForCurrentTrack({
+          path: outgoing.path,
+          trackTitle: outgoing.title,
+        });
+      } catch (error) {
+        let failureState;
+        let timeline = [];
+        try {
+          timeline = await initialStartDiagnostics.finish();
+          const { src: _privateSource, ...diagnostics } = await readGaplessPlaybackDiagnostics(page);
+          failureState = {
+            diagnostics,
+            protocolControls: traffic.snapshotSince(0).map(({ path: _privatePath, ...control }) => control),
+            timeline,
+          };
+        } catch (diagnosticError) {
+          failureState = {
+            diagnosticsUnavailable: {
+              message: String(diagnosticError?.message || diagnosticError),
+              name: String(diagnosticError?.name || 'Error'),
+            },
+            timeline,
+          };
+        }
+        await testInfo.attach('initial-playback-start-failure-state', {
+          body: Buffer.from(JSON.stringify(failureState, null, 2)),
+          contentType: 'application/json',
+        });
+        throw error;
+      }
+      await initialStartDiagnostics.finish();
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
       continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
       const diagnostics = await readGaplessPlaybackDiagnostics(page);

@@ -225,6 +225,88 @@ def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):
     assert recorded == [(source, preview)]
 
 
+def test_inventory_existing_previews_skips_a_vanished_cache_directory(
+    monkeypatch,
+    tmp_path,
+):
+    import os
+
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    cache_root = source.parent / ".album-haven" / "cover_variants"
+    preview = cache_root / "aa" / "aabb.webp"
+    preview.parent.mkdir(parents=True)
+    preview.write_bytes(b"preview")
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    recorded = []
+
+    def walk(top, *args, **kwargs):
+        assert Path(top) == cache_root
+        kwargs["onerror"](FileNotFoundError(str(cache_root / "vanished")))
+        yield str(preview.parent), [], [preview.name]
+
+    monkeypatch.setattr(os, "walk", walk)
+    monkeypatch.setattr(
+        Path,
+        "rglob",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError(str(cache_root / "vanished"))
+        ),
+    )
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": (
+                lambda source_path, preview_path: recorded.append(
+                    (Path(source_path), Path(preview_path))
+                )
+            ),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        throttle_seconds=0,
+    )
+
+    assert worker.inventory_existing_previews() == 1
+    assert recorded == [(source, preview)]
+
+
+def test_inventory_existing_previews_propagates_other_walk_errors(
+    monkeypatch,
+    tmp_path,
+):
+    import os
+
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    cache_root = source.parent / ".album-haven" / "cover_variants"
+    cache_root.mkdir(parents=True)
+    connection = _Connection([{"cover_path": str(source), "cover_revision": None}])
+    denied = PermissionError(str(cache_root))
+
+    def walk(_top, *args, **kwargs):
+        kwargs["onerror"](denied)
+        yield from ()
+
+    monkeypatch.setattr(os, "walk", walk)
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": lambda *_args: None,
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        throttle_seconds=0,
+    )
+
+    try:
+        worker.inventory_existing_previews()
+    except PermissionError as error:
+        assert error is denied
+    else:
+        raise AssertionError("Non-missing inventory errors must propagate")
+
+
 def test_inventory_existing_previews_does_not_wait_for_foreground_idle(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
 

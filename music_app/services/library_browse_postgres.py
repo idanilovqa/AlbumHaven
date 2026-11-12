@@ -839,24 +839,64 @@ class PostgresLibraryBrowseRepository:
             totals: dict[str, dict[str, int]] = {
                 "": {"artist_count": 0, "album_count": 0},
             }
+            root_alias_to_canonical: Mapping[str, object] | None = None
+            missing_album_rows: list[object] | None = None
             for mask in range(1, 2 ** len(sources)):
                 scope = [
                     source for index, source in enumerate(sources)
                     if mask & (1 << index)
                 ]
+                view_state = {
+                    "gallery_scope": "all",
+                    "visible_library_categories": scope,
+                }
                 projection = load_gallery_projection_sidebar(
                     connection,
-                    {
-                        "gallery_scope": "all",
-                        "visible_library_categories": scope,
-                    },
+                    view_state,
                     context=context,
                 )
                 if projection is None:
-                    raise GalleryProjectionPending("Gallery source totals are being prepared.")
-                sidebar, album_count = projection
+                    if root_alias_to_canonical is None:
+                        relation_alias_maps = self._load_relation_alias_maps(
+                            connection=connection,
+                        )
+                        root_alias_to_canonical = _root_browse_alias_to_canonical(
+                            relation_alias_maps["alias_to_canonical"]
+                        )
+                        missing_album_rows = self._load_missing_album_rows(
+                            connection=connection,
+                        )
+                    rows = _canonicalize_artist_rows(
+                        self._load_root_sidebar_rows(
+                            view_state,
+                            connection=connection,
+                        ),
+                        root_alias_to_canonical,
+                    )
+                    missing_albums = _missing_album_projection_payloads(
+                        missing_album_rows or [],
+                        view_state=view_state,
+                    )
+                    _displays, _sort_values, artist_counts, album_count = (
+                        _root_sidebar_aggregate(rows)
+                    )
+                    album_count += len(missing_albums)
+                    for album in missing_albums:
+                        artist_counts.setdefault(
+                            _row_artist_identity({
+                                "artist_name": _canonical_artist_name(
+                                    album.get("album_artist") or "Unknown Artist",
+                                    root_alias_to_canonical,
+                                ),
+                            }),
+                            0,
+                        )
+                    artist_count = len(artist_counts)
+                else:
+                    sidebar, album_count = projection
+                    artist_count = len(sidebar)
                 totals["|".join(sorted(scope))] = {
-                    "artist_count": len(sidebar),
+                    "artist_count": artist_count,
                     "album_count": album_count,
                 }
         finally:

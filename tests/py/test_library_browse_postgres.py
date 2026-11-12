@@ -2796,6 +2796,90 @@ def test_postgres_root_source_totals_use_ready_projection_for_every_scope(monkey
     }
 
 
+def test_postgres_root_source_totals_fall_back_for_missing_projection_scope(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection_module
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+    )
+    monkeypatch.setattr(
+        projection_module,
+        "gallery_projection_context",
+        lambda _connection: {"library_id": 1},
+    )
+
+    projected_scopes = []
+
+    def fake_projection(_connection, view_state, *, context):
+        assert context == {"library_id": 1}
+        scope = tuple(view_state["visible_library_categories"])
+        projected_scopes.append(scope)
+        if scope == ("hoard",):
+            return None
+        count = len(projected_scopes)
+        return ([{"artist": str(index)} for index in range(count)], count + 10)
+
+    monkeypatch.setattr(
+        projection_module,
+        "load_gallery_projection_sidebar",
+        fake_projection,
+    )
+    alias_loads = []
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda **kwargs: alias_loads.append(kwargs["connection"]) or {
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
+    )
+    fallback_scopes = []
+    monkeypatch.setattr(
+        repository,
+        "_load_root_sidebar_rows",
+        lambda view_state, **_kwargs: fallback_scopes.append(
+            tuple(view_state["visible_library_categories"])
+        ) or [
+            {"artist_name": "Artist One", "album_ids": [101, 102], "album_count": 2},
+            {"artist_name": "Artist Two", "album_ids": [103], "album_count": 1},
+        ],
+    )
+    missing_loads = []
+    monkeypatch.setattr(
+        repository,
+        "_load_missing_album_rows",
+        lambda **kwargs: missing_loads.append(kwargs["connection"]) or [
+            _missing_browse_row(
+                album_id=104,
+                title="Missing Album",
+                category="hoard",
+                artist="Missing Artist",
+            ),
+        ],
+    )
+
+    payload = repository.build_root_source_totals_payload()
+
+    assert len(projected_scopes) == 7
+    assert fallback_scopes == [("hoard",)]
+    assert len(alias_loads) == 1
+    assert len(missing_loads) == 1
+    assert payload == {
+        "source_totals_by_scope": {
+            "": {"artist_count": 0, "album_count": 0},
+            "hoard": {"artist_count": 3, "album_count": 4},
+            "hoard|main_library": {"artist_count": 5, "album_count": 15},
+            "hoard|main_library|new_arrivals": {"artist_count": 7, "album_count": 17},
+            "hoard|new_arrivals": {"artist_count": 6, "album_count": 16},
+            "main_library": {"artist_count": 1, "album_count": 11},
+            "main_library|new_arrivals": {"artist_count": 3, "album_count": 13},
+            "new_arrivals": {"artist_count": 2, "album_count": 12},
+        },
+    }
+
+
 def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
     monkeypatch, default_empty_missing_album_projection, default_empty_inventory_fingerprint,
 ):

@@ -5343,6 +5343,7 @@ for (const status of ['pending', 'running']) {
   const second = { slot: 1, cover_path: 'C:/music/Artist/Album/Covers/Back.jpg' };
   const context = loadHelper({
     getAlbumAdditionalArtwork: (album) => (album?.additional_artworks || []).find((artwork) => artwork.slot === 1) || null,
+    sameLocalPath: (left, right) => String(left || '').replaceAll('\\', '/').toLowerCase() === String(right || '').replaceAll('\\', '/').toLowerCase(),
   });
   context.state.coverLookup.modal = {
     artboxSlot: 1,
@@ -5352,6 +5353,11 @@ for (const status of ['pending', 'running']) {
   assert.equal(context.getCoverLookupActiveLocalPath(), '', 'nothing selected in a new second artbox');
   context.state.coverLookup.modal.album.additional_artworks = [second];
   assert.equal(context.getCoverLookupActiveLocalPath(), second.cover_path);
+  assert.equal(
+    context.coverLookupLocalPathMatches('c:\\MUSIC\\artist\\album\\covers\\back.jpg', second.cover_path),
+    true,
+    'Windows path casing cannot hide the selected second-artbox frame',
+  );
   context.state.coverLookup.modal.artboxCleared = true;
   assert.equal(context.getCoverLookupActiveLocalPath(), '');
 }

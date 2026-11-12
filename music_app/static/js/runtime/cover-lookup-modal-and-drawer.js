@@ -2241,6 +2241,12 @@ function scheduleDeferredCoverLookupPreviews(root) {
   window.setTimeout?.(release, 500);
 }
 
+function coverLookupLocalPathMatches(left, right) {
+  return typeof sameLocalPath === 'function'
+    ? sameLocalPath(left, right)
+    : String(left || '') === String(right || '');
+}
+
 function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
@@ -2274,9 +2280,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
-        ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
+        ? coverLookupLocalPathMatches(state.coverLookup.modal.pendingLocalPath, item?.path)
         : !String(state.coverLookup.modal.pendingPastedImageId || '')
-          && String(item?.path || '') === getCoverLookupActiveLocalPath()
+          && coverLookupLocalPathMatches(item?.path, getCoverLookupActiveLocalPath())
     ))
     : kind === 'pasted'
       ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalPath || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))

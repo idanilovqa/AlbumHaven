@@ -137,7 +137,7 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     : { virtualized: false, start: 0, end: sidebarArtists.length, before: 0, after: 0 };
   const visibleArtists = sidebarArtists.slice(virtualWindow.start, virtualWindow.end);
   let html = showAllArtistsLink ? renderItem({
-    label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
+    label: 'All artists', href: '/albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
   if (virtualWindow.virtualized && virtualWindow.before > 0) {

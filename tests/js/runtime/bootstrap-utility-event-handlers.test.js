@@ -533,6 +533,11 @@ test('applying a problem filter preserves the selected album in the live bootstr
     selectedProblematicKey: 'album-1',
     problemDropdownOpen: true,
   });
+  let replacementFocused = false;
+  context.getUtilityModalElements().problemFilterMenu.querySelectorAll = () => [{
+    getAttribute(name) { return name === 'data-problem-filter-value' ? 'Poor art quality' : ''; },
+    focus() { replacementFocused = true; },
+  }];
   const filterContainer = createElement();
   const { event, wasPrevented } = createEvent({
     '.utility-problem-filter-button, .utility-problem-filter-menu': filterContainer,
@@ -547,10 +552,11 @@ test('applying a problem filter preserves the selected album in the live bootstr
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.state.utility.problemDropdownOpen, true);
   assert.equal(context.state.utility.showRepairedDisplay, true);
   assert.equal(calls.renders, 1);
-  assert.equal(context.getUtilityModalElements().problemFilterButton.focused, true);
+  assert.equal(Boolean(context.getUtilityModalElements().problemFilterButton.focused), false);
+  assert.equal(replacementFocused, true);
 });
 
 test('applying a problem filter clears the selected album in the live bootstrap handler when it no longer matches', () => {
@@ -575,7 +581,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, '');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.state.utility.problemDropdownOpen, true);
 });
 
 test('applying a problem filter responds before the complete Problematic Files snapshot', async () => {

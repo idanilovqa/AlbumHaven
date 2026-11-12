@@ -129,6 +129,11 @@
   border-radius: 0 0 6px 6px;
 }
 :root .trigger-anchor-surface { border-color: var(--border); }
+.trigger-anchor-scroll {
+  max-height: var(--trigger-anchor-scroll-max-height, min(320px, 60vh));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 /* A popup's shadow must not darken the connected button or their shared join.
    Keep room for the side/bottom shadow without clipping the menu contents. */

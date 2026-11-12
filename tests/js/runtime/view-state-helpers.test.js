@@ -216,7 +216,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/?surface=albums&q=dream+pop&artist=Beach+House&all_artists=1&gallery_scope=all&category=main_library&category=new_arrivals&related_artist=Victoria+Legrand&related_artist=Alex+Scally&primary_filter=1&genre=Dream+Pop&genre=Shoegaze&mood=Nocturnal&style=Lush&duration_min=180&duration_max=420',
+    '/albums?q=dream+pop&artist=Beach+House&all_artists=1&gallery_scope=all&category=main_library&category=new_arrivals&related_artist=Victoria+Legrand&related_artist=Alex+Scally&primary_filter=1&genre=Dream+Pop&genre=Shoegaze&mood=Nocturnal&style=Lush&duration_min=180&duration_max=420',
   );
 }
 
@@ -234,7 +234,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/?surface=albums&q=dream+pop&artist=Beach+House&gallery_scope=all&gallery_display=covers&gallery_scale_percent=135&category=main_library',
+    '/albums?q=dream+pop&artist=Beach+House&gallery_scope=all&gallery_display=covers&gallery_scale_percent=135&category=main_library',
   );
 }
 
@@ -1238,7 +1238,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   assert.match(html, /data-sidebar-all-artists="1"/);
   assert.match(html, /data-sidebar-artist="Beach House"/);
   assert.match(html, /artist-link active/);
-  assert.match(html, /\?surface=albums&amp;q=dream\+pop&amp;artist=Beach\+House/);
+  assert.match(html, /\/albums\?q=dream\+pop&amp;artist=Beach\+House/);
 }
 
 {
@@ -1263,8 +1263,8 @@ test('rootFullPayload requests full root albums without changing other browse UR
     selectedArtistOverride: 'Beach House',
     allArtistsActiveOverride: false,
   });
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=dream\+pop&amp;artist=Beach\+House" data-nav="1" data-sidebar-artist="Beach House"/);
-  assert.doesNotMatch(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=dream\+pop&amp;artist=Cocteau\+Twins" data-nav="1" data-sidebar-artist="Cocteau Twins"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=dream\+pop&amp;artist=Beach\+House" data-nav="1" data-sidebar-artist="Beach House"/);
+  assert.doesNotMatch(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=dream\+pop&amp;artist=Cocteau\+Twins" data-nav="1" data-sidebar-artist="Cocteau Twins"/);
 }
 
 {
@@ -1284,7 +1284,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
     allArtistsActiveOverride: true,
     selectedArtistOverride: '',
   });
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums" data-nav="1" data-sidebar-all-artists="1"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums" data-nav="1" data-sidebar-all-artists="1"/);
 }
 
 {
@@ -1316,7 +1316,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
       count: 1,
     },
   ]);
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=Neal\+Morse&amp;artist=Neal\+Morse" data-nav="1" data-sidebar-artist="Neal Morse"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=Neal\+Morse&amp;artist=Neal\+Morse" data-nav="1" data-sidebar-artist="Neal Morse"/);
   assert.match(html, /data-sidebar-all-artists="1"/);
 }
 
@@ -1395,7 +1395,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
     selectedArtistOverride: 'Devin Townsend Project',
   });
   assert.match(html, /data-sidebar-all-artists="1"/);
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=devin\+townsend&amp;artist=Devin\+Townsend\+Project" data-nav="1" data-sidebar-artist="Devin Townsend Project"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=devin\+townsend&amp;artist=Devin\+Townsend\+Project" data-nav="1" data-sidebar-artist="Devin Townsend Project"/);
   assert.match(html, /data-sidebar-artist="Devin Townsend"/);
 }
 

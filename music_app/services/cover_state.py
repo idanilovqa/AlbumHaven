@@ -304,7 +304,11 @@ def serialize_cover_gallery_payload(
     if local_inventory is not None:
         if active_cover_path and not active_remote_cover and not is_managed_preview_path(active_cover_path) and active_cover_path.suffix.lower() in image_extensions and not any(Path(item["path"]) == active_cover_path for item in local_candidates):
             entry = next((entry for path, entry in (file_cache or {}).items() if path in track_paths and isinstance(entry, dict) and entry.get("cover_path") == str(active_cover_path)), {})
-            width, height = int(entry.get("local_cover_width") or 0), int(entry.get("local_cover_height") or 0)
+            width, height = (
+                (int(entry.get("local_cover_width") or 0), int(entry.get("local_cover_height") or 0))
+                if local_inventory.get("complete")
+                else (0, 0)
+            )
             local_candidates.append({
                 "path": str(active_cover_path), "filename": active_cover_path.name,
                 "relative_path": active_cover_path.name, "width": width, "height": height,

@@ -200,8 +200,7 @@
   right: 3px;
   z-index: 40;
   width: auto;
-  max-height: 320px;
-  overflow-y: auto;
+  --trigger-anchor-scroll-max-height: 320px;
   padding: 6px;
   border-radius: 12px;
   border: 1px solid var(--border);
@@ -946,20 +945,16 @@
   align-items: center;
   justify-content: center;
   margin-top: 10px;
-  width: 140px;
-  padding: 8px 12px;
-  border-radius: 10px;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   background: rgba(255,255,255,0.03);
-  color: var(--muted);
+  color: var(--text);
   cursor: pointer;
   text-align: center;
   font: inherit;
-}
-.utility-repair-toggle.is-active {
-  color: var(--text);
-  background: rgba(96,165,250,0.12);
-  border-color: rgba(96,165,250,0.35);
+  font-size: 0.71rem;
 }
 .utility-detail-open {
   margin-top: 10px;
@@ -1611,6 +1606,7 @@
 .tag-editor-folder-copy { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0; }
 .tag-editor-track-name { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
 .tag-editor-track-folder { color: var(--muted); font-size: 0.7rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-editor-folder-load { color: color-mix(in srgb, var(--muted) 70%, var(--text)); font-size: 0.7rem; line-height: 1.25; }
 .tag-editor-folder-path {
   min-width: 0;
   max-width: 100%;
@@ -1924,6 +1920,7 @@
 .utility-detected-table .compact-data-table { width: 100%; --cdt-mobile-min-width: 560px; }
 .utility-detected-table .compact-data-table-cell { min-width: 0; align-content: start; }
 .utility-detected-table .utility-track-problem-file { white-space: normal; overflow-wrap: anywhere; }
+.utility-track-search-match { padding: 0; background: color-mix(in srgb, var(--muted) 28%, transparent); color: inherit; }
 .utility-detected-table .utility-track-problem-file + .utility-detail-meta {
   display: block;
   margin: 3px 0 0;
@@ -1988,22 +1985,7 @@
 .utility-problem-filter {
   --problem-filter-connected-edge: var(--appearance-line, var(--border));
 }
-.utility-problem-filter-menu.trigger-anchor-surface {
-  border-color: var(--problem-filter-connected-edge);
-}
-/* Paint the joined edge on the scrolling surface itself so it stays continuous
-   beside the scrollbar and does not move with the menu options. */
-:root .utility-problem-filter-menu.trigger-anchor-surface[data-trigger-anchor-side="right"] {
-  border-right: 2px solid transparent;
-  background: var(--trigger-anchor-line-left) left top / calc(var(--trigger-anchor-left) + 1px) 2px no-repeat border-box,
-    linear-gradient(to bottom, var(--trigger-anchor-accent) 0 5px,
-    var(--problem-filter-connected-edge, var(--border)) 210px) right top / 2px 100% no-repeat border-box,
-    var(--trigger-anchor-background);
-}
-:root #utility-modal .utility-problem-filter-menu.trigger-anchor-surface[data-trigger-anchor-side="right"]::before,
-:root .utility-problem-filter-menu.trigger-anchor-surface[data-trigger-anchor-side="right"]::after {
-  display: none;
-}
+.utility-problem-filter-menu.trigger-anchor-surface { border-color: var(--problem-filter-connected-edge); }
 .settings-guide-copy pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .library-settings-move-policy-row { display: grid; gap: 8px; margin-bottom: 12px; max-width: 440px; }

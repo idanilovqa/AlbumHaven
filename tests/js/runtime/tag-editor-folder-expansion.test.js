@@ -172,7 +172,11 @@ test('Load all tracks from the folder sits under the path only while the album f
     path.join(root, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
     'utf8',
   );
-  assert.doesNotMatch(css, /\.tag-editor-folder-load(?:\s|:)/, 'the shared text-link component owns every visual state');
+  assert.match(
+    css,
+    /\.tag-editor-folder-load\s*\{[^}]*color:\s*color-mix\(in srgb, var\(--muted\) 70%, var\(--text\)\)[^}]*font-size:\s*0\.7rem[^}]*line-height:\s*1\.25/s,
+    'the action matches the path typography while remaining slightly brighter',
+  );
   const buttonCss = fs.readFileSync(path.join(root, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
   assert.match(buttonCss, /\.ui-text-link,[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;/);
   assert.match(buttonCss, /\.ui-text-link:is\(:hover, :focus-visible\):not\(:disabled\)[\s\S]*text-decoration-line:\s*underline/);

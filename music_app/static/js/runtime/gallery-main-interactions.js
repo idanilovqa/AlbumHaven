@@ -103,6 +103,20 @@ function resolveCurrentGalleryAnchor(anchor) {
   return section?.querySelector?.('[data-artist-info-trigger]') || anchor;
 }
 
+function isGalleryAnchorVisible(anchor, scroll) {
+  if (!anchor || anchor.isConnected === false) return false;
+  const bounds = anchor?.getBoundingClientRect?.();
+  if (!bounds) return false;
+  const viewport = scroll?.getBoundingClientRect?.();
+  const top = Number(viewport?.top || 0);
+  const windowBottom = Number(window.innerHeight);
+  const bottom = Math.min(
+    Number(viewport?.bottom || (Number.isFinite(windowBottom) ? windowBottom : Number.POSITIVE_INFINITY)),
+    Number.isFinite(windowBottom) ? windowBottom : Number.POSITIVE_INFINITY,
+  );
+  return Number(bounds.bottom) > top && Number(bounds.top) < bottom;
+}
+
 function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!surface?.matches?.('.artist-info-overlay')
       || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
@@ -1020,9 +1034,15 @@ function handleGalleryMainClick(event) {
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
+    const libraryWide = nonAlbum.dataset.libraryWide === '1' || !String(state.view?.selected_artist || '').trim();
+    const artistScopeAvailable = libraryWide || String(state.view?.query || '').trim() || (
+      typeof hasHydratedArtistNonAlbumAvailability === 'function'
+      && hasHydratedArtistNonAlbumAvailability()
+      && Number(state.view?.non_album_track_count) > 0
+    );
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true' && artistScopeAvailable) {
       openNonAlbumModal({
-        libraryWide: nonAlbum.dataset.libraryWide === '1' || !String(state.view?.selected_artist || '').trim(),
+        libraryWide,
       });
     }
     return true;
@@ -1044,11 +1064,6 @@ function initGalleryMain() {
   galleryFamilyPanelObserver = observeArtistFamilyPanelBounds({ panel, player });
   const scroll = document.getElementById('albums-scroll');
   scroll?.addEventListener('scroll', () => {
-    const active = galleryMainSurfaceController?.current?.();
-    if (active?.key?.startsWith?.('artist:') && active.surface.getAttribute?.('aria-modal') !== 'true') {
-      active.anchor = resolveCurrentGalleryAnchor(active.anchor);
-      positionGalleryAnchoredSurface(active.surface, active.anchor, 'left');
-    }
     if (galleryMainScrollFrame) return;
     galleryMainScrollFrame = requestAnimationFrame(() => {
       galleryMainScrollFrame = 0;
@@ -1056,7 +1071,11 @@ function initGalleryMain() {
       const settled = galleryMainSurfaceController?.current?.();
       if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
         settled.anchor = resolveCurrentGalleryAnchor(settled.anchor);
-        positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+        if (isGalleryAnchorVisible(settled.anchor, scroll)) {
+          positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+        } else {
+          closeGalleryMainSurface(false);
+        }
       }
     });
   }, { passive: true });

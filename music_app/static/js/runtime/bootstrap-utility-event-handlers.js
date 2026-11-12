@@ -192,10 +192,13 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
-      state.utility.problemDropdownOpen = false;
+      state.utility.problemDropdownOpen = true;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
-      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+      if (event.detail === 0) {
+        Array.from(getUtilityModalElements().problemFilterMenu?.querySelectorAll?.('[data-problem-filter-value]') || [])
+          .find((option) => option.getAttribute('data-problem-filter-value') === value)?.focus();
+      }
     }
     return;
   }

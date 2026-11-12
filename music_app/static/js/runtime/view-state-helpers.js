@@ -114,7 +114,7 @@ function buildUrl(view) {
   if (resolvedSurface === 'home') {
     return '/';
   }
-  if (resolvedSurface === 'playlists' || resolvedSurface === 'albums') {
+  if (resolvedSurface === 'playlists') {
     params.set('surface', resolvedSurface);
   }
   appendPlaylistStateParams(params, view, resolvedSurface);
@@ -139,7 +139,8 @@ function buildUrl(view) {
   if (view.primary_filter_active) params.set('primary_filter', '1');
   appendSearchFilterParams(params, view.search_filters);
   const qs = params.toString();
-  return `/${qs ? `?${qs}` : ''}`;
+  const pathname = resolvedSurface === 'albums' ? '/albums' : '/';
+  return `${pathname}${qs ? `?${qs}` : ''}`;
 }
 
 function buildApiUrl(view, options = {}) {
@@ -205,7 +206,7 @@ function buildApiUrl(view, options = {}) {
 function parseUrlStateFromUrl(url, baseOrigin) {
   const u = new URL(url, baseOrigin);
   return {
-    surface_request: u.searchParams.get('surface') || '',
+    surface_request: u.pathname === '/albums' ? 'albums' : u.searchParams.get('surface') || '',
     playlist_id: u.searchParams.get('playlist_id') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',

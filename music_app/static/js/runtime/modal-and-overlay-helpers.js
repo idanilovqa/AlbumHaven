@@ -868,7 +868,7 @@ function openNonAlbumModal(options = {}) {
       subtitle,
       titleId: 'non-album-modal-title',
       subtitleId: 'non-album-modal-subtitle',
-      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+      actionsHtml: looseTracks.length ? buildLooseTracksHeaderActionsHtml() : '',
     });
   }
   if (typeof presentMobilePage === 'function') {

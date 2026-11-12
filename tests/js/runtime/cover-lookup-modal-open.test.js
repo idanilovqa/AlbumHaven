@@ -16,6 +16,17 @@ const helperPath = path.join(
   'cover-lookup-modal-and-drawer.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const tagEditHelperSource = fs.readFileSync(path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'utility-loaders-and-cover-lookup.js',
+), 'utf8');
 const ButtonComponent = require(path.join(__dirname, '../../../music_app/static/js/button-component.js'));
 
 test('opening Cover Lookup starts one gallery request without loading notification history', async () => {
@@ -248,6 +259,75 @@ test('an optimistic re-merge replaces a split notification with the current merg
   assert.equal(context.state.coverLookup.tasks[0].status, 'running', 'rollback keeps newer task progress');
   await context.openCoverLookupModal(oldAlbum, { taskId: 'split-task' });
   assert.equal(choices.length, 1, 'rollback restores the prior split chooser');
+});
+
+test('production optimistic split and re-merge keep notification and immediate track membership current', async () => {
+  class TestButton {}
+  const tracks = Array.from({ length: 4 }, (_value, index) => ({
+    path: `N:/Music/DDT/Remixes/0${index + 1}.flac`,
+    album: 'Remixes',
+    album_artist: 'DDT',
+    title: `Track ${index + 1}`,
+    track_number: index + 1,
+  }));
+  const original = { key: 'ddt::remixes', name: 'Remixes', album_artist: 'DDT', tracks };
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [{ id: 'remixes-task', album: original.name, album_payload: original }],
+        modal: { pastedImages: [] },
+      },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    deepCloneJson: value => JSON.parse(JSON.stringify(value)),
+    formatAlbumDuration: () => '',
+    formatCanonicalAlbumDuration: () => '',
+    findVisibleAlbumByTrackPaths: () => null,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    persistCoverLookupNotificationTasks() {},
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(tagEditHelperSource, context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async releases => choices.push(releases);
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  const split = context.buildOptimisticUpdatedAlbumsFromEdits(original, {
+    [tracks[0].path]: { album: 'Remixes 2' },
+    [tracks[1].path]: { album: 'Remixes 2' },
+  });
+  context.recordCoverLookupOptimisticSplit(original, split);
+  await context.openCoverLookupModal(original, { taskId: 'remixes-task' });
+  assert.deepEqual(Array.from(choices[0], album => album.tracks.length), [2, 2]);
+
+  const source = split.find(album => album.name === 'Remixes');
+  const destination = split.find(album => album.name === 'Remixes 2');
+  context.getIndexedAlbum = key => (key === source.key ? source : null);
+  const merged = context.buildOptimisticUpdatedAlbumsFromEdits(destination, {
+    [tracks[0].path]: { album: 'Remixes' },
+    [tracks[1].path]: { album: 'Remixes' },
+  });
+  context.recordCoverLookupOptimisticSplit(destination, merged);
+  await context.openCoverLookupModal(original, { taskId: 'remixes-task' });
+
+  assert.equal(choices.length, 1, 'the merged notification must not reopen the obsolete split chooser');
+  assert.equal(context.state.coverLookup.modal.album.name, 'Remixes');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.album.tracks, track => track.path).sort(),
+    tracks.map(track => track.path).sort(),
+  );
 });
 
 test('split album conflict closes Cover Lookup, asks in a compact chooser, then opens the chosen release', async () => {
@@ -1105,7 +1185,7 @@ test('background lookup marks its trigger busy before the start request settles'
   );
 });
 
-test('retry immediately queues the existing notification without adding another card', async () => {
+test('retry immediately shows the existing notification as searching without adding another card', async () => {
   const album = {
     album_artist: 'Eden',
     name: 'Perelandra',
@@ -1162,8 +1242,8 @@ test('retry immediately queues the existing notification without adding another 
 
   assert.deepEqual(renderSnapshots.at(-1), [{
     id: interruptedTask.id,
-    status: 'pending',
-    progressLabel: 'Queued',
+    status: 'running',
+    progressLabel: 'Searching...',
   }]);
 
   resolveStartRequest({

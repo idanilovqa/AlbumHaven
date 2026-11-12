@@ -1297,7 +1297,11 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     ]
     assert submissions == []
     assert asgi_app.state.library_state["cold_scan_pending"] is False
-    root_status, _root_headers, root_body = run_asgi_request(asgi_app, "GET", "/", query=root_query)
+    root_status, _root_headers, root_body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/albums" if root_query else "/",
+    )
     status_status, _status_headers, status_body = _run_asgi_http_get(asgi_app, "/status")
 
     assert root_status == 200

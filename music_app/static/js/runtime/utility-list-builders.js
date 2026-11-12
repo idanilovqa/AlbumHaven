@@ -441,7 +441,7 @@ function buildDetectedProblemsHtml(album) {
     return {
       key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
       cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(formatProblematicTrackLabel(track, row))}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${highlightProblematicTrackLabel(formatProblematicTrackLabel(track, row), state.utility.searchQuery)}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
           const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
           const rowKey = String(match?.row_key || '');
@@ -535,13 +535,13 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
-            ${showRepairedDisplay ? 'Converted tags' : 'Original tags'}
+            ${showRepairedDisplay ? 'Displaying: converted tags' : 'Displaying: original tags'}
           </button>
         ` : ''}
       </div>
         <div class="utility-detail-context-actions">
           ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
-          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
+          ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Edit Tags', title: 'Edit Tags', iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
           ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
           ${ButtonComponent.renderActionButton({ presentation: 'bare', ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
@@ -662,6 +662,15 @@ function formatProblematicTrackLabel(track = {}, row = {}) {
   const number = Number.parseInt(track.track_number ?? row.track_number, 10);
   if (title && Number.isInteger(number) && number > 0) return `${String(number).padStart(2, '0')}. ${title}`;
   return String(row.filename || getFilenameFromPath(row.path) || title || 'Unknown file');
+}
+
+function highlightProblematicTrackLabel(label, query) {
+  const text = String(label || '');
+  const needle = String(query || '').trim();
+  if (!needle) return escapeHtml(text);
+  const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+  if (index < 0) return escapeHtml(text);
+  return `${escapeHtml(text.slice(0, index))}<mark class="utility-track-search-match">${escapeHtml(text.slice(index, index + needle.length))}</mark>${escapeHtml(text.slice(index + needle.length))}`;
 }
 
 function resolveActiveQueueAlbumSnapshot(trackPath) {
@@ -3012,7 +3021,13 @@ function getProblemReasonTypes() {
       if (reason) reasons.add(reason);
     });
   });
-  return Array.from(reasons).sort((a, b) => a.localeCompare(b));
+  const current = Array.from(reasons).sort((a, b) => a.localeCompare(b));
+  if (state.utility.problematicFilesComplete === true) {
+    state.utility.completeProblemReasonTypes = current;
+    return current;
+  }
+  return Array.from(new Set([...(state.utility.completeProblemReasonTypes || []), ...current]))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function albumMatchesProblemFilters(album, selectedFilters = state.utility.selectedProblemFilters || []) {
@@ -3063,14 +3078,14 @@ function renderProblemFilterControls(els) {
             <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
             <span class="utility-problem-filter-label">${escapeHtml(reason)}</span>
           </button>
-        `).join('') + (state.utility.problematicFilesComplete === false
+        `).join('') + (state.utility.problematicFilesComplete === false && !(state.utility.completeProblemReasonTypes || []).length
         ? '<div class="utility-problem-filter-empty">Loading more problem types…</div>'
         : '')
       : '<div class="utility-problem-filter-empty">No problem types found.</div>';
     // List refreshes re-render the controls while the menu is open; rewriting
     // unchanged options would reset its scroll position and keyboard focus.
     if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {
-      els.problemFilterMenu.innerHTML = optionsHtml;
+      els.problemFilterMenu.innerHTML = `<div class="trigger-anchor-scroll">${optionsHtml}</div>`;
       renderedProblemFilterOptions.set(els.problemFilterMenu, optionsHtml);
     }
   }

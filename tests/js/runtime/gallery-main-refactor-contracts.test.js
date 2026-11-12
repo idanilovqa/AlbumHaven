@@ -289,11 +289,16 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   const listeners = {};
   const frames = [];
   let anchor;
-  const scroll = { scrollTop: 0, scrollLeft: 0, addEventListener: (type, callback) => { listeners[type] = callback; } };
+  const scroll = {
+    scrollTop: 0,
+    scrollLeft: 0,
+    addEventListener: (type, callback) => { listeners[type] = callback; },
+    getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+  };
   const currentAnchor = {
     isConnected: true,
     setAttribute() {},
-    getBoundingClientRect: () => ({ top: 150, bottom: 170, left: 40, right: 60, width: 20, height: 20 }),
+    getBoundingClientRect: () => ({ top: 151 - scroll.scrollTop, bottom: 171 - scroll.scrollTop, left: 40, right: 60, width: 20, height: 20 }),
   };
   const section = {
     dataset: { virtualSectionKey: 'artist:all:Neal Morse:0' },
@@ -337,12 +342,17 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   scroll.scrollTop = 1;
   listeners.scroll();
   assert.equal(surface.hidden, false, 'wheel or touchpad scrolling over the gallery keeps the popup open');
-  assert.equal(surface.style.top, '198px', 'the popup follows its artist header');
+  assert.equal(surface.style.top, '199px', 'scroll handling waits for the settled virtual header instead of jumping twice');
   frames.shift()();
   assert.equal(surface.style.top, '169px', 'the popup rebinds after virtual rendering replaces its header');
   scroll.scrollLeft = 1;
   listeners.scroll();
   assert.equal(surface.hidden, false, 'horizontal gallery scrolling also keeps the popup open');
+  frames.shift()();
+  scroll.scrollTop = 80;
+  listeners.scroll();
+  frames.shift()();
+  assert.equal(surface.hidden, true, 'the popup closes once its invoking information button leaves the gallery viewport');
 });
 
 test('Album Types uses the same theme-inheriting stacked-sleeves icon before and after hydration', () => {
@@ -687,6 +697,25 @@ test('artist non-album tracks stay disabled until the family count is known', ()
   context.updateGalleryMainControls();
   assert.equal(button.dataset.searchMatch, 'true');
   assert.equal(button['aria-description'], 'Contains tracks matching your search');
+});
+
+test('a stale enabled artist Loose Tracks button cannot open an empty new artist scope', () => {
+  let opened = 0;
+  const button = {
+    dataset: { libraryWide: '' },
+    disabled: false,
+    getAttribute: () => 'false',
+  };
+  const context = loadRuntime({
+    state: { view: { selected_artist: 'Начало Века', query: '', non_album_track_count: 0 }, ui: {} },
+    openNonAlbumModal: () => { opened += 1; },
+    hasHydratedArtistNonAlbumAvailability: () => true,
+  });
+  context.handleGalleryMainClick({
+    target: { closest: selector => selector === '[data-open-non-album-tracks]' ? button : null },
+    preventDefault() {},
+  });
+  assert.equal(opened, 0);
 });
 
 test('the phone Loose Tracks tab shows the search dot like the desktop button', () => {

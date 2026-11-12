@@ -8221,10 +8221,78 @@ test('Problematic Files names tagged tracks with their number and untagged track
   assert.equal(context.formatProblematicTrackLabel({}, { filename: '07 - Untitled.mp3' }), '07 - Untitled.mp3');
 });
 
+test('Problematic Files highlights only the matching track title or filename substring', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.escapeHtml = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  assert.equal(
+    context.highlightProblematicTrackLabel('03 - The Art of Noise.flac', 'art'),
+    '03 - The <mark class="utility-track-search-match">Art</mark> of Noise.flac',
+  );
+  assert.equal(
+    context.highlightProblematicTrackLabel('<Art>', 'art'),
+    '&lt;<mark class="utility-track-search-match">Art</mark>&gt;',
+  );
+  assert.equal(context.highlightProblematicTrackLabel('Track', 'artist'), 'Track');
+});
+
+test('Problematic Files keeps complete filter types while a bounded refresh is pending', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problematicFilesComplete = true;
+  context.state.utility.problematicFiles = [
+    { problem_reasons: ['Missing year'] },
+    { problem_reasons: ['Poor art quality'] },
+  ];
+  assert.deepEqual(Array.from(context.getProblemReasonTypes()), ['Missing year', 'Poor art quality']);
+
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.problematicFiles = [{ problem_reasons: ['Missing year'] }];
+  assert.deepEqual(Array.from(context.getProblemReasonTypes()), ['Missing year', 'Poor art quality']);
+  const elements = {
+    problemFilterButton: { classList: { toggle() {} }, setAttribute() {} },
+    problemFilterMenu: { hidden: true, innerHTML: '' },
+  };
+  context.renderProblemFilterControls(elements);
+  assert.match(elements.problemFilterMenu.innerHTML, /Poor art quality/);
+  assert.doesNotMatch(elements.problemFilterMenu.innerHTML, /Loading more problem types/);
+});
+
+test('Problematic Files filter uses a shared inner scroll owner so its anchor outline stays fixed', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  const menuRule = css.match(/\.utility-problem-filter-menu\s*\{([^}]*)\}/)?.[1] || '';
+  const triggerCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/trigger-anchor.css'), 'utf8');
+  const scrollRule = triggerCss.match(/\.trigger-anchor-scroll\s*\{([^}]*)\}/)?.[1] || '';
+
+  assert.match(helperSource, /<div class="trigger-anchor-scroll">\$\{optionsHtml\}<\/div>/);
+  assert.doesNotMatch(menuRule, /overflow-y:\s*auto/);
+  assert.match(scrollRule, /overflow-y:\s*auto/);
+  assert.match(scrollRule, /max-height:\s*var\(--trigger-anchor-scroll-max-height/);
+});
+
 test('track problem labels align while album problem labels stay content-sized', () => {
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
   assert.match(css, /\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
   assert.doesNotMatch(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill[^}]*inline-size:/);
+});
+
+test('Problematic Files tag display toggle is compact and actionable in both states', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  const toggleRule = css.match(/\.utility-repair-toggle\s*\{([^}]*)\}/)?.[1] || '';
+
+  assert.match(helperSource, /showRepairedDisplay \? 'Displaying: converted tags' : 'Displaying: original tags'/);
+  assert.match(helperSource, /aria-pressed="\$\{showRepairedDisplay \? 'true' : 'false'\}"/);
+  assert.match(toggleRule, /min-height:\s*22px/);
+  assert.match(toggleRule, /padding:\s*3px 8px/);
+  assert.match(toggleRule, /font-size:\s*0\.71rem/);
+  assert.match(toggleRule, /color:\s*var\(--text\)/);
+  assert.doesNotMatch(toggleRule, /width:\s*140px/);
+  assert.doesNotMatch(css, /\.utility-repair-toggle\.is-active\s*\{/);
+});
+
+test('Problematic Files reuses Album Details Edit Tags icon', () => {
+  assert.match(
+    helperSource,
+    /ariaLabel: 'Edit Tags'[\s\S]*?iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit'[\s\S]*?'data-open-tag-editor': '1'/,
+  );
 });
 
 test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {

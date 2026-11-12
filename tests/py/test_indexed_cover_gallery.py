@@ -112,6 +112,26 @@ def test_indexed_gallery_keeps_selected_cover_stored_outside_album_root(monkeypa
     assert payload["selected_source_path"] == str(active)
 
 
+def test_partial_indexed_gallery_does_not_publish_stale_active_dimensions(monkeypatch, tmp_path):
+    active = tmp_path / "album" / "selected.jpg"
+    payload = _serialize_without_file_access(
+        monkeypatch,
+        tmp_path / "album",
+        {"available": True, "complete": False, "candidates": []},
+        {
+            "cover_path": str(active),
+            "cover_revision": "d" * 64,
+            "local_cover_width": 599,
+            "local_cover_height": 543,
+        },
+    )
+
+    candidate = (payload["local_covers"] + payload["other_art"])[0]
+    assert candidate["path"] == str(active)
+    assert candidate["resolution"] == "Unknown"
+    assert candidate["width"] == candidate["height"] == 0
+
+
 def test_remote_only_progress_can_serialize_before_local_root_is_indexed(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         raise AssertionError("Remote-only progress must not resolve a local root")

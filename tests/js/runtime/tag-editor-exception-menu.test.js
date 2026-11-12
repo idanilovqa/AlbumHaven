@@ -45,8 +45,8 @@ test('exception editor uses an owned anchored listbox and keeps custom values ed
   );
   assert.match(
     componentCss,
-    /\.ui-dropdown-control\s*>\s*input\s*\{[^}]*cursor:\s*pointer/s,
-    'the shared dropdown control owns the pointer cursor under its chevron',
+    /\.ui-dropdown-control\s*\{[^}]*cursor:\s*pointer/s,
+    'the shared dropdown envelope owns the pointer cursor under its chevron',
   );
 });
 

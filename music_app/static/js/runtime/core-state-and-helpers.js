@@ -180,6 +180,7 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+    completeProblemReasonTypes: [],
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,

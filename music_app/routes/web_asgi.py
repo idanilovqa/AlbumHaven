@@ -1012,9 +1012,26 @@ async def favicon() -> Response:
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Response:
+    if (
+        request.url.path == "/"
+        and str(request.query_params.get("surface") or "").strip().casefold() == "albums"
+    ):
+        canonical_query = urlencode([
+            (key, value)
+            for key, value in request.query_params.multi_items()
+            if key != "surface"
+        ])
+        return RedirectResponse(
+            f"/albums{f'?{canonical_query}' if canonical_query else ''}",
+            status_code=307,
+        )
     request_started_at = time.perf_counter()
     request_started_epoch_ms = int(time.time() * 1000)
-    query_args = request.query_params
+    query_args = (
+        QueryParams([("surface", "albums"), *request.query_params.multi_items()])
+        if request.url.path == "/albums"
+        else request.query_params
+    )
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
@@ -1121,6 +1138,11 @@ async def index(request: Request) -> Response:
         else "shell_only",
     )
     return response
+
+
+@router.get("/albums", response_class=HTMLResponse)
+async def albums_page(request: Request) -> Response:
+    return await index(request)
 
 
 @router.get("/loose-tracks", response_class=HTMLResponse)

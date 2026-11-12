@@ -325,13 +325,25 @@ def test_favicon_route_returns_cacheable_empty_response(asgi_app):
     assert body == b""
 
 
-@pytest.mark.parametrize("path", ["/", "/loose-tracks"])
+def test_legacy_root_albums_query_redirects_to_canonical_path(asgi_app):
+    status, headers, _body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/",
+        query={"surface": "albums", "q": "Broadcast", "category": "hoard"},
+    )
+
+    assert status == 307
+    assert headers["location"] == "/albums?q=Broadcast&category=hoard"
+
+
+@pytest.mark.parametrize("path", ["/", "/albums", "/loose-tracks"])
 def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch, path):
     from music_app.routes import web_asgi
 
     def fake_build_postgres_root_startup_view(*, config, query_args, library_state):
         assert config is asgi_app.state.config
-        assert query_args.get("surface") is None
+        assert query_args.get("surface") == ("albums" if path == "/albums" else None)
         assert library_state is asgi_app.state.library_state
         return (
             {
@@ -620,7 +632,7 @@ def test_index_fails_loudly_when_postgres_browse_is_unavailable_without_file_fal
         ValueError,
         match="Postgres runtime persistence adapter is unavailable for library_browse",
     ):
-        run_asgi_request(asgi_app, "GET", "/", query={"surface": "albums"})
+        run_asgi_request(asgi_app, "GET", "/albums")
 
 
 def test_bootstrap_data_preserves_startup_hydration_query_contract(asgi_app, monkeypatch):
@@ -842,7 +854,7 @@ def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app,
     )
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
 
-    status, _headers, body = run_asgi_request(asgi_app, "GET", "/", query={"surface": "albums"})
+    status, _headers, body = run_asgi_request(asgi_app, "GET", "/albums")
 
     assert status == 200
     payload = _extract_bootstrap_payload_from_shell(body)
@@ -976,7 +988,7 @@ def test_index_surface_albums_ignores_cached_root_startup_preview_when_postgres_
         encoding="utf-8",
     )
 
-    status, _headers, body = run_asgi_request(asgi_app, "GET", "/", query={"surface": "albums"})
+    status, _headers, body = run_asgi_request(asgi_app, "GET", "/albums")
 
     assert status == 200
     payload = _extract_bootstrap_payload_from_shell(body)
@@ -1204,7 +1216,7 @@ def test_startup_sidebar_artist_links_keep_album_surface_contract():
 
     html = str(markup)
 
-    assert 'href="/?surface=albums&amp;q=dream+pop&amp;artist=Beach+House"' in html
+    assert 'href="/albums?q=dream+pop&amp;artist=Beach+House"' in html
     assert 'href="/?q=dream+pop&amp;artist=Beach+House"' not in html
 
 

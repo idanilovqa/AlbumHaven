@@ -1277,6 +1277,11 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
     size: 480,
     revision: selectedCandidate?.cover_revision,
   });
+  cacheOptimisticLocalCoverGallery(album, {
+    ...selectedCandidate,
+    path: normalizedSourcePath,
+    preview_url: selectedCandidate?.preview_url || src,
+  });
   state.coverLookup.optimisticAlbumCovers[signature] = { src, coverPath: normalizedSourcePath };
   return src;
 }
@@ -3372,6 +3377,44 @@ function cachedCoverLookupGalleryPayload(album) {
   return cached ? JSON.parse(JSON.stringify(cached)) : null;
 }
 
+function cacheOptimisticLocalCoverGallery(album, selectedCover) {
+  const path = String(selectedCover?.path || '').trim();
+  if (!path) return;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const previousCovers = Array.isArray(previousGallery?.local_covers)
+    ? previousGallery.local_covers : [];
+  const existing = previousCovers.find((cover) => coverLookupLocalPathMatches(cover?.path, path));
+  const width = Number(selectedCover?.width || 0) || null;
+  const height = Number(selectedCover?.height || 0) || null;
+  cacheCoverLookupGalleryPayload(album, {
+    ...(previousGallery || { ok: true, other_art: [] }),
+    remote_cover: null,
+    local_inventory_available: true,
+    selected_source_path: path,
+    active_cover_path: path,
+    local_covers: existing
+      ? previousCovers.map((cover) => (coverLookupLocalPathMatches(cover?.path, path)
+        ? {
+          ...cover,
+          ...selectedCover,
+          path,
+          is_active: true,
+          ...(selectedCover?.resolution || (width && height)
+            ? { resolution: selectedCover?.resolution || `${width}x${height}` }
+            : {}),
+        }
+        : { ...cover, is_active: false }))
+      : [{
+        ...selectedCover,
+        path,
+        is_active: true,
+        ...(selectedCover?.resolution || (width && height)
+          ? { resolution: selectedCover?.resolution || `${width}x${height}` }
+          : {}),
+      }, ...previousCovers.map((cover) => ({ ...cover, is_active: false }))],
+  });
+}
+
 function cacheOptimisticRemoteCoverGallery(album, selectedMatch, coverPath, taskId) {
   const normalizedPath = String(coverPath || '').trim();
   const marker = String(taskId || '').trim();
@@ -3983,10 +4026,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
         String(task?.id || '') === retryTaskId
           ? {
             ...task,
-            status: 'pending',
+            status: 'running',
             result_kind: '',
             progress: 0,
-            progress_label: 'Queued',
+            progress_label: 'Searching...',
             message: '',
             created_at: queuedAt,
             started_at: '',
@@ -4105,6 +4148,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
   if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupMutationPending(album)) return;
   const mutationKey = buildCoverLookupMutationKey(album);
   const previousAlbum = deepCloneJson(album);
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
   coverLookupPendingMutations.add(mutationKey);
   coverLookupGalleryRequest += 1;
@@ -4150,6 +4194,8 @@ async function saveLocalCoverFromLookup(sourcePath) {
     }
   } catch (error) {
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (previousGallery) cacheCoverLookupGalleryPayload(album, previousGallery);
+    else invalidateCoverLookupGalleryCache(album);
     if (previousAlbum) {
       clearOptimisticAlbumCovers([previousAlbum]);
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -4518,6 +4564,17 @@ async function savePastedCoverFromLookup(imageId) {
       throw new Error(data.error || 'Failed to save pasted image.');
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
+    const updatedAlbum = updatedAlbums[0];
+    if (updatedAlbum?.cover_path) {
+      cacheOptimisticLocalCoverGallery(album, {
+        path: updatedAlbum.cover_path,
+        preview_url: pastedItem.data_url,
+        filename: pastedItem.filename,
+        width: pastedItem.width,
+        height: pastedItem.height,
+        cover_revision: updatedAlbum.cover_revision,
+      });
+    }
     clearOptimisticAlbumCovers(updatedAlbums);
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);

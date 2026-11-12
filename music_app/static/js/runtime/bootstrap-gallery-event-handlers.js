@@ -405,6 +405,13 @@ function handleGalleryBootstrapClick(event) {
     state.ui.pendingSidebarSelectedArtist = '';
     state.ui.pendingSidebarAllArtistsActive = !opensMobileHome;
     if (opensMobileHome) {
+      const reusableHomeBrowseView = typeof getReusableRootBrowseView === 'function'
+        ? getReusableRootBrowseView({ ...nextView, surface: { active: 'albums' }, surface_request: 'albums' })
+        : null;
+      if (Array.isArray(reusableHomeBrowseView?.artists_sidebar)) {
+        nextView.artists_sidebar = reusableHomeBrowseView.artists_sidebar;
+        nextView.show_all_artists_sidebar_link = reusableHomeBrowseView.show_all_artists_sidebar_link;
+      }
       applyViewPayload(nextView, { trackSidebarReveal: false });
       pushBrowserViewState(nextView);
       renderSidebar();

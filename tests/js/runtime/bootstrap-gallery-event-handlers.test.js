@@ -1590,6 +1590,29 @@ test('library-home navigation opens Home on mobile instead of All artists', () =
   assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
 });
 
+test('mobile Home restores the cached full Artist Tree before its request completes', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    artists_sidebar: [{ artist: 'Broadcast', count: 7 }, { artist: 'Mono', count: 4 }],
+    show_all_artists_sidebar_link: true,
+  };
+  const { context, calls } = createContext({ cachedRootView, useProductionBuildApiUrl: true });
+  context.usesMobilePageLayout = () => true;
+  context.state.view.query = 'flower kings';
+  context.state.view.artists_sidebar = [{ artist: 'The Flower Kings', count: 1 }];
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.applyViewPayload[0].payload.artists_sidebar)),
+    cachedRootView.artists_sidebar,
+  );
+  assert.equal(calls.applyViewPayload[0].payload.query, '');
+  assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
+});
+
 test('mobile Home removes the Artists search-results dot left by an earlier search', () => {
   const { context } = createContext({ searchInputValue: 'DDT', useProductionBuildApiUrl: true });
   const button = {
@@ -5788,7 +5811,7 @@ test('gallery presentation changes preserve a semantic anchor instead of obsolet
 
 test('enabled source remains in search requests after category-restricted hydration', () => {
   const { context, calls } = createContext({ useProductionBuildApiUrl: true,
-    currentUrl: 'http://localhost/?surface=albums&category=main_library' });
+    currentUrl: 'http://localhost/albums?category=main_library' });
   context.appBootstrap = { getInitialView: () => ({ visible_library_categories: ['main_library'] }) };
   const runtimeRoot = path.dirname(helperPath);
   for (const file of ['response-state-helpers.js', 'gallery-main-interactions.js']) {
@@ -5800,6 +5823,10 @@ test('enabled source remains in search requests after category-restricted hydrat
   context.state.gallery.mainState = context.createGalleryMainState({
     sources: { main_library: true, new_arrivals: false, hoard: false },
   });
+  context.state.gallery.sourceTotalsRevision = 0;
+  context.state.gallery.sourceTotalsByScope = {
+    'hoard|main_library': { artistCount: 1, albumCount: 1 },
+  };
   context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
   assert.deepEqual(new URL(calls.fetchAndRender.at(-1).url, 'http://localhost').searchParams.getAll('category'), ['main_library', 'hoard']);
   context.applyViewPayload({ ...context.state.view,
@@ -5823,7 +5850,7 @@ test('enabled source remains in search requests after category-restricted hydrat
 test('source changes request an authoritative Artist Tree instead of preserving the stale sidebar', () => {
   const { context, calls } = createContext({
     useProductionBuildApiUrl: true,
-    currentUrl: 'http://localhost/?surface=albums&category=main_library',
+    currentUrl: 'http://localhost/albums?category=main_library',
   });
   const runtimeRoot = path.dirname(helperPath);
   vm.runInContext(fs.readFileSync(path.join(runtimeRoot, 'gallery-main-interactions.js'), 'utf8'), context);
@@ -5836,6 +5863,10 @@ test('source changes request an authoritative Artist Tree instead of preserving 
   context.state.gallery.mainState = context.createGalleryMainState({
     sources: { main_library: true, new_arrivals: false, hoard: false },
   });
+  context.state.gallery.sourceTotalsRevision = 0;
+  context.state.gallery.sourceTotalsByScope = {
+    'main_library|new_arrivals': { artistCount: 1, albumCount: 1 },
+  };
 
   context.transitionGalleryMain({ type: 'toggle-source', source: 'new_arrivals' });
 
@@ -5849,7 +5880,7 @@ for (const [loadedSource, expectsLoader] of [['new_arrivals', false], ['main_lib
   test(`switching to New Arrivals ${expectsLoader ? 'shows the shared loader when no loaded album remains' : 'keeps loaded New Arrivals albums visible'}`, () => {
     const { context, calls } = createContext({
       useProductionBuildApiUrl: true,
-      currentUrl: 'http://localhost/?surface=albums',
+      currentUrl: 'http://localhost/albums',
     });
     vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-interactions.js'), 'utf8'), context);
     const categories = ['main_library', 'new_arrivals', 'hoard'];
@@ -5863,6 +5894,10 @@ for (const [loadedSource, expectsLoader] of [['new_arrivals', false], ['main_lib
     context.state.gallery.mainState = context.createGalleryMainState({
       sources: { main_library: false, new_arrivals: true, hoard: true },
     });
+    context.state.gallery.sourceTotalsRevision = 0;
+    context.state.gallery.sourceTotalsByScope = {
+      new_arrivals: { artistCount: 1, albumCount: 1 },
+    };
 
     context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
 

@@ -202,8 +202,6 @@ def build_startup_cover_url(album: dict[str, object]) -> str:
 def build_startup_sidebar_href(view: dict[str, object], artist: str | None = None) -> str:
     params: list[tuple[str, str]] = []
     query_raw = str(view.get("query") or "").strip()
-    if query_raw or artist:
-        params.append(("surface", "albums"))
     if query_raw:
         params.append(("q", query_raw))
     if artist:
@@ -229,7 +227,7 @@ def build_startup_sidebar_href(view: dict[str, object], artist: str | None = Non
             params.append(("related_artist", related_artist_text))
     if bool(view.get("primary_filter_active")):
         params.append(("primary_filter", "1"))
-    return "/" if not params else f"/?{urlencode(params, doseq=True)}"
+    return "/albums" if not params else f"/albums?{urlencode(params, doseq=True)}"
 
 
 def resolve_effective_selected_artist(view: dict[str, object] | None) -> str:

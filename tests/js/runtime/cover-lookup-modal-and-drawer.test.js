@@ -5147,6 +5147,14 @@ for (const status of ['pending', 'running']) {
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(updatedAlbums);
   };
+  const previousGallery = {
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: album.cover_path,
+    local_covers: [{ path: album.cover_path, is_active: true }, { path: sourcePath, is_active: false }],
+    other_art: [],
+  };
+  context.cacheCoverLookupGalleryPayload(album, previousGallery);
   context.fetch = async () => ({
     ok: false,
     json: async () => ({ ok: false, error: 'selection failed' }),
@@ -5159,6 +5167,15 @@ for (const status of ['pending', 'running']) {
     undefined,
   );
   assert.equal(JSON.stringify(refreshedAlbums.at(-1)), JSON.stringify([album]));
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.cachedCoverLookupGalleryPayload(album))),
+    previousGallery,
+  );
+  context.invalidateCoverLookupGalleryCache(album);
+
+  await context.saveLocalCoverFromLookup(sourcePath);
+
+  assert.equal(context.cachedCoverLookupGalleryPayload(album), null);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -6855,6 +6872,91 @@ require('node:test')('optimistic cover changes keep cached LOCAL cards for immed
   }
 });
 
+require('node:test')('local cover selection updates the cached active card before immediate reopen', () => {
+  const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Fleet Foxes/01.flac' }] };
+  const context = loadHelper({
+    getAlbumPathSignature: () => 'fleet-foxes',
+    getAlbumRequestKey: value => String(value?.key || ''),
+    buildCoverUrl: path => `/cover/${path.split('/').pop()}`,
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal.localCovers = [
+    { path: 'N:/Fleet Foxes/old.jpg', is_active: true },
+    { path: 'N:/Fleet Foxes/new.jpg', is_active: false },
+  ];
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Fleet Foxes/old.jpg',
+    remote_cover: { url: 'https://images.example/old-remote.jpg' },
+    local_covers: context.state.coverLookup.modal.localCovers,
+    other_art: [],
+  });
+
+  context.applyOptimisticLocalCoverSelection(album, 'N:/Fleet Foxes/new.jpg');
+
+  const cached = context.cachedCoverLookupGalleryPayload(album);
+  assert.equal(cached.selected_source_path, 'N:/Fleet Foxes/new.jpg');
+  assert.equal(cached.remote_cover, null);
+  assert.deepEqual(Array.from(cached.local_covers, item => [item.path, item.is_active]), [
+    ['N:/Fleet Foxes/old.jpg', false],
+    ['N:/Fleet Foxes/new.jpg', true],
+  ]);
+});
+
+require('node:test')('successful pasted cover seeds the cached LOCAL card before notification reopen', async () => {
+  const album = {
+    key: 'fleet-foxes',
+    name: 'Fleet Foxes',
+    tracks: [{ path: 'N:/Fleet Foxes/01.flac' }],
+  };
+  const pasted = {
+    id: 'new-cover',
+    data_url: 'data:image/jpeg;base64,new-cover',
+    mime_type: 'image/jpeg',
+    filename: 'new-cover.jpg',
+    width: 600,
+    height: 543,
+  };
+  const updatedAlbum = { ...album, cover_path: 'N:/Fleet Foxes/cover.jpg', cover_revision: 'new-revision' };
+  const context = loadHelper({
+    deepCloneJson: value => JSON.parse(JSON.stringify(value)),
+    getAlbumPathSignature: () => 'fleet-foxes',
+    getAlbumRequestKey: value => String(value?.key || ''),
+    showToast: () => {},
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, updated_album: updatedAlbum }),
+    }),
+  });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal = { album, taskId: '', pastedImages: [pasted] };
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Fleet Foxes/old.jpg',
+    local_covers: [{ path: 'N:/Fleet Foxes/old.jpg', is_active: true }],
+    other_art: [],
+  });
+  context.closeCoverLookupModal = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.renderCoverLookupDrawer = () => {};
+
+  await context.savePastedCoverFromLookup(pasted.id);
+
+  const cached = context.cachedCoverLookupGalleryPayload(album);
+  assert.equal(cached.selected_source_path, updatedAlbum.cover_path);
+  assert.deepEqual(
+    [cached.local_covers[0].path, cached.local_covers[0].preview_url, cached.local_covers[0].resolution],
+    [updatedAlbum.cover_path, pasted.data_url, '600x543'],
+  );
+  assert.equal(cached.local_covers[0].is_active, true);
+  assert.equal(cached.local_covers[1].is_active, false);
+});
+
 require('node:test')('accepted remote save seeds and selects its new LOCAL card on immediate notification reopen', async () => {
   class TestButton { setAttribute(name, value) { this[name] = String(value); } }
   const overlay = {
@@ -8011,9 +8113,9 @@ require('node:test')('retry immediately resets the existing card label tone and 
   await Promise.resolve();
 
   assert.equal(context.state.coverLookup.tasks.length, 1);
-  assert.equal(context.state.coverLookup.tasks[0].status, 'pending');
+  assert.equal(context.state.coverLookup.tasks[0].status, 'running');
   assert.equal(context.state.coverLookup.tasks[0].progress, 0);
-  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Queued');
+  assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Searching...');
   assert.equal(context.state.coverLookup.tasks[0].message, '');
   assert.equal(renderOptions[0]?.preserveInteraction, false);
   const { context: drawerContext, bodyElement } = createDrawerHarness();
@@ -8021,7 +8123,7 @@ require('node:test')('retry immediately resets the existing card label tone and 
     JSON.parse(JSON.stringify(context.state.coverLookup.tasks[0])),
   ];
   drawerContext.renderCoverLookupDrawer({ preserveInteraction: false });
-  assert.match(bodyElement.innerHTML, /is-running[^>]*>Queued</);
+  assert.match(bodyElement.innerHTML, /is-running[^>]*>Searching</);
   assert.match(bodyElement.innerHTML, /width:\s*0%/);
   assert.doesNotMatch(bodyElement.innerHTML, /is-failed/);
   resolveFetch({

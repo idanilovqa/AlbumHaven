@@ -948,6 +948,46 @@ test('one selected track album edit leaves sibling tracks in the source album', 
   );
 });
 
+test('production optimistic builder preserves exact split and immediate re-merge membership', () => {
+  const context = loadHelpers();
+  const tracks = Array.from({ length: 4 }, (_value, index) => ({
+    path: `C:\\Music\\DDT\\Remixes\\0${index + 1}.flac`,
+    album: 'Remixes',
+    album_artist: 'DDT',
+    title: `Track ${index + 1}`,
+    track_number: index + 1,
+  }));
+  const original = {
+    key: 'ddt::remixes',
+    name: 'Remixes',
+    album_artist: 'DDT',
+    preview_only: false,
+    tracks,
+  };
+
+  const split = context.buildOptimisticUpdatedAlbumsFromEdits(original, {
+    [tracks[0].path]: { album: 'Remixes 2' },
+    [tracks[1].path]: { album: 'Remixes 2' },
+  });
+  const splitSource = split.find(album => album.name === 'Remixes');
+  const splitDestination = split.find(album => album.name === 'Remixes 2');
+  assert.deepEqual(Array.from(splitSource.tracks, track => track.path), [tracks[2].path, tracks[3].path]);
+  assert.deepEqual(Array.from(splitDestination.tracks, track => track.path), [tracks[0].path, tracks[1].path]);
+
+  context.getIndexedAlbum = key => (key === splitSource.key ? splitSource : null);
+  const merged = context.buildOptimisticUpdatedAlbumsFromEdits(splitDestination, {
+    [tracks[0].path]: { album: 'Remixes' },
+    [tracks[1].path]: { album: 'Remixes' },
+  });
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].name, 'Remixes');
+  assert.deepEqual(
+    Array.from(merged[0].tracks, track => track.path).sort(),
+    tracks.map(track => track.path).sort(),
+  );
+});
+
 test('blanking Album on the only track produces no optimistic gallery album', () => {
   const context = loadHelpers();
   const trackPath = 'C:\\Music\\Artist\\Only Album\\01 Only.flac';

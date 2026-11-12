@@ -350,6 +350,32 @@ test('populated Loose Tracks paints before deferred table enhancements run', () 
   ]);
 });
 
+test('empty Loose Tracks does not offer Edit Tags', () => {
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.ui = {};
+  context.hasHydratedLibraryNonAlbumTracks = () => true;
+  context.getVisibleNonAlbumTracks = () => [];
+  context.buildLooseTracksHeaderActionsHtml = () => '<button data-open-non-album-tag-editor="1">Edit</button>';
+  context.buildAlbumDetailsHeaderHtml = config => config.actionsHtml || '';
+
+  context.openNonAlbumModal({ libraryWide: true });
+
+  assert.doesNotMatch(header.innerHTML, /data-open-non-album-tag-editor/);
+});
+
 test('initial artist loose tracks remain usable without a second gallery request', async () => {
   const { context } = loadHelper();
   const tracks = [{ path: '/music/agalloch/loose.flac', artist: 'Agalloch', title: 'Loose' }];

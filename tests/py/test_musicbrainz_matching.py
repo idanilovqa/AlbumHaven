@@ -11,8 +11,10 @@ from music_app.services.musicbrainz_evidence import (
     album_signals,
     candidate_name_keys,
     decide,
+    group_title_keys,
     name_keys,
     name_relation,
+    ranked_title_matches,
     title_agreement,
     title_keys,
 )
@@ -355,3 +357,93 @@ def test_a_collaboration_is_never_split_or_given_to_one_member_by_certain_albums
     menken = _candidate("menken", ["strong"], name=False, signals=CERTAIN, canonical="Alan Menken")
 
     assert decide([menken], "Alan Menken & Glenn Slater")["classification"] == "unconfirmed"
+
+
+# Owner review 4 (2026-11-09): titles under other forms, with the tracklist bar.
+@pytest.mark.parametrize(("local", "remote", "expected"), [
+    ("The Seim A New", "The Seim Anew", "exact"),                    # spacing only
+    ("Jinsei Game (人生ゲイム)", "人生ゲイム", "exact"),                # the bracketed original
+    ("22 strings", "22 Strings/Cordes", "exact"),                     # one side of a bilingual title
+    ("Up to 30", "Up to Thirty", "exact"),                            # a number in words
+    ("RTJ3", "Run the Jewels 3", "exact"),                            # the band's initials
+    ("Toy Manitee", "Toy Matinee", "typo"),                           # two letters swapped
+    ("Exodus: Slaves for Life", "Slaves for Life", "partial"),   # a subtitle is only part of a title
+    ("Up to 30 + 3 + Infinity", "30+3+Infinity", "partial"),
+    ("Tusk", "Tusks", None),
+    ("Abbey Road", "Abbey Lane", None),
+])
+def test_owner_review_4_title_forms(local, remote, expected):
+    names = ("Run the Jewels", "Amaseffer")
+    assert title_agreement(local, remote, names) == expected
+
+
+def test_a_typo_or_partial_title_counts_only_with_a_matching_tracklist():
+    for title in ("typo", "partial"):
+        assert album_level(title, {"year", "track_count"}) is None
+        assert album_level(title, {"track_list", "track_count"}) == "strong"
+
+
+@pytest.mark.parametrize(("local", "title", "comment"), [
+    ("Live", "Unrelated", "live"),
+    ("Recorded in New York", "Unrelated", "recorded in New York"),
+    ("Recorded New York", "Recorded Old York", "Recorded New York"),
+])
+def test_a_release_group_comment_is_not_exact_title_evidence_without_tracks(local, title, comment):
+    group = {"title": title, "disambiguation": comment}
+
+    matches = ranked_title_matches(local, [(group, group_title_keys(group))])
+
+    assert matches == [(group, "partial")]
+    assert album_level(matches[0][1], {"year", "track_count"}) is None
+
+
+def test_mojibake_tags_compare_with_their_repaired_text():
+    assert name_keys("Korai Цrцm") & name_keys("Korai Öröm")
+    assert name_keys("BjÃ¶rk") & name_keys("Björk")
+    assert not name_keys("Кино") & name_keys("Kino Öröm")
+
+
+def test_equal_track_counts_compare_lengths_track_by_track():
+    # Diatom: a 7:40 first track against a 3:00 one is not a length match, whatever the total.
+    local = {"tracks": [{"title": "A", "duration_seconds": 180}, {"title": "B", "duration_seconds": 460}]}
+    remote = {"tracks": [{"title": "X", "length": 460000}, {"title": "Y", "length": 180000}]}
+    assert "durations" not in album_signals(local, remote)
+
+
+def test_a_release_whose_tracks_differ_is_no_evidence_whatever_its_title():
+    # Dramatic View and an unrelated "1973": the year and the count agree, the fetched
+    # titles and lengths do not. Matching is led by the tracks (owner, 2026-11-10).
+    local = {"year": 2015, "tracks": [{"title": "A", "duration_seconds": 100}, {"title": "B", "duration_seconds": 200}]}
+    remote = {"first_release_date": "2015", "tracks": [{"title": "C", "length": 300000}, {"title": "D", "length": 50000}]}
+    signals = album_signals(local, remote)
+    assert signals == {"year", "track_count", "tracks_differ"}
+    assert album_level("exact", signals) is None
+
+
+def test_missing_musicbrainz_lengths_are_unknown_not_a_mismatch():
+    local = {"tracks": [{"title": "A", "duration_seconds": 100}, {"title": "B", "duration_seconds": 200}]}
+    remote = {"tracks": [{"title": "A", "length": 0}, {"title": "B", "length": 0}]}
+    assert album_signals(local, remote) == {"track_count", "track_list", "lengths_unknown"}
+
+
+def test_a_shorter_musicbrainz_tracklist_inside_the_local_one_agrees():
+    # Karma: MusicBrainz lists the cassette's 4 tracks; the local edition adds 3.
+    local = {"tracks": [{"title": t, "duration_seconds": s} for t, s in
+                        (("Intruder D'or", 237), ("Tigers In The Rain", 468), ("Small Fish", 291),
+                         ("Nine Cats", 873), ("Five", 500), ("Six", 600), ("Seven", 700))]}
+    remote = {"tracks": [{"title": t, "length": s * 1000} for t, s in
+                         (("Intruder d’or", 237), ("Tigers in the Rain", 468), ("Small Fish", 291), ("Nine Cats", 873))]}
+    assert {"track_list", "durations"} <= album_signals(local, remote)
+
+
+def test_a_one_word_bracket_or_slash_part_is_never_a_title_of_its_own():
+    assert title_agreement("Foo (Live)", "Live") is None
+    assert title_agreement("Abbey Road (Remastered 2009)", "Remastered") is None
+    assert title_agreement("Mysterious Realms / Heidebilder", "Heidebilder") is None
+    assert title_agreement("22 strings", "22 Strings/Cordes") == "exact"
+
+
+def test_titles_sharing_only_generic_words_never_agree_partially():
+    """Jay-Z: "The Grey Album" (a mash-up of The Black Album's songs) is not that album."""
+    assert title_agreement("The Grey Album", "The Black Album (Pete Rock Remix)") is None
+    assert title_agreement("Keys to the Paradise", "Keys to the Palace") == "partial"

@@ -469,7 +469,6 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
     assert migration_names[-75:] == [
-        "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -544,6 +543,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0175_add_musicbrainz_match_album_evidence.sql",
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
+        "0178_add_musicbrainz_associated_artists.sql",
     ]
 
 

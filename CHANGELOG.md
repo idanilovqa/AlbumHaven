@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.3 - 2026-11-12
+
+- Improved MusicBrainz matching across localized, original-script, alternate, split, re-release and compilation titles, with bounded typo and mojibake handling and exact track evidence.
+- Kept evidence honest when MusicBrainz track lengths are missing or releases disagree, and gave split-artist albums enough matching attempts.
+- Linked a same-name person and band when MusicBrainz records the membership, while keeping differently named collaborations separate; migration 0178 stores the associated artist identities.
+
 ## 0.11.2 - 2026-11-12
 
 - Added MusicBrainz artist identity for album artists: each artist is matched on album evidence (titles, track titles, track counts and lengths), never on a name alone, and an album that certainly matches one MusicBrainz artist gives that artist its identity. The tags themselves never change.

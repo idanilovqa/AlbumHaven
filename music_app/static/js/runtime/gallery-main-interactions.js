@@ -727,7 +727,9 @@ function buildGalleryArtistExternalLinksHtml(artistMusicBrainz, artist) {
 // A local name whose albums belong to several MusicBrainz artists (Amarok) lists each
 // with its albums and its own MusicBrainz link.
 function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
-  const identities = Array.isArray(artistMusicBrainz?.identities) ? artistMusicBrainz.identities : [];
+  // A split name lists every artist; a person lists the same-named band they belong to.
+  const associated = Array.isArray(artistMusicBrainz?.associated) ? artistMusicBrainz.associated : [];
+  const identities = Array.isArray(artistMusicBrainz?.identities) ? artistMusicBrainz.identities : associated;
   if (!identities.length) return '';
   const items = identities.map((identity) => {
     const name = [identity.canonical_name, identity.disambiguation ? `(${identity.disambiguation})` : '']
@@ -737,7 +739,10 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
     });
     return `<li class="artist-info-overlay__identity"><span>${escapeHtml(name)} · ${escapeHtml(galleryMainPlural(identity.album_count, 'album'))}</span>${link}</li>`;
   }).join('');
-  return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">Your albums belong to ${escapeHtml(galleryMainPlural(identities.length, 'MusicBrainz artist'))}:</p><ul>${items}</ul></div>`;
+  const heading = identities === associated
+    ? 'Also on MusicBrainz as:'
+    : `Your albums belong to ${escapeHtml(galleryMainPlural(identities.length, 'MusicBrainz artist'))}:`;
+  return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
 function openGalleryArtistInfo(anchor) {

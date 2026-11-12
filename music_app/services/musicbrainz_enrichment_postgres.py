@@ -17,7 +17,9 @@ _OWNER_SYNC_REASON = "library_menu_sync"
 # re-checked by the next backfill (migration 0174). Version 3 adds box-set discs,
 # matched siblings, Last.fm album identifiers and per-album assignment. Version 4
 # gives each album the artist it certainly matches, with no margin (owner, 2026-11-08).
-MATCHER_VERSION = 4
+# Version 5 reads every release's title, partial and typo titles with their tracks,
+# other scripts and code pages, and compares a split artist's undecided albums (2026-11-09).
+MATCHER_VERSION = 5
 # Local "artists" that name no artist: never matched, never a problem.
 _PLACEHOLDER_ARTIST_NAMES = ("various artists", "various artist", "various", "va", "v.a.", "v/a",
                              "unknown", "unknown artist", "[unknown]", "artist unknown")
@@ -128,7 +130,7 @@ class MusicBrainzEnrichmentPostgresRepository:
               -- outcome for one is withdrawn, an owner's own choice is kept.
               update library.local_artist_musicbrainz_matches matches
               set state = 'not_found', artist_mbid = null, confidence = 0, credit_name = null,
-                  album_evidence = null, selected_at = null, last_verified_at = null,
+                  album_evidence = null, associated_artist_mbids = null, selected_at = null, last_verified_at = null,
                   evidence_summary = 'Not an artist: a display name such as Various Artists.',
                   updated_at = %(observed_at)s
               from placeholder_artists
@@ -578,9 +580,10 @@ class MusicBrainzEnrichmentPostgresRepository:
         album_evidence: list[dict[str, object]] | None = None,
         album_identities: list[dict[str, object]] | None = None,
         identity_artists: list[dict[str, object]] | None = None,
+        associated_artist_mbids: list[str] | None = None,
     ) -> dict[str, object]:
-        """``album_identities`` are the albums a MusicBrainz artist certainly holds; a
-        ``per_album`` outcome names those artists in ``identity_artists``."""
+        """``album_identities`` are the albums a MusicBrainz artist certainly holds;
+        ``identity_artists`` names those artists (a split's, or a person's band)."""
         projection = _artist_projection(artist)
         aliases = projection["aliases"] if projection else []
         tags = projection["tags"] if projection else []
@@ -593,6 +596,8 @@ class MusicBrainzEnrichmentPostgresRepository:
             "observed_at": _aware_utc(observed_at),
             "credit_name": _bounded_text(credit_name, 512) or None,
             "album_evidence": _album_evidence(album_evidence),
+            "associated_artist_mbids": [mbid for mbid in map(_optional_mbid, associated_artist_mbids or ()) if mbid]
+            or None,
             "matcher_version": MATCHER_VERSION,
             **_projection_params(projection),
             **_alias_array_params(aliases),
@@ -1639,6 +1644,7 @@ def _upsert_candidate_match_sql() -> str:
            and artists.id = %(local_artist_id)s
           on conflict (library_id, local_artist_id) do update
           set state = excluded.state,
+              associated_artist_mbids = null,
               confidence = excluded.confidence,
               evidence_summary = excluded.evidence_summary,
               provider_classification = excluded.provider_classification,
@@ -1764,7 +1770,8 @@ def _automatic_outcome_sql() -> str:
             library_id, local_artist_id, artist_mbid, state, decision_source,
             confidence, evidence_summary, selected_at, last_verified_at,
             provider_classification, provider_observed_at, first_observed_at,
-            last_observed_at, created_at, updated_at, credit_name, album_evidence
+            last_observed_at, created_at, updated_at, credit_name, album_evidence,
+            associated_artist_mbids
           )
           select active_artist.library_id, active_artist.id,
                  (select mbid from upsert_artist), %(match_state)s, 'automatic',
@@ -1774,7 +1781,8 @@ def _automatic_outcome_sql() -> str:
                  %(provider_state)s, %(observed_at)s, %(observed_at)s,
                  %(observed_at)s, %(observed_at)s, %(observed_at)s,
                  case when %(match_state)s = 'matched' then %(credit_name)s else null end,
-                 case when %(match_state)s = 'matched' then %(album_evidence)s::jsonb else null end
+                 case when %(match_state)s = 'matched' then %(album_evidence)s::jsonb else null end,
+                 case when %(match_state)s = 'matched' then %(associated_artist_mbids)s::uuid[] else null end
           from active_artist
           where active_artist.is_present or %(provider_state)s = 'not_present'
           on conflict (library_id, local_artist_id) do update
@@ -1782,6 +1790,7 @@ def _automatic_outcome_sql() -> str:
               state = excluded.state,
               credit_name = excluded.credit_name,
               album_evidence = excluded.album_evidence,
+              associated_artist_mbids = excluded.associated_artist_mbids,
               confidence = excluded.confidence,
               evidence_summary = excluded.evidence_summary,
               selected_at = excluded.selected_at,
@@ -1905,6 +1914,7 @@ def _manual_match_sql() -> str:
         set artist_mbid = excluded.artist_mbid,
             state = 'matched',
             decision_source = 'manual',
+            associated_artist_mbids = null,
             confidence = excluded.confidence,
             evidence_summary = excluded.evidence_summary,
             selected_at = excluded.selected_at,

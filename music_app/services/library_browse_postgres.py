@@ -8193,23 +8193,26 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
             "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
 
 
+def _projected_identities(identities: object) -> list[dict[str, object]]:
+    if isinstance(identities, str):
+        identities = json.loads(identities)
+    return [
+        {"artist_mbid": str(item.get("artist_mbid")),
+         "musicbrainz_url": f"https://musicbrainz.org/artist/{item.get('artist_mbid')}",
+         "canonical_name": item.get("canonical_name"), "disambiguation": item.get("disambiguation") or None,
+         "album_count": int(item.get("album_count") or 0)}
+        for item in identities or [] if isinstance(item, Mapping) and item.get("artist_mbid")
+    ] if isinstance(identities, list) else []
+
+
 def _artist_musicbrainz_projection(
     row: Mapping[str, object],
 ) -> dict[str, object] | None:
     artist_mbid = str(row.get("artist_mbid") or "").strip().lower()
     if not artist_mbid:
-        identities = row.get("artist_identities")
-        if isinstance(identities, str):
-            identities = json.loads(identities)
-        if not isinstance(identities, list) or not identities:
-            return None
+        identities = _projected_identities(row.get("artist_identities"))
         # A local name whose albums belong to several MusicBrainz artists.
-        return {"identities": [
-            {"artist_mbid": str(item.get("artist_mbid")),
-             "musicbrainz_url": f"https://musicbrainz.org/artist/{item.get('artist_mbid')}",
-             "canonical_name": item.get("canonical_name"), "disambiguation": item.get("disambiguation") or None,
-             "album_count": int(item.get("album_count") or 0)}
-            for item in identities if isinstance(item, Mapping) and item.get("artist_mbid")]}
+        return {"identities": identities} if identities else None
     raw_genres = row.get("artist_genres")
     genres = (
         [
@@ -8233,6 +8236,10 @@ def _artist_musicbrainz_projection(
     if credit_name:
         # Matched through a release credit: "credited as 3 Crows".
         projection["credited_as"] = credit_name
+    associated = _projected_identities(row.get("artist_identities"))
+    if associated:
+        # A person's same-named band, whose albums keep its own MBID (Alice Cooper).
+        projection["associated"] = associated
     discogs_artist_id = row.get("artist_discogs_artist_id")
     if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
         projection["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"
@@ -8748,7 +8755,10 @@ def _artist_musicbrainz_projection_joins_sql(
              and identity.album_key = identity_album.album_key
             join integration.musicbrainz_artists identity_artist
               on identity_artist.mbid = identity.artist_mbid
-            where split_match.local_artist_id is not null
+            -- The first test depends only on the outer row: other artists skip the scan.
+            where (split_match.local_artist_id is not null or artist_match.associated_artist_mbids is not null)
+              and (split_match.local_artist_id is not null
+                   or identity.artist_mbid = any(artist_match.associated_artist_mbids))
               and identity_album.library_id = {library_id}
               and identity_album.artist_id = {artist_id}
             group by 1, 2, 3

@@ -234,14 +234,14 @@ test('notification hover evidence waits for finite owned transitions before read
 test('cover toast entrance observer detects movement and owns bounded cleanup', async (t) => {
   const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
   const vm = require('node:vm');
-  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'already-settled', 'timeout', 'cancel']) {
+  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'settled-first-running-frame', 'already-settled', 'already-animating', 'timeout', 'cancel']) {
     await t.test(scenario, async () => {
       const frames = new Map();
       const timers = new Map();
       let nextId = 0;
       let settled = scenario === 'already-settled';
       let progressVisible = false;
-      let toastVisible = scenario !== 'settled-after-baseline';
+      let toastVisible = ['already-settled', 'already-animating'].includes(scenario);
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
         querySelector: () => ({ textContent: 'Cover search started.' }),
@@ -285,18 +285,34 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         callback();
       };
       paint();
-      assert.equal(frames.size, 1, 'no baseline until running progress is rendered');
+      if (scenario.startsWith('already-')) {
+        assert.equal(frames.size, 0, 'a pre-existing matching toast must reject observation');
+      } else {
+        assert.equal(frames.size, 1, 'the pre-search observer must remain armed');
+      }
       if (scenario === 'timeout') {
         [...timers.values()][0]();
       } else if (scenario === 'cancel') {
         measurement.cancel();
+      } else if (scenario.startsWith('already-')) {
+        // The observer rejected the stale toast before the new search action.
       } else {
         progressVisible = true;
+        if (scenario === 'settled-first-running-frame') {
+          toastVisible = true;
+          settled = true;
+        } else if (scenario !== 'settled-after-baseline') {
+          toastVisible = true;
+        }
         paint();
-        if (scenario === 'settled-after-baseline') {
+        if (scenario === 'settled-first-running-frame') {
+          if (frames.size) paint();
+          if (frames.size) paint();
+        } else if (scenario === 'settled-after-baseline') {
           toastVisible = true;
           settled = true;
           paint();
+          if (frames.size) paint();
           if (frames.size) paint();
         } else if (scenario !== 'already-settled') {
           if (scenario === 'translation') rectangle = { ...rectangle, x: 104, y: 48 };
@@ -310,12 +326,13 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         }
       }
       const result = await measurement.result;
-      if (scenario === 'already-settled') assert.match(result.error, /already settled/);
+      if (scenario.startsWith('already-')) assert.match(result.error, /already present/);
       else if (scenario === 'timeout') assert.match(result.error, /Timed out/);
       else if (scenario === 'cancel') assert.match(result.error, /cancelled/);
       else {
         assert.equal(result.baselineUnsettled, true);
-        assert.equal(result.sampledFrames, scenario === 'settled-after-baseline' ? 2 : 4);
+        assert.equal(result.sampledFrames,
+          ['settled-after-baseline', 'settled-first-running-frame'].includes(scenario) ? 3 : 4);
         assert.deepEqual(JSON.parse(JSON.stringify(result.delta)), {
           height: scenario === 'resize' ? 10 : 0,
           width: scenario === 'resize' ? 2 : 0,
@@ -2777,6 +2794,11 @@ test('functional race checks arm transient mutation observation before submit an
   assert.match(
     playerActions,
     /const preReload = await this\.globalPlayer\.readPlaybackTiming\(\);[\s\S]*?page\.reload[\s\S]*?preReload,/,
+  );
+  assert.match(
+    reloadSpec,
+    /pauseAndReadListenCheckpoint\(\)[\s\S]*?waitForFullTrackTiming\(\)[\s\S]*?reloadAndWaitForRestoredTrack\(/,
+    'paused reload must await the listen checkpoint and claim release before reading its snapshot',
   );
   assert.match(
     reloadSpec,

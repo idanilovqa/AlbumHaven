@@ -109,6 +109,73 @@ test('status delivery installs its Status-gated recorder before navigation', () 
   assert.match(helperSource, /recordRepairAlertPresentations\(\{\s*surfaceSelector:\s*'#library-loader'/u);
 });
 
+test('status delivery prearms its recorder before save confirmation can show the timed toast', () => {
+  const actionsSource = fs.readFileSync(
+    path.join(__dirname, '..', 'e2e', 'actions', 'tagEditorActions.js'),
+    'utf8',
+  );
+  const applyStart = actionsSource.indexOf('async applyAndWaitForSavedFiles(options = {})');
+  const recorderStart = actionsSource.indexOf('recordRepairAlertPresentations', applyStart);
+  const confirmationStart = actionsSource.indexOf('await this.tagEditor.confirmButton.click()', applyStart);
+
+  assert.ok(applyStart >= 0 && recorderStart > applyStart, actionsSource);
+  assert.ok(recorderStart < confirmationStart, actionsSource);
+});
+
+test('status delivery transfers one prearmed recorder into protected helper cleanup', async () => {
+  const { TagEditorActions } = await import('../e2e/actions/tagEditorActions.js');
+  const { editor, events } = savedEditor();
+  const presentations = {};
+  let armed = false;
+  let stopCount = 0;
+  editor.recordRepairAlertPresentations = async () => {
+    armed = true;
+    events.push('record');
+    return presentations;
+  };
+  editor.confirmButton.click = async () => {
+    assert.equal(armed, true, 'confirmation must not outrun recorder installation');
+    events.push('confirm');
+  };
+  editor.stopRecordingRepairAlertPresentations = async (received) => {
+    assert.equal(received, presentations);
+    stopCount += 1;
+  };
+
+  await assert.rejects(
+    new TagEditorActions(editor).applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' }),
+    /Immediate delivery must not navigate/,
+  );
+  assert.ok(events.indexOf('record') < events.indexOf('confirm'), JSON.stringify(events));
+  assert.equal(stopCount, 1);
+});
+
+test('status delivery retains operation and recorder cleanup failures after ownership transfer', async () => {
+  const { TagEditorActions } = await import('../e2e/actions/tagEditorActions.js');
+  const { editor } = savedEditor();
+  const presentations = {};
+  let stopCount = 0;
+  editor.recordRepairAlertPresentations = async () => presentations;
+  editor.stopRecordingRepairAlertPresentations = async (received) => {
+    assert.equal(received, presentations);
+    stopCount += 1;
+    throw new Error('Recorder cleanup failed');
+  };
+
+  await assert.rejects(
+    new TagEditorActions(editor).applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.deepEqual(error.errors.map(item => item.message), [
+        'Immediate delivery must not navigate to another surface',
+        'Recorder cleanup failed',
+      ]);
+      return true;
+    },
+  );
+  assert.equal(stopCount, 1);
+});
+
 test('status delivery cleans up recording failures and restores only after Status opens', () => {
   const helperSource = fs.readFileSync(
     path.join(__dirname, '..', 'e2e', 'helpers', 'savedNotificationDelivery.js'),

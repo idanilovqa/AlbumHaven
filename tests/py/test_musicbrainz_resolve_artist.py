@@ -443,3 +443,63 @@ def test_a_certain_album_under_another_name_matches_and_is_marked_for_tag_correc
         "local_album_id": 5, "local_title": "The Grey Album", "artist_mbid": OTHER,
         "release_group_mbid": group_id(OTHER, "The Grey Album"), "release_mbid": outcome["album_identities"][0]["release_mbid"],
         "disc_position": None, "signals": ["durations", "track_count", "track_list", "year"], "tag_differs": True}]
+
+
+def test_a_person_and_the_same_named_band_they_belong_to_are_one_artist():
+    """Owner 2026-11-09: Alice Cooper is a person; the 1969-74 albums credited to the group
+    he is a member of are still his. One artist-level identity, the person; each album keeps
+    its certain MBID, and the group is stored so those identities resolve."""
+    person = {"id": GERMAN, "name": "Axxis", "type": "Person", "disambiguation": "the singer",
+              "relations": [{"type": "member of band", "direction": "forward",
+                             "artist": {"id": TRANCE, "name": "Axxis"}}]}
+    artists = {GERMAN: person, TRANCE: {"id": TRANCE, "name": "Axxis", "type": "Group", "disambiguation": "the band"}}
+    client, calls = _client({GERMAN: ["Kingdom of the Night", "Axxis II"], TRANCE: ["Dancefloor Mix"]}, artists=artists)
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "id": index + 1}
+                          for index, album in enumerate(albums("Kingdom of the Night", "Axxis II", "Dancefloor Mix"))]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "found"
+    assert outcome["artist"]["mbid"] == GERMAN
+    assert {item["local_album_id"]: item["artist_mbid"] for item in outcome["album_identities"]} == {
+        1: GERMAN, 2: GERMAN, 3: TRANCE}
+    assert {artist["mbid"] for artist in outcome["artists"]} == {GERMAN, TRANCE}
+    assert any("inc=artist-rels" in url for url in calls)
+
+
+def test_another_release_never_replaces_an_album_with_weaker_evidence():
+    """Waltari: a box set's title-only disc replaced the album's own agreeing release."""
+    from music_app.services.musicbrainz_enrichment import _better_than
+
+    agreeing = {"title": "exact", "level": "agree", "signals": {"year", "track_count", "tracks_differ"}}
+    assert not _better_than({"title": "exact", "level": "title", "signals": set()}, agreeing)
+    assert _better_than({"title": "exact", "level": "strong", "signals": {"year", "track_list"}}, agreeing)
+    # A disc titled exactly beats a partial title at the same level ("Contain Us 10"").
+    partial = {"title": "partial", "level": "strong", "signals": {"year", "track_count", "track_list"}}
+    assert _better_than({"title": "exact", "level": "strong", "signals": {"year", "track_count"}}, partial)
+    assert _better_than({"title": "exact", "level": "title", "signals": set()}, {"title": None, "level": None, "signals": set()})
+
+
+def test_a_person_s_group_named_otherwise_stays_a_separate_artist():
+    """Owner 2026-11-10: "Ольга Арефьева и Ковчег" is her group, a separate artist from her
+    solo work, even when MusicBrainz lists her name as the group's alias."""
+    person = {"id": GERMAN, "name": "Axxis", "type": "Person",
+              "relations": [{"type": "member of band", "direction": "forward",
+                             "artist": {"id": TRANCE, "name": "Axxis and the Ark"}}]}
+    group = {"id": TRANCE, "name": "Axxis and the Ark", "type": "Group",
+             "aliases": [{"name": "Axxis", "locale": None, "primary": False}]}
+    search = [{"id": GERMAN, "name": "Axxis", "score": 100, "type": "Person"},
+              {"id": TRANCE, "name": "Axxis and the Ark", "score": 90, "type": "Group",
+               "aliases": [{"name": "Axxis"}]}]
+    client, _calls = _client({GERMAN: ["Kingdom of the Night", "Axxis II"], TRANCE: ["Dancefloor Mix"]},
+                             artists={GERMAN: person, TRANCE: group}, search=search)
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "id": index + 1}
+                          for index, album in enumerate(albums("Kingdom of the Night", "Axxis II", "Dancefloor Mix"))]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "per_album"
+    assert {item["local_album_id"]: item["artist_mbid"] for item in outcome["album_identities"]} == {
+        1: GERMAN, 2: GERMAN, 3: TRANCE}

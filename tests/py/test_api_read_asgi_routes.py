@@ -5204,6 +5204,48 @@ def test_asgi_log_history_returns_non_cacheable_empty_transient_snapshot(
     }
 
 
+def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
+    app,
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_page(self, *, limit):
+            assert limit == 50
+            return {
+                "count": 1,
+                "items": [{"key": "bounded-album", "detail_loaded": False}],
+                "complete": False,
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "load_problematic_artist_items",
+        lambda _request: (_ for _ in ()).throw(
+            AssertionError("the bounded first page must not wait for artist attention")
+        ),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"limit": "50"},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert [item["key"] for item in payload["items"]] == ["bounded-album"]
+
+
 def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_runtime_hydration(
     app,
     asgi_app,

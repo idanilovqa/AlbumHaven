@@ -190,4 +190,91 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     });
     expectTimingBudgetOutcome(expect, readinessOutcome, 'Problematic Files populated detail readiness');
   });
+
+  test('Problematic Files paints its bounded first page before the complete tree and keeps the filter icon stable', async ({
+    galleryActions,
+    page,
+    settingsModalAppBarActions,
+    utilityProblematicFilesActions,
+  }) => {
+    expect(process.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP).toBe('1');
+    expect(process.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE).toBe('postgres');
+    await galleryActions.goto('/');
+
+    let completeResponseReceived = false;
+    const trackCompleteResponse = (response) => {
+      const url = new URL(response.url());
+      if (url.pathname === SUMMARY_PATHNAME && !url.searchParams.has('limit')) {
+        completeResponseReceived = true;
+      }
+    };
+    page.on('response', trackCompleteResponse);
+
+    try {
+      await settingsModalAppBarActions.prepareToOpenSettings();
+      const boundedResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === SUMMARY_PATHNAME && url.searchParams.has('limit');
+      }, { timeout: 120000 });
+      const openSettings = settingsModalAppBarActions.openSettings();
+      await boundedResponse;
+      await utilityProblematicFilesActions.waitForFirstVisible({ timeout: 120000 });
+      await expect(page.locator('#utility-problematic-list [data-problematic-album-key]').first()).toBeVisible();
+      expect(
+        completeResponseReceived,
+        'The bounded first page must paint before the complete background tree response arrives.',
+      ).toBe(false);
+
+      await openSettings;
+      await utilityProblematicFilesActions.waitForReady({ timeout: 120000, requirePopulated: true });
+
+      const filterButton = page.locator('#utility-problem-filter-button');
+      const filterIcon = filterButton.locator('svg');
+      const filterMenu = page.locator('#utility-problem-filter-menu');
+      const baseline = await filterIcon.boundingBox();
+      expect(baseline, 'Expected a measurable Problematic Files filter icon.').toBeTruthy();
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await filterButton.click();
+        await expect(filterMenu).toBeVisible();
+        const openBox = await filterIcon.boundingBox();
+        expect(openBox, 'Expected the filter icon to remain measurable while open.').toBeTruthy();
+        for (const property of ['x', 'y', 'width', 'height']) {
+          expect(
+            Math.abs(openBox[property] - baseline[property]),
+            `Opening Filters must not move or resize the SVG ${property}.`,
+          ).toBeLessThanOrEqual(0.5);
+        }
+        await expect(filterButton).toHaveClass(/trigger-anchor-open/);
+        await expect(filterMenu).toHaveClass(/trigger-anchor-surface/);
+        await expect(filterButton).toHaveAttribute('data-trigger-anchor-edge', /^(top|bottom)$/);
+        await expect(filterMenu).toHaveAttribute('data-trigger-anchor-edge', /^(top|bottom)$/);
+        const edge = await filterButton.getAttribute('data-trigger-anchor-edge');
+        expect(edge).toBe(await filterMenu.getAttribute('data-trigger-anchor-edge'));
+        const buttonBox = await filterButton.boundingBox();
+        const menuBox = await filterMenu.boundingBox();
+        expect(buttonBox, 'Expected a measurable open filter trigger.').toBeTruthy();
+        expect(menuBox, 'Expected a measurable open filter menu.').toBeTruthy();
+        const connectedGap = edge === 'bottom'
+          ? Math.abs((menuBox.y + menuBox.height) - buttonBox.y)
+          : Math.abs(menuBox.y - (buttonBox.y + buttonBox.height));
+        expect(connectedGap, 'The trigger and menu must retain a continuous connected edge.').toBeLessThanOrEqual(2);
+        expect(buttonBox.x + buttonBox.width).toBeGreaterThanOrEqual(menuBox.x);
+        expect(buttonBox.x).toBeLessThanOrEqual(menuBox.x + menuBox.width);
+
+        await filterButton.click();
+        await expect(filterMenu).toBeHidden();
+        const closedBox = await filterIcon.boundingBox();
+        expect(closedBox, 'Expected the filter icon to remain measurable after closing.').toBeTruthy();
+        for (const property of ['x', 'y', 'width', 'height']) {
+          expect(
+            Math.abs(closedBox[property] - baseline[property]),
+            `Closing Filters must restore the SVG ${property} without jitter.`,
+          ).toBeLessThanOrEqual(0.5);
+        }
+      }
+    } finally {
+      page.off('response', trackCompleteResponse);
+    }
+  });
 });

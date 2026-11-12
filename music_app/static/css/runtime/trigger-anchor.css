@@ -61,9 +61,8 @@
   position: relative;
   /* Joined controls paint above the shared menu layer (105), including its shadow. */
   z-index: 106;
-  border: 2px solid transparent !important;
+  border-color: transparent !important;
   --trigger-anchor-direction: to bottom;
-  border-bottom: 0 !important;
   border-radius: 8px 8px 0 0 !important;
   outline: none !important;
   box-shadow: none !important;
@@ -94,7 +93,6 @@
     var(--trigger-anchor-line-right) right top / calc(var(--trigger-anchor-right) + 2px) var(--trigger-top-line-width, 2px) no-repeat;
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"] {
-  border-top: 0 !important; border-bottom: 2px solid transparent !important;
   --trigger-anchor-direction: to top;
   border-radius: 0 0 8px 8px !important;
 }

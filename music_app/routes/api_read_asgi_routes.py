@@ -1415,13 +1415,15 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
+        if limit is not None and not q.strip():
+            payload = repository.build_problematic_files_page(limit=limit)
+            _project_missing_album_actions_for_request(request, payload)
+            return JSONResponse(_attach_library_watch_health(request, payload))
         # The owner's Artist rows load beside the page, adding no readiness time.
         with ThreadPoolExecutor(max_workers=1) as pool:
             artist_items = pool.submit(load_problematic_artist_items, request)
             if q.strip():
                 payload = repository.build_problematic_files_search(q)
-            elif limit is not None:
-                payload = repository.build_problematic_files_page(limit=limit)
             else:
                 payload = repository.build_problematic_files_payload()
             _project_missing_album_actions_for_request(request, payload)

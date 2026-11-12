@@ -41,6 +41,14 @@ const triggerAnchorCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'),
   'utf8',
 );
+const searchInputCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'search-input.css'),
+  'utf8',
+);
+const utilitiesCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
+  'utf8',
+);
 const galleryBarTemplateSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'partials', 'gallery-bar.html'),
   'utf8',
@@ -61,12 +69,12 @@ test('connected trigger accents follow light palette colors', () => {
   );
 });
 
-test('connected triggers leave the edge adjoining their surface unpainted', () => {
-  // The continuous outline and opaque inner mask own paint; the trigger still
-  // omits the border facing its popup for both opening directions.
+test('connected triggers paint a continuous outline without changing their box geometry', () => {
+  // The continuous outline and opaque inner mask own paint; native border
+  // widths remain untouched so trigger contents never move when a menu opens.
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open\s*\{[^}]*border-bottom:\s*0 !important;[^}]*linear-gradient\(var\(--trigger-anchor-background\), var\(--trigger-anchor-background\)\) padding-box !important;/s,
+    /\.trigger-anchor-open\s*\{[^}]*border-color:\s*transparent !important;[^}]*linear-gradient\(var\(--trigger-anchor-background\), var\(--trigger-anchor-background\)\) padding-box !important;/s,
   );
   assert.match(
     triggerAnchorCssSource,
@@ -74,11 +82,35 @@ test('connected triggers leave the edge adjoining their surface unpainted', () =
   );
   assert.match(
     triggerAnchorCssSource,
-    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]\s*\{[^}]*border-top:\s*0 !important;[^}]*--trigger-anchor-direction:\s*to top;/s,
+    /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]\s*\{[^}]*--trigger-anchor-direction:\s*to top;/s,
   );
   assert.match(
     triggerAnchorCssSource,
     /\.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]::before\s*\{[^}]*top:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\); bottom:\s*0;/s,
+  );
+});
+
+test('anchored search actions keep identical closed and open border geometry', () => {
+  assert.match(
+    searchInputCssSource,
+    /\.search-field-action > \.search-field-button\s*\{[^}]*border:\s*0;/s,
+  );
+  const openRule = triggerAnchorCssSource.match(/:root \.trigger-anchor-open\s*\{[^}]*\}/s)?.[0] || '';
+  assert.match(openRule, /border-color:\s*transparent !important;/);
+  assert.doesNotMatch(
+    openRule,
+    /\bborder(?:-top|-bottom)?\s*:/,
+    'open state must not change border widths',
+  );
+  assert.doesNotMatch(openRule, /\bpadding(?:-top|-bottom)?\s*:/);
+  const flippedRule = triggerAnchorCssSource.match(
+    /:root \.trigger-anchor-open\[data-trigger-anchor-edge="bottom"\]\s*\{[^}]*\}/s,
+  )?.[0] || '';
+  assert.doesNotMatch(flippedRule, /\b(?:border|padding)(?:-top|-bottom)?\s*:/);
+  assert.doesNotMatch(
+    utilitiesCssSource,
+    /--problem-filter-connected-edge|\.utility-problem-filter-menu\.trigger-anchor-surface/,
+    'Problematic Files uses the shared continuous trigger-anchor outline',
   );
 });
 

@@ -1982,10 +1982,6 @@
 
 .settings-guide-copy { white-space: normal; }
 
-.utility-problem-filter {
-  --problem-filter-connected-edge: var(--appearance-line, var(--border));
-}
-.utility-problem-filter-menu.trigger-anchor-surface { border-color: var(--problem-filter-connected-edge); }
 .settings-guide-copy pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .library-settings-move-policy-row { display: grid; gap: 8px; margin-bottom: 12px; max-width: 440px; }

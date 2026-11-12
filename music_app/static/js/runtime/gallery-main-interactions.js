@@ -29,11 +29,6 @@ function createAnchoredSurfaceController() {
   };
 }
 
-function shouldDismissArtistInfoOverlay(config = {}) {
-  if (config.reason === 'scroll') return !config.scrollInsideOverlay;
-  return ['outside-pointer', 'escape', 'repeat-anchor'].includes(config.reason);
-}
-
 function observeArtistFamilyPanelBounds({ panel, player } = {}) {
   if (!panel || !player) return { disconnect() {} };
   const update = () => {
@@ -97,6 +92,23 @@ function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
     surface.style.left = 'auto';
   }
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(surface, anchor);
+}
+
+function revealGalleryArtistInfoSurface(surface, anchor) {
+  if (!surface?.matches?.('.artist-info-overlay')
+      || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
+  const scroll = document.getElementById('albums-scroll');
+  if (!scroll) return 0;
+  const player = document.querySelector('[data-shell-slot="bottom_player"]');
+  const playerBounds = player?.getBoundingClientRect?.();
+  const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
+    ? Math.min(window.innerHeight, Number(playerBounds.top))
+    : window.innerHeight;
+  const offset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
+  if (!offset) return 0;
+  scroll.scrollTop += offset;
+  positionGalleryAnchoredSurface(surface, anchor, 'left');
+  return offset;
 }
 
 function positionArtistFamilyPanelEnvelope(panel, anchor) {
@@ -479,10 +491,8 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   }, { anchor });
-  const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
-    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null,
     openingQuery: String((typeof state === 'undefined' ? '' : state.view?.query) || '').trim() });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
@@ -494,7 +504,10 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   surface.setAttribute?.('aria-hidden', 'false');
   if (surface.matches?.('.mobile-settings-drawer')) {
     surface.style.top = `${Math.max(0, Math.round(document.querySelector('#app-shell .app-bar').getBoundingClientRect().bottom))}px`;
-  } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
+  } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) {
+    positionGalleryAnchoredSurface(surface, anchor, align);
+    if (surface.matches?.('.artist-info-overlay')) revealGalleryArtistInfoSurface(surface, anchor);
+  }
   if (surface.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(surface, anchor);
   if (surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(surface, true);
   if (shouldFocusGalleryMainSurface(key)) focusGalleryMainSurface(surface);
@@ -1017,9 +1030,9 @@ function initGalleryMain() {
   const scroll = document.getElementById('albums-scroll');
   scroll?.addEventListener('scroll', () => {
     const active = galleryMainSurfaceController?.current?.();
-    if (active?.key?.startsWith?.('artist:') && active.surface.getAttribute?.('aria-modal') !== 'true' && active.openingScrollPosition
-        && (scroll.scrollTop !== active.openingScrollPosition.top
-          || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false);
+    if (active?.key?.startsWith?.('artist:') && active.surface.getAttribute?.('aria-modal') !== 'true') {
+      positionGalleryAnchoredSurface(active.surface, active.anchor, 'left');
+    }
     if (galleryMainScrollFrame) return;
     galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
   }, { passive: true });

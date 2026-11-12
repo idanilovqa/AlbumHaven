@@ -285,13 +285,13 @@ test('initial Artist Family markup is hidden only when no effective artist is se
   assert.match(button, /\{% if not effective_selected_artist %\} hidden\{% endif %\}/);
 });
 
-test('artist info ignores queued pre-open scroll but dismisses real post-open movement', () => {
+test('artist info stays open and follows its header while the gallery scrolls', () => {
   const listeners = {};
   const scroll = { scrollTop: 0, scrollLeft: 0, addEventListener: (type, callback) => { listeners[type] = callback; } };
   const context = loadRuntime({
     document: { getElementById: id => id === 'albums-scroll' ? scroll : null,
       querySelector: () => null, addEventListener() {} },
-    window: { addEventListener() {} },
+    window: { addEventListener() {}, innerWidth: 1000 },
     requestAnimationFrame: () => 1,
   });
   // Keep unrelated chrome/layout work outside this event-lifecycle test.
@@ -300,21 +300,30 @@ test('artist info ignores queued pre-open scroll but dismisses real post-open mo
   context.updateGalleryMainChrome = () => {};
   context.focusGalleryMainSurface = () => {};
   context.initGalleryMain();
-  const anchor = { setAttribute() {} };
-  const surface = { hidden: true, matches: () => false, setAttribute() {},
-    classList: { add() {}, remove() {} } };
+  const anchor = {
+    setAttribute() {},
+    getBoundingClientRect: () => ({ top: 180 - scroll.scrollTop, bottom: 200 - scroll.scrollTop,
+      left: 40, right: 60, width: 20, height: 20 }),
+  };
+  const surface = {
+    hidden: true,
+    matches: selector => selector.includes('.artist-info-overlay'),
+    setAttribute() {},
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ bottom: 300 }),
+    classList: { add() {}, remove() {} },
+    dataset: {},
+    style: { setProperty() {} },
+  };
   context.openGalleryMainSurface('artist:Neal Morse', anchor, surface);
-  listeners.scroll();
-  assert.equal(surface.hidden, false, 'queued event at the opening position must not close the popup');
+  assert.equal(surface.style.top, '199px');
   scroll.scrollTop = 1;
   listeners.scroll();
-  assert.equal(surface.hidden, true, 'actual vertical movement dismisses the popup');
-  context.openGalleryMainSurface('artist:Neal Morse', anchor, surface);
-  listeners.scroll();
-  assert.equal(surface.hidden, false, 'reopening records the new position');
+  assert.equal(surface.hidden, false, 'wheel or touchpad scrolling over the gallery keeps the popup open');
+  assert.equal(surface.style.top, '198px', 'the popup follows its artist header');
   scroll.scrollLeft = 1;
   listeners.scroll();
-  assert.equal(surface.hidden, true, 'actual horizontal movement dismisses the popup');
+  assert.equal(surface.hidden, false, 'horizontal gallery scrolling also keeps the popup open');
 });
 
 test('Album Types uses the same theme-inheriting stacked-sleeves icon before and after hydration', () => {
@@ -1573,14 +1582,29 @@ test('search suggestions escape content stacking and align to the search field i
   assert.match(bootstrapGalleryEventHandlersSource, /positionSearchSuggestionsSurface\(popover\)/);
 });
 
-test('artist info dismisses on outside, Escape, repeat, and outside scroll but not internal scroll', () => {
-  const context = loadRuntime();
-  const shouldDismissArtistInfoOverlay = requireContract(context, 'shouldDismissArtistInfoOverlay');
-  assert.equal(shouldDismissArtistInfoOverlay({ reason: 'outside-pointer' }), true);
-  assert.equal(shouldDismissArtistInfoOverlay({ reason: 'escape' }), true);
-  assert.equal(shouldDismissArtistInfoOverlay({ reason: 'repeat-anchor' }), true);
-  assert.equal(shouldDismissArtistInfoOverlay({ reason: 'scroll', scrollInsideOverlay: false }), true);
-  assert.equal(shouldDismissArtistInfoOverlay({ reason: 'scroll', scrollInsideOverlay: true }), false);
+test('opening Artist Info scrolls the gallery enough to clear the bottom player and reanchors the panel', () => {
+  const scroll = { scrollTop: 80 };
+  const player = { hidden: false, getBoundingClientRect: () => ({ top: 410, height: 90 }) };
+  const surface = {
+    hidden: false,
+    matches: selector => selector === '.artist-info-overlay',
+    getBoundingClientRect: () => ({ bottom: 486 }),
+  };
+  const anchor = {};
+  let positioned = 0;
+  const context = loadRuntime({
+    window: { innerHeight: 500 },
+    document: {
+      getElementById: id => (id === 'albums-scroll' ? scroll : null),
+      querySelector: selector => (selector === '[data-shell-slot="bottom_player"]' ? player : null),
+    },
+  });
+  context.positionGalleryAnchoredSurface = () => { positioned += 1; };
+
+  requireContract(context, 'revealGalleryArtistInfoSurface')(surface, anchor);
+
+  assert.equal(scroll.scrollTop, 156, 'the complete 76px overlap is revealed');
+  assert.equal(positioned, 1, 'the fixed panel follows its moved artist header immediately');
 });
 
 test('local artist information stays capability-bounded and leaves unavailable optional enrichment empty', () => {

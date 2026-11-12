@@ -762,7 +762,7 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else {
     name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
-    summary.textContent = galleryMainPlural(context.albumCount, 'album');
+    summary.innerHTML = buildGalleryArtistSummaryHtml(context.albumCount, context.artist_musicbrainz);
     if (metadata) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
@@ -1121,15 +1121,15 @@ function createGalleryFamilyPaintController(toggle) {
   };
 }
 
-// Owner (11-08): on mobile the gallery buttons share the name's row when the whole name fits beside them; a
-// longer name keeps the row to itself, printed in full, and the buttons move under it. Measured only when the
-// name, its info button or the window width changes, never on every scroll frame.
+// Non-artist mobile contexts may wrap long names. Artist headers stay two lines and ellipsize instead.
+// Measure only when the name, context, info button, or window width changes, never on every scroll frame.
 function syncGalleryBarNameFit(bar, name) {
   if (!bar?.classList || !name) return;
-  const key = `${name.textContent}|${window.innerWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}`;
+  const contextKind = String(bar.dataset.galleryContextKind || '');
+  const key = `${name.textContent}|${window.innerWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}|${contextKind}`;
   if (bar.dataset.galleryNameFitKey === key) return;
   bar.dataset.galleryNameFitKey = key;
   bar.classList.remove('is-name-wrapping');
-  if (Number(window.innerWidth) > 900) return;
+  if (Number(window.innerWidth) > 900 || contextKind === 'artist' || contextKind === 'single-artist') return;
   if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-name-wrapping');
 }

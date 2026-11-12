@@ -378,10 +378,10 @@ test('Gallery country pills show the full country name, not the ISO code', () =>
   vm.runInContext(read('music_app/static/js/runtime/markup-format-helpers.js'), context);
   vm.runInContext(read('music_app/static/js/runtime/gallery-main-components.js'), context);
 
-  const html = context.buildGalleryArtistMetadataHtml({ country: 'AT', genres: ['black metal'] });
+  const html = context.buildGalleryArtistSummaryHtml(2, { country: 'AT', genres: ['black metal'] });
   assert.match(html, /ui-metadata-pill--country">Austria</);
-  assert.match(context.buildGalleryArtistMetadataHtml({ country: 'GB', genres: [] }), />United Kingdom</);
-  assert.match(context.buildGalleryArtistMetadataHtml({ country: 'Russia', genres: [] }), />Russia</, 'stored names pass through');
+  assert.match(context.buildGalleryArtistSummaryHtml(2, { country: 'GB', genres: [] }), />United Kingdom</);
+  assert.match(context.buildGalleryArtistSummaryHtml(2, { country: 'Russia', genres: [] }), />Russia</, 'stored names pass through');
 });
 
 test('a MusicBrainz status change reloads only the Gallery view, never Problematic Files', () => {

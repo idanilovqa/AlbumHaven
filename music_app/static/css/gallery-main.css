@@ -7,14 +7,14 @@
 .gallery-bar__title { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 1.08rem; font-weight: 750; }
 .gallery-bar__title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gallery-bar__artist-divider { flex: 1 1 auto; min-width: 24px; overflow: visible !important; }
-/* An artist header reads "Name (i) • N albums"; its pills take the second line. */
+/* An artist header is always two lines: name, info, primary genre; then count and country. */
 .gallery-bar__artist-total { flex: 0 0 auto; color: var(--muted); font-size: .82rem; font-weight: 500; }
 .gallery-bar__artist-total::before { content: "\2022"; margin: 0 6px 0 2px; font-size: 1.25em; line-height: 0; vertical-align: -.08em; }
-/* The second line keeps one height for the summary and the pills, so the
-   header never moves when an artist takes it over while scrolling. */
-.gallery-bar__summary, .gallery-bar__artist-metadata { box-sizing: border-box; min-height: 20px; margin: 2px 0 0; }
-.gallery-bar__summary { display: block; color: var(--muted); font-size: .72rem; line-height: 20px; }
-.gallery-bar__artist-metadata { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow: hidden; }
+/* The second line keeps one height, so the header never moves while scrolling. */
+.gallery-bar__summary { box-sizing: border-box; min-height: 20px; margin: 2px 0 0; display: flex; align-items: center; color: var(--muted); font-size: .72rem; line-height: 20px; white-space: nowrap; overflow: hidden; }
+.gallery-bar__artist-metadata { display: flex; flex: 0 1 auto; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; }
+.gallery-bar__artist-country { display: inline-flex; align-items: center; min-width: 0; overflow: hidden; }
+.gallery-bar__artist-country::before { content: "\2022"; flex: 0 0 auto; margin: 0 6px; font-size: 1.25em; line-height: 0; vertical-align: -.08em; }
 .gallery-bar__summary[hidden], .gallery-bar__artist-metadata[hidden] { display: none; }
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-main-surface, var(--panel)); }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }
@@ -115,7 +115,6 @@
 .artist-musicbrainz-pending [data-pending-dot]:nth-child(2) { animation-delay: 160ms; }
 .artist-musicbrainz-pending [data-pending-dot]:nth-child(3) { animation-delay: 320ms; }
 @keyframes artist-musicbrainz-pending-dots { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-1px); } }
-@media (max-width: 720px) { .gallery-bar__artist-metadata { flex-wrap: wrap; } }
 @media (prefers-reduced-motion: reduce) { .artist-musicbrainz-pending [data-pending-dot] { animation: none; } }
 .artist-family-panel { position: fixed; z-index: 70; top: calc(var(--app-bar-height) + 54px); right: 0; bottom: var(--player-height); width: min(390px, 92vw); box-sizing: border-box; display: flex; flex-direction: column; border: 1px solid var(--border); border-right: 0; background: var(--panel); box-shadow: -18px 0 48px #0008; border-top: 0; clip-path: inset(-1px 0 100% 0); opacity: 0; transition: clip-path 240ms cubic-bezier(.22, 1, .36, 1); }
 .artist-family-panel::before {

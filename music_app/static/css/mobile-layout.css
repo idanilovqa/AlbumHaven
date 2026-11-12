@@ -655,8 +655,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: 3; grid-row: 2; justify-self: end; align-self: start; margin: 0;
   }
-  /* Owner (11-08): the Gallery's buttons share the name row when the whole name fits (syncGalleryBarNameFit);
-     a longer name is printed in full on its own row and the buttons stay under it. */
+  /* Non-artist Gallery contexts may give a long name its own row. Artist headers remain two lines and ellipsize. */
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"] .gallery-bar__title { grid-row: 1; align-items: center; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) .gallery-bar__title { grid-column: 2; }
   /* Owner (11-09): the 40px buttons sit on the 24px title line without making it taller, so the count follows the

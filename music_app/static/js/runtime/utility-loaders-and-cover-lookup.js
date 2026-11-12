@@ -2680,7 +2680,7 @@ function renderTagEditorArtwork(selectedPaths) {
     label: 'Load all tracks from the folder',
     variant: 'secondary',
     size: 'small',
-    className: 'tag-editor-folder-load',
+    className: 'tag-editor-folder-load ui-text-link',
     disabled: Boolean(state.tagEditor.folderLoading),
     attributes: { 'data-load-tag-editor-folder': '1', ...(state.tagEditor.folderLoading ? { 'aria-busy': 'true' } : {}) },
   }) : '';

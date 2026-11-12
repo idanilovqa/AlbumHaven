@@ -39,6 +39,9 @@ operate, or contribute to the application.
   navigation-tree header; a new side-bar entry goes vertically under the
   existing side-bar buttons in their style. Never place the same control in
   two places, and never render an empty or icon-less button.
+- Artist Gallery headers stay exactly two lines on web and mobile: artist name,
+  info icon, and only the highest-ranked genre on line one; album count, a fat
+  dot, and country on line two. Neither line may wrap.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - E2E tests for owner-reported regressions must assert every named

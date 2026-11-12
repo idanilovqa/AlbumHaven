@@ -167,13 +167,15 @@ test('Load all tracks from the folder sits under the path only while the album f
   assert.doesNotMatch(artwork.innerHTML, /data-load-tag-editor-folder/, 'hidden until the app knows tracks are missing');
   await context.refreshTagEditorFolderCompleteness(tagEditor);
   assert.equal(tagEditor.folderHasUnloadedTracks, true, 'only CD2 is loaded, so CD1 is missing');
-  assert.match(artwork.innerHTML, /class="tag-editor-folder-copy"><div class="tag-editor-folder-path"[^>]*>[^<]*<\/div><button[^>]*class="[^"]*tag-editor-folder-load[^"]*"[^>]*data-load-tag-editor-folder="1"[^>]*><span class="ui-button__content">Load all tracks from the folder<\/span>/);
+  assert.match(artwork.innerHTML, /class="tag-editor-folder-copy"><div class="tag-editor-folder-path"[^>]*>[^<]*<\/div><button[^>]*class="[^"]*tag-editor-folder-load[^"]*ui-text-link[^"]*"[^>]*data-load-tag-editor-folder="1"[^>]*><span class="ui-button__content">Load all tracks from the folder<\/span>/);
   const css = fs.readFileSync(
     path.join(root, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
     'utf8',
   );
-  assert.match(css, /\.tag-editor-folder-load\s*\{[^}]*background:\s*transparent;[^}]*border:\s*0;[^}]*min-height:\s*0;/s);
-  assert.match(css, /\.tag-editor-folder-load:hover:not\(:disabled\)\s*\{[^}]*text-decoration:\s*underline;/s);
+  assert.doesNotMatch(css, /\.tag-editor-folder-load(?:\s|:)/, 'the shared text-link component owns every visual state');
+  const buttonCss = fs.readFileSync(path.join(root, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
+  assert.match(buttonCss, /\.ui-text-link,[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;/);
+  assert.match(buttonCss, /\.ui-text-link:is\(:hover, :focus-visible\):not\(:disabled\)[\s\S]*text-decoration-line:\s*underline/);
 
   tagEditor.tracks.push({ path: 'C:/Music/Album/CD1/01.mp3' });
   await context.refreshTagEditorFolderCompleteness(tagEditor);

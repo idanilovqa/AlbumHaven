@@ -393,7 +393,7 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
 });
 
-test('current GalleryBar owner puts the album count on the name line and the pills under it', () => {
+test('current GalleryBar owner keeps artist metadata to two lines on web and mobile', () => {
   const context = loadRuntime();
   const projection = {
     country: 'Russia',
@@ -408,16 +408,15 @@ test('current GalleryBar owner puts the album count on the name line and the pil
 
   const nameAt = markup.indexOf('Kipelov');
   const infoAt = markup.indexOf('data-artist-info-trigger');
+  const firstGenreAt = markup.indexOf('Heavy Metal');
   const countAt = markup.indexOf('4 albums');
   const countryAt = markup.indexOf('Russia');
-  const firstGenreAt = markup.indexOf('Heavy Metal');
-  assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < countAt && countAt < countryAt && countryAt < firstGenreAt);
-  assert.match(markup, /data-gallery-context-metadata/);
+  assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < firstGenreAt && firstGenreAt < countAt && countAt < countryAt);
+  assert.match(markup, /gallery-bar__title[\s\S]*data-artist-info-trigger[\s\S]*data-gallery-context-metadata[\s\S]*Heavy Metal[\s\S]*<\/div><span class="gallery-bar__summary"/);
   assert.match(markup, /class="ui-metadata-pill ui-metadata-pill--country"[^>]*>Russia</);
-  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 3);
+  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 1);
   assert.match(markup, />Heavy Metal</);
-  assert.match(markup, />Power Metal</);
-  assert.match(markup, />Hard Rock</);
+  assert.doesNotMatch(markup, /Power Metal|Hard Rock/);
   assert.doesNotMatch(markup, /Fourth Genre/);
   assert.doesNotMatch(markup, /gallery-bar__actions[\s\S]*MusicBrainz/);
 
@@ -427,12 +426,27 @@ test('current GalleryBar owner puts the album count on the name line and the pil
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#1c1730;[^}]*--ui-metadata-pill-country-border:\s*#8b6fd6;[^}]*--ui-metadata-pill-country-ink:\s*#cbb8ff;[^}]*background:\s*var\(--ui-metadata-pill-country-fill\)/s);
   assert.match(buttonComponentCssSource, /:root\[data-appearance-mode='light'\] \.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#f1ecfd;[^}]*--ui-metadata-pill-country-ink:\s*#4a2e99;/s);
   assert.doesNotMatch(galleryMainCssSource, /ui-metadata-pill--country/, 'no page-local country colour');
-  assert.match(markup, /data-gallery-context-inline-total hidden><\/span>/);
-  assert.match(markup, /data-gallery-context-summary>4 albums</, 'the count sits below the name and i icon');
-  assert.match(galleryMainCssSource, /\.gallery-bar__artist-total::before\s*\{[^}]*content:\s*"\\2022"/s, 'a fat dot leads the count');
-  // Summary and pills share one fixed-height second line, so the header never shifts while scrolling.
-  assert.match(galleryMainCssSource, /\.gallery-bar__summary,\s*\.gallery-bar__artist-metadata\s*\{[^}]*min-height:\s*20px/s);
-  assert.doesNotMatch(mobileLayoutCssSource, /\.gallery-bar__summary:empty\s*\{[^}]*display:\s*none/s);
+  assert.match(markup, /data-gallery-context-summary>4 albums<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
+    'the second line is album count, fat dot, and country');
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-country::before\s*\{[^}]*content:\s*"\\2022"/s);
+  assert.match(galleryMainCssSource, /\.gallery-bar__summary\s*\{[^}]*display:\s*flex;[^}]*white-space:\s*nowrap/s);
+  assert.doesNotMatch(galleryMainCssSource + mobileLayoutCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*flex-wrap:\s*wrap/s);
+  assert.equal((markup.match(/data-gallery-context-metadata/g) || []).length, 1, 'genre metadata has no third-row owner');
+});
+
+test('mobile artist GalleryBar ellipsizes instead of creating a third line', () => {
+  const classes = new Set(['is-name-wrapping']);
+  const context = loadRuntime({ window: { innerWidth: 390 } });
+  const bar = {
+    dataset: { galleryContextKind: 'artist' },
+    classList: {
+      add: value => classes.add(value),
+      remove: value => classes.delete(value),
+    },
+    querySelector: () => ({}),
+  };
+  context.syncGalleryBarNameFit(bar, { textContent: 'A very long artist name', scrollWidth: 260, clientWidth: 100 });
+  assert.equal(classes.has('is-name-wrapping'), false);
 });
 
 test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {

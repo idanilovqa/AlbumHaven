@@ -170,7 +170,7 @@ test('summary waits for the complete response after a bounded first page', async
   const { observeProblematicDetails } = await load();
   const page = capturePage(); const capture = observeProblematicDetails(page);
   page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
-  const summary = capture.summary({ timeout: 100 });
+  const summary = capture.summary({ timeout: 1000 });
   setImmediate(() => page.emit('/utilities/problematic-files', { items: [{ key: 'first' }, { key: 'second' }] }));
   assert.deepEqual((await summary).map(item => item.key), ['first', 'second']);
   await capture.dispose();

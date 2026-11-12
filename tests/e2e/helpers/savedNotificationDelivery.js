@@ -31,10 +31,12 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
     ? await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' })
     : null;
   let deliveryError;
+  let restoreRequired = false;
   try {
     await beforeNavigation?.();
     await appBar.openStatusMenu();
     await scan.scanPage.openStatusPage.click();
+    restoreRequired = true;
     await scan.waitForVisible({ timeout });
     if (presentations) {
       await scan.waitForDedicatedPageVisible({ timeout });
@@ -46,7 +48,19 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   } catch (error) {
     deliveryError = error;
   } finally {
-    if (presentations) await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+    if (presentations) {
+      try {
+        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+      } catch (cleanupError) {
+        deliveryError = deliveryError
+          ? new AggregateError([deliveryError, cleanupError], 'Saved notification delivery and recorder cleanup failed')
+          : cleanupError;
+      }
+    }
+  }
+  if (!restoreRequired) {
+    if (deliveryError) throw deliveryError;
+    return;
   }
   try {
     await scan.clickBack();

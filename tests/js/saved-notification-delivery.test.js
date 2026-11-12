@@ -109,6 +109,24 @@ test('status delivery installs its Status-gated recorder before navigation', () 
   assert.match(helperSource, /recordRepairAlertPresentations\(\{\s*surfaceSelector:\s*'#library-loader'/u);
 });
 
+test('status delivery cleans up recording failures and restores only after Status opens', () => {
+  const helperSource = fs.readFileSync(
+    path.join(__dirname, '..', 'e2e', 'helpers', 'savedNotificationDelivery.js'),
+    'utf8',
+  );
+  const statusClicked = helperSource.indexOf('await scan.scanPage.openStatusPage.click()');
+  const restoreEnabled = helperSource.indexOf('restoreRequired = true');
+  const restoreGuard = helperSource.indexOf('if (!restoreRequired)');
+  const backNavigation = helperSource.indexOf('await scan.clickBack()');
+
+  assert.ok(statusClicked >= 0 && statusClicked < restoreEnabled, helperSource);
+  assert.ok(restoreEnabled < restoreGuard && restoreGuard < backNavigation, helperSource);
+  assert.match(
+    helperSource,
+    /try\s*\{\s*await tagEditor\.stopRecordingRepairAlertPresentations\(presentations\);\s*\}\s*catch \(cleanupError\) \{[\s\S]*?deliveryError = deliveryError/u,
+  );
+});
+
 test('the presentation recorder ignores Gallery and captures the same toast when Status activates', async () => {
   const { inspectRepairAlert } = await import('../e2e/poms/tagEditor.js');
   const observers = [];

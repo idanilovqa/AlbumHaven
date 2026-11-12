@@ -1734,6 +1734,21 @@ def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, 
     assert body == bounded_variant.read_bytes()
     assert observed_recorders == [recorder]
 
+    status, _headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={
+            "path": str(cover_path),
+            "size": "480",
+            "v": "process-session-cache-token",
+        },
+    )
+
+    assert status == 200
+    assert body == bounded_variant.read_bytes()
+    assert observed_recorders == [recorder, None]
+
 
 def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi_app, monkeypatch):
     persisted_loops: list[dict[str, object]] = []

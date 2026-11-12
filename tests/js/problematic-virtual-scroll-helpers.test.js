@@ -162,6 +162,18 @@ test('a dropped complete summary body is recovered through one authenticated unb
   await capture.dispose();
 });
 
+test('a summary completed before capture is recovered through one authenticated unbounded read', async () => {
+  const { observeProblematicDetails } = await load();
+  const { page, requestedUrl } = capturePageWithFallback({
+    items: [{ key: 'first' }, { key: 'second' }], complete: true,
+  });
+  const capture = observeProblematicDetails(page);
+
+  assert.deepEqual((await capture.summary()).map(item => item.key), ['first', 'second']);
+  assert.equal(requestedUrl(), 'https://app.test/utilities/problematic-files');
+  await capture.dispose();
+});
+
 for (const [label, fallback, expected] of [
   ['an incomplete fallback', { items: [{ key: 'first' }], complete: false }, /must be complete/],
   ['duplicate fallback identities', { items: [{ key: 'first' }, { key: 'first' }], complete: true }, /must be unique/],
@@ -191,15 +203,38 @@ test('a dropped older summary body is tolerated only while a newer complete summ
   await assert.rejects(stale.summary(), /newest complete summary body must be captured/);
   await stale.dispose();
 
-  const boundedPage = capturePage(); const bounded = observeProblematicDetails(boundedPage);
+  const { page: boundedPage } = capturePageWithFallback({
+    items: [{ key: 'first' }, { key: 'second' }], complete: true,
+  });
+  const bounded = observeProblematicDetails(boundedPage);
   boundedPage.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
-  await assert.rejects(bounded.summary(), /Capture must be installed/);
+  assert.deepEqual((await bounded.summary()).map(item => item.key), ['first', 'second']);
   await bounded.dispose();
 
   const otherPage = capturePage(); const other = observeProblematicDetails(otherPage);
   otherPage.emit('/utilities/problematic-files', new Error('socket hang up'));
   await assert.rejects(other.summary(), /evidence capture failed/);
   await assert.rejects(other.dispose(), /evidence capture failed/);
+});
+
+test('summary drains a newer response that arrives while an older body is pending', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage();
+  const capture = observeProblematicDetails(page);
+  let resolveOlder;
+  let rejectNewer;
+  const olderBody = new Promise((resolve) => { resolveOlder = resolve; });
+  const newerBody = new Promise((resolve, reject) => { rejectNewer = reject; });
+
+  page.emit('/utilities/problematic-files', olderBody);
+  const reading = capture.summary();
+  page.emit('/utilities/problematic-files', newerBody);
+  resolveOlder({ items: [{ key: 'stale' }] });
+  await new Promise(resolve => setImmediate(resolve));
+  rejectNewer(droppedBody());
+
+  await assert.rejects(reading, /newest complete summary body must be captured/);
+  await capture.dispose();
 });
 
 test('a complete bounded first page counts as the complete summary', async () => {

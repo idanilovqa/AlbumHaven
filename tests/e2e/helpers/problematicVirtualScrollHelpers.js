@@ -136,13 +136,13 @@ export function observeProblematicDetails(page) {
   };
   page.on('response', responseListener);
   const settle = async () => {
-    await Promise.all([...pending]);
+    while (pending.size) await Promise.all([...pending]);
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
     async summary() {
       await settle();
-      if (!summary && droppedSummarySequence > 0) {
+      if (!summary) {
         const response = await authenticatedPageGet(page, '/utilities/problematic-files');
         assert.equal(response.ok(), true, 'Fallback problematic summary request must succeed');
         const payload = await response.json();

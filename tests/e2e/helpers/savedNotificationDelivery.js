@@ -21,24 +21,32 @@ export async function confirmTimedSavedNotification(tagEditor, presentations, ex
   await expect(tagEditor.repairAlert).toBeHidden({ timeout });
 }
 
-export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, { timeout, autoDismisses, beforeNavigation }) {
-  const appBar = new AppBarActions(new AppBar(tagEditor.page));
-  const scan = new ScanPageActions(new ScanPage(tagEditor.page));
-  await expect(tagEditor.overlay).toBeHidden({ timeout });
-  await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
-  const previous = await tagEditor.readLibraryReturnState();
-  const presentations = autoDismisses
-    ? await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' })
-    : null;
+export async function deliverSavedNotificationThroughStatus(tagEditor, expectedMessage, {
+  timeout,
+  autoDismisses,
+  beforeNavigation,
+  presentations: prearmedPresentations = null,
+}) {
+  let scan;
+  let previous;
+  let presentations = prearmedPresentations;
   let deliveryError;
   let restoreRequired = false;
   try {
+    const appBar = new AppBarActions(new AppBar(tagEditor.page));
+    scan = new ScanPageActions(new ScanPage(tagEditor.page));
+    await expect(tagEditor.overlay).toBeHidden({ timeout });
+    await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
+    previous = await tagEditor.readLibraryReturnState();
+    if (autoDismisses && !presentations) {
+      presentations = await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' });
+    }
     await beforeNavigation?.();
     await appBar.openStatusMenu();
     await scan.scanPage.openStatusPage.click();
     restoreRequired = true;
     await scan.waitForVisible({ timeout });
-    if (presentations) {
+    if (autoDismisses) {
       await scan.waitForDedicatedPageVisible({ timeout });
       await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
     } else {

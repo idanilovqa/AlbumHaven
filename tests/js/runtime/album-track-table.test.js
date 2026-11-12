@@ -127,6 +127,18 @@ test('AlbumTrackTable composes CompactDataTable compact rows and preserves playb
   assert.match(html, /class="album-track-table__total"/);
 });
 
+test('AlbumTrackTable marks named sections for shared row styling', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ namedSection: true, discLabel: 'Second movement', tracks: [{ path: 'two.flac', title: 'Two' }] }],
+  });
+
+  assert.match(html, /album-track-table__disc--named/);
+  assert.match(html, /album-track-table__disc-heading[^>]*>Second movement<\/h4>/);
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
+  assert.match(css, /album-track-table__disc--named[\s\S]*padding:\s*7px 10px[\s\S]*background:\s*color-mix/);
+});
+
 test('AlbumTrackTable uses an opaque member identity without inventing another table', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

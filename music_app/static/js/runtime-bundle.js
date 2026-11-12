@@ -22435,6 +22435,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
     const showLabel = Boolean(label) && (
       forceGroupLabels
+      || Boolean(group?.namedSection)
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
     const columnsConfig = [
@@ -22476,7 +22477,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       mobile,
     });
     if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -22485,7 +22486,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;
-    return `<section class="album-track-table__disc">${heading}${table}</section>`;
+    return `<section class="album-track-table__disc${group?.namedSection ? ' album-track-table__disc--named' : ''}">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
   const mainLength = String(config.mainLength || '').trim();
@@ -40627,7 +40628,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
     if (group.discSubtitle) {
-      discLabel = discLabel ? `${discLabel} • ${group.discSubtitle}` : group.discSubtitle;
+      discLabel = group.discSubtitle;
     } else if (group.isBonus) {
       discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
@@ -40671,6 +40672,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     return {
       discNumber: group.discNumber,
       discLabel,
+      namedSection: Boolean(group.discSubtitle),
       isBonus: Boolean(group.isBonus),
       discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
       tracks: componentTracks,

@@ -2516,7 +2516,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
     if (group.discSubtitle) {
-      discLabel = discLabel ? `${discLabel} • ${group.discSubtitle}` : group.discSubtitle;
+      discLabel = group.discSubtitle;
     } else if (group.isBonus) {
       discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
@@ -2560,6 +2560,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     return {
       discNumber: group.discNumber,
       discLabel,
+      namedSection: Boolean(group.discSubtitle),
       isBonus: Boolean(group.isBonus),
       discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
       tracks: componentTracks,

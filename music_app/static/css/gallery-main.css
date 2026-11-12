@@ -186,6 +186,7 @@
 .artist-info-overlay[hidden] { display: none; }
 .artist-info-overlay > header { display: flex; gap: 13px; padding: 15px 16px 10px; }
 .artist-info-overlay h2 { margin: 4px 0; font-size: 1.1rem; }
+.artist-info-overlay__metadata { display: flex; flex-wrap: wrap; gap: 6px; }
 .artist-info-overlay__image { width: 112px; height: 112px; display: grid; place-items: center; flex: 0 0 auto; object-fit: cover; object-position: center top; border-radius: 11px; background: var(--panel-2, var(--app-active, #1b3047)); }
 .artist-info-overlay__body { max-height: 300px; overflow: auto; padding: 0 16px 16px; line-height: 1.5; user-select: text; }
 /* A long biography is cut after five lines, ending in "… Open full page" over a fade in the panel colour. */

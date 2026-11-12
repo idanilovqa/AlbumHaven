@@ -90,6 +90,8 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
           credit: [],
+          countries: ['Finland'],
+          genres: ['ambient', 'dark wave'],
           links: expect.arrayContaining([
             `https://musicbrainz.org/artist/${MBID.guest}`,
             'https://www.discogs.com/artist/424242',

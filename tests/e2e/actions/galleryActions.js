@@ -335,6 +335,8 @@ export class GalleryActions {
     return {
       heading: String(await this.galleryPage.artistInfoHeading.textContent() || '').trim(),
       credit: (await this.galleryPage.artistInfoCredit.allTextContents()).map((value) => value.trim()),
+      countries: (await this.galleryPage.artistInfoCountryPills.allTextContents()).map((value) => value.trim()),
+      genres: (await this.galleryPage.artistInfoGenrePills.allTextContents()).map((value) => value.trim()),
       identities,
       identityRows: (await this.galleryPage.artistInfoIdentityRows.allTextContents()).map((value) => value.trim()),
       links: (await Promise.all(links.map(async (link) => (

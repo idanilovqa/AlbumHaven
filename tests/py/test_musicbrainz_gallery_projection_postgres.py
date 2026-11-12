@@ -236,4 +236,3 @@ def test_a_person_projects_the_same_named_band_they_belong_to_as_associated():
         {"artist_mbid": band, "musicbrainz_url": f"https://musicbrainz.org/artist/{band}", "canonical_name": "Alice Cooper",
          "disambiguation": "the band", "album_count": 7}]
     assert "identities" not in projection
-

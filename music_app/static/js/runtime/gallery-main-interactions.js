@@ -1050,7 +1050,15 @@ function initGalleryMain() {
       positionGalleryAnchoredSurface(active.surface, active.anchor, 'left');
     }
     if (galleryMainScrollFrame) return;
-    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
+    galleryMainScrollFrame = requestAnimationFrame(() => {
+      galleryMainScrollFrame = 0;
+      updateGalleryMainChrome();
+      const settled = galleryMainSurfaceController?.current?.();
+      if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
+        settled.anchor = resolveCurrentGalleryAnchor(settled.anchor);
+        positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+      }
+    });
   }, { passive: true });
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();

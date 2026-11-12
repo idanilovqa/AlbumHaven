@@ -287,20 +287,37 @@ test('initial Artist Family markup is hidden only when no effective artist is se
 
 test('artist info stays open and follows its header while the gallery scrolls', () => {
   const listeners = {};
+  const frames = [];
+  let anchor;
   const scroll = { scrollTop: 0, scrollLeft: 0, addEventListener: (type, callback) => { listeners[type] = callback; } };
+  const currentAnchor = {
+    isConnected: true,
+    setAttribute() {},
+    getBoundingClientRect: () => ({ top: 150, bottom: 170, left: 40, right: 60, width: 20, height: 20 }),
+  };
+  const section = {
+    dataset: { virtualSectionKey: 'artist:all:Neal Morse:0' },
+    querySelector: () => currentAnchor,
+  };
   const context = loadRuntime({
     document: { getElementById: id => id === 'albums-scroll' ? scroll : null,
-      querySelector: () => null, addEventListener() {} },
+      querySelector: () => null,
+      querySelectorAll: selector => selector === '[data-virtual-section-key]' ? [section] : [],
+      addEventListener() {} },
     window: { addEventListener() {}, innerWidth: 1000 },
-    requestAnimationFrame: () => 1,
+    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   });
   // Keep unrelated chrome/layout work outside this event-lifecycle test.
   context.ensureGalleryMainState = () => ({});
   context.observeArtistFamilyPanelBounds = () => null;
-  context.updateGalleryMainChrome = () => {};
+  context.updateGalleryMainChrome = () => { if (anchor) anchor.isConnected = false; };
   context.focusGalleryMainSurface = () => {};
   context.initGalleryMain();
-  const anchor = {
+  anchor = {
+    isConnected: true,
+    closest: selector => selector === '[data-virtual-section-key]'
+      ? { dataset: { virtualSectionKey: 'artist:all:Neal Morse:0' } }
+      : null,
     setAttribute() {},
     getBoundingClientRect: () => ({ top: 180 - scroll.scrollTop, bottom: 200 - scroll.scrollTop,
       left: 40, right: 60, width: 20, height: 20 }),
@@ -321,6 +338,8 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   listeners.scroll();
   assert.equal(surface.hidden, false, 'wheel or touchpad scrolling over the gallery keeps the popup open');
   assert.equal(surface.style.top, '198px', 'the popup follows its artist header');
+  frames.shift()();
+  assert.equal(surface.style.top, '169px', 'the popup rebinds after virtual rendering replaces its header');
   scroll.scrollLeft = 1;
   listeners.scroll();
   assert.equal(surface.hidden, false, 'horizontal gallery scrolling also keeps the popup open');

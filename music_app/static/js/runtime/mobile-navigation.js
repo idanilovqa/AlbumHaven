@@ -962,6 +962,15 @@ function scheduleMobileAlbumThumbnail() {
   });
 }
 
+function returnMobilePageToGallery(kind) {
+  if (mobilePageState.cleaning || mobilePageState.pages.at(-1)?.kind !== kind) return false;
+  cleanupMobilePage(mobilePageState.pages.pop());
+  syncMobilePageShell();
+  writeMobilePageHistory('replace');
+  syncMobileHome();
+  return true;
+}
+
 function returnMobilePagesToGallery() {
   while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
   syncMobilePageShell();

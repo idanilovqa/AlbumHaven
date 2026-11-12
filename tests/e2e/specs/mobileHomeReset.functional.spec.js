@@ -60,4 +60,31 @@ test.describe('mobile Home reset', () => {
       expect(firstBox.y).toBeGreaterThanOrEqual(railBox.y);
     });
   });
+
+  test('FTC-MOBILE-HOME-002 mobile Home closes Loose Tracks and renders Home', { tag: '@area:gallery-search' }, async ({
+    galleryActions,
+    page,
+    stepLogger,
+  }) => {
+    const mobileLayout = new MobileLayoutPage(page);
+    const nonAlbumPage = page.locator('#non-album-modal');
+
+    await stepLogger.step('Open library-wide Loose Tracks as a retained mobile page', async () => {
+      await galleryActions.goto('/');
+      await mobileLayout.libraryButton.click();
+      await mobileLayout.artistRail.locator('[data-navigation-mode="collections"]').click();
+      await expect(page).toHaveURL(/\/loose-tracks(?:\?|$)/);
+      await expect(nonAlbumPage).toBeVisible();
+      await expect(page.locator('#mobile-page-title')).toHaveText('Loose Tracks');
+    });
+
+    await stepLogger.step('The app brand synchronously retires Loose Tracks and owns Home', async () => {
+      await mobileLayout.homeLink.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe('/');
+      await expect(mobileLayout.home).toBeVisible();
+      await expect(nonAlbumPage).toBeHidden();
+      await expect(page.locator('#mobile-page-outlet > #non-album-modal')).toHaveCount(0);
+      await expect(page.getByRole('heading', { name: 'Loose Tracks', exact: true })).toBeHidden();
+    });
+  });
 });

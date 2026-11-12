@@ -825,6 +825,25 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
     { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
 });
 
+test('single-page gallery return retires only the requested topmost mobile page', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js');
+  context.cleanupMobilePage = descriptor => calls.push(`cleanup:${descriptor.kind}`);
+  context.syncMobilePageShell = () => calls.push('sync-shell');
+  context.writeMobilePageHistory = mode => calls.push(`history:${mode}`);
+  context.syncMobileHome = () => calls.push('sync-home');
+  vm.runInContext("mobilePageState.pages.push({ kind: 'utilities' }, { kind: 'non-album' })", context);
+
+  assert.equal(context.returnMobilePageToGallery('non-album'), true);
+  assert.deepEqual(calls, ['cleanup:non-album', 'sync-shell', 'history:replace', 'sync-home']);
+  assert.equal(vm.runInContext("mobilePageState.pages.at(-1).kind", context), 'utilities');
+
+  calls.length = 0;
+  assert.equal(context.returnMobilePageToGallery('non-album'), false);
+  assert.deepEqual(calls, []);
+  assert.equal(vm.runInContext("mobilePageState.pages.at(-1).kind", context), 'utilities');
+});
+
 test('desktop Loose Tracks owns a reloadable URL with Back and Forward history', () => {
   const location = { href: 'https://example.test/?surface=albums' };
   let pushedUrl = '';

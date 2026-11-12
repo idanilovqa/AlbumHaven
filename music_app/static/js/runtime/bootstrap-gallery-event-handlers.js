@@ -646,6 +646,7 @@ function scrollRootGalleryToArtist(artist) {
 // Home is an in-app restart: leave every surface the user navigated into and
 // land on the default library page with the Artist Tree at All artists.
 function resetLibraryHomeNavigation() {
+  if (typeof returnMobilePageToGallery === 'function') returnMobilePageToGallery('non-album');
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const surface = typeof getDismissibleForegroundSurface === 'function'
       ? getDismissibleForegroundSurface()

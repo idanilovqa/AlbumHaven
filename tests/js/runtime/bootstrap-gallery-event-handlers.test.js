@@ -1646,6 +1646,47 @@ test('mobile Home leaves Loose Tracks mode and restores the full unqueried Artis
   );
 });
 
+test('mobile Home synchronously retires a retained Loose Tracks page before rendering Home', () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  const order = [];
+  let nonAlbumPageActive = true;
+  const applyViewPayload = context.applyViewPayload;
+  context.usesMobilePageLayout = () => true;
+  context.returnMobilePageToGallery = (kind) => {
+    order.push(`return-to-gallery:${kind}`);
+    if (kind !== 'non-album' || !nonAlbumPageActive) return false;
+    nonAlbumPageActive = false;
+    return true;
+  };
+  context.returnMobilePagesToGallery = () => assert.fail('Home must not force-close every mobile page');
+  context.applyViewPayload = (payload, runtimeOptions) => {
+    order.push(`render:${payload.surface.active}`);
+    assert.equal(nonAlbumPageActive, false, 'Loose Tracks must be retired before Home renders');
+    return applyViewPayload(payload, runtimeOptions);
+  };
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.deepEqual(order, ['return-to-gallery:non-album', 'render:home']);
+  assert.equal(nonAlbumPageActive, false);
+  assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
+});
+
+test('mobile Home never force-cleans Utilities while requesting Loose Tracks retirement', () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const requestedKinds = [];
+  context.usesMobilePageLayout = () => true;
+  context.returnMobilePageToGallery = (kind) => {
+    requestedKinds.push(kind);
+    return false;
+  };
+  context.returnMobilePagesToGallery = () => assert.fail('Utilities must retain its guarded close owner');
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.deepEqual(requestedKinds, ['non-album']);
+});
+
 test('mobile Home removes the Artists search-results dot left by an earlier search', () => {
   const { context } = createContext({ searchInputValue: 'DDT', useProductionBuildApiUrl: true });
   const button = {

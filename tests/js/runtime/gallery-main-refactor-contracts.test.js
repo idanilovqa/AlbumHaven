@@ -1584,6 +1584,7 @@ test('search suggestions escape content stacking and align to the search field i
 
 test('opening Artist Info scrolls the gallery enough to clear the bottom player and reanchors the panel', () => {
   const scroll = { scrollTop: 80 };
+  let settle;
   const player = { hidden: false, getBoundingClientRect: () => ({ top: 410, height: 90 }) };
   const surface = {
     hidden: false,
@@ -1594,6 +1595,7 @@ test('opening Artist Info scrolls the gallery enough to clear the bottom player 
   let positioned = 0;
   const context = loadRuntime({
     window: { innerHeight: 500 },
+    requestAnimationFrame: callback => { settle = callback; },
     document: {
       getElementById: id => (id === 'albums-scroll' ? scroll : null),
       querySelector: selector => (selector === '[data-shell-slot="bottom_player"]' ? player : null),
@@ -1605,6 +1607,8 @@ test('opening Artist Info scrolls the gallery enough to clear the bottom player 
 
   assert.equal(scroll.scrollTop, 156, 'the complete 76px overlap is revealed');
   assert.equal(positioned, 1, 'the fixed panel follows its moved artist header immediately');
+  settle();
+  assert.equal(positioned, 2, 'the connector is recomputed after scrolling settles');
 });
 
 test('local artist information stays capability-bounded and leaves unavailable optional enrichment empty', () => {

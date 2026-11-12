@@ -7417,6 +7417,7 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!offset) return 0;
   scroll.scrollTop += offset;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
+  requestAnimationFrame(() => positionGalleryAnchoredSurface(surface, anchor, 'left'));
   return offset;
 }
 

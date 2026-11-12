@@ -31,18 +31,20 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   await appBar.openStatusMenu();
   let deliveryError;
   try {
-    await scan.scanPage.openStatusPage.click();
-    await scan.waitForVisible({ timeout });
     if (autoDismisses) {
-      // Placement is judged on Status, where these cases assert it; recording starts there.
+      // Attach before navigation because Status can render and dismiss the toast before its ready wait returns.
       const presentations = await tagEditor.recordRepairAlertPresentations();
       try {
+        await scan.scanPage.openStatusPage.click();
+        await scan.waitForVisible({ timeout });
         await scan.waitForDedicatedPageVisible({ timeout });
         await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
       } finally {
         await tagEditor.stopRecordingRepairAlertPresentations(presentations);
       }
     } else {
+      await scan.scanPage.openStatusPage.click();
+      await scan.waitForVisible({ timeout });
       await scan.waitForDedicatedPageVisible({ timeout });
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }

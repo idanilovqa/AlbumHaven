@@ -139,7 +139,11 @@ export function observeProblematicDetails(page) {
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
-    async summary() {
+    async summary({ timeout = 10000 } = {}) {
+      await expect.poll(() => summary !== null || errors.length > 0, {
+        timeout,
+        message: 'Complete problematic summary response was not captured',
+      }).toBe(true);
       await settle();
       assert.ok(summary, 'Capture must be installed before the normal summary request');
       assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');

@@ -149,7 +149,7 @@ test('a dropped older summary body is tolerated only while a newer complete summ
 
   const boundedPage = capturePage(); const bounded = observeProblematicDetails(boundedPage);
   boundedPage.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
-  await assert.rejects(bounded.summary(), /Capture must be installed/);
+  await assert.rejects(bounded.summary({ timeout: 10 }), /Complete problematic summary response was not captured/);
   await bounded.dispose();
 
   const otherPage = capturePage(); const other = observeProblematicDetails(otherPage);
@@ -163,6 +163,16 @@ test('a complete bounded first page counts as the complete summary', async () =>
   const page = capturePage(); const capture = observeProblematicDetails(page);
   page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'only' }], complete: true });
   assert.deepEqual((await capture.summary()).map(item => item.key), ['only']);
+  await capture.dispose();
+});
+
+test('summary waits for the complete response after a bounded first page', async () => {
+  const { observeProblematicDetails } = await load();
+  const page = capturePage(); const capture = observeProblematicDetails(page);
+  page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
+  const summary = capture.summary({ timeout: 100 });
+  setImmediate(() => page.emit('/utilities/problematic-files', { items: [{ key: 'first' }, { key: 'second' }] }));
+  assert.deepEqual((await summary).map(item => item.key), ['first', 'second']);
   await capture.dispose();
 });
 

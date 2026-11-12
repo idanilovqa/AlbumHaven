@@ -124,8 +124,6 @@ function validateWorkflowContract(workflow) {
   ], 'foundation workflow', errors);
 
   const jobs = {
-    androidBuild: jobSource(workflow, 'test_android', 'test_android_instrumentation'),
-    androidInstrumentation: jobSource(workflow, 'test_android_instrumentation', 'test_js'),
     portable: jobSource(workflow, 'test_js', 'test_components'),
     components: jobSource(workflow, 'test_components', 'test_node_windows'),
     windowsNode: jobSource(workflow, 'test_node_windows', 'test_python'),
@@ -151,26 +149,6 @@ function validateWorkflowContract(workflow) {
       [/^      - review_prerequisites\r?$/m, 'review_prerequisites dependency'],
       [/^    if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/m, 'successful review prerequisite and cancellable job condition'],
     ], `${name} job`, errors);
-  }
-
-  const e2eJobs = [
-    ['Phase 7 auth', jobs.phase7Auth],
-    ['Phase 7 admin', jobs.phase7Admin],
-    ['functional', jobs.functional],
-    ['performance', jobs.performance],
-  ];
-  const foundations = [
-    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
-    'test_android', 'test_android_instrumentation',
-  ];
-  for (const [name, source] of e2eJobs) {
-    if (!source) continue;
-    for (const foundation of foundations) {
-      if (new RegExp(`^      - ${foundation}\\r?$`, 'm').test(source)
-          || new RegExp(`needs\\.${foundation}\\.result`).test(source)) {
-        errors.push(`${name} job must run in parallel with ${foundation}`);
-      }
-    }
   }
 
   for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {

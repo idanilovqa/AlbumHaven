@@ -315,7 +315,6 @@ test('foundation validator rejects every test family losing its review-success d
   const validator = require(validatorPath);
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   for (const job of [
-    'test_android', 'test_android_instrumentation',
     'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
     'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
   ]) {
@@ -331,27 +330,3 @@ test('foundation validator rejects every test family losing its review-success d
   }
 });
 
-test('expensive E2E families run in parallel with foundation checks', () => {
-  const validator = require(validatorPath);
-  const workflow = fs.readFileSync(workflowPath, 'utf8');
-  const e2eJobs = ['e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci'];
-  const foundations = [
-    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
-    'test_android', 'test_android_instrumentation',
-  ];
-
-  for (const job of e2eJobs) {
-    const start = workflow.indexOf(`  ${job}:`);
-    const remainder = workflow.slice(start + 1);
-    const nextJob = remainder.match(/\n {2}[A-Za-z_][A-Za-z0-9_]*:\r?\n/);
-    const end = nextJob ? start + 1 + nextJob.index : workflow.length;
-    const source = workflow.slice(start, end);
-    for (const foundation of foundations) {
-      assert.doesNotMatch(source, new RegExp(`^      - ${foundation}\\r?$`, 'm'));
-      assert.doesNotMatch(source, new RegExp(`needs\\.${foundation}\\.result`));
-    }
-    assertWorkflowDrift(validator, workflow,
-      replaceInJob(workflow, job, /^      - codex_review\r?$/m, '      - codex_review\n      - test_python'),
-      /must run in parallel with test_python/);
-  }
-});

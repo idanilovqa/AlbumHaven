@@ -620,6 +620,13 @@
               "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
               "case": "FTC-MOBILE-HOME-001 mobile Home clears an active search and resets the Artists tree",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+              "case": "FTC-MOBILE-HOME-002 mobile Home closes Loose Tracks and renders Home",
+              "area": "gallery-search"
             }
           ]
         }

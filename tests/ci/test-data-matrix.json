@@ -10003,6 +10003,44 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/mobileHomeReset.functional.spec.js",
+    "case": "FTC-MOBILE-HOME-002 mobile Home closes Loose Tracks and renders Home",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "search:mobile-home-reset"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "mobile-home-closes-loose-tracks",
+      "mobile-home-restores-root-url",
+      "mobile-home-renders-without-retained-loose-tracks"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/dropdownControl.spec.js",
+    "case": "shared dropdown keeps a centered neutral chevron and pointer cursor across its control",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "shared-dropdown-centered-neutral-chevron",
+      "shared-dropdown-pointer-cursor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.mobile-feedback.config.js",
     "project": "",
     "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",

@@ -1173,7 +1173,7 @@ function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set(), options
 
 async function prewarmFunctionalFixture(port, options = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
-  const indexUrl = `${baseUrl}/?surface=albums`;
+  const indexUrl = `${baseUrl}/albums`;
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;

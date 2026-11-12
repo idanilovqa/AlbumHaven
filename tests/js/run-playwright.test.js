@@ -3459,7 +3459,7 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
   secondUrl.searchParams.set('path', secondCover);
   secondUrl.searchParams.set('size', '480');
   assert.deepEqual(requests.map((request) => request.url), [
-    'http://127.0.0.1:4324/?surface=albums',
+    'http://127.0.0.1:4324/albums',
     'http://127.0.0.1:4324/view-data?surface=albums&omit_sidebar=1',
     firstUrl.toString(),
     secondUrl.toString(),

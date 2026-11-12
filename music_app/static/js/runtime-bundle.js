@@ -37644,7 +37644,7 @@ async function confirmManualTagEdit() {
       showRepairAlert(
         [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
         hasCompletionWarning ? 'warning' : 'success',
-        hasCompletionWarning ? 8000 : 2000,
+        8000,
         {
           title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
         },

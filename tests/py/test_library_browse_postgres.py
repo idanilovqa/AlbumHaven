@@ -18592,6 +18592,26 @@ def test_a_display_correction_is_a_problematic_file_until_written():
     assert list(_physical_file_problem_reasons({})) == []
 
 
+def test_cue_source_failure_is_one_problematic_file_reason():
+    from music_app.services import library_browse_postgres as browse
+
+    assert browse._problematic_album_scope_reasons({
+        "key": "cue-album",
+        "_cue_source_problem": True,
+        "cover_path": "cover.jpg",
+        "year": 2026,
+        "name": "Album",
+        "album_artist": "Artist",
+        "_ignored_repair_keys": set(),
+        "_file_entries": [],
+    }) == ["Invalid CUE"]
+    sql = " ".join(browse._problematic_files_sql(candidate_summary=True).split()).casefold()
+    assert "cue_problem_album_ids" in sql
+    assert "as cue_source_status" in sql
+    assert "cue_source_problems" not in browse._selected_artist_sql()
+    assert "cue_source_problems" not in browse._album_detail_sql()
+
+
 def test_album_sql_projects_active_cue_tracks_and_hides_their_whole_image_rows():
     from music_app.services import library_browse_postgres as browse
 

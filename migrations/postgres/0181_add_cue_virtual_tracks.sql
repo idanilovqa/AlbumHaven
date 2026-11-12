@@ -9,6 +9,8 @@ create table if not exists library.cue_programs (
   is_valid boolean not null default false,
   is_active boolean not null default false,
   problems jsonb not null default '[]'::jsonb,
+  source_status text not null default 'online',
+  source_problems jsonb not null default '[]'::jsonb,
   last_valid_program_id bigint references library.cue_programs(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -20,6 +22,12 @@ create table if not exists library.cue_programs (
   ),
   constraint cue_programs_problems_check check (
     jsonb_typeof(problems) = 'array'
+  ),
+  constraint cue_programs_source_status_check check (
+    source_status in ('online', 'invalid', 'offline')
+  ),
+  constraint cue_programs_source_problems_check check (
+    jsonb_typeof(source_problems) = 'array'
   ),
   constraint cue_programs_active_valid_check check (
     not is_active or is_valid

@@ -186,6 +186,28 @@ def test_targeted_reconciler_rebuilds_cue_for_changed_program_or_media(tmp_path,
     assert candidate.media_paths == (audio.resolve(),)
 
 
+@pytest.mark.parametrize("deleted_name", ["album.cue", "image.flac"])
+def test_targeted_reconciler_reports_deleted_cue_dependency_to_persistence(tmp_path, deleted_name):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "main"
+    deleted_path = root / "Artist" / "Album" / deleted_name
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "CUE_EXTENSIONS": {".cue"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+    )
+
+    reconciler.reconcile(_request(deleted_paths=(deleted_path,)))
+
+    assert repository.cue_calls == [{
+        "root_id": "main",
+        "candidates": (),
+        "changed_paths": (str(deleted_path),),
+    }]
+
+
 def test_targeted_reconciler_persists_cue_candidates_under_their_own_roots(tmp_path):
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
 
@@ -220,8 +242,13 @@ def test_targeted_reconciler_persists_cue_candidates_under_their_own_roots(tmp_p
         destination_root_id="archive", is_directory=True,
     ),)))
 
-    assert [call["root_id"] for call in repository.cue_calls] == ["archive"]
+    assert [call["root_id"] for call in repository.cue_calls] == ["archive", "main"]
     assert len(repository.cue_calls[0]["candidates"]) == 1
+    assert repository.cue_calls[1] == {
+        "root_id": "main",
+        "candidates": (),
+        "changed_paths": (str(source),),
+    }
 
 
 def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
@@ -851,6 +878,11 @@ def test_targeted_reconciler_passes_root_scoped_deleted_subtrees_without_scannin
     assert repository.calls[0]["root_id"] == "main"
     assert repository.calls[0]["deleted_subtrees"] == (str(deleted_album),)
     assert repository.calls[0]["active_file_entries"] == {}
+    assert repository.cue_calls == [{
+        "root_id": "main",
+        "candidates": (),
+        "changed_paths": (str(deleted_album),),
+    }]
 
 
 def test_targeted_reconciler_rejects_paths_outside_the_claimed_root(tmp_path):

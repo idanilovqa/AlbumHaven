@@ -5237,6 +5237,12 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 or row_payload.get("exception_override_present") is True
             )
 
+        if (
+            row_payload.get("cue_source_status") not in (None, "", "online")
+            or row_payload.get("cue_source_problems")
+        ):
+            album["_cue_source_problem"] = True
+
         track_path = str(row_payload.get("file_private_path") or "").strip()
         if not track_path or track_path in seen_track_paths_by_album[album_identity]:
             continue
@@ -5856,6 +5862,8 @@ def _problematic_album_scope_reasons(album: Mapping[str, object]) -> list[str]:
     add(_cached_problematic_text_reason(album, "Artist", str(album.get("album_artist") or "")))
     add(_cached_problematic_text_reason(album, "Album", str(album.get("name") or "")))
     add(year_problem_reason(album.get("year")))
+    if album.get("_cue_source_problem"):
+        add("Invalid CUE")
 
     if album.get("spotify_cover_quota_exceeded"):
         add("Spotify cover search quota exceeded")
@@ -9013,6 +9021,7 @@ def _selected_artist_sql() -> str:
           case when library.cue_programs.id is not null
             then library.local_tracks.track_key end as cue_segment_ref,
           library.cue_programs.source_kind as cue_source_kind,
+          library.cue_programs.source_status as cue_source_status,
             (select c.payload->'fields'
              from library.cue_corrections c
              where c.library_id = library.local_tracks.library_id
@@ -9280,6 +9289,7 @@ def _album_detail_sql() -> str:
           case when library.cue_programs.id is not null
             then library.local_tracks.track_key end as cue_segment_ref,
           library.cue_programs.source_kind as cue_source_kind,
+          library.cue_programs.source_status as cue_source_status,
             (select c.payload->'fields'
              from library.cue_corrections c
              where c.library_id = library.local_tracks.library_id
@@ -12008,8 +12018,22 @@ def _problematic_files_sql(
           ) track_numbers
           group by track_numbers.album_id, track_numbers.disc_number
         ),
+        cue_problem_album_ids as (
+          select distinct tracks.album_id
+          from library.cue_programs programs
+          join bootstrap_context on bootstrap_context.library_id = programs.library_id
+          join library.cue_track_segments segments on segments.program_id = programs.id
+          join library.local_tracks tracks on tracks.id = segments.track_id
+          where programs.is_active is true
+            and (
+              programs.source_status <> 'online'
+              or programs.source_problems <> '[]'::jsonb
+            )
+        ),
         candidate_album_ids as (
           select active_candidate_ids.album_id from active_candidate_ids
+          union
+          select cue_problem_album_ids.album_id from cue_problem_album_ids
           union
           -- Same members as physical_file_context's flags, without materializing
           -- that per-file context for every active file.
@@ -12203,6 +12227,17 @@ def _problematic_files_sql(
           selected_albums.album_edition,
           selected_albums.album_rating,
           selected_albums.album_root_provenance,
+          (select min(programs.source_status)
+             from library.cue_programs programs
+             join library.cue_track_segments segments on segments.program_id = programs.id
+             join library.local_tracks tracks on tracks.id = segments.track_id
+            where programs.is_active is true
+              and tracks.album_id = selected_albums.id
+              and tracks.library_id = selected_albums.library_id
+              and (
+                programs.source_status <> 'online'
+                or programs.source_problems <> '[]'::jsonb
+              )) as cue_source_status,
         """
         file_result_projection = """
           active_track_files.file_size,

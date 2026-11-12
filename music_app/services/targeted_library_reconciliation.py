@@ -156,10 +156,17 @@ class TargetedLibraryReconciler:
                 if self._belongs_to_root(candidate, root):
                     add_event_file(candidate, root)
 
+        requested_deleted_paths = tuple(
+            Path(value) for value in getattr(request, "deleted_paths", ())
+        )
         deleted_paths = tuple(
             path
-            for path in (Path(value) for value in getattr(request, "deleted_paths", ()))
+            for path in requested_deleted_paths
             if is_supported_media(path)
+        )
+        deleted_cue_paths = tuple(
+            path for path in requested_deleted_paths
+            if path.suffix.casefold() in cue_extensions
         )
         deleted_subtrees = tuple(
             Path(path) for path in getattr(request, "deleted_subtrees", ())
@@ -239,7 +246,7 @@ class TargetedLibraryReconciler:
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
         has_inventory_work = bool(
-            active_targets or cue_paths or deleted_paths or deleted_subtrees or normalized_moves
+            active_targets or cue_paths or deleted_paths or deleted_cue_paths or deleted_subtrees or normalized_moves
         )
         if not has_inventory_work and not normalization_paths:
             return TargetedReconciliationResult(0, ())
@@ -365,6 +372,7 @@ class TargetedLibraryReconciler:
                 ),
             )
             cue_candidates_by_root: dict[str, list[object]] = {}
+            cue_changed_paths_by_root: dict[str, set[str]] = {}
             for candidate_root in root_definitions:
                 candidate_root_id = str(candidate_root.get("id") or "")
                 root_path = Path(str(candidate_root.get("path") or "")).resolve(strict=False)
@@ -390,19 +398,32 @@ class TargetedLibraryReconciler:
                 )
                 if candidates:
                     cue_candidates_by_root.setdefault(candidate_root_id, []).extend(candidates)
+                changed_paths = {
+                    str(path)
+                    for path, matched_root in cue_paths.values()
+                    if str(matched_root.get("id") or "") == candidate_root_id
+                }
+                changed_paths.update(
+                    str(path) for path in deleted_cue_paths
+                    if self._belongs_to_root(path, candidate_root)
+                )
+                changed_paths.update(
+                    str(path) for path in deleted_paths
+                    if self._belongs_to_root(path, candidate_root)
+                )
+                changed_paths.update(
+                    str(path) for path in deleted_subtrees
+                    if self._belongs_to_root(path, candidate_root)
+                )
+                if changed_paths:
+                    cue_changed_paths_by_root[candidate_root_id] = changed_paths
             reconcile_cue_sources = getattr(self._repository, "reconcile_cue_sources", None)
             if callable(reconcile_cue_sources):
-                for candidate_root_id, candidates in cue_candidates_by_root.items():
+                for candidate_root_id in sorted(set(cue_candidates_by_root) | set(cue_changed_paths_by_root)):
                     reconcile_cue_sources(
                         root_id=candidate_root_id,
-                        candidates=tuple(candidates),
-                        changed_paths=tuple(
-                            sorted(
-                                str(path)
-                                for path, matched_root in cue_paths.values()
-                                if str(matched_root.get("id") or "") == candidate_root_id
-                            )
-                        ),
+                        candidates=tuple(cue_candidates_by_root.get(candidate_root_id, ())),
+                        changed_paths=tuple(sorted(cue_changed_paths_by_root.get(candidate_root_id, ()))),
                     )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),

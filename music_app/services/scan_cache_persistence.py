@@ -544,6 +544,19 @@ class PostgresScanCacheAdapter:
             })))
             program_id = int(program_row["id"])
             if program.problems:
+                if previous.get("id"):
+                    connection.execute("""
+                        /* cue_mark_source_failure */
+                        update library.cue_programs
+                           set source_status = %(source_status)s,
+                               source_problems = %(source_problems)s::jsonb,
+                               updated_at = now()
+                         where id = %(program_id)s and is_active is true;
+                    """, {
+                        "program_id": int(previous["id"]),
+                        "source_status": "invalid",
+                        "source_problems": json.dumps(list(program.problems)),
+                    })
                 connection.commit()
                 return CueReconciliationResult((), (), (), str(previous.get("revision_sha256") or "") or None)
             if context.get("album_id") is None:
@@ -638,6 +651,7 @@ class PostgresScanCacheAdapter:
                 /* cue_activate_program */
                 update library.cue_programs
                    set is_active = true, is_valid = true,
+                       source_status = 'online', source_problems = '[]'::jsonb,
                        last_valid_program_id = %(last_valid_program_id)s, updated_at = now()
                  where id = %(program_id)s;
             """, {
@@ -654,11 +668,71 @@ class PostgresScanCacheAdapter:
     def reconcile_cue_sources(
         self, *, root_id: str, candidates: tuple[object, ...], changed_paths: tuple[str, ...] = (),
     ) -> tuple[CueReconciliationResult, ...]:
-        del changed_paths
-        return tuple(
+        results = tuple(
             self.persist_cue_program_revision(root_id=root_id, candidate=candidate)
             for candidate in candidates
         )
+        missing_paths = sorted({
+            str(Path(path).resolve(strict=False))
+            for path in changed_paths
+            if not Path(path).exists()
+        })
+        if missing_paths:
+            with self._connect_to_database() as connection:
+                connection.execute("""
+                    /* cue_mark_missing_sources */
+                    update library.cue_programs program
+                       set source_status = 'offline',
+                           source_problems = '["CUE source is unavailable."]'::jsonb,
+                           updated_at = now()
+                      from library.library_roots root
+                     where root.id = program.library_root_id
+                       and coalesce(nullif(root.metadata ->> 'root_id', ''), root.id::text) = %(root_id)s
+                       and program.is_active is true
+                       and (
+                         library.local_path_key(
+                           root.root_path || '/' || split_part(program.source_identity, '#embedded-cue', 1)
+                         ) = any(array(
+                           select library.local_path_key(path)
+                           from unnest(%(missing_paths)s::text[]) path
+                         ))
+                         or exists (
+                           select 1
+                           from unnest(%(missing_paths)s::text[]) path
+                           where starts_with(
+                             replace(library.local_path_key(
+                               root.root_path || '/' || split_part(program.source_identity, '#embedded-cue', 1)
+                             ), E'\\', '/'),
+                             rtrim(replace(library.local_path_key(path), E'\\', '/'), '/') || '/'
+                           )
+                         )
+                         or exists (
+                           select 1
+                           from library.cue_track_segments segment
+                           join library.cue_media_sources media on media.id = segment.media_source_id
+                           where segment.program_id = program.id
+                             and (
+                               library.local_path_key(media.private_path) = any(array(
+                                 select library.local_path_key(path)
+                                 from unnest(%(missing_paths)s::text[]) path
+                               ))
+                               or exists (
+                                 select 1
+                                 from unnest(%(missing_paths)s::text[]) path
+                                 where starts_with(
+                                   replace(library.local_path_key(media.private_path), E'\\', '/'),
+                                   rtrim(replace(library.local_path_key(path), E'\\', '/'), '/') || '/'
+                                 )
+                               )
+                             )
+                         )
+                       );
+                """, {
+                    "root_id": root_id,
+                    "missing_paths": missing_paths,
+                })
+                connection.commit()
+        return results
 
     def load_targeted_subtree_track_paths(
         self, subtrees_by_root: dict[str, set[str]],

@@ -37,6 +37,10 @@ def test_cue_migration_creates_revision_source_segment_and_correction_tables():
     for fragment in required:
         assert fragment in sql
 
+    assert "source_status text not null default 'online'" in sql
+    assert "source_problems jsonb not null default '[]'::jsonb" in sql
+    assert "cue_programs_source_status_check" in sql
+
 
 def test_cue_migration_indexes_every_foreign_key_and_active_identity():
     sql = _sql()

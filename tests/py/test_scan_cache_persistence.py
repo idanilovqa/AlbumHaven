@@ -298,6 +298,49 @@ def test_persist_invalid_cue_revision_retains_previous_active_revision(monkeypat
         "insert into library.cue_track_segments" in _normalized_sql(sql)
         for sql, _params in connection.executed
     )
+    failure_update = next(
+        params for sql, params in connection.executed
+        if "cue_mark_source_failure" in _normalized_sql(sql)
+    )
+    assert failure_update == {
+        "program_id": 5,
+        "source_status": "invalid",
+        "source_problems": '["Malformed CUE."]',
+    }
+
+
+def test_reconcile_cue_sources_marks_missing_source_offline(monkeypatch, tmp_path):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    missing = tmp_path / "Artist" / "Album" / "album.cue"
+
+    class OfflineConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "cue_mark_missing_sources" in _normalized_sql(sql):
+                assert "starts_with(" in _normalized_sql(sql)
+                assert params == {
+                    "root_id": "main",
+                    "missing_paths": [str(missing.resolve(strict=False))],
+                }
+            return cursor
+
+    monkeypatch.setattr(persistence, "Jsonb", None)
+    connection = OfflineConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+    )
+
+    assert adapter.reconcile_cue_sources(
+        root_id="main", candidates=(), changed_paths=(str(missing),)
+    ) == ()
+    assert connection.commit_calls == 1
+    assert any(
+        "cue_mark_missing_sources" in _normalized_sql(sql)
+        for sql, _params in connection.executed
+    )
 
 
 def test_persist_cue_program_revision_rejects_mismatched_parsed_revision():

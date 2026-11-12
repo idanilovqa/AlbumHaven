@@ -874,6 +874,7 @@ function handleStreamingControl(message) {
       ? pending.requestedSeekSeconds
       : null;
     engine.pendingPromotion = null;
+    keepHeardStreamingWire(engine.roles.current);
     if (retainedSeekSeconds !== null) {
       void seekStreamingPlayback(retainedSeekSeconds);
     } else {
@@ -897,7 +898,7 @@ function handleStreamingControl(message) {
     if (roleState.encoded && !roleState.encoded.delivered) {
       const { wire } = roleState.encoded;
       wire.eos = message;
-      keepStreamingWire(wire, message);
+      keepStreamingWire(wire, message, roleState.role);
       for (const follower of [...wire.followers]) {
         if (follower.delivered || !streamingRoleIsLive(follower.roleState)) continue;
         follower.eos = message;
@@ -1636,6 +1637,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -1744,6 +1746,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -2302,9 +2305,16 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
 }
 
 // A whole stream from the track's first frame is kept for the next time it plays.
-function keepStreamingWire(wire, eos) {
+// Keeps a whole track once it is heard. A successor prepared ahead waits until it is promoted, so
+// a song fetched and then skipped is never kept as recently played.
+function keepStreamingWire(wire, eos, role) {
   if (wire.serverless || wire.streamStart !== 0 || !wire.bytes
       || typeof keepStreamingCachedTrack !== 'function') return;
+  if (role !== 'current') {
+    wire.keepWhenHeard = eos;
+    return;
+  }
+  wire.keepWhenHeard = null;
   keepStreamingCachedTrack(streamingTrackCacheKey(wire.track, wire.quality), {
     codec: wire.codec,
     sampleRate: streamingEngineState().sampleRate,
@@ -2314,6 +2324,11 @@ function keepStreamingWire(wire, eos) {
     table: wire.table,
     bytes: wire.bytes.slice(0, wire.size),
   });
+}
+
+function keepHeardStreamingWire(roleState) {
+  const wire = roleState?.encoded?.wire;
+  if (wire?.keepWhenHeard) keepStreamingWire(wire, wire.keepWhenHeard, 'current');
 }
 
 // Loads `track` from the cache before a role opens it, so the open itself stays synchronous.

@@ -1095,6 +1095,7 @@ test('restore exposes the full persisted track before browser audio startup can 
 
 test('paused restore requests waveform peaks after the restored streaming role is current', async () => {
   const waveformCalls = [];
+  let updatePlayerUiCalls = 0;
   const restoredTrack = {
     src: '/track?path=restored.flac',
     path: 'C:/Music/restored.flac',
@@ -1127,6 +1128,7 @@ test('paused restore requests waveform peaks after the restored streaming role i
       waveformCalls.push(event);
       return Promise.resolve();
     },
+    updatePlayerUi: () => { updatePlayerUiCalls += 1; },
     resolveAlbumForPlayerTrack: () => null,
     setLocalStorageItem: () => true,
   });
@@ -1139,6 +1141,7 @@ test('paused restore requests waveform peaks after the restored streaming role i
     currentPath: restoredTrack.path,
     continuityPath: '',
   }]);
+  assert.equal(updatePlayerUiCalls, 2);
 });
 
 test('blocked active restore reconciles waveform and persists the retained paused role', async () => {

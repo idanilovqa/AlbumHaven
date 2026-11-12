@@ -13801,6 +13801,10 @@
 }
 ]
 },
+"/release?artist=a826967b-88e5-4475-b4ff-fdb0765cfa68&inc=media+release-groups&fmt=json&limit=100&offset=0": {
+"release-count": 17,
+"releases": [{"date":"1990","id":"183a7b00-9833-45cd-8d2f-33737b215eb7","media":[{"format":"CD","position":1,"title":"","track-count":11}],"release-group":{"id":"0764eb0d-73a7-4cc1-827e-f51e53c90220","title":"Pražský výběr","disambiguation":"Straka v hrsti"},"title":"Pražský výběr"}]
+},
 "/release?artist=a9b146a7-354c-479c-8bf9-1840be38ce45&inc=media+release-groups&fmt=json&limit=100&offset=0": {
 "release-count": 6,
 "releases": [

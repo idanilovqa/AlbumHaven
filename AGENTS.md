@@ -36,6 +36,12 @@ operate, or contribute to the application.
   colors, and buttons share visibly disabled states. Keep light-theme alerts
   readable without changing approved dark-theme alerts; do not add page-local
   copies or overrides of these rules.
+- Postgres migrations (owner rule, 2026-11-10): every file in `migrations/postgres`
+  has a unique four-digit number. Numbers may leave gaps and may be applied out
+  of order, but a new migration never reuses a number that main or any open pull
+  request already uses; renumber before merging when two branches collide. Only
+  code merged to main may apply migrations to a shared or production database;
+  branch work uses an isolated database or a disposable copy.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - E2E tests for owner-reported regressions must assert every named

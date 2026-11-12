@@ -21,7 +21,9 @@ const RECORD = 'tests/fixtures/android-bridge/stable-shells.json';
 const FIXTURE = 'tests/fixtures/android-bridge/v1.json';
 const realClient = fs.readFileSync(path.join(root, CLIENT), 'utf8');
 const realRecord = fs.readFileSync(path.join(root, RECORD), 'utf8');
+// The unit cases start from the real record as it would be before any stable promotion.
 const record = JSON.parse(realRecord);
+for (const shell of Object.values(record.shells)) Object.assign(shell, { versionCode: null, sourceCommit: null });
 const policy = readSitePolicy(realClient);
 const latest = record.shells.latest.capabilities;
 
@@ -102,9 +104,8 @@ test('shell sources, shared contracts, protocol changes and capabilities the sta
 });
 
 test('the guard requires both supported stable shells to run the site', () => {
-  // The interim WebView player predates the stable shells; sandbox selection exists only in sandbox shells;
-  // cookie-less downloads, page-built file saves, the media card's album details and the app's copy wait for the next stable APK.
-  const legacy = ['playback.webview.v1', 'playback.album_details.v1', 'sandbox.select.v1', 'downloads.link.v1', 'files.save.v1', 'app.copy.v1']
+  // The interim WebView player predates the stable shells; sandbox selection exists only in sandbox shells.
+  const legacy = ['playback.webview.v1', 'sandbox.select.v1']
     .map((name) => `The latest stable shell lacks ${name}; the site gates it at runtime`);
   assert.deepEqual(checkSupportedShells(policy, record), { errors: [], notes: legacy });
   const previousLacks = structuredClone(record);
@@ -211,7 +212,8 @@ function repository(t) {
 test('a pull request range is classified and guarded from its own commits', (t) => {
   const repo = repository(t);
   repo.write(CLIENT, realClient);
-  repo.write(RECORD, realRecord);
+  repo.write(RECORD, `${JSON.stringify(record, null, 2)}
+`);
   repo.write('music_app/static/js/runtime/mobile-navigation.js', 'function open() {}\n');
   const base = repo.commit('base');
 

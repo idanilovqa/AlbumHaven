@@ -1643,7 +1643,13 @@ function createManagedIsolatedAppRestartController(options = {}) {
 
   const readPendingRequest = () => {
     if (!fs.existsSync(requestPath)) return null;
-    const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    let request;
+    try {
+      request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
     const nonce = String(request?.nonce || '').trim();
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');

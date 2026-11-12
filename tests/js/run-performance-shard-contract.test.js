@@ -343,6 +343,13 @@ test('performance profile runner defaults local imitation to local and propagate
   );
 });
 
+test('performance profile runner can select one exact case without broadening the target', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(source, /\[string\]\$Grep\s*=\s*['"]['"]/i);
+  assert.match(source, /\$grepArgument\s*=\s*if\s*\(\[string\]::IsNullOrWhiteSpace\(\$Grep\)\)/i);
+  assert.match(source, /--test=\$target["'][^\r\n]*@grepArgument[^\r\n]*--prepared-fixture/i);
+});
+
 test('performance shard runner never parallelizes targets or hides the one-worker runner contract', () => {
   const source = fs.existsSync(runnerPath) ? fs.readFileSync(runnerPath, 'utf8') : '';
   assert.doesNotMatch(source, /Start-Job|ForEach-Object\s+-Parallel|Start-ThreadJob/i);

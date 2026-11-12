@@ -465,11 +465,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     migration_numbers = [int(name[:4]) for name in migration_names]
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    # Numbers stay contiguous, except migrations reserved past numbers that
-    # unmerged branches and the production ledger already use.
-    reserved = {112, 171, 172, 173, 174, 175, 176, 177, 178}
-    contiguous = [number for number in migration_numbers if number not in reserved]
-    assert contiguous == list(range(1, len(contiguous) + 1))
+    # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
+    # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
     assert migration_names[-75:] == [
         "0042_track_distinct_cover_improvement_alerts.sql",

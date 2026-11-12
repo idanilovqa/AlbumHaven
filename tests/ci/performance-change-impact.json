@@ -141,13 +141,22 @@
         "music_app/static/vendor/wasm-audio-decoders/mpg123-decoder.min.js",
         "music_app/static/js/runtime/album-details-components.js",
         "music_app/static/js/runtime/modal-and-overlay-helpers.js",
-        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
         "music_app/static/css/runtime/album-details-components.css"
       ],
       "targets": [
         "selected-artist",
         "all-artists",
         "gapless-playback"
+      ]
+    },
+    {
+      "paths": ["music_app/static/js/runtime/track-modal-lightbox-helpers.js"],
+      "targets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback",
+        "utility-problematic-files",
+        "problematic-files-focused"
       ]
     },
     {

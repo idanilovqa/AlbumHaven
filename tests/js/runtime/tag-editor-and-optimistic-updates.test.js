@@ -2015,7 +2015,7 @@ test('completed save-task response reconciles immediately without starting a wat
     [
       'Saved changes to 1 track in “Album”.',
       'success',
-      2000,
+      8000,
       { title: 'Tags updated' },
     ],
   ]);

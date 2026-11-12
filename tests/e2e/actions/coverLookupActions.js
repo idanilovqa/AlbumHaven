@@ -52,7 +52,7 @@ export async function waitForDisplayedImageDecode(element) {
       };
       element.addEventListener('load', onLoad, { once: true });
       element.addEventListener('error', onError, { once: true });
-      if (element.complete) {
+      if (element.complete && !element.hasAttribute('data-cover-lookup-deferred-src')) {
         if (element.naturalWidth > 0) onLoad();
         else onError();
       }

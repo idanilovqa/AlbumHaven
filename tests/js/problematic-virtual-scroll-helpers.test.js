@@ -258,6 +258,22 @@ test('real POM callback includes visible tracks and excludes hidden reason text'
   assert.deepEqual(Array.from(result.albumReasons), ['Missing year']);
 });
 
+test('problem row actions wait for the complete summary render to settle', async () => {
+  const module = await import(pathToFileURL(path.resolve(__dirname, '../e2e/poms/settingsRefactorShell.js')).href);
+  const { exerciseProblematicNativeJumps } = await load();
+  const shell = Object.create(module.SettingsRefactorShell.prototype);
+  let readiness;
+  shell.waitForPageCondition = async (predicate) => { readiness = predicate; };
+
+  await shell.waitForProblematicSummarySettled();
+
+  const evaluate = utility => vm.runInNewContext(`(${readiness.toString()})()`, { state: { utility } });
+  assert.equal(evaluate({ problematicFilesComplete: false }), false);
+  assert.equal(evaluate({ problematicFilesComplete: true, completeLoadPromise: {} }), false);
+  assert.equal(evaluate({ problematicFilesComplete: true, loading: false, loadPromise: null, completeLoadPromise: null }), true);
+  assert.match(exerciseProblematicNativeJumps.toString(), /waitForProblematicSummarySettled/);
+});
+
 for (const [label, hide] of [
   ['display none', dom => { dom.parent.style.display = 'none'; }],
   ['ancestor opacity zero', dom => { dom.parent.style.opacity = '0'; }],

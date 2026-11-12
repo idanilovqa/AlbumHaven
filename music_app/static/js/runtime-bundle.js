@@ -7417,6 +7417,15 @@ function resolveCurrentGalleryAnchor(anchor, sectionKey = '') {
   return section?.querySelector?.('[data-artist-info-trigger]') || anchor;
 }
 
+function resolveVisibleGalleryArtistInfoAnchor(active, scroll) {
+  if (!active?.key?.startsWith?.('artist:')) return active?.anchor || null;
+  const artist = active.key.slice('artist:'.length);
+  const resolved = resolveCurrentGalleryAnchor(active.anchor, active.anchorSectionKey);
+  return [resolved, ...Array.from(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
+    .find(candidate => String(candidate?.dataset?.artist || '') === artist
+      && isGalleryArtistInfoAnchorVisible(candidate, scroll)) || null;
+}
+
 function isGalleryAnchorVisible(anchor, scroll) {
   if (!anchor || anchor.isConnected === false) return false;
   const bounds = anchor?.getBoundingClientRect?.();
@@ -8466,6 +8475,19 @@ function initGalleryMain() {
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();
     const active = galleryMainSurfaceController?.current?.();
+    if (active?.surface?.matches?.('.artist-info-overlay')
+        && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) {
+      const anchor = resolveVisibleGalleryArtistInfoAnchor(active, document.getElementById('albums-scroll'));
+      if (!anchor) {
+        closeGalleryMainSurface(false);
+        return;
+      }
+      if (anchor !== active.anchor) {
+        active.anchor?.setAttribute?.('aria-expanded', 'false');
+        anchor.setAttribute?.('aria-expanded', 'true');
+        active.anchor = anchor;
+      }
+    }
     if (active?.surface?.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(active.surface, active.anchor, active.key.startsWith('artist:') ? 'left' : 'right');
     if (active?.surface?.matches?.('.artist-info-overlay')) revealGalleryArtistInfoSurface(active.surface, active.anchor);
     if (active?.surface?.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(active.surface, active.anchor);

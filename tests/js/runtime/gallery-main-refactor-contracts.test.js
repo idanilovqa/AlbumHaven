@@ -380,6 +380,26 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   assert.equal(surface.hidden, true, 'the popup closes once no visible trigger belongs to its artist');
 });
 
+test('Artist Info resolves its current rendered trigger after virtual resize', () => {
+  const scroll = { getBoundingClientRect: () => ({ top: 100, bottom: 700 }) };
+  const stale = { isConnected: false, dataset: { artist: 'Neal Morse' } };
+  const current = {
+    isConnected: true,
+    dataset: { artist: 'Neal Morse' },
+    getBoundingClientRect: () => ({ top: 151, bottom: 171 }),
+  };
+  const context = loadRuntime({
+    window: { innerHeight: 800 },
+    document: { querySelectorAll: selector => (selector === '[data-artist-info-trigger]' ? [current] : []) },
+  });
+
+  const resolved = requireContract(context, 'resolveVisibleGalleryArtistInfoAnchor')({
+    key: 'artist:Neal Morse', anchor: stale,
+  }, scroll);
+
+  assert.equal(resolved, current);
+});
+
 test('mobile artist info clears its desktop-only body height constraint', () => {
   const removed = [];
   const context = loadRuntime({ window: { innerWidth: 390 } });

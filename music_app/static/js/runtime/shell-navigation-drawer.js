@@ -39,7 +39,10 @@ function getArtistsDrawerNavigationContentKind(view = state.view || {}) {
 }
 
 function canUseArtistsDrawerForCurrentView() {
-  return getArtistsDrawerNavigationContentKind() === 'artists_sidebar';
+  const contentKind = getArtistsDrawerNavigationContentKind();
+  return contentKind === 'artists_sidebar'
+    || (contentKind === 'custom_collections'
+      && document.getElementById('shell-navigation-rail')?.getAttribute('data-library-navigation-mode') === 'artists');
 }
 
 function isArtistsDrawerMobileViewport() {

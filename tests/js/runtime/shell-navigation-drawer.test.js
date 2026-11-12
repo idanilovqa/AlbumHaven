@@ -367,7 +367,7 @@ test('mobile mode rail hides to a tappable anchor and reveals from an intentiona
 });
 
 test('pointer mode selection releases focus so the mobile rail can hide', () => {
-  const { context, pendingTimers } = loadHelper({ isMobile: true });
+  const { context, drawerRail, modeRailAnchor, pendingTimers } = loadHelper({ isMobile: true });
   context.state.ui.artistsDrawerOpen = true;
   context.setLibraryNavigationMode = async () => 'artists';
   let blurred = 0;
@@ -381,6 +381,9 @@ test('pointer mode selection releases focus so the mobile rail can hide', () => 
 
   assert.equal(blurred, 1);
   assert.equal(pendingTimers.size, 1);
+  [...pendingTimers.values()][0]();
+  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), true);
+  assert.equal(modeRailAnchor.hidden, false);
 });
 
 test('navigation tree rows stay on one line and expose the edge anchor chevron', () => {

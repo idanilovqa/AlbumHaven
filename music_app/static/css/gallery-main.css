@@ -232,8 +232,12 @@
   .gallery-view-cluster, .artist-family-panel, .gallery-card__focus-title { transition: none; }
 }
 
-.artist-info-overlay__image { width: 176px; height: 176px; flex-basis: 176px; }
-.artist-info-overlay { max-height: calc(100dvh - 100px); }
+.artist-info-overlay__image {
+  width: clamp(48px, calc(var(--artist-info-panel-max-height, 246px) - 70px), 176px);
+  height: clamp(48px, calc(var(--artist-info-panel-max-height, 246px) - 70px), 176px);
+  flex-basis: clamp(48px, calc(var(--artist-info-panel-max-height, 246px) - 70px), 176px);
+}
+.artist-info-overlay { max-height: min(calc(100dvh - 100px), var(--artist-info-panel-max-height, calc(100dvh - 100px))); }
 .artist-info-overlay__body { max-height: min(360px, calc(100dvh - 330px), var(--artist-info-body-max-height, 360px)); }
 .artist-info-overlay__body [data-artist-info-summary] { white-space: pre-line; }
 .artist-info-overlay__links { padding: 8px 0 14px; }

@@ -390,7 +390,7 @@ test('mobile artist info clears its desktop-only body height constraint', () => 
   }, { getBoundingClientRect() {} });
 
   assert.deepEqual(removed, [
-    'top', 'left', 'right', 'max-width', '--artist-info-body-max-height',
+    'top', 'left', 'right', 'max-width', '--artist-info-panel-max-height', '--artist-info-body-max-height',
   ]);
 });
 
@@ -1803,6 +1803,23 @@ test('opening Artist Info adds the missing scroll range when the gallery is too 
 
   assert.equal(revealStyles.get('--artist-info-reveal-space'), '56px');
   assert.equal(scroll.scrollTop, 156);
+});
+
+test('Artist Info constrains the complete panel when its pinned header cannot scroll farther', () => {
+  const values = new Map();
+  const body = {};
+  const header = { getBoundingClientRect: () => ({ height: 218 }) };
+  const surface = {
+    querySelector: selector => (selector === '.artist-info-overlay__body' ? body : header),
+    style: { setProperty: (name, value) => values.set(name, value) },
+  };
+  const anchor = { getBoundingClientRect: () => ({ bottom: 160 }) };
+  const context = loadRuntime({ getComputedStyle: () => ({}) });
+
+  requireContract(context, 'constrainGalleryArtistInfoSurface')(surface, anchor, 274);
+
+  assert.equal(values.get('--artist-info-panel-max-height'), '114px');
+  assert.equal(values.get('--artist-info-body-max-height'), '0px');
 });
 
 test('local artist information stays capability-bounded and leaves unavailable optional enrichment empty', () => {

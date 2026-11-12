@@ -7385,7 +7385,7 @@ function observeArtistFamilyPanelBounds({ panel, player } = {}) {
 function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   if (!surface || !anchor?.getBoundingClientRect) return;
   if (surface.matches?.('.artist-info-overlay') && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    ['top', 'left', 'right', 'max-width', '--artist-info-body-max-height']
+    ['top', 'left', 'right', 'max-width', '--artist-info-panel-max-height', '--artist-info-body-max-height']
       .forEach(name => surface.style.removeProperty(name));
     return;
   }
@@ -7444,6 +7444,8 @@ function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
   const header = surface?.querySelector?.(':scope > header');
   const anchorBounds = anchor?.getBoundingClientRect?.();
   if (!body || !header || !anchorBounds || !Number.isFinite(viewportBottom)) return;
+  const panelHeight = Math.max(0, Math.floor(viewportBottom - Number(anchorBounds.bottom)));
+  surface.style.setProperty?.('--artist-info-panel-max-height', `${panelHeight}px`);
   const bodyStyle = typeof getComputedStyle === 'function' ? getComputedStyle(body) : null;
   const bodyChrome = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
     .reduce((total, property) => total + (parseFloat(bodyStyle?.[property]) || 0), 0);

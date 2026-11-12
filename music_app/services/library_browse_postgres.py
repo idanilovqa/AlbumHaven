@@ -3334,6 +3334,11 @@ class PostgresLibraryBrowseRepository:
             cached_detail = (cached or {}).get(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY)
             if isinstance(cached_detail, Mapping):
                 return deepcopy(cached_detail)
+        missing_albums = _missing_album_projection_payloads(
+            self._load_missing_album_rows(album_key=normalized_album_key)
+        )
+        if missing_albums:
+            return _problematic_album_detail_payload(missing_albums[0])
         albums = _problematic_album_projection_payloads(
             self._load_problematic_file_rows(album_key=normalized_album_key)
         )
@@ -3345,11 +3350,6 @@ class PostgresLibraryBrowseRepository:
             detail = _problematic_album_detail_payload(album)
             if detail is not None:
                 return detail
-        missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows(album_key=str(album_key or ""))
-        )
-        if missing_albums:
-            return _problematic_album_detail_payload(missing_albums[0])
         return None
 
     def build_problem_suggestion_entries_by_paths(self, track_paths: set[str]) -> dict[str, dict[str, object]]:

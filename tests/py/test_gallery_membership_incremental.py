@@ -253,6 +253,26 @@ def test_writer_startup_refreshes_stray_duplicate_ownership_for_every_album(monk
     assert refreshed == [(7, [2, 4])]
 
 
+def test_duplicate_ownership_compares_complete_equal_album_tracklists():
+    from music_app.services import scoped_relation_projection as relations
+
+    captured = []
+
+    class Connection:
+        def execute(self, sql, params):
+            captured.append((" ".join(sql.split()).lower(), params))
+            return type("Cursor", (), {"fetchall": lambda _: []})()
+
+    relations._refresh_stray_duplicate_ownership(Connection(), 7, [11, 12])
+
+    sql, params = captured[0]
+    assert params["album_ids"] == [11, 12]
+    assert "source.artist_identity=small.artist_identity" in sql
+    assert "source.release_year is not distinct from small.release_year" in sql
+    assert "source_sizes.track_count = small_sizes.track_count" in sql
+    assert "source.id < small.id" in sql
+
+
 @pytest.mark.parametrize("shared", [True, False])
 def test_shared_gallery_refresh_replays_dirty_keys_without_a_full_build(monkeypatch, shared):
     from music_app.services import scoped_relation_projection as relations

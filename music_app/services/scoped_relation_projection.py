@@ -426,9 +426,13 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
         ), title_identities as materialized (
           select distinct title_identity from seed_albums where title_identity <> ''
         ), scoped_albums as materialized (
-          select albums.id, albums.album_key, albums.title, albums.release_year,
-            library.duplicate_identity_text(albums.title) as title_identity
+            select albums.id, albums.album_key, albums.title, albums.release_year,
+                   library.duplicate_identity_text(albums.title) as title_identity,
+                   library.duplicate_identity_text(
+                     coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
+                   ) as artist_identity
           from library.local_albums albums
+            join library.local_artists artists on artists.id=albums.artist_id
           join title_identities
             on title_identities.title_identity=library.duplicate_identity_text(albums.title)
           where albums.library_id=%(library_id)s
@@ -450,13 +454,23 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
           select small.id as stray_album_id, source.id as source_album_id,
             source.album_key as source_album_key, source_sizes.track_count
           from scoped_albums small
-          join album_sizes small_sizes on small_sizes.album_id=small.id
-            and small_sizes.track_count <= 2
+            join album_sizes small_sizes on small_sizes.album_id=small.id
           join scoped_albums source on source.id <> small.id
             and source.title_identity=small.title_identity
           join album_sizes source_sizes on source_sizes.album_id=source.id
-            and source_sizes.track_count > small_sizes.track_count
-          where not exists (
+            where (
+              (
+                small_sizes.track_count <= 2
+                and source_sizes.track_count > small_sizes.track_count
+              )
+              or (
+                source_sizes.track_count = small_sizes.track_count
+                and source.id < small.id
+                and source.artist_identity=small.artist_identity
+                and source.release_year is not distinct from small.release_year
+              )
+            )
+            and not exists (
             select 1 from active_tracks stray_track
             where stray_track.album_id=small.id
               and not exists (

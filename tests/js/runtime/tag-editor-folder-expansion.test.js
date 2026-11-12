@@ -176,6 +176,16 @@ test('Load all tracks from the folder sits under the path only while the album f
   const buttonCss = fs.readFileSync(path.join(root, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
   assert.match(buttonCss, /\.ui-text-link,[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;/);
   assert.match(buttonCss, /\.ui-text-link:is\(:hover, :focus-visible\):not\(:disabled\)[\s\S]*text-decoration-line:\s*underline/);
+  assert.match(
+    buttonCss,
+    /\.ui-button\.ui-text-link,[\s\S]*height:\s*auto;[\s\S]*min-height:\s*0;/,
+    'the shared text-link modifier removes Button geometry',
+  );
+  assert.match(
+    buttonCss,
+    /\.ui-button\.ui-text-link:is\(:hover, :active, :focus-visible\):not\(:disabled\)[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;/,
+    'Button hover and focus surfaces cannot repaint a text link',
+  );
 
   tagEditor.tracks.push({ path: 'C:/Music/Album/CD1/01.mp3' });
   await context.refreshTagEditorFolderCompleteness(tagEditor);

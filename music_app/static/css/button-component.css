@@ -341,6 +341,7 @@ box-shadow: none !important;
 
 /* Shared dropdown control: positions a neutral chevron against the control, not its label. */
 .ui-dropdown-control { position: relative; width: 100%; }
+.ui-dropdown-control > input { cursor: pointer; }
 .ui-dropdown-control::after {
   content: '';
   position: absolute;
@@ -374,6 +375,17 @@ box-shadow: none !important;
 .ui-text-link:is(:hover, :focus-visible):not(:disabled) {
   color: var(--text, currentColor);
   text-decoration-line: underline;
+}
+.ui-button.ui-text-link,
+.ui-button.ui-text-link:is(:hover, :active, :focus-visible):not(:disabled) {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* Shared server-path field (PathInput): text input plus folder-browse action inside one surface. */

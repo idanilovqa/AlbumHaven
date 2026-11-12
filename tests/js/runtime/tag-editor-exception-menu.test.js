@@ -43,6 +43,11 @@ test('exception editor uses an owned anchored listbox and keeps custom values ed
     componentCss,
     /\.ui-dropdown-control::after\s*\{[^}]*top:\s*50%[^}]*width:\s*5px[^}]*height:\s*5px[^}]*border-right:\s*1\.5px solid var\(--muted,[^}]*transform:\s*translateY\(-70%\) rotate\(45deg\)/s,
   );
+  assert.match(
+    componentCss,
+    /\.ui-dropdown-control\s*>\s*input\s*\{[^}]*cursor:\s*pointer/s,
+    'the shared dropdown control owns the pointer cursor under its chevron',
+  );
 });
 
 test('custom collection name is hidden at the form boundary unless selected', () => {

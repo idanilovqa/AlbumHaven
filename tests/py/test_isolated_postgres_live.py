@@ -773,6 +773,68 @@ def test_live_stray_soundtrack_copy_is_duplicate_not_gallery_album(
     assert stray_key in gallery_keys
 
 
+def test_live_complete_duplicate_albums_with_title_variants_share_one_gallery_card(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import _root_gallery_membership_sql
+
+    fixture = watcher_repair_inventory
+
+    def track(path, *, album, title, number, duration):
+        entry = fixture.entry(path, album=album, artist="Fabrizio De André")
+        entry.update(
+            album_artist="Fabrizio De André",
+            title=title,
+            track_number=number,
+            duration_seconds=duration,
+            year=1971,
+        )
+        return entry
+
+    titles = [
+        ("La Guerra Di Piero", 205),
+        ("Il Testamento Di Tito", 310),
+        ("Il Suonatore Jones", 265),
+    ]
+    variants = [
+        "Non Al Denaro Non all'amore Nè Al Cielo",
+        "Non al denaro non all'amore né al cielo",
+    ]
+    fixture.seed(*[
+        track(
+            f"Fabrizio De André/{album}/{number:02}.flac",
+            album=album,
+            title=title,
+            number=number,
+            duration=duration,
+        )
+        for album in variants
+        for number, (title, duration) in enumerate(titles, start=1)
+    ])
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        matching_albums = connection.execute(
+            """
+            select id, album_key, metadata -> 'stray_duplicate_of' as duplicate_of
+            from library.local_albums
+            where lower(title) like 'non al denaro%'
+            order by id
+            """
+        ).fetchall()
+        assert len(matching_albums) == 2
+        assert matching_albums[0]["duplicate_of"] is None
+        assert matching_albums[1]["duplicate_of"]["album_id"] == matching_albums[0]["id"]
+
+        gallery_keys = {
+            row["album_key"]
+            for row in connection.execute(
+                _root_gallery_membership_sql(),
+                {"category_count": 0, "visible_categories": []},
+            ).fetchall()
+        }
+        assert len(gallery_keys & {row["album_key"] for row in matching_albums}) == 1
+
+
 @pytest.mark.parametrize("exception_source", ["stored", "path_override", "track_override", "clear_override"])
 def test_live_missing_album_projection_respects_effective_rarity(watcher_repair_inventory, exception_source):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository

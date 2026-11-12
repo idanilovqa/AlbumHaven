@@ -2498,6 +2498,48 @@ test('row measurement reconciliation retains the settled scroll render owner', (
   assert.equal(diagnostics.latestRender.renderGeneration, diagnostics.latestScroll.renderGeneration);
 });
 
+test('settled scroll restore does not supersede a newer pending scroll render owner', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 985;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.captureScrollAnchor = () => ({ albumKey: 'measured-scroll-album' });
+  virtualGrid.restoreScrollAnchor = () => { scrollEl.scrollTop = 566; };
+  scrollEl.scrollTop = 603;
+  virtualGrid.setGroups(
+    [{
+      artist: 'Measured Scroll Artist',
+      artist_display: 'Measured Scroll Artist',
+      albums: [{
+        key: 'measured-scroll-album',
+        name: 'Measured Scroll Album',
+        album_artist: 'Measured Scroll Artist',
+        tracks: [],
+      }],
+    }],
+    [],
+    null,
+    { preserveScroll: true },
+  );
+  const scrollRestoreFrameId = virtualGrid._scrollRestoreRaf;
+  scrollEl.scrollTop = 566;
+  virtualGrid.onScroll();
+  const scrollRenderFrameId = virtualGrid._raf;
+  scheduledFrames.get(scrollRestoreFrameId)();
+  scheduledFrames.get(scrollRenderFrameId)();
+
+  const diagnostics = context.__ALBUM_HAVEN_VIRTUAL_GRID__;
+  assert.equal(diagnostics.latestScroll.renderRafOwner, scrollRenderFrameId);
+  assert.equal(diagnostics.latestRender.renderRafOwner, scrollRenderFrameId);
+});
+
 test('same-viewport rerenders retain the settled scroll render owner', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

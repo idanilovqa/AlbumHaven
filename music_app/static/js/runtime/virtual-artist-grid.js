@@ -1176,6 +1176,7 @@ class VirtualArtistGrid {
         restoreScroll();
         if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
         if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+        if (this._raf) return;
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration

@@ -11,11 +11,36 @@ function getCurrentAlbumDetailsRelease() {
 // UI-14 (owner): Cover Look Up may hold another copy of the album (gallery card, notification), so the
 // Album Details release that carries the saved artworks answers for it.
 function getAlbumAdditionalArtwork(album) {
-  const key = String(album?.key || '');
-  const source = Array.isArray(album?.additional_artworks) ? album
-    : (state.modalReleases || []).find((release) => key && String(release?.key || '') === key);
-  const artworks = Array.isArray(source?.additional_artworks) ? source.additional_artworks : [];
-  return artworks.find((artwork) => Number(artwork?.slot) === ALBUM_ADDITIONAL_ARTBOX_SLOT) || null;
+  const findArtwork = (source) => (
+    Array.isArray(source?.additional_artworks)
+      ? source.additional_artworks.find((artwork) => Number(artwork?.slot) === ALBUM_ADDITIONAL_ARTBOX_SLOT)
+      : null
+  );
+  const direct = findArtwork(album);
+  if (direct) return direct;
+  const stableAlbumId = (source) => {
+    const albumId = Number(source?.album_id || source?.id || 0);
+    return Number.isSafeInteger(albumId) && albumId > 0 ? albumId : 0;
+  };
+  const identityAliases = (source) => {
+    return [
+      source?.key,
+      source?.album_ref,
+      source?.request_key,
+      source?.identity_key,
+      typeof getAlbumRequestKey === 'function' ? getAlbumRequestKey(source) : '',
+    ].map((value) => String(value || '').trim()).filter(Boolean);
+  };
+  const releases = state.modalReleases || [];
+  const albumId = stableAlbumId(album);
+  const stableSource = albumId
+    ? releases.find((release) => stableAlbumId(release) === albumId && findArtwork(release))
+    : null;
+  const aliases = new Set(identityAliases(album));
+  const source = stableSource || releases.find((release) => (
+    findArtwork(release) && identityAliases(release).some((value) => aliases.has(value))
+  ));
+  return findArtwork(source) || null;
 }
 
 // Cover URL helpers take an album-shaped source; give it its own identity so the album's

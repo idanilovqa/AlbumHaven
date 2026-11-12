@@ -170,6 +170,83 @@ test('UI-14: a Cover Look Up opened with another copy of the album still sees th
   assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
 });
 
+test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-key rebound', () => {
+  const { context } = load();
+  const second = {
+    slot: 1,
+    source_kind: 'local',
+    cover_path: 'D:/Music/Dragonland/Holy War/back.jpg',
+  };
+  context.state.modalReleases = [
+    {
+      key: 'album:42',
+      album_id: 42,
+      name: 'Holy War gallery copy',
+      additional_artworks: [],
+    },
+    {
+      key: 'dragonland::holy-war::2002',
+      album_id: 42,
+      name: 'Holy War',
+      cover_path: 'D:/Music/Dragonland/Holy War/cover.jpg',
+      additional_artworks: [second],
+    },
+  ];
+  const lookupCopy = {
+    key: 'album:42',
+    album_ref: 'album:42',
+    album_id: 42,
+    name: 'Holy War',
+    cover_path: 'D:/Music/Dragonland/Holy War/cover.jpg',
+    additional_artworks: [],
+  };
+  context.state.coverLookup.modal = {
+    artboxSlot: 1,
+    album: lookupCopy,
+    artboxCleared: false,
+    selectedRemoteId: '',
+    pendingLocalPath: '',
+    pendingPastedImageId: '',
+  };
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.getAlbumAdditionalArtwork(lookupCopy))),
+    second,
+  );
+  assert.equal(
+    context.isCoverLookupItemInFirstArtbox({ path: lookupCopy.cover_path }, 'local'),
+    true,
+    'the first artbox remains independent',
+  );
+});
+
+test('UI-14: stable album ID wins when an earlier release shares a runtime alias', () => {
+  const { context } = load();
+  const wrong = { slot: 1, cover_path: 'D:/Music/Other/back.jpg' };
+  const holyWar = { slot: 1, cover_path: 'D:/Music/Dragonland/Holy War/back.jpg' };
+  context.state.modalReleases = [
+    {
+      key: 'shared-release-alias',
+      album_id: 7,
+      additional_artworks: [wrong],
+    },
+    {
+      key: 'dragonland::holy-war::2002',
+      album_ref: 'shared-release-alias',
+      album_id: 42,
+      additional_artworks: [holyWar],
+    },
+  ];
+
+  const resolved = context.getAlbumAdditionalArtwork({
+    key: 'shared-release-alias',
+    album_id: 42,
+    additional_artworks: [],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(resolved)), holyWar);
+});
+
 test('UI-14: the second artbox lookup selects its saved remote art, and a click deselects it', () => {
   const { context } = load();
   const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'remote', remote_cover_url: 'https://img.example/back.jpg' }] };

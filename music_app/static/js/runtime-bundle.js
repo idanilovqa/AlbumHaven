@@ -11447,8 +11447,15 @@ function renderCustomCollectionNavigation(collections) {
   list.dataset.navigationTree = 'custom-collections';
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
-  list.innerHTML = collections.length
-    ? collections.map(({ name, count }) => window.NavigationTree.renderItem({
+  const allLooseTracks = window.NavigationTree.renderItem({
+    action: true,
+    variant: 'panel',
+    key: 'all-loose-tracks',
+    label: 'All Loose Tracks',
+    selected: !String(state.ui?.nonAlbumCollectionName || '').trim(),
+    attributes: { 'data-open-loose-tracks': '1' },
+  });
+  const collectionRows = collections.map(({ name, count }) => window.NavigationTree.renderItem({
       action: true,
       variant: 'panel',
       key: name,
@@ -11456,16 +11463,11 @@ function renderCustomCollectionNavigation(collections) {
       count,
       selected: String(state.ui?.nonAlbumCollectionName || '').trim() === name,
       attributes: { 'data-open-custom-collection': name },
-    })).join('')
-    : '<p class="utility-empty-state compact">No Custom Collections yet.</p>';
+    })).join('');
+  list.innerHTML = `${allLooseTracks}<div class="gallery-divider__line" role="separator" aria-label="Custom Collections"></div>${collectionRows}`;
 }
 
 async function setLibraryNavigationMode(mode) {
-  if (mode === 'loose-tracks') {
-    openNonAlbumModal({ libraryWide: true });
-    if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
-    return 'loose-tracks';
-  }
   const normalized = mode === 'custom-collections' ? mode : 'artists';
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
@@ -11502,15 +11504,16 @@ function handleLibraryNavigationClick(event) {
     return true;
   }
   const collectionButton = event.target.closest?.('[data-open-custom-collection]');
-  if (!collectionButton) return false;
+  const allLooseTracksButton = event.target.closest?.('[data-open-loose-tracks]');
+  if (!collectionButton && !allLooseTracksButton) return false;
   event.preventDefault();
-  const collectionName = String(collectionButton.getAttribute('data-open-custom-collection') || '').trim();
-  if (!collectionName) return true;
+  const collectionName = String(collectionButton?.getAttribute('data-open-custom-collection') || '').trim();
+  const selectionKey = collectionName || 'all-loose-tracks';
   window.NavigationTree?.setSelection?.(
     document.getElementById('sidebar-list'),
-    collectionName,
+    selectionKey,
   );
-  openNonAlbumModal({ libraryWide: true, collectionName });
+  openLooseTracksPage({ collectionName });
   if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
   return true;
 }
@@ -15317,6 +15320,39 @@ function isCurrentNonAlbumModalRequest(options = {}) {
       === String(options.collectionName || '').trim();
 }
 
+function closeNonAlbumPageOnTreeNavigation(event) {
+  if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
+      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+}
+
+function setNonAlbumPagePresentation(overlay, open) {
+  const main = document.getElementById('shell-main-surface');
+  const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+    && !overlay.classList.contains('is-mobile-page');
+  overlay.classList?.toggle?.('non-album-modal--page', Boolean(page));
+  if (page && overlay.parentElement !== main) main.appendChild(overlay);
+  if (page && typeof closeGalleryMainSurface === 'function'
+      && typeof galleryMainSurfaceController !== 'undefined'
+      && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
+  document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  const dialog = overlay.querySelector?.('.non-album-modal-dialog');
+  if (dialog) {
+    if (page) {
+      dialog.setAttribute('role', 'region');
+      dialog.removeAttribute('aria-modal');
+    } else if (!overlay.classList.contains('is-mobile-page')) {
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+    }
+  }
+  return Boolean(page);
+}
+
+function openLooseTracksPage(options = {}) {
+  openNonAlbumModal({ libraryWide: true, collectionName: options.collectionName || '' });
+}
+
 function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
@@ -15342,7 +15378,13 @@ function openNonAlbumModal(options = {}) {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
-  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
+  if (typeof presentMobilePage === 'function') {
+    presentMobilePage({
+      ...mobilePageDescriptor('non-album', null, { libraryWide, collectionName }),
+      title: collectionName || 'Loose Tracks',
+      subtitle,
+    });
+  }
   els.table.innerHTML = hydrationPending
     ? '<div class="utility-empty-state">Loading loose tracks…</div>'
     : collectionName
@@ -15353,7 +15395,9 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) {
+    document.body.classList.add('modal-open');
+  }
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
@@ -15560,6 +15604,7 @@ function closeNonAlbumModal() {
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  setNonAlbumPagePresentation(els.overlay, false);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
@@ -52306,10 +52351,12 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 }
 
 function revealArtistTreeForSearch() {
+  if (typeof setLibraryNavigationMode === 'function') setLibraryNavigationMode('artists');
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
     button?.setAttribute('aria-description', 'Search results available in Artists');
+    if (typeof openArtistsDrawer === 'function') openArtistsDrawer();
     return;
   }
   const shell = document.getElementById('app-shell');
@@ -52321,11 +52368,6 @@ function revealArtistTreeForSearch() {
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
-  if (state.ui.artistsDrawerOpen
-    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
-    && typeof closeArtistsDrawer === 'function') {
-    closeArtistsDrawer({ restoreFocus: false });
-  }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
@@ -52335,6 +52377,11 @@ function handleGalleryBootstrapSearchSubmit(event) {
       && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     libraryHome.click();
     return;
+  }
+  if (!String(nextQuery).trim() && state.ui.artistsDrawerOpen
+      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+      && typeof closeArtistsDrawer === 'function') {
+    closeArtistsDrawer({ restoreFocus: false });
   }
   applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
@@ -53407,10 +53454,12 @@ function isMobileClient() {
       platform: window.navigator?.platform, maxTouchPoints: window.navigator?.maxTouchPoints }) === 'mobile';
 }
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
-function mobilePageDescriptor(kind, album = null) {
+function mobilePageDescriptor(kind, album = null, options = {}) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
-  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
+  return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
+    libraryWide: kind === 'non-album' && options.libraryWide === true,
+    collectionName: kind === 'non-album' ? String(options.collectionName || '').trim() : '',
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
@@ -53475,10 +53524,15 @@ function setMobilePagePresentation(kind, mobile) {
 function writeMobilePageHistory(mode = 'push') {
   const url = new URL(window.location.href);
   const active = mobilePageState.pages.at(-1);
-  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail'].forEach(key => url.searchParams.delete(key));
+  if (active?.kind === 'non-album' && active.libraryWide) {
+    url.pathname = '/loose-tracks';
+    url.searchParams.delete('surface');
+  } else if (url.pathname === '/loose-tracks') url.pathname = '/';
+  ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail', 'collection'].forEach(key => url.searchParams.delete(key));
   if (active) {
-    url.searchParams.set('mobile_page', active.kind);
+    if (active.kind !== 'non-album' || !active.libraryWide) url.searchParams.set('mobile_page', active.kind);
     if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
+    if (active.kind === 'non-album' && active.collectionName) url.searchParams.set('collection', active.collectionName);
     if (active.kind === 'utilities') {
       url.searchParams.set('utility_tab', active.tab || 'appearance');
       if (active.utilityDetail) url.searchParams.set('utility_detail', active.utilityDetail);
@@ -53666,10 +53720,11 @@ function restoreMobileGalleryParent(descriptor) {
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {
-  if (!usesMobilePageLayout() && !mobilePageState.pages.length) return false;
+  const historyOnly = descriptor.kind === 'non-album' && !usesMobilePageLayout();
+  if (!usesMobilePageLayout() && !mobilePageState.pages.length && !historyOnly) return false;
   const outlet = document.getElementById('mobile-page-outlet');
   const element = document.getElementById(MOBILE_PAGE_KINDS[descriptor.kind]);
-  if (!outlet || !element) return false;
+  if ((!outlet && !historyOnly) || !element) return false;
   const previous = mobilePageState.pages.find(page => page.kind === descriptor.kind);
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
@@ -53705,8 +53760,8 @@ function presentMobilePage(descriptor) {
     syncMobilePageShell();
     return true;
   }
-  delete outlet.dataset.pageInteracted;
-  if (!mobilePageState.originals.has(descriptor.kind)) {
+  if (!historyOnly) delete outlet.dataset.pageInteracted;
+  if (!historyOnly && !mobilePageState.originals.has(descriptor.kind)) {
     const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
     element.before(placeholder);
     const dialog = element.querySelector('[role="dialog"]') || element;
@@ -53727,7 +53782,7 @@ function presentMobilePage(descriptor) {
   closeGalleryMainSurface?.(false);
   syncMobilePageShell();
   if (!mobilePageState.restoring) writeMobilePageHistory();
-  requestAnimationFrame(() => {
+  if (!historyOnly) requestAnimationFrame(() => {
     const inBody = document.getElementById('mobile-page-header')?.dataset.albumIdentityInBody === 'true';
     const title = document.getElementById(inBody ? 'mobile-album-identity-title' : 'mobile-page-title');
     if (title) { title.tabIndex = -1; title.focus({ preventScroll: true }); }
@@ -53802,7 +53857,10 @@ function navigateMobileBack() {
 function restoreMobilePage(descriptor) {
   if (!descriptor || !Object.hasOwn(MOBILE_PAGE_KINDS, descriptor.kind)) return;
   const album = descriptor.albumKey ? (getIndexedAlbum(descriptor.albumKey) || { key: descriptor.albumKey, name: descriptor.title || 'Album', preview_only: true }) : null;
-  if (descriptor.kind === 'non-album') openNonAlbumModal();
+  if (descriptor.kind === 'non-album') openNonAlbumModal({
+    libraryWide: descriptor.libraryWide === true,
+    collectionName: descriptor.collectionName || '',
+  });
   else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
     setUtilityActiveTab(mobileUtilityTabAllowed(descriptor.tab) ? descriptor.tab : 'appearance');
@@ -53824,6 +53882,31 @@ function restoreMobilePage(descriptor) {
     }
   } else if (descriptor.kind === 'cover-lookup' && album) void openCoverLookupModal(album);
 }
+
+function restoreMobilePageFromUrl() {
+  const url = new URL(window.location.href);
+  const looseTracksPath = url.pathname === '/loose-tracks';
+  const kind = url.searchParams.get('mobile_page') || (looseTracksPath ? 'non-album' : '');
+  if (!kind || (!usesMobilePageLayout() && kind !== 'non-album')) return;
+  mobilePageState.restoring = true;
+  try {
+    restoreMobilePage({
+      kind,
+      albumKey: url.searchParams.get('mobile_album') || '',
+      title: 'Album',
+      libraryWide: looseTracksPath,
+      collectionName: url.searchParams.get('collection') || '',
+      tab: url.searchParams.get('utility_tab'),
+      utilityDetail: url.searchParams.get('utility_detail') || '',
+      loopSongId: url.searchParams.get('loop_song') || '',
+      loopFilter: url.searchParams.get('loop_filter') || '',
+    });
+  } finally {
+    mobilePageState.restoring = false;
+  }
+  writeMobilePageHistory('replace');
+}
+
 function handleMobilePagePopState() {
   const requested = Array.isArray(window.history.state?.mobilePages) ? window.history.state.mobilePages : [];
   const hadPage = mobilePageState.pages.length > 0;
@@ -54143,20 +54226,7 @@ function initMobileNavigation() {
     status.hidden = !['unsaved', 'unavailable'].includes(event.detail.state);
     status.textContent = 'Settings have not synced. They will retry when you reconnect.';
   });
-  const url = new URL(window.location.href);
-  if (usesMobilePageLayout() && url.searchParams.has('mobile_page')) {
-    mobilePageState.restoring = true;
-    try { restoreMobilePage({ kind: url.searchParams.get('mobile_page'), albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
-    finally { mobilePageState.restoring = false; }
-    // A directly loaded page has no guaranteed in-app previous entry.
-    const loopPage = getMobileLoopPage();
-    if (loopPage) {
-      loopPage.parentPosition = null;
-      loopPage.loopListPosition = null;
-    }
-    // Keep the restored page as a parent for any child opened after reload.
-    writeMobilePageHistory('replace');
-  }
+  restoreMobilePageFromUrl();
 }
 
 

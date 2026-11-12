@@ -5831,16 +5831,24 @@ for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library',
   });
 }
 
-test('nonempty mobile search keeps Artists closed and marks filtered results available', () => {
+test('nonempty mobile search resets navigation and opens Artists', () => {
   const { context, calls } = createContext({ searchInputValue: 'Devin' });
   const button = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
   const originalGetElementById = context.document.getElementById.bind(context.document);
   context.document.getElementById = id => id === 'mobile-library-button' ? button : originalGetElementById(id);
   context.usesMobilePageLayout = () => true;
-  context.openArtistsDrawer = () => { throw new Error('Search must not open Artists automatically'); };
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  const navigationModes = [];
+  let opens = 0;
+  context.setLibraryNavigationMode = mode => {
+    navigationModes.push(mode);
+    context.state.ui.libraryNavigationMode = mode;
+  };
+  context.openArtistsDrawer = () => { opens += 1; };
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
-  assert.equal(button.attributes['data-search-results'], 'true');
-  assert.equal(button.attributes['aria-description'], 'Search results available in Artists');
+  assert.deepEqual(navigationModes, ['artists']);
+  assert.equal(context.state.ui.libraryNavigationMode, 'artists');
+  assert.equal(opens, 1);
   assert.equal(calls.buildApiUrl[0].query, 'Devin');
 });
 
@@ -5851,21 +5859,29 @@ test('empty submitted search restores the gallery without opening the mobile Art
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
 });
 
-test('search reveal expands only a folded desktop Artists tree', () => {
+test('search reveal resets navigation and expands only a folded desktop Artists tree', () => {
   const { context } = createContext();
   let folded = true;
   let toggles = 0;
+  const navigationModes = [];
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  context.setLibraryNavigationMode = mode => {
+    navigationModes.push(mode);
+    context.state.ui.libraryNavigationMode = mode;
+  };
   context.usesMobilePageLayout = () => false;
   context.document.getElementById = id => id === 'app-shell' ? { classList: { contains: name => name === 'is-artist-tree-folded' && folded } } : null;
   context.toggleArtistTreeFold = () => { toggles += 1; folded = false; };
   context.revealArtistTreeForSearch();
   context.revealArtistTreeForSearch();
   assert.equal(toggles, 1);
+  assert.deepEqual(navigationModes, ['artists', 'artists']);
+  assert.equal(context.state.ui.libraryNavigationMode, 'artists');
 });
 
 
 for (const query of ['Devin', '']) {
-  test(`mobile search submission closes an already open Artists drawer (${query || 'empty'})`, () => {
+  test(`mobile search submission ${query ? 'keeps Artists open' : 'closes an already open Artists drawer for an empty query'}`, () => {
     const { context } = createContext({ searchInputValue: query });
     context.usesMobilePageLayout = () => true;
     context.state.ui.artistsDrawerOpen = true;
@@ -5876,7 +5892,7 @@ for (const query of ['Devin', '']) {
       context.state.ui.artistsDrawerOpen = false;
     };
     context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
-    assert.deepEqual(closes, [false]);
-    assert.equal(context.state.ui.artistsDrawerOpen, false);
+    assert.deepEqual(closes, query ? [] : [false]);
+    assert.equal(context.state.ui.artistsDrawerOpen, Boolean(query));
   });
 }

@@ -1573,10 +1573,12 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 }
 
 function revealArtistTreeForSearch() {
+  if (typeof setLibraryNavigationMode === 'function') setLibraryNavigationMode('artists');
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
     button?.setAttribute('aria-description', 'Search results available in Artists');
+    if (typeof openArtistsDrawer === 'function') openArtistsDrawer();
     return;
   }
   const shell = document.getElementById('app-shell');
@@ -1588,11 +1590,6 @@ function revealArtistTreeForSearch() {
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
-  if (state.ui.artistsDrawerOpen
-    && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
-    && typeof closeArtistsDrawer === 'function') {
-    closeArtistsDrawer({ restoreFocus: false });
-  }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
   // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
@@ -1602,6 +1599,11 @@ function handleGalleryBootstrapSearchSubmit(event) {
       && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     libraryHome.click();
     return;
+  }
+  if (!String(nextQuery).trim() && state.ui.artistsDrawerOpen
+      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
+      && typeof closeArtistsDrawer === 'function') {
+    closeArtistsDrawer({ restoreFocus: false });
   }
   applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');

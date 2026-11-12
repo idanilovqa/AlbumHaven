@@ -214,14 +214,15 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
     context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
   };
   context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
-  let renderedOptions = null;
+  const renderedOptions = [];
   context.window.NavigationTree = {
     renderItem: (options) => {
-      renderedOptions = options;
+      renderedOptions.push(options);
       const { label, count, attributes } = options;
-      return (
-      `<button data-open-custom-collection="${attributes['data-open-custom-collection']}">${label}:${count}</button>`
-      );
+      const collection = attributes['data-open-custom-collection'];
+      return collection
+        ? `<button data-open-custom-collection="${collection}">${label}:${count}</button>`
+        : `<button data-open-loose-tracks="1">${label}:${count}</button>`;
     },
   };
 
@@ -229,10 +230,14 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
 
   assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
   assert.equal(navigationHeading.textContent, 'Custom Collections');
-  assert.equal(artistList.innerHTML, '<button data-open-custom-collection="Night">Night:2</button>');
-  assert.equal(renderedOptions.variant, 'panel');
-  assert.equal(renderedOptions.key, 'Night');
-  assert.equal(renderedOptions.selected, false);
+  assert.match(artistList.innerHTML, /^<button data-open-loose-tracks="1">All Loose Tracks:/);
+  assert.match(artistList.innerHTML, /role="separator"/);
+  assert.match(artistList.innerHTML, /<button data-open-custom-collection="Night">Night:2<\/button>$/);
+  assert.equal(renderedOptions.length, 2);
+  assert.equal(renderedOptions[0].variant, 'panel');
+  assert.equal(renderedOptions[0].key, 'all-loose-tracks');
+  assert.equal(renderedOptions[1].key, 'Night');
+  assert.equal(renderedOptions[1].selected, false);
   assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
 });
 
@@ -248,7 +253,9 @@ test('custom collections keeps the current tree visible until collection rows ar
   });
   context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
   context.window.NavigationTree = {
-    renderItem: () => '<button data-open-custom-collection="Night">Night:2</button>',
+    renderItem: options => options.key === 'all-loose-tracks'
+      ? '<button data-open-loose-tracks="1">All Loose Tracks</button>'
+      : '<button data-open-custom-collection="Night">Night:2</button>',
   };
 
   const pending = context.setLibraryNavigationMode('custom-collections');
@@ -257,7 +264,7 @@ test('custom collections keeps the current tree visible until collection rows ar
   assert.doesNotMatch(artistList.innerHTML, /Loading Custom Collections/);
   finishHydration();
   await pending;
-  assert.equal(artistList.innerHTML, '<button data-open-custom-collection="Night">Night:2</button>');
+  assert.equal(artistList.innerHTML, '<button data-open-loose-tracks="1">All Loose Tracks</button><div class="gallery-divider__line" role="separator" aria-label="Custom Collections"></div><button data-open-custom-collection="Night">Night:2</button>');
 });
 
 test('custom collections mode marks the open collection selected', async () => {
@@ -275,11 +282,11 @@ test('custom collections mode marks the open collection selected', async () => {
   assert.equal(renderedOptions.selected, true);
 });
 
-test('library navigation delegates modes and exact collection detail without per-row listeners', () => {
+test('library navigation delegates modes and routes Loose Tracks without per-row listeners', () => {
   const { context } = loadHelper();
   const calls = [];
   context.setLibraryNavigationMode = mode => { calls.push(['mode', mode]); };
-  context.openNonAlbumModal = options => { calls.push(['collection', options]); };
+  context.openLooseTracksPage = options => { calls.push(['loose-tracks', options]); };
   context.closeArtistsDrawer = options => { calls.push(['close', options]); };
   context.window.NavigationTree = { setSelection: (list, key) => calls.push(['selection', list?.id, key]) };
   context.isArtistsDrawerMobileViewport = () => true;
@@ -293,13 +300,20 @@ test('library navigation delegates modes and exact collection detail without per
   assert.equal(context.handleLibraryNavigationClick(event({
     closest: selector => selector === '[data-open-custom-collection]' ? collection : null,
   })), true);
+  const allLooseTracks = { getAttribute: () => '1' };
+  assert.equal(context.handleLibraryNavigationClick(event({
+    closest: selector => selector === '[data-open-loose-tracks]' ? allLooseTracks : null,
+  })), true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ['mode', 'custom-collections'],
     ['selection', null, 'Night'],
-    ['collection', { libraryWide: true, collectionName: 'Night' }],
+    ['loose-tracks', { collectionName: 'Night' }],
+    ['close', { restoreFocus: false }],
+    ['selection', null, 'all-loose-tracks'],
+    ['loose-tracks', { collectionName: '' }],
     ['close', { restoreFocus: false }],
   ]);
-  assert.equal(prevented, 2);
+  assert.equal(prevented, 3);
 });
 
 test('compact Artists and Custom Collections actions restore the selected expanded view', () => {
@@ -331,6 +345,7 @@ test('compact Artists and Custom Collections template actions route and expand t
 
   assert.match(compactNavigation, /Artist Tree[\s\S]*data-toggle-artist-tree-fold[\s\S]*data-library-navigation-mode[^}]*artists/);
   assert.match(compactNavigation, /Custom Collections[\s\S]*data-toggle-artist-tree-fold[\s\S]*data-library-navigation-mode[^}]*custom-collections/);
+  assert.doesNotMatch(compactNavigation, /data-library-navigation-mode[^}]*loose-tracks/);
 });
 
 test('library navigation uses the approved collection glyph and generic mobile close label', () => {
@@ -339,10 +354,11 @@ test('library navigation uses the approved collection glyph and generic mobile c
 
   assert.equal(collectionActions.length, 2);
   for (const action of collectionActions) {
-    assert.match(action, /M16 16l4 4M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z/);
-    assert.match(action, /M9 13V7l5-1v5/);
-    assert.doesNotMatch(action, /M4 5h6l2 2h8v12H4z/);
+    assert.match(action, /M9 18V5l11-2v13/);
+    assert.match(action, /circle cx="6" cy="18" r="3"/);
+    assert.match(action, /circle cx="17" cy="16" r="3"/);
   }
+  assert.doesNotMatch(template, /action_button\('Loose Tracks'[\s\S]*data-library-navigation-mode/);
   assert.match(template, /action_button\('Close library navigation'/);
   assert.doesNotMatch(template, /Back from Artists/);
 });

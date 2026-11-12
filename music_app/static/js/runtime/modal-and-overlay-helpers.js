@@ -924,6 +924,39 @@ function isCurrentNonAlbumModalRequest(options = {}) {
       === String(options.collectionName || '').trim();
 }
 
+function closeNonAlbumPageOnTreeNavigation(event) {
+  if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
+      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+}
+
+function setNonAlbumPagePresentation(overlay, open) {
+  const main = document.getElementById('shell-main-surface');
+  const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+    && !overlay.classList.contains('is-mobile-page');
+  overlay.classList?.toggle?.('non-album-modal--page', Boolean(page));
+  if (page && overlay.parentElement !== main) main.appendChild(overlay);
+  if (page && typeof closeGalleryMainSurface === 'function'
+      && typeof galleryMainSurfaceController !== 'undefined'
+      && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
+  document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  const dialog = overlay.querySelector?.('.non-album-modal-dialog');
+  if (dialog) {
+    if (page) {
+      dialog.setAttribute('role', 'region');
+      dialog.removeAttribute('aria-modal');
+    } else if (!overlay.classList.contains('is-mobile-page')) {
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+    }
+  }
+  return Boolean(page);
+}
+
+function openLooseTracksPage(options = {}) {
+  openNonAlbumModal({ libraryWide: true, collectionName: options.collectionName || '' });
+}
+
 function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
@@ -949,7 +982,13 @@ function openNonAlbumModal(options = {}) {
       actionsHtml: buildLooseTracksHeaderActionsHtml(),
     });
   }
-  if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
+  if (typeof presentMobilePage === 'function') {
+    presentMobilePage({
+      ...mobilePageDescriptor('non-album', null, { libraryWide, collectionName }),
+      title: collectionName || 'Loose Tracks',
+      subtitle,
+    });
+  }
   els.table.innerHTML = hydrationPending
     ? '<div class="utility-empty-state">Loading loose tracks…</div>'
     : collectionName
@@ -960,7 +999,9 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) {
+    document.body.classList.add('modal-open');
+  }
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
@@ -1167,6 +1208,7 @@ function closeNonAlbumModal() {
   const els = getNonAlbumModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  setNonAlbumPagePresentation(els.overlay, false);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;

@@ -325,6 +325,10 @@ def test_favicon_route_returns_cacheable_empty_response(asgi_app):
     assert body == b""
 
 
+def test_loose_tracks_page_route_is_registered(asgi_app):
+    assert "/loose-tracks" in {route.path for route in asgi_app.routes}
+
+
 def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 

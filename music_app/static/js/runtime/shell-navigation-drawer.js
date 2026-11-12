@@ -82,8 +82,15 @@ function renderCustomCollectionNavigation(collections) {
   list.dataset.navigationTree = 'custom-collections';
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
-  list.innerHTML = collections.length
-    ? collections.map(({ name, count }) => window.NavigationTree.renderItem({
+  const allLooseTracks = window.NavigationTree.renderItem({
+    action: true,
+    variant: 'panel',
+    key: 'all-loose-tracks',
+    label: 'All Loose Tracks',
+    selected: !String(state.ui?.nonAlbumCollectionName || '').trim(),
+    attributes: { 'data-open-loose-tracks': '1' },
+  });
+  const collectionRows = collections.map(({ name, count }) => window.NavigationTree.renderItem({
       action: true,
       variant: 'panel',
       key: name,
@@ -91,16 +98,11 @@ function renderCustomCollectionNavigation(collections) {
       count,
       selected: String(state.ui?.nonAlbumCollectionName || '').trim() === name,
       attributes: { 'data-open-custom-collection': name },
-    })).join('')
-    : '<p class="utility-empty-state compact">No Custom Collections yet.</p>';
+    })).join('');
+  list.innerHTML = `${allLooseTracks}<div class="gallery-divider__line" role="separator" aria-label="Custom Collections"></div>${collectionRows}`;
 }
 
 async function setLibraryNavigationMode(mode) {
-  if (mode === 'loose-tracks') {
-    openNonAlbumModal({ libraryWide: true });
-    if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
-    return 'loose-tracks';
-  }
   const normalized = mode === 'custom-collections' ? mode : 'artists';
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
@@ -137,15 +139,16 @@ function handleLibraryNavigationClick(event) {
     return true;
   }
   const collectionButton = event.target.closest?.('[data-open-custom-collection]');
-  if (!collectionButton) return false;
+  const allLooseTracksButton = event.target.closest?.('[data-open-loose-tracks]');
+  if (!collectionButton && !allLooseTracksButton) return false;
   event.preventDefault();
-  const collectionName = String(collectionButton.getAttribute('data-open-custom-collection') || '').trim();
-  if (!collectionName) return true;
+  const collectionName = String(collectionButton?.getAttribute('data-open-custom-collection') || '').trim();
+  const selectionKey = collectionName || 'all-loose-tracks';
   window.NavigationTree?.setSelection?.(
     document.getElementById('sidebar-list'),
-    collectionName,
+    selectionKey,
   );
-  openNonAlbumModal({ libraryWide: true, collectionName });
+  openLooseTracksPage({ collectionName });
   if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
   return true;
 }

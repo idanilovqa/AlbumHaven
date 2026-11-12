@@ -639,14 +639,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - test_android
-      - test_android_instrumentation
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && (needs.review_scope.outputs.run_android != 'true' || (needs.test_android.result == 'success' && needs.test_android_instrumentation.result == 'success')) && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -741,14 +734,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - test_android
-      - test_android_instrumentation
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && (needs.review_scope.outputs.run_android != 'true' || (needs.test_android.result == 'success' && needs.test_android_instrumentation.result == 'success')) && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -843,14 +829,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - test_android
-      - test_android_instrumentation
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && (needs.review_scope.outputs.run_android != 'true' || (needs.test_android.result == 'success' && needs.test_android_instrumentation.result == 'success')) && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
@@ -1038,14 +1017,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - test_android
-      - test_android_instrumentation
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && (needs.review_scope.outputs.run_android != 'true' || (needs.test_android.result == 'success' && needs.test_android_instrumentation.result == 'success')) && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     defaults:
       run:

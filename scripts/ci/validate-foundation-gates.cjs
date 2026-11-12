@@ -159,24 +159,18 @@ function validateWorkflowContract(workflow) {
     ['functional', jobs.functional],
     ['performance', jobs.performance],
   ];
-  const webFoundations = ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity'];
-  const allFoundations = [...webFoundations, 'test_android', 'test_android_instrumentation'];
+  const foundations = [
+    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
+    'test_android', 'test_android_instrumentation',
+  ];
   for (const [name, source] of e2eJobs) {
     if (!source) continue;
-    for (const foundation of allFoundations) {
-      requirePatterns(source, [
-        [new RegExp(`^      - ${foundation}\\r?$`, 'm'), `${foundation} foundation dependency`],
-      ], `${name} job`, errors);
+    for (const foundation of foundations) {
+      if (new RegExp(`^      - ${foundation}\\r?$`, 'm').test(source)
+          || new RegExp(`needs\\.${foundation}\\.result`).test(source)) {
+        errors.push(`${name} job must run in parallel with ${foundation}`);
+      }
     }
-    for (const foundation of webFoundations) {
-      requirePatterns(source, [
-        [new RegExp(`needs\\.${foundation}\\.result == 'success'`), `successful ${foundation} foundation`],
-      ], `${name} job`, errors);
-    }
-    requirePatterns(source, [[
-      /needs\.review_scope\.outputs\.run_android != 'true' \|\| \(needs\.test_android\.result == 'success' && needs\.test_android_instrumentation\.result == 'success'\)/,
-      'conditional Android foundation success',
-    ]], `${name} job`, errors);
   }
 
   for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {

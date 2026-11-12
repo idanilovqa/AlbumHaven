@@ -456,10 +456,11 @@ function restoreMobilePage(descriptor) {
 
 function restoreMobilePageFromUrl() {
   const url = new URL(window.location.href);
-  const kind = url.searchParams.get('mobile_page');
+  const looseTracksPath = url.pathname === '/loose-tracks';
+  const kind = url.searchParams.get('mobile_page') || (looseTracksPath ? 'non-album' : '');
   if (!kind || (!usesMobilePageLayout() && kind !== 'non-album')) return;
   mobilePageState.restoring = true;
-  try { restoreMobilePage({ kind, albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', libraryWide: url.searchParams.get('loose_tracks') === 'library', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
+  try { restoreMobilePage({ kind, albumKey: url.searchParams.get('mobile_album') || '', title: 'Album', libraryWide: looseTracksPath || url.searchParams.get('loose_tracks') === 'library', tab: url.searchParams.get('utility_tab'), utilityDetail: url.searchParams.get('utility_detail') || '', loopSongId: url.searchParams.get('loop_song') || '', loopFilter: url.searchParams.get('loop_filter') || '' }); }
   finally { mobilePageState.restoring = false; }
   // A directly loaded page has no guaranteed in-app previous entry.
   const loopPage = getMobileLoopPage();

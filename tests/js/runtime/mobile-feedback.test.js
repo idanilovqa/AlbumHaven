@@ -879,7 +879,7 @@ test('desktop copied Loose Tracks URL restores through the existing page route',
     URL,
     window: {
       innerWidth: 1180,
-      location: { href: 'https://example.test/?surface=albums&mobile_page=non-album&loose_tracks=library' },
+      location: { href: 'https://example.test/loose-tracks' },
     },
     openNonAlbumModal: options => restored.push(`non-album:${options.libraryWide}`),
     getMobileLoopPage: () => null,

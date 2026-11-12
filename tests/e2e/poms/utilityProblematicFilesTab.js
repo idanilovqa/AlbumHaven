@@ -38,7 +38,8 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
       '#utility-problematic-detail .alert-label[data-problem-exclusion-reason], '
-      + '#utility-problematic-detail .utility-album-problem-content .alert-label',
+      + '#utility-problematic-detail .utility-album-problem-content .alert-label, '
+      + '#utility-problematic-detail .musicbrainz-artist-problem .utility-album-problem-labels .alert-label',
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');

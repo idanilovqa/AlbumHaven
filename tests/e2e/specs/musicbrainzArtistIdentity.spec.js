@@ -67,6 +67,15 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
         countries: ['Finland'],
         genres: ['progressive rock', 'art rock', 'doom metal'],
       });
+      await expect.poll(() => galleryActions.readArtistContextLayout(), { timeout: 60000 }).toEqual({
+        name: GUEST,
+        infoLabel: `Information about ${GUEST}`,
+        divider: '•',
+        albumCount: '12 albums',
+        titleLineAligned: true,
+        metadataBelowTitle: true,
+        unclipped: true,
+      });
     });
 
     await stepLogger.step('MBD1-06: zero-vote MusicBrainz genres remain visible', async () => {
@@ -214,6 +223,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await utilityProblematicFilesActions.applySingleProblemFilter('MBID: Unconfirmed match');
       const detail = await utilityProblematicFilesActions.selectAlbumByTitle(UNCONFIRMED);
       expect(detail.title).toBe(UNCONFIRMED);
+      expect(detail.problemReasons).toContain('MBID: Unconfirmed match');
       await expect.poll(() => utilityProblematicFilesActions.readSelectedDetailLinks(), { timeout: 60000 })
         .toContain(`https://musicbrainz.org/artist/${MBID.unconfirmed}`);
     });

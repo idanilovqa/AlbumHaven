@@ -263,6 +263,8 @@ export class GalleryPage extends BasePage {
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
     this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
+    this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');
+    this.galleryContextInlineTotal = this.galleryContext.locator('[data-gallery-context-inline-total]');
     this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country');
     this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');

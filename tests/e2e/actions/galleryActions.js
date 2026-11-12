@@ -322,6 +322,40 @@ export class GalleryActions {
     };
   }
 
+  async readArtistContextLayout() {
+    const {
+      artistInfoTrigger, galleryContext, galleryContextInlineTotal,
+      galleryContextMetadata, galleryContextName, page,
+    } = this.galleryPage;
+    const box = async (locator) => (await locator.isVisible() ? locator.boundingBox() : null);
+    const [context, name, info, total, metadata] = await Promise.all([
+      box(galleryContext), box(galleryContextName), box(artistInfoTrigger),
+      box(galleryContextInlineTotal), box(galleryContextMetadata),
+    ]);
+    const titleBoxes = [name, info, total];
+    const viewport = page.viewportSize();
+    const within = (outer, inner) => Boolean(outer && inner
+      && inner.x >= outer.x - 1 && inner.y >= outer.y - 1
+      && inner.x + inner.width <= outer.x + outer.width + 1
+      && inner.y + inner.height <= outer.y + outer.height + 1);
+    const overlapsNameLine = (candidate) => Boolean(name && candidate
+      && candidate.y < name.y + name.height && candidate.y + candidate.height > name.y);
+    return {
+      name: String(await galleryContextName.textContent() || '').trim(),
+      infoLabel: await artistInfoTrigger.getAttribute('aria-label'),
+      divider: await galleryContextInlineTotal.evaluate((element) => (
+        getComputedStyle(element, '::before').content.replace(/^['"]|['"]$/gu, '')
+      )),
+      albumCount: String(await galleryContextInlineTotal.textContent() || '').trim(),
+      titleLineAligned: titleBoxes.every(overlapsNameLine),
+      metadataBelowTitle: Boolean(metadata
+        && metadata.y >= Math.max(...titleBoxes.filter(Boolean).map((item) => item.y + item.height)) - 1),
+      unclipped: [name, info, total, metadata].every((item) => within(context, item))
+        && Boolean(context && viewport && context.y >= -1
+          && context.y + context.height <= viewport.height + 1),
+    };
+  }
+
   async openArtistInfoPanel() {
     await this.galleryPage.artistInfoTrigger.click();
     await expect(this.galleryPage.artistInfoPanel).toBeVisible();

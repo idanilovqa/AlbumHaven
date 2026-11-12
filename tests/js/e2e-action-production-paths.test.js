@@ -2797,6 +2797,11 @@ test('functional race checks arm transient mutation observation before submit an
   );
   assert.match(
     reloadSpec,
+    /pauseAndReadListenCheckpoint\(\)[\s\S]*?waitForFullTrackTiming\(\)[\s\S]*?reloadAndWaitForRestoredTrack\(/,
+    'paused reload must await the listen checkpoint and claim release before reading its snapshot',
+  );
+  assert.match(
+    reloadSpec,
     /restored\.initialRestore\.currentTime - restored\.preReload\.currentTime/,
   );
 });

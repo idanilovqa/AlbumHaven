@@ -27,6 +27,7 @@ async function mount(page, viewport) {
         <aside class="sidebar shell-navigation-rail${viewport.width <= 900 ? ' is-mobile-drawer-open' : ''}" id="shell-navigation-rail">
           <div id="artist-tree-expanded">
             <div class="sidebar-top shell-navigation-rail-header">
+              <button class="shell-navigation-rail-toggle" aria-label="Collapse Artist Tree"${viewport.width <= 900 ? ' hidden' : ''}></button>
               <button class="mobile-bar-action" aria-label="Close library navigation"></button>
               <h2 id="library-navigation-heading">Custom Collections</h2>
             </div>
@@ -38,12 +39,15 @@ async function mount(page, viewport) {
                 ${modeButton('Loose Tracks', 'loose-tracks')}
               </nav>
               <div class="artist-list navigation-tree" id="sidebar-list">
-                <button class="artist-link navigation-tree-item is-selected">Night<span class="artist-count">2</span></button>
+                <button class="artist-link navigation-tree-item is-selected"><span class="artist-name-label">Nightg</span><span class="artist-count">2</span></button>
               </div>
             </div>
           </div>
         </aside>
         <main class="shell-main-surface">
+          <div class="gallery-bar" data-gallery-bar-layout="mobile-primary">
+            <div class="gallery-bar__context"><h2 class="gallery-bar__title"><span>Gallery</span></h2></div>
+          </div>
           <div class="non-album-modal-table">
             <div class="custom-collection-detail">
               <div class="custom-collection-detail__art">
@@ -92,6 +96,7 @@ async function mount(page, viewport) {
   for (const file of [
     'static/css/runtime/base-layout.css',
     'static/css/app-chrome.css',
+    'static/css/gallery-main.css',
     'static/css/button-component.css',
     'static/css/runtime/compact-data-table.css',
     'static/css/runtime/album-track-table.css',
@@ -102,6 +107,77 @@ async function mount(page, viewport) {
     await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app', file) });
   }
 }
+
+test('mobile tree title aligns with Gallery and the approved edge handle is easy to grab', async ({ page }) => {
+  await mount(page, { width: 390, height: 760 });
+  const geometry = await page.locator('#shell-navigation-rail').evaluate((rail) => {
+    rail.classList.add('is-mobile-mode-rail-hidden');
+    const anchor = rail.querySelector('#mobile-tree-edge-anchor');
+    anchor.hidden = false;
+    const heading = rail.querySelector('#library-navigation-heading').getBoundingClientRect();
+    const firstRow = rail.querySelector('#sidebar-list .artist-link').getBoundingClientRect();
+    const galleryTitle = document.querySelector('.gallery-bar__title').getBoundingClientRect();
+    const railBox = rail.getBoundingClientRect();
+    const anchorBox = anchor.getBoundingClientRect();
+    return {
+      titleCenterOffset: Math.abs(
+        (heading.top + heading.height / 2) - (galleryTitle.top + galleryTitle.height / 2),
+      ),
+      titleToFirstRow: firstRow.top - heading.bottom,
+      anchorLeft: anchorBox.left - railBox.left,
+      anchorWidth: anchorBox.width,
+      anchorHeight: anchorBox.height,
+      anchorCursor: getComputedStyle(anchor).cursor,
+    };
+  });
+
+  expect(geometry.titleCenterOffset).toBeLessThanOrEqual(1);
+  expect(geometry.titleToFirstRow).toBeLessThanOrEqual(10);
+  expect(geometry.anchorLeft).toBe(19);
+  expect(geometry.anchorWidth).toBe(15);
+  expect(geometry.anchorHeight).toBe(72);
+  expect(geometry.anchorCursor).toBe('grab');
+});
+
+test('desktop navigation keeps its header fixed while only the tree list scrolls', async ({ page }) => {
+  await mount(page, { width: 1200, height: 800 });
+  await page.locator('#shell-navigation-rail').evaluate(element => { element.style.height = '260px'; });
+  await page.locator('#sidebar-list').evaluate((element) => {
+    element.insertAdjacentHTML('beforeend', Array.from({ length: 40 }, (_, index) => (
+      `<button class="artist-link navigation-tree-item"><span class="artist-name-label">Artist ${index}g</span><span class="artist-count">1</span></button>`
+    )).join(''));
+  });
+
+  const before = await page.locator('.shell-navigation-rail-header').boundingBox();
+  const titleCenters = await page.locator('body').evaluate(() => {
+    const heading = document.querySelector('#library-navigation-heading').getBoundingClientRect();
+    const gallery = document.querySelector('.gallery-bar__title').getBoundingClientRect();
+    return {
+      navigation: heading.top + heading.height / 2,
+      gallery: gallery.top + gallery.height / 2,
+    };
+  });
+  const metrics = await page.locator('#sidebar-list').evaluate((list) => {
+    list.scrollTop = list.scrollHeight;
+    const rail = list.closest('.shell-navigation-rail');
+    const label = list.querySelector('.artist-name-label');
+    return {
+      listScrollTop: list.scrollTop,
+      listScrollHeight: list.scrollHeight,
+      listClientHeight: list.clientHeight,
+      railScrollTop: rail.scrollTop,
+      labelOverflowY: getComputedStyle(label).overflowY,
+    };
+  });
+  const after = await page.locator('.shell-navigation-rail-header').boundingBox();
+
+  expect(metrics.listScrollHeight).toBeGreaterThan(metrics.listClientHeight);
+  expect(Math.abs(titleCenters.navigation - titleCenters.gallery)).toBeLessThanOrEqual(1);
+  expect(metrics.listScrollTop).toBeGreaterThan(0);
+  expect(metrics.railScrollTop).toBe(0);
+  expect(after.y).toBe(before.y);
+  expect(metrics.labelOverflowY).toBe('visible');
+});
 
 for (const viewport of [{ width: 1200, height: 800 }, { width: 390, height: 760 }]) {
   test(`collection rail and empty art reuse the approved responsive geometry at ${viewport.width}px`, async ({ page }) => {

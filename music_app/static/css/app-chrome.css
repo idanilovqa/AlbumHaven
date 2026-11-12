@@ -156,12 +156,13 @@
   grid-column: 1;
   grid-row: 2;
   min-height: 0;
-  overflow-y: auto;
   overflow-x: hidden;
   background: var(--app-chrome);
   border: 0;
 }
-.shell-navigation-rail { height: 100%; padding: 20px 14px; }
+.shell-navigation-rail { height: 100%; padding: var(--app-page-header-top) 14px 20px; overflow: hidden; }
+.shell-navigation-rail-header { min-height: 54px; }
+.settings-host .settings-nav { overflow-y: auto; }
 .shell-navigation-rail.is-transitioning { overflow-y: hidden; }
 .shell-navigation-rail.is-expanding { position: relative; }
 .shell-navigation-rail.is-expanding #artist-tree-expanded {
@@ -201,7 +202,8 @@
   stroke-linejoin: round;
 }
 .shell-navigation-rail h2 { margin-left: 12px; }
-.library-navigation-body { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; min-height: 0; }
+#artist-tree-expanded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.library-navigation-body { display: grid; flex: 1 1 auto; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; min-height: 0; overflow: hidden; }
 .library-navigation-mode-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 :root .library-navigation-mode-action,
 :root .shell-navigation-compact-action { width: 40px; height: 40px; min-width: 40px; min-height: 40px; flex-basis: 40px; padding: 0; }
@@ -209,14 +211,9 @@
 .library-navigation-mode-action.is-active { background: var(--app-active); }
 :root .library-navigation-mode-action:hover:not(:disabled):not(.is-active) { background: color-mix(in srgb, var(--app-muted) 8%, transparent) !important; box-shadow: none; }
 :root .library-navigation-mode-action:focus-visible { outline-color: var(--app-muted); box-shadow: none; }
-.library-navigation-body #sidebar-list { min-width: 0; }
+.library-navigation-body #sidebar-list { min-width: 0; min-height: 0; overflow-y: auto; }
 .mobile-tree-edge-anchor { display: none; }
 .shell-navigation-rail .artist-link { border-color: transparent; }
-.shell-navigation-rail .artist-link .artist-name-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .shell-navigation-rail .artist-link:hover { background: #ffffff07; }
 .shell-navigation-rail .artist-link.active { background: var(--app-active); }
 .shell-navigation-rail-backdrop { display: none; }
@@ -240,7 +237,7 @@
 .settings-host .settings-main { min-width: 0; padding: 6px 24px 60px; }
 .artists-drawer-button { display: none; }
 
-.shell-navigation-rail,
+#sidebar-list,
 .shell-main-surface .albums-scroll,
 .settings-host .settings-nav,
 .settings-host .settings-outlet {

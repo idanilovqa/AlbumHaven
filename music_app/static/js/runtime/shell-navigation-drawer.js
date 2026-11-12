@@ -27,12 +27,23 @@ function installMobileLibraryModeRailGestures() {
   const rail = document.getElementById('shell-navigation-rail');
   if (!rail || rail.dataset.mobileModeRailGestures === 'true') return;
   rail.dataset.mobileModeRailGestures = 'true';
+  const list = document.getElementById('sidebar-list');
+  const deferIdleHide = () => {
+    if (
+      state.ui.mobileLibraryModeRailVisible !== false
+      && state.ui.artistsDrawerOpen
+      && isArtistsDrawerMobileViewport()
+    ) setMobileLibraryModeRailVisible(true);
+  };
+  list?.addEventListener('pointerdown', deferIdleHide, { passive: true });
+  list?.addEventListener('scroll', deferIdleHide, { passive: true });
   let gesture = null;
   rail.addEventListener('pointerdown', (event) => {
+    const fromAnchor = event.target?.closest?.('[data-reveal-library-mode-rail="1"]');
     if (
       event.pointerType !== 'touch'
       || state.ui.mobileLibraryModeRailVisible !== false
-      || Number(event.clientX || 0) > 28
+      || (!fromAnchor && Number(event.clientX || 0) > 28)
     ) return;
     gesture = { pointerId: event.pointerId, x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
   });
@@ -100,7 +111,6 @@ async function setLibraryNavigationMode(mode) {
     return normalized;
   }
   const list = document.getElementById('sidebar-list');
-  if (list) list.innerHTML = '<p class="utility-empty-state compact">Loading Custom Collections…</p>';
   try {
     await hydrateDeferredNonAlbumTracks({ libraryWide: true });
     if (state.ui.libraryNavigationMode !== normalized) return normalized;
@@ -189,6 +199,7 @@ function isArtistsDrawerMobileViewport() {
 function syncArtistsDrawerVisibility() {
   const { button, rail, backdrop } = getArtistsDrawerElements();
   const isMobile = isArtistsDrawerMobileViewport();
+  if (!isMobile) setMobileLibraryModeRailVisible(true);
   const supportsArtistsDrawer = canUseArtistsDrawerForCurrentView();
   const isDrawerVisible = Boolean(isMobile && supportsArtistsDrawer);
   if (!isDrawerVisible) {

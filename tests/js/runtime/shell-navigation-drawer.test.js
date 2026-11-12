@@ -236,6 +236,30 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
   assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
 });
 
+test('custom collections keeps the current tree visible until collection rows are ready', async () => {
+  const { context, artistList } = loadHelper();
+  artistList.innerHTML = '<button>Existing artist</button>';
+  let finishHydration;
+  context.hydrateDeferredNonAlbumTracks = () => new Promise((resolve) => {
+    finishHydration = () => {
+      context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
+      resolve();
+    };
+  });
+  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
+  context.window.NavigationTree = {
+    renderItem: () => '<button data-open-custom-collection="Night">Night:2</button>',
+  };
+
+  const pending = context.setLibraryNavigationMode('custom-collections');
+
+  assert.equal(artistList.innerHTML, '<button>Existing artist</button>');
+  assert.doesNotMatch(artistList.innerHTML, /Loading Custom Collections/);
+  finishHydration();
+  await pending;
+  assert.equal(artistList.innerHTML, '<button data-open-custom-collection="Night">Night:2</button>');
+});
+
 test('custom collections mode marks the open collection selected', async () => {
   const { context } = loadHelper();
   context.state.ui.nonAlbumCollectionName = 'Night';
@@ -358,12 +382,46 @@ test('mobile mode rail hides to a tappable anchor and reveals from an intentiona
   assert.equal(modeRailAnchor.hidden, false);
 
   context.installMobileLibraryModeRailGestures();
-  drawerRail.dispatchEvent({ type: 'pointerdown', pointerType: 'touch', pointerId: 7, clientX: 4, clientY: 80 });
-  drawerRail.dispatchEvent({ type: 'pointermove', pointerType: 'touch', pointerId: 7, clientX: 42, clientY: 84, preventDefault() {} });
+  const anchorTarget = {
+    closest: selector => selector === '[data-reveal-library-mode-rail="1"]' ? modeRailAnchor : null,
+  };
+  drawerRail.dispatchEvent({ type: 'pointerdown', target: anchorTarget, pointerType: 'touch', pointerId: 7, clientX: 31, clientY: 80 });
+  drawerRail.dispatchEvent({ type: 'pointermove', target: anchorTarget, pointerType: 'touch', pointerId: 7, clientX: 69, clientY: 84, preventDefault() {} });
 
   assert.equal(context.state.ui.mobileLibraryModeRailVisible, true);
   assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), false);
   assert.equal(modeRailAnchor.hidden, true);
+});
+
+test('active artist-tree scrolling defers the mobile mode rail idle hide', () => {
+  const { context, artistList, pendingTimers } = loadHelper({ isMobile: true });
+  context.state.ui.artistsDrawerOpen = true;
+  context.setMobileLibraryModeRailVisible(true);
+  context.installMobileLibraryModeRailGestures();
+  const [initialTimer] = pendingTimers.keys();
+
+  artistList.dispatchEvent({ type: 'scroll' });
+
+  assert.equal(pendingTimers.has(initialTimer), false);
+  assert.equal(pendingTimers.size, 1);
+});
+
+test('returning to desktop clears every mobile-only tree rail state', () => {
+  const { context, drawerRail, modeRailAnchor, expandedTree, compactNavigation } = loadHelper({ isMobile: true });
+  context.state.ui.artistsDrawerOpen = true;
+  context.setMobileLibraryModeRailVisible(false);
+  context.syncArtistsDrawerVisibility();
+  context.isArtistsDrawerMobileViewport = () => false;
+
+  context.syncArtistsDrawerVisibility();
+
+  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), false);
+  assert.equal(drawerRail.classList.contains('is-mobile-drawer'), false);
+  assert.equal(drawerRail.classList.contains('is-mobile-drawer-open'), false);
+  assert.equal(drawerRail.classList.contains('is-transitioning'), false);
+  assert.equal(modeRailAnchor.hidden, true);
+  assert.equal(expandedTree.hidden, false);
+  assert.equal(compactNavigation.hidden, true);
 });
 
 test('pointer mode selection releases focus so the mobile rail can hide', () => {
@@ -390,7 +448,7 @@ test('navigation tree rows stay on one line and expose the edge anchor chevron',
   const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'), 'utf8');
   const template = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'), 'utf8');
 
-  assert.match(css, /\.shell-navigation-rail \.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*nowrap;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
+  assert.doesNotMatch(css, /\.shell-navigation-rail \.artist-link \.artist-name-label\s*\{/s);
   assert.match(css, /--app-sidebar-width:\s*320px/);
   assert.match(template, /mobile-tree-edge-anchor[\s\S]*&rsaquo;/);
 });

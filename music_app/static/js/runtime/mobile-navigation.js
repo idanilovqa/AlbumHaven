@@ -93,9 +93,8 @@ function writeMobilePageHistory(mode = 'push') {
   else if (url.pathname === '/loose-tracks') url.pathname = '/';
   ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail', 'loose_tracks'].forEach(key => url.searchParams.delete(key));
   if (active) {
-    url.searchParams.set('mobile_page', active.kind);
+    if (active.kind !== 'non-album' || !active.libraryWide) url.searchParams.set('mobile_page', active.kind);
     if (active.albumKey) url.searchParams.set('mobile_album', active.albumKey);
-    if (active.kind === 'non-album' && active.libraryWide) url.searchParams.set('loose_tracks', 'library');
     if (active.kind === 'utilities') {
       url.searchParams.set('utility_tab', active.tab || 'appearance');
       if (active.utilityDetail) url.searchParams.set('utility_detail', active.utilityDetail);

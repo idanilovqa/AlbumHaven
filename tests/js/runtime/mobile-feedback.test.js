@@ -858,8 +858,8 @@ test('desktop Loose Tracks owns a reloadable URL with Back and Forward history',
   };
 
   assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: true }), true);
-  assert.equal(new URL(pushedUrl).searchParams.get('mobile_page'), 'non-album');
-  assert.equal(new URL(pushedUrl).searchParams.get('loose_tracks'), 'library');
+  assert.equal(new URL(pushedUrl).searchParams.get('mobile_page'), null);
+  assert.equal(new URL(pushedUrl).searchParams.get('loose_tracks'), null);
   assert.equal(new URL(pushedUrl).pathname, '/loose-tracks');
   assert.equal(new URL(pushedUrl).searchParams.has('surface'), false);
   const forwardState = history.state;

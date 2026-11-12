@@ -7,8 +7,8 @@ function exactNormalizedText(value) {
 
 // Runs in the page. Measures the alert's bounds against independently hit-tested actionable controls;
 // given its message selector, instead returns a live list that a read-only observer fills with the
-// message and measurement of each presentation, taken as the alert becomes visible.
-function inspectRepairAlert(alert, messageSelector) {
+// message and measurement of each presentation, taken when the alert is visible on its required surface.
+export function inspectRepairAlert(alert, options) {
   const measure = () => {
     const bounds = alert.getBoundingClientRect();
     const overlaps = [];
@@ -41,11 +41,22 @@ function inspectRepairAlert(alert, messageSelector) {
       overlaps,
     };
   };
-  if (!messageSelector) return measure();
+  if (!options) return measure();
+  const messageSelector = typeof options === 'string' ? options : options.messageSelector;
+  const requiresSurface = typeof options !== 'string' && Boolean(options.surfaceSelector);
+  const surface = !requiresSurface
+    ? null
+    : document.querySelector(options.surfaceSelector);
   const presentations = [];
   let shown = false;
   const record = () => {
-    const visible = alert.classList.contains('is-visible');
+    const surfaceStyle = surface ? getComputedStyle(surface) : null;
+    const surfaceActive = !requiresSurface || Boolean(surface && (
+      !surface.hidden
+      && surfaceStyle.display !== 'none'
+      && surfaceStyle.visibility !== 'hidden'
+    ));
+    const visible = alert.classList.contains('is-visible') && surfaceActive;
     if (visible && !shown) {
       const message = String(alert.querySelector(messageSelector)?.textContent || '').trim();
       presentations.push({ message, ...measure() });
@@ -54,6 +65,7 @@ function inspectRepairAlert(alert, messageSelector) {
   };
   const observer = new MutationObserver(record);
   observer.observe(alert, { attributes: true, attributeFilter: ['class'] });
+  if (surface) observer.observe(surface, { attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
   record();
   // The alert node outlives the delivery, so the caller stops observing once it has read the list.
   presentations.stop = () => observer.disconnect();
@@ -166,9 +178,12 @@ export class TagEditor extends BasePage {
 
   // A live list of each presentation from now on, measured as readRepairAlertOverlap does while it is
   // shown, so a timed toast that closes before it can be read is still proven rendered and placed.
-  async recordRepairAlertPresentations() {
+  async recordRepairAlertPresentations(options = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- observe the alert's class without changing it and measure each presentation
-    return this.repairAlert.evaluateHandle(inspectRepairAlert, this.repairAlertMessageSelector);
+    return this.repairAlert.evaluateHandle(inspectRepairAlert, {
+      messageSelector: this.repairAlertMessageSelector,
+      ...options,
+    });
   }
 
   async stopRecordingRepairAlertPresentations(presentations) {

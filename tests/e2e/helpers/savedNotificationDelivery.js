@@ -27,24 +27,23 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   await expect(tagEditor.overlay).toBeHidden({ timeout });
   await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
   const previous = await tagEditor.readLibraryReturnState();
-  await beforeNavigation?.();
-  await appBar.openStatusMenu();
+  const presentations = autoDismisses
+    ? await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' })
+    : null;
   let deliveryError;
   try {
+    await beforeNavigation?.();
+    await appBar.openStatusMenu();
     await scan.openStatusPageFromMenu();
-    if (autoDismisses) {
-      // Placement is judged on Status, where these cases assert it; recording starts there.
-      const presentations = await tagEditor.recordRepairAlertPresentations();
-      try {
-        await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
-      } finally {
-        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
-      }
+    if (presentations) {
+      await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
     } else {
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }
   } catch (error) {
     deliveryError = error;
+  } finally {
+    if (presentations) await tagEditor.stopRecordingRepairAlertPresentations(presentations);
   }
   try {
     await scan.clickBack();

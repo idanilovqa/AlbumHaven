@@ -59,6 +59,7 @@ from music_app.services.capability_ui import is_current_library_owner
 from music_app.services.ordered_cover_presentation import project_ordered_covers_for_request
 from music_app.services.playback_references import PlaybackContractError, PlaybackReferenceService
 from music_app.services.duplicate_copy_review import DuplicateCopyReferenceService, project_duplicate_copy_review
+from music_app.services.duplicate_copy_preview import DuplicateCopyPreviewConflict, DuplicateCopyPreviewService
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -1471,6 +1472,37 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
         )
     payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
     return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/utilities/problematic-files/duplicate-copy-preview")
+async def utilities_duplicate_copy_preview(request: Request) -> JSONResponse:
+    await require_action("library.inventory.manage", refresh_actor=True)(request)
+    await require_action("library.covers.delete")(request)
+    album_key = request.query_params.get("album_key")
+    copy_ref = request.query_params.get("copy_ref")
+    if (
+        not isinstance(album_key, str)
+        or not 1 <= len(album_key) <= 2048
+        or not isinstance(copy_ref, str)
+        or not 1 <= len(copy_ref) <= 128
+    ):
+        return JSONResponse({"ok": False, "error": "Invalid duplicate-copy preview request."}, status_code=400)
+    try:
+        preview = await run_in_threadpool(
+            DuplicateCopyPreviewService({
+                **_app_config(request),
+                **request.app.state.auth_policy_config,
+            }).preview,
+            library_id=request.state.current_actor.current_library_id,
+            album_key=album_key,
+            copy_ref=copy_ref,
+        )
+    except DuplicateCopyPreviewConflict as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+    return JSONResponse(
+        {"ok": True, "preview": preview},
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/utilities/problematic-files/{album_key:path}")

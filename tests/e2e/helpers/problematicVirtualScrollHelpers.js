@@ -141,7 +141,7 @@ export function observeProblematicDetails(page) {
   };
   return {
     async summary({ timeout = 10000 } = {}) {
-      await expect.poll(() => summary !== null || errors.length > 0, {
+      await expect.poll(() => summary !== null || errors.length > 0 || droppedSummarySequence > 0, {
         timeout,
         message: 'Complete problematic summary response was not captured',
       }).toBe(true);

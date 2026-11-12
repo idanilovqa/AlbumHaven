@@ -137,10 +137,10 @@
 
 /* A popup's shadow must not darken the connected button or their shared join.
    Keep room for the side/bottom shadow without clipping the menu contents. */
-:root .trigger-anchor-surface:not(.artist-family-panel) {
+:root .trigger-anchor-surface:not(.artist-family-panel):not(.artist-info-overlay) {
   clip-path: inset(0 -80px -80px -80px);
 }
-:root .trigger-anchor-surface:not(.artist-family-panel)[data-trigger-anchor-edge="bottom"] {
+:root .trigger-anchor-surface:not(.artist-family-panel):not(.artist-info-overlay)[data-trigger-anchor-edge="bottom"] {
   clip-path: inset(-80px -80px 0 -80px);
 }
 /* Nested popups must escape the parent's shadow/anchor clipping boundary. */

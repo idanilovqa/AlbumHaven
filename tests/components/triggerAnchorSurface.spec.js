@@ -353,15 +353,15 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
       const panel = document.getElementById('surface').getBoundingClientRect();
       const pixel = (x, y) => [...context.getImageData(Math.floor(x), Math.floor(y), 1, 1).data];
       return {
-        button: pixel(anchor.left + 6, anchor.bottom - 6),
+        button: pixel(anchor.right - 6, anchor.bottom - 6),
         bridge: pixel(anchor.left + 6, panel.top - 2),
         join: pixel(anchor.left + 6, panel.top + 1),
         panel: pixel(panel.left + 6, panel.top + 60),
       };
     }, screenshot.toString('base64'));
-    expect(pixels.button).toEqual(pixels.panel);
-    expect(pixels.bridge).toEqual(pixels.panel);
-    expect(pixels.join).toEqual(pixels.panel);
+    expect(pixels.button, 'open trigger matches its panel surface').toEqual(pixels.panel);
+    expect(pixels.bridge, 'connector matches its panel surface').toEqual(pixels.panel);
+    expect(pixels.join, 'panel join matches its panel surface').toEqual(pixels.panel);
     if (['Album Types', 'Settings', 'Log History Period'].includes(name)) {
       await mountVisualAnchor(page, name);
       // Capture both the hovered trigger and its joined panel across the content,
@@ -370,7 +370,9 @@ for (const [name, anchorClass, surfaceClass, context] of cases) {
         animations: 'disabled', clip: { x: 20, y: 0, width: 380, height: 360 },
       });
     }
-    expect(styles.panelClipPath).toBe('inset(0px -80px -80px)');
+    expect(styles.panelClipPath).toBe(
+      surfaceClass === 'artist-info-overlay' ? 'none' : 'inset(0px -80px -80px)',
+    );
   });
 }
 

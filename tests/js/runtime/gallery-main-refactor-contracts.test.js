@@ -289,6 +289,8 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   const listeners = {};
   const frames = [];
   let anchor;
+  const anchorAttributes = new Map();
+  const stickyAttributes = new Map();
   const scroll = {
     scrollTop: 0,
     scrollLeft: 0,
@@ -297,8 +299,16 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   };
   const currentAnchor = {
     isConnected: true,
-    setAttribute() {},
+    dataset: { artist: 'Neal Morse' },
+    setAttribute(name, value) { anchorAttributes.set(name, value); },
     getBoundingClientRect: () => ({ top: 151 - scroll.scrollTop, bottom: 171 - scroll.scrollTop, left: 40, right: 60, width: 20, height: 20 }),
+  };
+  const stickyAnchor = {
+    isConnected: true,
+    dataset: { artist: 'Neal Morse' },
+    closest: selector => selector === '[data-gallery-bar-instance="gallery"]' ? {} : null,
+    setAttribute(name, value) { stickyAttributes.set(name, value); },
+    getBoundingClientRect: () => ({ top: 60, bottom: 80, left: 40, right: 60, width: 20, height: 20 }),
   };
   const section = {
     dataset: { virtualSectionKey: 'artist:all:Neal Morse:0' },
@@ -307,9 +317,13 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   const context = loadRuntime({
     document: { getElementById: id => id === 'albums-scroll' ? scroll : null,
       querySelector: () => null,
-      querySelectorAll: selector => selector === '[data-virtual-section-key]' ? [section] : [],
+      querySelectorAll: selector => selector === '[data-virtual-section-key]'
+        ? [section]
+        : selector === '[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]'
+          ? [stickyAnchor]
+          : [],
       addEventListener() {} },
-    window: { addEventListener() {}, innerWidth: 1000 },
+    window: { addEventListener() {}, innerHeight: 800, innerWidth: 1000 },
     requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
   });
   // Keep unrelated chrome/layout work outside this event-lifecycle test.
@@ -320,7 +334,7 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   context.initGalleryMain();
   anchor = {
     isConnected: true,
-    closest: selector => selector === '[data-virtual-section-key]'
+    closest: selector => anchor.isConnected && selector === '[data-virtual-section-key]'
       ? { dataset: { virtualSectionKey: 'artist:all:Neal Morse:0' } }
       : null,
     setAttribute() {},
@@ -352,7 +366,32 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   scroll.scrollTop = 80;
   listeners.scroll();
   frames.shift()();
-  assert.equal(surface.hidden, true, 'the popup closes once its invoking information button leaves the gallery viewport');
+  assert.equal(surface.hidden, false, 'the popup transfers to the visible same-artist sticky information button');
+  assert.equal(anchorAttributes.get('aria-expanded'), 'false');
+  assert.equal(stickyAttributes.get('aria-expanded'), 'true');
+  assert.equal(surface.style.top, '79px');
+  context.stickyAnchor = stickyAnchor;
+  assert.equal(vm.runInContext('galleryMainSurfaceController.current().anchor === stickyAnchor', context), true);
+
+  stickyAnchor.dataset.artist = 'Transatlantic';
+  scroll.scrollTop = 900;
+  listeners.scroll();
+  frames.shift()();
+  assert.equal(surface.hidden, true, 'the popup closes once no visible trigger belongs to its artist');
+});
+
+test('mobile artist info clears its desktop-only body height constraint', () => {
+  const removed = [];
+  const context = loadRuntime({ window: { innerWidth: 390 } });
+  vm.runInContext('function usesMobilePageLayout() { return true; }', context);
+  context.positionGalleryAnchoredSurface({
+    matches: selector => selector === '.artist-info-overlay',
+    style: { removeProperty: property => removed.push(property) },
+  }, { getBoundingClientRect() {} });
+
+  assert.deepEqual(removed, [
+    'top', 'left', 'right', 'max-width', '--artist-info-body-max-height',
+  ]);
 });
 
 test('Album Types uses the same theme-inheriting stacked-sleeves icon before and after hydration', () => {
@@ -807,6 +846,10 @@ test('artist info triggers use a larger plain information glyph with neutral env
   assert.match(galleryMainCssSource, /\.artist-info-overlay__image\s*\{[^}]*background:\s*var\(--panel-2,/);
   assert.match(galleryMainCssSource, /\.gallery-info-button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*border-radius:\s*6px/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay::before/);
+  assert.match(galleryMainCssSource, /:root \.artist-info-overlay\.trigger-anchor-surface::before\s*\{[^}]*display:\s*block/);
+  assert.match(galleryMainCssSource, /:root \.artist-info-overlay\.trigger-anchor-surface\s*\{[^}]*clip-path:\s*none/);
+  const artistInfoBodyRules = [...galleryMainCssSource.matchAll(/\.artist-info-overlay__body\s*\{([^}]*)\}/g)];
+  assert.match(artistInfoBodyRules.at(-1)[1], /var\(--artist-info-body-max-height,/);
   assert.match(galleryMainCssSource, /\.artist-family-panel::before/);
 });
 

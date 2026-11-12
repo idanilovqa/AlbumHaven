@@ -7385,7 +7385,8 @@ function observeArtistFamilyPanelBounds({ panel, player } = {}) {
 function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   if (!surface || !anchor?.getBoundingClientRect) return;
   if (surface.matches?.('.artist-info-overlay') && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    ['top', 'left', 'right', 'max-width'].forEach(name => surface.style.removeProperty(name));
+    ['top', 'left', 'right', 'max-width', '--artist-info-body-max-height']
+      .forEach(name => surface.style.removeProperty(name));
     return;
   }
   const rect = anchor.getBoundingClientRect();
@@ -7406,12 +7407,13 @@ function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(surface, anchor);
 }
 
-function resolveCurrentGalleryAnchor(anchor) {
+function resolveCurrentGalleryAnchor(anchor, sectionKey = '') {
   if (!anchor || anchor.isConnected !== false) return anchor;
-  const sectionKey = anchor.closest?.('[data-virtual-section-key]')?.dataset.virtualSectionKey;
-  if (!sectionKey) return anchor;
+  const resolvedSectionKey = sectionKey
+    || anchor.closest?.('[data-virtual-section-key]')?.dataset.virtualSectionKey;
+  if (!resolvedSectionKey) return anchor;
   const section = Array.from(document.querySelectorAll?.('[data-virtual-section-key]') || [])
-    .find(candidate => candidate.dataset.virtualSectionKey === sectionKey);
+    .find(candidate => candidate.dataset.virtualSectionKey === resolvedSectionKey);
   return section?.querySelector?.('[data-artist-info-trigger]') || anchor;
 }
 
@@ -7429,6 +7431,27 @@ function isGalleryAnchorVisible(anchor, scroll) {
   return Number(bounds.bottom) > top && Number(bounds.top) < bottom;
 }
 
+function isGalleryArtistInfoAnchorVisible(anchor, scroll) {
+  if (anchor?.closest?.('[data-gallery-bar-instance="gallery"]')) {
+    const bounds = anchor.getBoundingClientRect?.();
+    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight;
+  }
+  return isGalleryAnchorVisible(anchor, scroll);
+}
+
+function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
+  const body = surface?.querySelector?.('.artist-info-overlay__body');
+  const header = surface?.querySelector?.(':scope > header');
+  const anchorBounds = anchor?.getBoundingClientRect?.();
+  if (!body || !header || !anchorBounds || !Number.isFinite(viewportBottom)) return;
+  const bodyStyle = typeof getComputedStyle === 'function' ? getComputedStyle(body) : null;
+  const bodyChrome = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+    .reduce((total, property) => total + (parseFloat(bodyStyle?.[property]) || 0), 0);
+  const available = viewportBottom - Number(anchorBounds.bottom)
+    - Number(header.getBoundingClientRect?.().height || 0) - bodyChrome - 2;
+  surface.style.setProperty?.('--artist-info-body-max-height', `${Math.max(0, Math.floor(available))}px`);
+}
+
 function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!surface?.matches?.('.artist-info-overlay')
       || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
@@ -7439,15 +7462,25 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
     ? Math.min(window.innerHeight, Number(playerBounds.top))
     : window.innerHeight;
-  const offset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
-  if (!offset) return 0;
+  const requiredOffset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
+  const anchorBounds = anchor?.getBoundingClientRect?.();
+  const scrollBounds = scroll.getBoundingClientRect?.();
+  const maximumOffset = anchorBounds && scrollBounds
+    ? Math.max(0, Math.floor(Number(anchorBounds.top) - Number(scrollBounds.top)))
+    : requiredOffset;
+  const offset = Math.min(requiredOffset, maximumOffset);
+  if (!offset) {
+    constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom);
+    return 0;
+  }
   scroll.scrollTop += offset;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
   requestAnimationFrame(() => {
-    const currentAnchor = resolveCurrentGalleryAnchor(anchor);
     const active = galleryMainSurfaceController?.current?.();
+    const currentAnchor = resolveCurrentGalleryAnchor(anchor, active?.anchorSectionKey);
     if (active?.surface === surface) active.anchor = currentAnchor;
     positionGalleryAnchoredSurface(surface, currentAnchor, 'left');
+    constrainGalleryArtistInfoSurface(surface, currentAnchor, viewportBottom);
   });
   return offset;
 }
@@ -7833,6 +7866,7 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   }, { anchor });
   galleryMainSurfaceController.activate({ key, anchor, surface,
+    anchorSectionKey: anchor.closest?.('[data-virtual-section-key]')?.dataset.virtualSectionKey || null,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
     openingQuery: String((typeof state === 'undefined' ? '' : state.view?.query) || '').trim() });
   anchor.setAttribute('aria-expanded', 'true');
@@ -8382,9 +8416,31 @@ function initGalleryMain() {
       updateGalleryMainChrome();
       const settled = galleryMainSurfaceController?.current?.();
       if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
-        settled.anchor = resolveCurrentGalleryAnchor(settled.anchor);
-        if (isGalleryAnchorVisible(settled.anchor, scroll)) {
+        const previousAnchor = settled.anchor;
+        const artist = settled.key.slice('artist:'.length);
+        let nextAnchor = resolveCurrentGalleryAnchor(previousAnchor, settled.anchorSectionKey);
+        if (String(nextAnchor?.dataset?.artist || '') !== artist || !isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
+          nextAnchor = Array.from(document.querySelectorAll?.('[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]') || [])
+            .find(candidate => String(candidate.dataset?.artist || '') === artist
+              && isGalleryArtistInfoAnchorVisible(candidate, scroll)) || nextAnchor;
+        }
+        if (nextAnchor !== previousAnchor && String(nextAnchor?.dataset?.artist || '') === artist
+            && isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
+          previousAnchor?.setAttribute?.('aria-expanded', 'false');
+          nextAnchor.setAttribute?.('aria-expanded', 'true');
+          settled.anchor = nextAnchor;
+        }
+        if (String(settled.anchor?.dataset?.artist || '') === artist
+            && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
           positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+          const playerBounds = player?.getBoundingClientRect?.();
+          constrainGalleryArtistInfoSurface(
+            settled.surface,
+            settled.anchor,
+            player && !player.hidden && Number(playerBounds?.height || 0) > 0
+              ? Math.min(window.innerHeight, Number(playerBounds.top))
+              : window.innerHeight,
+          );
         } else {
           closeGalleryMainSurface(false);
         }

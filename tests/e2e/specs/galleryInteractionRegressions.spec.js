@@ -132,6 +132,88 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await galleryActions.waitForGalleryReady();
     await expect(ui.nealSidebar).toHaveAttribute('aria-current','true');
   });
+  await stepLogger.step('UI-ARTIST-INFO-SCROLL clears the player, retains its connector and follows background scrolling',async()=>{
+    const originalViewport=page.viewportSize();
+    await page.setViewportSize({width:1200,height:500});
+    try {
+      await ui.headingInfo.click();
+      await expect(ui.infoPanel).toBeVisible();
+      const readGeometry=()=>ui.infoPanel.evaluate((panel)=>{
+        const trigger=document.querySelector('[data-artist-info-trigger][data-artist="Neal Morse"][aria-expanded="true"]');
+        const player=document.querySelector('[data-shell-slot="bottom_player"]');
+        const panelBounds=panel.getBoundingClientRect();
+        const triggerBounds=trigger?.getBoundingClientRect();
+        const playerBounds=player?.getBoundingClientRect();
+        const connector=getComputedStyle(panel,'::before');
+        return {
+          connectorHeight:parseFloat(connector.height),
+          connectorVisible:connector.display!=='none'&&connector.visibility!=='hidden',
+          connectorWidth:parseFloat(connector.width),
+          panelClipPath:getComputedStyle(panel).clipPath,
+          panelBottom:panelBounds.bottom,
+          panelTop:panelBounds.top,
+          playerTop:playerBounds?.top??window.innerHeight,
+          triggerTop:triggerBounds?.top??null,
+          triggerBottom:triggerBounds?.bottom??null,
+          triggerExpanded:trigger?.getAttribute('aria-expanded')==='true',
+          viewportHeight:window.innerHeight,
+        };
+      });
+      await expect.poll(async()=>{
+        const geometry=await readGeometry();
+        return Math.abs(geometry.panelTop-(geometry.triggerBottom-1));
+      }).toBeLessThanOrEqual(1);
+      const opened=await readGeometry();
+      expect(opened.connectorVisible).toBe(true);
+      expect(opened.connectorWidth).toBeGreaterThan(0);
+      expect(opened.connectorHeight).toBeGreaterThan(0);
+      expect(opened.panelClipPath).toBe('none');
+      expect(opened.panelBottom).toBeLessThanOrEqual(opened.playerTop+1);
+      expect(opened.panelTop).toBeCloseTo(opened.triggerBottom-1,0);
+
+      const galleryBounds=await ui.galleryScroll.boundingBox();
+      expect(galleryBounds).not.toBeNull();
+      await page.mouse.move(galleryBounds.x+galleryBounds.width-24,galleryBounds.y+galleryBounds.height/2);
+      const scrollBefore=await ui.galleryScroll.evaluate(node=>node.scrollTop);
+      await page.mouse.wheel(0,80);
+      await expect.poll(()=>ui.galleryScroll.evaluate(node=>node.scrollTop)).toBeGreaterThan(scrollBefore);
+      await expect(ui.infoPanel).toBeVisible();
+      await expect.poll(async()=>{
+        const geometry=await readGeometry();
+        return Math.abs(geometry.panelTop-(geometry.triggerBottom-1));
+      }).toBeLessThanOrEqual(1);
+      const scrolled=await readGeometry();
+      expect(scrolled.panelTop).toBeLessThan(opened.panelTop);
+      expect(scrolled.panelTop).toBeCloseTo(scrolled.triggerBottom-1,0);
+
+      const farScrollBefore=await ui.galleryScroll.evaluate(node=>node.scrollTop);
+      await page.mouse.wheel(0,900);
+      await expect.poll(()=>ui.galleryScroll.evaluate(node=>node.scrollTop)).toBeGreaterThan(farScrollBefore);
+      await expect(ui.infoPanel).toBeVisible();
+      await expect.poll(async()=>{
+        const geometry=await readGeometry();
+        return Math.abs(geometry.panelTop-(geometry.triggerBottom-1));
+      }).toBeLessThanOrEqual(1);
+      const farScrolled=await readGeometry();
+      expect(farScrolled.triggerExpanded).toBe(true);
+      expect(farScrolled.connectorVisible).toBe(true);
+      expect(farScrolled.connectorWidth).toBeGreaterThan(0);
+      expect(farScrolled.connectorHeight).toBeGreaterThan(0);
+      expect(farScrolled.panelClipPath).toBe('none');
+      expect(farScrolled.triggerTop).toBeGreaterThanOrEqual(0);
+      expect(farScrolled.triggerBottom).toBeLessThanOrEqual(farScrolled.viewportHeight);
+      expect(farScrolled.panelTop).toBeGreaterThanOrEqual(0);
+      expect(farScrolled.panelBottom).toBeLessThanOrEqual(farScrolled.playerTop+1);
+      expect(farScrolled.panelTop).toBeCloseTo(farScrolled.triggerBottom-1,0);
+      await page.keyboard.press('Escape');
+      await expect(ui.infoPanel).toBeHidden();
+    } finally {
+      if(await ui.infoPanel.isVisible())await page.keyboard.press('Escape');
+      const scrollTop=await ui.galleryScroll.evaluate(node=>node.scrollTop);
+      if(scrollTop>0)await galleryActions.scrollGalleryBy(-scrollTop);
+      if(originalViewport)await page.setViewportSize(originalViewport);
+    }
+  });
   await stepLogger.step('Info text has visible selection during drag and cannot select gallery cards',async()=>{
     await ui.info.click(); await expect(ui.infoPanel).toBeVisible();
     const text=ui.infoSummary;

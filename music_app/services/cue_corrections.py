@@ -24,9 +24,32 @@ class CueCorrectionError(ValueError):
 
 
 class CueCorrectionService:
-    def __init__(self, config: Mapping[str, object], *, connect=None) -> None:
-        self._database_url = config.get("ALBUM_HAVEN_APP_DATABASE_URL")
+    def __init__(
+        self,
+        config: Mapping[str, object],
+        *,
+        connect=None,
+        external_writer=None,
+        write_enabled=None,
+    ) -> None:
+        self._config = dict(config)
+        self._database_url = self._config.get("ALBUM_HAVEN_APP_DATABASE_URL")
         self._connect = connect or pooled_connection
+        self._external_writer = external_writer
+        self._write_enabled = write_enabled or self._library_writes_tags
+
+    def _library_writes_tags(self, library_id: int) -> bool:
+        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
+            return False
+        from music_app.services.library_roots import (
+            METADATA_CORRECTIONS_WRITE_TAGS,
+            load_library_root_settings,
+        )
+
+        return (
+            load_library_root_settings(self._config, library_id=library_id).get("metadata_corrections")
+            == METADATA_CORRECTIONS_WRITE_TAGS
+        )
 
     @staticmethod
     def _scope(actor: object, *, owner: bool = False) -> tuple[int, int]:
@@ -92,6 +115,7 @@ class CueCorrectionService:
             rows = connection.execute(
                 """/* cue_editor_tracks */
                 select t.track_key as cue_segment_ref, t.title, s.program_id,
+                       p.source_kind,
                        p.revision_sha256,
                        coalesce((boundary.payload->>'start_frame')::bigint, s.start_frame) as start_frame,
                        s.end_frame, s.internal_indexes,
@@ -124,6 +148,25 @@ class CueCorrectionService:
             ).fetchall()
         if not rows:
             raise CueCorrectionError("CUE track is unavailable.")
+        writes_source = (
+            rows[0].get("source_kind") == "external"
+            and self._write_enabled(library_id)
+        )
+        can_restore_source = False
+        if writes_source:
+            from music_app.services.cue_external_writer import (
+                CueExternalWriteConflict,
+                CueExternalWriteService,
+            )
+
+            writer = self._external_writer or CueExternalWriteService(self._config)
+            try:
+                can_restore_source = writer.has_retained_revision(
+                    library_id=library_id,
+                    program_id=rows[0]["program_id"],
+                )
+            except CueExternalWriteConflict:
+                pass
         tracks = []
         for row in rows:
             metadata = row.get("metadata_correction")
@@ -146,6 +189,8 @@ class CueCorrectionService:
         return {
             "base_revision_sha256": rows[0]["revision_sha256"],
             "can_edit_structure": can_edit_structure,
+            "can_restore_source": can_restore_source,
+            "writes_source": writes_source,
             "tracks": tracks,
         }
 
@@ -219,7 +264,27 @@ class CueCorrectionService:
                     Jsonb(correction_payload),
                 ),
             ).fetchone()
-        return {"ok": True, "correction_id": row["id"]}
+        result = {"ok": True, "correction_id": row["id"]}
+        if self._write_enabled(library_id) and payload.get("write_source") is not False:
+            from music_app.services.cue_external_writer import (
+                CueExternalWriteConflict,
+                CueExternalWriteService,
+            )
+
+            writer = self._external_writer or CueExternalWriteService(self._config)
+            try:
+                write_result = writer.write_program(
+                    library_id=library_id,
+                    program_id=target["program_id"],
+                )
+            except CueExternalWriteConflict as error:
+                raise CueCorrectionError(str(error)) from error
+            result.update({
+                key: write_result[key]
+                for key in ("written_to_tags", "write_reason", "program_id")
+                if key in write_result
+            })
+        return result
 
     def restore(
         self,
@@ -229,10 +294,40 @@ class CueCorrectionService:
         kind: object,
     ) -> dict[str, object]:
         correction_kind = str(kind or "")
-        if correction_kind not in {"boundary", "metadata"}:
+        if correction_kind not in {"boundary", "metadata", "source"}:
             raise CueCorrectionError("Invalid CUE correction kind.")
         _account_id, library_id = self._scope(actor, owner=correction_kind == "boundary")
         identity = self._identity(cue_segment_ref)
+        if correction_kind == "source":
+            if not self._write_enabled(library_id):
+                raise CueCorrectionError("Write in tags is disabled for this library.")
+            with self._connect(self._database_url) as connection:
+                target = self._target(
+                    connection,
+                    library_id=library_id,
+                    cue_segment_ref=identity,
+                )
+            from music_app.services.cue_external_writer import (
+                CueExternalWriteConflict,
+                CueExternalWriteService,
+            )
+
+            writer = self._external_writer or CueExternalWriteService(self._config)
+            try:
+                restore_result = writer.restore_program(
+                    library_id=library_id,
+                    program_id=target["program_id"],
+                )
+            except CueExternalWriteConflict as error:
+                raise CueCorrectionError(str(error)) from error
+            return {
+                "ok": True,
+                **{
+                    key: restore_result[key]
+                    for key in ("restored_source", "restore_reason", "program_id")
+                    if key in restore_result
+                },
+            }
         with self._connect(self._database_url) as connection:
             row = connection.execute(
                 """/* cue_restore_correction */

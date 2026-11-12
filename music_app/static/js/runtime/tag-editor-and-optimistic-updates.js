@@ -29,6 +29,8 @@ async function loadCueEditorState(tagEditor = state.tagEditor) {
   tagEditor.cueLoaded = true;
   tagEditor.cueBaseRevision = String(payload.base_revision_sha256 || '');
   tagEditor.canEditCueStructure = payload.can_edit_structure === true;
+  tagEditor.canRestoreCueSource = payload.can_restore_source === true;
+  tagEditor.cueWritesSource = payload.writes_source === true;
   tagEditor.cueError = '';
   if (typeof renderTagEditor === 'function') renderTagEditor();
   return payload;
@@ -118,7 +120,12 @@ async function applyCueMetadataDrafts() {
     };
   });
   if (!corrections.length) return false;
-  await Promise.all(corrections.map(submitCueMetadataCorrection));
+  for (const [index, correction] of corrections.entries()) {
+    await submitCueMetadataCorrection({
+      ...correction,
+      write_source: index === corrections.length - 1,
+    });
+  }
   await loadCueEditorState(tagEditor);
   tagEditor.values = Object.fromEntries(tagEditor.tracks.map(track => [
     cueEditorTrackIdentity(track),

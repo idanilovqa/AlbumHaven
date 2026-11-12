@@ -27,6 +27,14 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
   + '\n' + fs.readFileSync(helperPath, 'utf8');
+const utilityLoaderSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'),
+  'utf8',
+);
+const utilityHandlerSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'bootstrap-utility-event-handlers.js'),
+  'utf8',
+);
 
 test('openTagEditor hydrates an album on mobile', () => {
   const pending = new Map();
@@ -119,6 +127,8 @@ test('CUE editor loads path-free structure into the existing Tag Editor session'
           return {
             ok: true,
             base_revision_sha256: 'a'.repeat(64),
+            can_restore_source: true,
+            writes_source: true,
             tracks: [{
               cue_segment_ref: 'cue:track-1',
               title: 'Track One',
@@ -145,6 +155,8 @@ test('CUE editor loads path-free structure into the existing Tag Editor session'
   await context.loadCueEditorState(session);
 
   assert.equal(session.cueLoaded, true);
+  assert.equal(session.canRestoreCueSource, true);
+  assert.equal(session.cueWritesSource, true);
   assert.equal(session.tracks[0].cue_structure.start_frame, 0);
   assert.equal('path' in session.tracks[0], false);
 });
@@ -248,6 +260,16 @@ test('Edit Tags reuses its dialog, list, footer, shared tabs, and alert host for
   assert.match(primaryModalsTemplate, /id="tag-editor-view-tabs"/);
   assert.match(primaryModalsTemplate, /id="tag-editor-cue-alert"/);
   assert.match(primaryModalsTemplate, /id="tag-editor-cue-structure"/);
+});
+
+test('Edit Tags reuses the CUE alert to restore a retained external source revision', () => {
+  assert.match(utilityLoaderSource, /data-restore-cue-source="1"/);
+  assert.match(utilityHandlerSource, /restoreCueCorrection\('source', identity\)/);
+});
+
+test('multi-track CUE Apply stores every row before one final source write', () => {
+  assert.doesNotMatch(helperSource, /Promise\.all\(corrections\.map/);
+  assert.match(helperSource, /write_source: index === corrections\.length - 1/);
 });
 
 test('Edit Tags exposes Album Type separately from Edition', () => {

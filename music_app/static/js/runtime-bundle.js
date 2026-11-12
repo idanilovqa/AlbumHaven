@@ -33571,16 +33571,25 @@ function renderTagEditor(options = {}) {
     const canRestore = activeView === 'cue'
       ? focusedTrack?.cue_boundary_corrected
       : focusedTrack?.cue_metadata_corrected;
-    const message = state.tagEditor.cueError
-      || 'Display only stores CUE corrections in this library. Source files are not changed.';
+        const sourceRestoreAction = state.tagEditor.canRestoreCueSource
+          ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-source="1">Restore prior CUE</button>'
+          : '';
+        const message = state.tagEditor.cueError || (state.tagEditor.cueWritesSource
+          ? 'Apply writes supported corrections to the external CUE and retains one prior revision.'
+          : 'Display only stores CUE corrections in this library. Source files are not changed.');
     els.cueAlert.hidden = !cueLoaded;
     els.cueAlert.innerHTML = cueLoaded ? buildOnPageAlertHtml({
       severity: state.tagEditor.cueError ? 'error' : 'warning',
-      title: state.tagEditor.cueError ? 'CUE structure unavailable' : 'Display only',
+          title: state.tagEditor.cueError
+            ? 'CUE structure unavailable'
+            : (state.tagEditor.cueWritesSource ? 'Write in tags' : 'Display only'),
       message,
-      actionsHtml: canRestore
-        ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
-        : '',
+          actionsHtml: [
+            canRestore
+              ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
+              : '',
+            sourceRestoreAction,
+          ].filter(Boolean).join(''),
     }) : '';
   }
   if (showCue) {
@@ -38141,6 +38150,8 @@ async function loadCueEditorState(tagEditor = state.tagEditor) {
   tagEditor.cueLoaded = true;
   tagEditor.cueBaseRevision = String(payload.base_revision_sha256 || '');
   tagEditor.canEditCueStructure = payload.can_edit_structure === true;
+  tagEditor.canRestoreCueSource = payload.can_restore_source === true;
+  tagEditor.cueWritesSource = payload.writes_source === true;
   tagEditor.cueError = '';
   if (typeof renderTagEditor === 'function') renderTagEditor();
   return payload;
@@ -38230,7 +38241,12 @@ async function applyCueMetadataDrafts() {
     };
   });
   if (!corrections.length) return false;
-  await Promise.all(corrections.map(submitCueMetadataCorrection));
+  for (const [index, correction] of corrections.entries()) {
+    await submitCueMetadataCorrection({
+      ...correction,
+      write_source: index === corrections.length - 1,
+    });
+  }
   await loadCueEditorState(tagEditor);
   tagEditor.values = Object.fromEntries(tagEditor.tracks.map(track => [
     cueEditorTrackIdentity(track),
@@ -48728,6 +48744,21 @@ async function handleUtilityBootstrapClick(event) {
       state.tagEditor.cueError = error.message;
       renderTagEditor({ preserveTrackList: true });
     });
+    return;
+  }
+  const restoreCueSource = event.target.closest('[data-restore-cue-source="1"]');
+  if (restoreCueSource) {
+    event.preventDefault();
+    const tagEditor = state.tagEditor;
+    const identity = getTagEditorFocusedPath();
+    restoreCueSource.disabled = true;
+    void restoreCueCorrection('source', identity)
+      .then(() => loadCueEditorState(tagEditor))
+      .catch((error) => {
+        if (!state.tagEditor) return;
+        state.tagEditor.cueError = error.message;
+        renderTagEditor({ preserveTrackList: true });
+      });
     return;
   }
   const restoreCue = event.target.closest('[data-restore-cue-correction="1"]');

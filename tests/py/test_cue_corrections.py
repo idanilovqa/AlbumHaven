@@ -37,6 +37,7 @@ class Connection:
             return Cursor(row={
                 "track_id": 42,
                 "program_id": 7,
+                "source_kind": "external",
                 "revision_sha256": REVISION,
                 "start_frame": 900,
                 "end_frame": 1800,
@@ -47,6 +48,7 @@ class Connection:
                 "cue_segment_ref": "cue:track-2",
                 "title": "Track Two",
                 "program_id": 7,
+                "source_kind": "external",
                 "revision_sha256": REVISION,
                 "start_frame": 1050,
                 "end_frame": 1800,
@@ -73,6 +75,7 @@ def test_cue_editor_state_is_path_free_and_includes_active_overlays():
     service = CueCorrectionService(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
         connect=lambda _url: Connection(),
+        write_enabled=lambda _library_id: False,
     )
 
     state = service.load_editor(actor=actor(), cue_segment_ref="cue:track-2")
@@ -80,6 +83,8 @@ def test_cue_editor_state_is_path_free_and_includes_active_overlays():
     assert state == {
         "base_revision_sha256": REVISION,
         "can_edit_structure": True,
+        "can_restore_source": False,
+        "writes_source": False,
         "tracks": [{
             "cue_segment_ref": "cue:track-2",
             "title": "Corrected title",
@@ -100,6 +105,7 @@ def test_non_owner_cue_editor_gets_metadata_without_structural_controls():
     service = CueCorrectionService(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
         connect=lambda _url: Connection(),
+        write_enabled=lambda _library_id: False,
     )
 
     state = service.load_editor(actor=actor(owner=False), cue_segment_ref="cue:track-2")
@@ -107,6 +113,49 @@ def test_non_owner_cue_editor_gets_metadata_without_structural_controls():
     assert state["can_edit_structure"] is False
     assert state["tracks"][0]["title"] == "Corrected title"
     assert "cue_structure" not in state["tracks"][0]
+
+
+def test_cue_editor_reports_retained_source_restore_without_exposing_a_path():
+    calls = []
+
+    class Writer:
+        def has_retained_revision(self, *, library_id, program_id):
+            calls.append((library_id, program_id))
+            return True
+
+    service = CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: Connection(),
+        external_writer=Writer(),
+        write_enabled=lambda _library_id: True,
+    )
+
+    state = service.load_editor(actor=actor(owner=False), cue_segment_ref="cue:track-2")
+
+    assert state["can_restore_source"] is True
+    assert state["writes_source"] is True
+    assert calls == [(5, 7)]
+    assert "path" not in repr(state).lower()
+
+
+def test_cue_editor_stays_available_when_retained_revision_check_is_stale():
+    from music_app.services.cue_external_writer import CueExternalWriteConflict
+
+    class Writer:
+        def has_retained_revision(self, **_kwargs):
+            raise CueExternalWriteConflict("The CUE program changed.")
+
+    service = CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: Connection(),
+        external_writer=Writer(),
+        write_enabled=lambda _library_id: True,
+    )
+
+    state = service.load_editor(actor=actor(owner=False), cue_segment_ref="cue:track-2")
+
+    assert state["can_restore_source"] is False
+    assert state["writes_source"] is True
 
 
 def test_boundary_correction_requires_owner_and_current_revision():
@@ -136,6 +185,7 @@ def test_boundary_correction_and_restore_are_reversible_database_overlays():
     service = CueCorrectionService(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
         connect=lambda _url: connection,
+        write_enabled=lambda _library_id: False,
     )
 
     applied = service.apply(actor=actor(), payload={
@@ -160,6 +210,7 @@ def test_metadata_correction_uses_the_shared_editable_fields_without_owner_only_
     service = CueCorrectionService(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
         connect=lambda _url: connection,
+        write_enabled=lambda _library_id: False,
     )
 
     result = service.apply(actor=actor(owner=False), payload={
@@ -171,3 +222,85 @@ def test_metadata_correction_uses_the_shared_editable_fields_without_owner_only_
 
     assert result == {"ok": True, "correction_id": 9}
     assert len(connection.writes) == 1
+
+
+def test_write_in_tags_mode_uses_the_same_apply_action_for_external_cue():
+    connection = Connection()
+    calls = []
+    enabled_for = []
+
+    class Writer:
+        def write_program(self, *, library_id, program_id):
+            calls.append((library_id, program_id))
+            return {"written_to_tags": True, "program_id": 8}
+
+    service = CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: connection,
+        external_writer=Writer(),
+        write_enabled=lambda library_id: enabled_for.append(library_id) or True,
+    )
+
+    result = service.apply(actor=actor(owner=False), payload={
+        "kind": "metadata",
+        "cue_segment_ref": "cue:track-2",
+        "base_revision_sha256": REVISION,
+        "fields": {"title": "Written title"},
+    })
+
+    assert result == {
+        "ok": True,
+        "correction_id": 9,
+        "written_to_tags": True,
+        "program_id": 8,
+    }
+    assert enabled_for == [5]
+    assert calls == [(5, 7)]
+
+
+def test_metadata_batch_can_defer_source_write_until_its_final_correction():
+    class Writer:
+        def write_program(self, **_kwargs):
+            pytest.fail("an intermediate batch correction must not write the source")
+
+    service = CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: Connection(),
+        external_writer=Writer(),
+        write_enabled=lambda _library_id: True,
+    )
+
+    result = service.apply(actor=actor(owner=False), payload={
+        "kind": "metadata",
+        "cue_segment_ref": "cue:track-2",
+        "base_revision_sha256": REVISION,
+        "fields": {"title": "First batch row"},
+        "write_source": False,
+    })
+
+    assert result == {"ok": True, "correction_id": 9}
+
+
+def test_restore_action_restores_the_retained_external_cue_revision():
+    calls = []
+
+    class Writer:
+        def restore_program(self, *, library_id, program_id):
+            calls.append((library_id, program_id))
+            return {"restored_source": True, "program_id": 8}
+
+    service = CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: Connection(),
+        external_writer=Writer(),
+        write_enabled=lambda _library_id: True,
+    )
+
+    result = service.restore(
+        actor=actor(owner=False),
+        cue_segment_ref="cue:track-2",
+        kind="source",
+    )
+
+    assert result == {"ok": True, "restored_source": True, "program_id": 8}
+    assert calls == [(5, 7)]

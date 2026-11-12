@@ -34,6 +34,21 @@ async function handleUtilityBootstrapClick(event) {
     });
     return;
   }
+  const restoreCueSource = event.target.closest('[data-restore-cue-source="1"]');
+  if (restoreCueSource) {
+    event.preventDefault();
+    const tagEditor = state.tagEditor;
+    const identity = getTagEditorFocusedPath();
+    restoreCueSource.disabled = true;
+    void restoreCueCorrection('source', identity)
+      .then(() => loadCueEditorState(tagEditor))
+      .catch((error) => {
+        if (!state.tagEditor) return;
+        state.tagEditor.cueError = error.message;
+        renderTagEditor({ preserveTrackList: true });
+      });
+    return;
+  }
   const restoreCue = event.target.closest('[data-restore-cue-correction="1"]');
   if (restoreCue) {
     event.preventDefault();

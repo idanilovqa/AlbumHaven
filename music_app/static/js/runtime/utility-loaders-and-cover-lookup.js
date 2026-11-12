@@ -2712,16 +2712,25 @@ function renderTagEditor(options = {}) {
     const canRestore = activeView === 'cue'
       ? focusedTrack?.cue_boundary_corrected
       : focusedTrack?.cue_metadata_corrected;
-    const message = state.tagEditor.cueError
-      || 'Display only stores CUE corrections in this library. Source files are not changed.';
+        const sourceRestoreAction = state.tagEditor.canRestoreCueSource
+          ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-source="1">Restore prior CUE</button>'
+          : '';
+        const message = state.tagEditor.cueError || (state.tagEditor.cueWritesSource
+          ? 'Apply writes supported corrections to the external CUE and retains one prior revision.'
+          : 'Display only stores CUE corrections in this library. Source files are not changed.');
     els.cueAlert.hidden = !cueLoaded;
     els.cueAlert.innerHTML = cueLoaded ? buildOnPageAlertHtml({
       severity: state.tagEditor.cueError ? 'error' : 'warning',
-      title: state.tagEditor.cueError ? 'CUE structure unavailable' : 'Display only',
+          title: state.tagEditor.cueError
+            ? 'CUE structure unavailable'
+            : (state.tagEditor.cueWritesSource ? 'Write in tags' : 'Display only'),
       message,
-      actionsHtml: canRestore
-        ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
-        : '',
+          actionsHtml: [
+            canRestore
+              ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
+              : '',
+            sourceRestoreAction,
+          ].filter(Boolean).join(''),
     }) : '';
   }
   if (showCue) {

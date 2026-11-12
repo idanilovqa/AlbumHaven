@@ -439,7 +439,12 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
         ), active_tracks as materialized (
           select tracks.id, tracks.album_id,
             library.duplicate_identity_text(tracks.title) as title_identity,
-            tracks.duration_seconds
+            tracks.duration_seconds,
+            row_number() over (
+              partition by tracks.album_id
+              order by coalesce(tracks.disc_number, 1),
+                coalesce(tracks.track_number, 2147483647), tracks.id
+            ) as track_position
           from library.local_tracks tracks
           join scoped_albums on scoped_albums.id=tracks.album_id
           where tracks.library_id=%(library_id)s
@@ -476,11 +481,29 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
               and not exists (
                 select 1 from active_tracks source_track
                 where source_track.album_id=source.id
-                  and stray_track.title_identity <> ''
-                  and source_track.title_identity=stray_track.title_identity
-                  and stray_track.duration_seconds > 0
-                  and source_track.duration_seconds > 0
-                  and abs(source_track.duration_seconds-stray_track.duration_seconds) <= 2
+                and (
+                  (
+                    source_sizes.track_count > small_sizes.track_count
+                    and stray_track.title_identity <> ''
+                    and source_track.title_identity=stray_track.title_identity
+                    and stray_track.duration_seconds > 0
+                    and source_track.duration_seconds > 0
+                    and abs(source_track.duration_seconds-stray_track.duration_seconds) <= 2
+                  )
+                  or (
+                    source_sizes.track_count = small_sizes.track_count
+                    and source_track.track_position=stray_track.track_position
+                    and stray_track.title_identity <> ''
+                    and (
+                      source_track.title_identity=stray_track.title_identity
+                      or starts_with(source_track.title_identity, stray_track.title_identity || ' (')
+                      or starts_with(stray_track.title_identity, source_track.title_identity || ' (')
+                    )
+                    and stray_track.duration_seconds > 0
+                    and source_track.duration_seconds > 0
+                    and abs(source_track.duration_seconds-stray_track.duration_seconds) <= 3
+                  )
+                )
               )
           )
         ), chosen_sources as materialized (

@@ -271,6 +271,10 @@ def test_duplicate_ownership_compares_complete_equal_album_tracklists():
     assert "source.release_year is not distinct from small.release_year" in sql
     assert "source_sizes.track_count = small_sizes.track_count" in sql
     assert "source.id < small.id" in sql
+    assert "row_number() over (" in sql
+    assert "source_track.track_position=stray_track.track_position" in sql
+    assert "starts_with(source_track.title_identity, stray_track.title_identity || ' (')" in sql
+    assert "abs(source_track.duration_seconds-stray_track.duration_seconds) <= 3" in sql
 
 
 @pytest.mark.parametrize("shared", [True, False])

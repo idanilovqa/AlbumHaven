@@ -442,6 +442,7 @@ class NativePlaybackController(
             listens.unload(positionMs() / 1000.0, (queue.getOrNull(index)?.durationMs ?: 0) / 1000.0)
         }
         stopNow(keepPosition = true)
+        releaseOutput()
         releasePending = false
         warmUntilMs = null
         shutdownDeadlineMs = clock() + SHUTDOWN_CHECKPOINT_MS

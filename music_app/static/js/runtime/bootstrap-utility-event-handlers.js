@@ -598,6 +598,17 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const deleteDuplicateCopyButton = event.target.closest('[data-delete-duplicate-copy]');
+  if (deleteDuplicateCopyButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const album = getSelectedProblematicAlbum();
+    const copyRef = deleteDuplicateCopyButton.getAttribute('data-copy-ref') || '';
+    const copy = (album?.duplicate_copy_review || []).find(item => String(item?.copy_ref || '') === copyRef);
+    if (copy) void performDuplicateCopyRemoval(album, copy);
+    return;
+  }
+
   const tagEditorTrackButton = event.target.closest('[data-tag-editor-track]');
   if (tagEditorTrackButton) {
     if (event.target.closest('[data-tag-editor-reorder-grip]')) return;

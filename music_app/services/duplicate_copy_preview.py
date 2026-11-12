@@ -2,6 +2,7 @@
 
 import base64
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
@@ -15,6 +16,15 @@ from music_app.services.postgres_connections import pooled_connection
 
 class DuplicateCopyPreviewConflict(ValueError):
     """The requested copy is unavailable or changed."""
+
+
+@dataclass(frozen=True)
+class PreparedDuplicateCopyPreview:
+    payload: dict[str, object]
+    selected_rows: tuple[dict[str, object], ...]
+    survivor_rows: tuple[dict[str, object], ...]
+    album_root: Path
+    configured_root_id: str
 
 
 def _conflict():
@@ -163,7 +173,7 @@ class DuplicateCopyPreviewService:
             _conflict()
         return other_files
 
-    def preview(self, *, library_id: int, album_key: str, copy_ref: str) -> dict[str, object]:
+    def prepare(self, *, library_id: int, album_key: str, copy_ref: str) -> PreparedDuplicateCopyPreview:
         if type(library_id) is not int or library_id < 1 or not isinstance(album_key, str) or not album_key:
             _conflict()
         with self._connect(self._database_url) as connection:
@@ -200,9 +210,23 @@ class DuplicateCopyPreviewService:
         selected = matches[0]
         survivors = [row for group in groups.values() if group is not selected for row in group]
         other_files = self._inventory(selected)
-        return {
+        payload = {
             "indexed_audio_file_count": len(selected),
             "other_file_count": other_files,
             "surviving_copy_count": len(groups) - 1,
             "confirmation_ref": self._confirmation_ref(library_id, album_key, selected, survivors),
         }
+        return PreparedDuplicateCopyPreview(
+            payload=payload,
+            selected_rows=tuple(selected),
+            survivor_rows=tuple(survivors),
+            album_root=Path(physical_album_root(selected[0]["private_path"])),
+            configured_root_id=str(selected[0]["configured_root_id"]),
+        )
+
+    def preview(self, *, library_id: int, album_key: str, copy_ref: str) -> dict[str, object]:
+        return self.prepare(
+            library_id=library_id,
+            album_key=album_key,
+            copy_ref=copy_ref,
+        ).payload

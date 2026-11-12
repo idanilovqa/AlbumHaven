@@ -487,6 +487,8 @@ function buildDetectedProblemsHtml(album) {
 function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-review') {
   const copies = Array.isArray(album?.duplicate_copy_review) ? album.duplicate_copy_review : [];
   if (copies.length < 2) return '';
+  const canDelete = album?.allowed_actions?.['library.inventory.manage'] === true
+    && album?.allowed_actions?.['library.covers.delete'] === true;
   const lengthLabel = (seconds) => {
     if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return 'Unknown';
     const total = Math.round(seconds);
@@ -507,6 +509,16 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
   ]);
   const content = copies.map((copy, copyIndex) => {
     const copyLabel = `Copy ${copy.copy_number}`;
+    const deleteButton = canDelete && copy.copy_ref
+      ? ButtonComponent.renderButton({
+        label: 'Delete', variant: 'secondary', size: 'small',
+        className: 'confirm-modal-danger duplicate-copy-review__delete',
+        attributes: {
+          'data-delete-duplicate-copy': String(copy.copy_number),
+          'data-copy-ref': String(copy.copy_ref),
+          'data-copy-label': copyLabel,
+        },
+      }) : '';
     const id = `${idPrefix}-${copyIndex + 1}`;
     const tracks = Array.isArray(copy.tracks) ? copy.tracks : [];
     const table = buildUtilityCompactTable({
@@ -543,7 +555,7 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
     });
     // Native disclosure owns keyboard and open state. New payload markup starts
     // collapsed; CSS-only resize keeps the mounted disclosure intact.
-    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span></summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
   }).join('');
   return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
 }

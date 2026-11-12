@@ -69,6 +69,12 @@ from music_app.services.manual_versions import load_manual_version_links, save_m
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
 from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
+from music_app.services.duplicate_copy_removal import (
+    DuplicateCopyRemovalCleanupPending,
+    DuplicateCopyRemovalConflict,
+    DuplicateCopyRemovalRecoveryError,
+    DuplicateCopyRemovalService,
+)
 from music_app.services.problematic_albums import (
     find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
 )
@@ -1826,6 +1832,59 @@ async def utilities_move_album(request: Request) -> JSONResponse:
         )
     except AlbumMoveError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, exc.status_code))
+
+
+@router.post("/utilities/problematic-files/duplicate-copy-remove")
+async def utilities_remove_duplicate_copy(request: Request) -> JSONResponse:
+    await require_action("library.inventory.manage", refresh_actor=True)(request)
+    await require_action("library.covers.delete")(request)
+    payload = await _json_payload(request)
+    if payload is None or payload.get("confirmed") is not True:
+        return _json_response(_invalid_payload_response("Removal was not confirmed"))
+    values = {
+        name: payload.get(name)
+        for name in ("album_key", "copy_ref", "confirmation_ref")
+    }
+    if (
+        not isinstance(values["album_key"], str)
+        or not 1 <= len(values["album_key"]) <= 2048
+        or not isinstance(values["copy_ref"], str)
+        or not 1 <= len(values["copy_ref"]) <= 128
+        or not isinstance(values["confirmation_ref"], str)
+        or not 1 <= len(values["confirmation_ref"]) <= 128
+    ):
+        return _json_response(_invalid_payload_response("Invalid duplicate-copy removal request"))
+    try:
+        result = await run_in_threadpool(
+            DuplicateCopyRemovalService({
+                **_app_config(request),
+                **request.app.state.auth_policy_config,
+            }).remove,
+            library_id=request.state.current_actor.current_library_id,
+            **values,
+        )
+    except DuplicateCopyRemovalConflict as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+    except DuplicateCopyRemovalCleanupPending as exc:
+        return JSONResponse(
+            {"ok": True, "cleanup_pending": True, "message": str(exc)},
+            status_code=202,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    except DuplicateCopyRemovalRecoveryError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    log_app_event(
+        _app_config(request),
+        _asgi_logger(request),
+        "Duplicate album copy removed",
+        level="info",
+        album_key=values["album_key"],
+        retired_file_count=int(result.get("retired_file_count") or 0),
+    )
+    return JSONResponse(
+        {"ok": True, "result": result},
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/utilities/save-task/{task_id}")

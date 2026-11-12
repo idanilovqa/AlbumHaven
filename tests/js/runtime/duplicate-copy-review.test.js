@@ -9,6 +9,9 @@ const escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replace
 function load() {
   const context = { escapeHtml, console };
   context.window = context;
+  context.ButtonComponent = { renderButton: ({ label, className = '', attributes = {} }) => (
+    `<button class="${className}" ${Object.entries(attributes).map(([key, value]) => `${key}="${escapeHtml(value)}"`).join(' ')}>${label}</button>`
+  ) };
   vm.createContext(context);
   for (const file of ['compact-data-table.js', 'utility-list-builders.js']) {
     vm.runInContext(fs.readFileSync(path.join(runtime, file), 'utf8'), context, { filename: file });
@@ -46,6 +49,27 @@ test('review renders real escaped DTO metadata in collapsed native disclosures w
   }
   assert.match(html, /unknown|unavailable/i);
   assert.doesNotMatch(html, /RAW_PRIVATE_CANARY|RAW_TRACK_CANARY|<button\b|<audio\b|<a\b|onclick=|data-(?:delete|play|edit|open-folder)/i);
+});
+
+test('review shows Delete only for exact referenced copies with both delete actions', () => {
+  const c = load();
+  const input = album();
+  input.key = 'album:key';
+  input.allowed_actions = { 'library.inventory.manage': true, 'library.covers.delete': true };
+  input.duplicate_copy_review[0].copy_ref = 'dcr1.7.first';
+  input.duplicate_copy_review[1].copy_ref = 'dcr1.7.second';
+
+  const html = c.buildDuplicateCopyReviewHtml(input);
+
+  assert.equal((html.match(/data-delete-duplicate-copy=/g) || []).length, 2);
+  assert.match(html, /data-copy-ref="dcr1\.7\.first"/);
+  assert.match(html, /data-copy-ref="dcr1\.7\.second"/);
+  for (const actions of [
+    { 'library.inventory.manage': false, 'library.covers.delete': true },
+    { 'library.inventory.manage': true, 'library.covers.delete': false },
+  ]) {
+    assert.doesNotMatch(c.buildDuplicateCopyReviewHtml({ ...input, allowed_actions: actions }), /data-delete-duplicate-copy/);
+  }
 });
 
 test('review uses shared grouped table with seven desktop and two mobile columns', () => {
@@ -363,4 +387,56 @@ test('PF layout rerender preserves focus on the retained disclosure summary', ()
   if (summary.wasDetached) {
     assert.equal(summary.focusOptions?.preventScroll, true, 'Restoring a detached summary must not scroll the detail');
   }
+});
+
+test('authorized Delete previews, confirms exact whole folder, removes, and refreshes both surfaces', async () => {
+  const requests = [];
+  const confirmations = [];
+  const refreshes = [];
+  const toasts = [];
+  const c = {
+    console,
+    URL,
+    state: { view: {}, utility: {} },
+    buildApiUrl: () => '/view-data',
+    fetchAndRender: async (...args) => { refreshes.push(['view', ...args]); },
+    loadProblematicFiles: async (...args) => { refreshes.push(['problematic', ...args]); },
+    showToast: (...args) => { toasts.push(args); },
+    showAppConfirmDialog: async options => { confirmations.push(options); return true; },
+    fetch: async (url, options = {}) => {
+      requests.push([url, options]);
+      if (requests.length === 1) return { ok: true, json: async () => ({ ok: true, preview: {
+        indexed_audio_file_count: 2, other_file_count: 3, surviving_copy_count: 1,
+        confirmation_ref: 'dcc1.7.confirm',
+      } }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { retired_file_count: 2 } }) };
+    },
+  };
+  c.window = c;
+  vm.createContext(c);
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'utility-loaders-and-cover-lookup.js'), 'utf8'), c,
+    { filename: 'utility-loaders-and-cover-lookup.js' });
+  c.loadProblematicFiles = async (...args) => { refreshes.push(['problematic', ...args]); };
+  const selected = { copy_number: 2, copy_ref: 'dcr1.7.copy', folder_name: 'Second copy' };
+
+  assert.equal(await c.performDuplicateCopyRemoval({ key: 'album:key' }, selected), true);
+
+  assert.match(requests[0][0], /duplicate-copy-preview\?album_key=album%3Akey&copy_ref=dcr1\.7\.copy/);
+  assert.match(confirmations[0].message, /Second copy/);
+  assert.match(confirmations[0].message, /entire folder/i);
+  assert.match(confirmations[0].message, /3 other files/);
+  assert.equal(confirmations[0].danger, true);
+  assert.equal(requests[1][0], '/utilities/problematic-files/duplicate-copy-remove');
+  assert.deepEqual(JSON.parse(requests[1][1].body), {
+    album_key: 'album:key', copy_ref: 'dcr1.7.copy', confirmation_ref: 'dcc1.7.confirm', confirmed: true,
+  });
+  assert.deepEqual(refreshes.map(item => item[0]), ['problematic', 'view']);
+  assert.equal(toasts.at(-1)[1], 'success');
+});
+
+test('utility delegation consumes duplicate Delete without toggling its disclosure', () => {
+  const source = fs.readFileSync(path.join(runtime, 'bootstrap-utility-event-handlers.js'), 'utf8');
+  assert.match(source, /closest\('\[data-delete-duplicate-copy\]'\)/);
+  assert.match(source, /deleteDuplicateCopyButton[\s\S]*?preventDefault\(\)[\s\S]*?stopPropagation\(\)/);
+  assert.match(source, /performDuplicateCopyRemoval\(album, copy\)/);
 });

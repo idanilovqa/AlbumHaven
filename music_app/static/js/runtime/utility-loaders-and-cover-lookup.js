@@ -569,6 +569,63 @@ async function fetchCoverForProblematicAlbum(album) {
   await fetchCoverForAlbum(album, { refreshProblematicFiles: true });
 }
 
+let duplicateCopyRemovalBusy = false;
+async function performDuplicateCopyRemoval(album, copy) {
+  const albumKey = String(album?.key || '').trim();
+  const copyRef = String(copy?.copy_ref || '').trim();
+  if (!albumKey || !copyRef || duplicateCopyRemovalBusy) return false;
+  duplicateCopyRemovalBusy = true;
+  try {
+    const previewResponse = await fetch(
+      `/utilities/problematic-files/duplicate-copy-preview?album_key=${encodeURIComponent(albumKey)}&copy_ref=${encodeURIComponent(copyRef)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    const previewPayload = await previewResponse.json().catch(() => ({}));
+    if (!previewResponse.ok || !previewPayload.ok) {
+      throw new Error(previewPayload.error || 'Unable to preview duplicate-copy removal.');
+    }
+    const preview = previewPayload.preview || {};
+    const label = String(copy.folder_path || copy.folder_name || `Copy ${copy.copy_number || ''}`).trim();
+    const survivingCopies = Number(preview.surviving_copy_count || 0);
+    const confirmed = await showAppConfirmDialog({
+      title: 'Delete duplicate copy?',
+      message: `Delete ${label}? This permanently deletes the entire folder from the drive, including ${Number(preview.indexed_audio_file_count || 0)} indexed audio files and ${Number(preview.other_file_count || 0)} other files. ${survivingCopies} other ${survivingCopies === 1 ? 'copy remains' : 'copies remain'}.`,
+      cancelLabel: 'Cancel',
+      acceptLabel: 'Delete copy',
+      danger: true,
+    });
+    if (!confirmed) return false;
+    const response = await fetch('/utilities/problematic-files/duplicate-copy-remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        album_key: albumKey,
+        copy_ref: copyRef,
+        confirmation_ref: String(preview.confirmation_ref || ''),
+        confirmed: true,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Unable to delete the duplicate copy.');
+    }
+    await loadProblematicFiles(true);
+    await fetchAndRender(buildApiUrl(state.view), true);
+    showToast(
+      payload.cleanup_pending ? payload.message : 'Duplicate copy deleted.',
+      payload.cleanup_pending ? 'error' : 'success',
+      4000,
+    );
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to delete duplicate copy.', error);
+    showToast(error.message || 'Unable to delete the duplicate copy.', 'error', 4000);
+    return false;
+  } finally {
+    duplicateCopyRemovalBusy = false;
+  }
+}
+
 async function performAlbumMove(album, action, options = {}) {
   if (!album) {
     showToast('No album selected for move.', 'error', 3200);

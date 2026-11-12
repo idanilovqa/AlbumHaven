@@ -1055,6 +1055,10 @@
   font-size: 0.6875rem;
   line-height: 1.5;
 }
+.duplicate-copy-review__delete {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
 .duplicate-copy-review__heading .utility-section-chevron {
   flex: 0 0 10px;
   align-self: flex-start;

@@ -23255,6 +23255,8 @@ function buildDetectedProblemsHtml(album) {
 function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-review') {
   const copies = Array.isArray(album?.duplicate_copy_review) ? album.duplicate_copy_review : [];
   if (copies.length < 2) return '';
+  const canDelete = album?.allowed_actions?.['library.inventory.manage'] === true
+    && album?.allowed_actions?.['library.covers.delete'] === true;
   const lengthLabel = (seconds) => {
     if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return 'Unknown';
     const total = Math.round(seconds);
@@ -23275,6 +23277,16 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
   ]);
   const content = copies.map((copy, copyIndex) => {
     const copyLabel = `Copy ${copy.copy_number}`;
+    const deleteButton = canDelete && copy.copy_ref
+      ? ButtonComponent.renderButton({
+        label: 'Delete', variant: 'secondary', size: 'small',
+        className: 'confirm-modal-danger duplicate-copy-review__delete',
+        attributes: {
+          'data-delete-duplicate-copy': String(copy.copy_number),
+          'data-copy-ref': String(copy.copy_ref),
+          'data-copy-label': copyLabel,
+        },
+      }) : '';
     const id = `${idPrefix}-${copyIndex + 1}`;
     const tracks = Array.isArray(copy.tracks) ? copy.tracks : [];
     const table = buildUtilityCompactTable({
@@ -23311,7 +23323,7 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
     });
     // Native disclosure owns keyboard and open state. New payload markup starts
     // collapsed; CSS-only resize keeps the mounted disclosure intact.
-    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span></summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
   }).join('');
   return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
 }
@@ -31426,6 +31438,63 @@ async function fetchCoverForAlbum(album, options = {}) {
 
 async function fetchCoverForProblematicAlbum(album) {
   await fetchCoverForAlbum(album, { refreshProblematicFiles: true });
+}
+
+let duplicateCopyRemovalBusy = false;
+async function performDuplicateCopyRemoval(album, copy) {
+  const albumKey = String(album?.key || '').trim();
+  const copyRef = String(copy?.copy_ref || '').trim();
+  if (!albumKey || !copyRef || duplicateCopyRemovalBusy) return false;
+  duplicateCopyRemovalBusy = true;
+  try {
+    const previewResponse = await fetch(
+      `/utilities/problematic-files/duplicate-copy-preview?album_key=${encodeURIComponent(albumKey)}&copy_ref=${encodeURIComponent(copyRef)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    const previewPayload = await previewResponse.json().catch(() => ({}));
+    if (!previewResponse.ok || !previewPayload.ok) {
+      throw new Error(previewPayload.error || 'Unable to preview duplicate-copy removal.');
+    }
+    const preview = previewPayload.preview || {};
+    const label = String(copy.folder_path || copy.folder_name || `Copy ${copy.copy_number || ''}`).trim();
+    const survivingCopies = Number(preview.surviving_copy_count || 0);
+    const confirmed = await showAppConfirmDialog({
+      title: 'Delete duplicate copy?',
+      message: `Delete ${label}? This permanently deletes the entire folder from the drive, including ${Number(preview.indexed_audio_file_count || 0)} indexed audio files and ${Number(preview.other_file_count || 0)} other files. ${survivingCopies} other ${survivingCopies === 1 ? 'copy remains' : 'copies remain'}.`,
+      cancelLabel: 'Cancel',
+      acceptLabel: 'Delete copy',
+      danger: true,
+    });
+    if (!confirmed) return false;
+    const response = await fetch('/utilities/problematic-files/duplicate-copy-remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        album_key: albumKey,
+        copy_ref: copyRef,
+        confirmation_ref: String(preview.confirmation_ref || ''),
+        confirmed: true,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'Unable to delete the duplicate copy.');
+    }
+    await loadProblematicFiles(true);
+    await fetchAndRender(buildApiUrl(state.view), true);
+    showToast(
+      payload.cleanup_pending ? payload.message : 'Duplicate copy deleted.',
+      payload.cleanup_pending ? 'error' : 'success',
+      4000,
+    );
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Failed to delete duplicate copy.', error);
+    showToast(error.message || 'Unable to delete the duplicate copy.', 'error', 4000);
+    return false;
+  } finally {
+    duplicateCopyRemovalBusy = false;
+  }
 }
 
 async function performAlbumMove(album, action, options = {}) {
@@ -49307,6 +49376,17 @@ async function handleUtilityBootstrapClick(event) {
       getSelectedProblematicAlbum(),
       moveProblematicAlbumButton.getAttribute('data-move-problematic-album') || '',
     );
+    return;
+  }
+
+  const deleteDuplicateCopyButton = event.target.closest('[data-delete-duplicate-copy]');
+  if (deleteDuplicateCopyButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const album = getSelectedProblematicAlbum();
+    const copyRef = deleteDuplicateCopyButton.getAttribute('data-copy-ref') || '';
+    const copy = (album?.duplicate_copy_review || []).find(item => String(item?.copy_ref || '') === copyRef);
+    if (copy) void performDuplicateCopyRemoval(album, copy);
     return;
   }
 

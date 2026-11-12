@@ -49,6 +49,7 @@ overflow-y: auto;
 flex: 1 1 auto;
 min-height: 0;
 padding-right: 4px;
+padding-bottom: var(--artist-info-reveal-space, 0px);
 overflow-anchor: none;
 overscroll-behavior: contain;
 }

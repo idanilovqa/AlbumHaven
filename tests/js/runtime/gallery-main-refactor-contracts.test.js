@@ -1766,6 +1766,45 @@ test('opening Artist Info scrolls the gallery enough to clear the bottom player 
   assert.deepEqual(positionedAnchors, [anchor, currentAnchor], 'the connector rebinds to the virtualized section header');
 });
 
+test('opening Artist Info adds the missing scroll range when the gallery is too short', () => {
+  const revealStyles = new Map();
+  const scroll = {
+    scrollTop: 80,
+    scrollHeight: 500,
+    clientHeight: 400,
+    getBoundingClientRect: () => ({ top: 0 }),
+    style: {
+      getPropertyValue: name => revealStyles.get(name) || '',
+      setProperty: (name, value) => revealStyles.set(name, value),
+      removeProperty: name => revealStyles.delete(name),
+    },
+  };
+  const player = { hidden: false, getBoundingClientRect: () => ({ top: 410, height: 90 }) };
+  const surface = {
+    matches: selector => selector === '.artist-info-overlay',
+    getBoundingClientRect: () => ({ bottom: 486 }),
+  };
+  const anchor = {
+    isConnected: true,
+    getBoundingClientRect: () => ({ top: 200 }),
+    closest: () => null,
+  };
+  const context = loadRuntime({
+    window: { innerHeight: 500 },
+    requestAnimationFrame() {},
+    document: {
+      getElementById: id => (id === 'albums-scroll' ? scroll : null),
+      querySelector: selector => (selector === '[data-shell-slot="bottom_player"]' ? player : null),
+    },
+  });
+  context.positionGalleryAnchoredSurface = () => {};
+
+  requireContract(context, 'revealGalleryArtistInfoSurface')(surface, anchor);
+
+  assert.equal(revealStyles.get('--artist-info-reveal-space'), '56px');
+  assert.equal(scroll.scrollTop, 156);
+});
+
 test('local artist information stays capability-bounded and leaves unavailable optional enrichment empty', () => {
   const context = loadRuntime();
   const resolveGalleryArtistInfo = requireContract(context, 'resolveGalleryArtistInfo');

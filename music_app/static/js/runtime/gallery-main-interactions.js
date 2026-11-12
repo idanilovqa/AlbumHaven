@@ -158,9 +158,17 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
     : requiredOffset;
   const offset = Math.min(requiredOffset, maximumOffset);
   if (!offset) {
+    scroll.style?.removeProperty?.('--artist-info-reveal-space');
     constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom);
     return 0;
   }
+  const currentRevealSpace = parseFloat(scroll.style?.getPropertyValue?.('--artist-info-reveal-space')) || 0;
+  const remainingScroll = Math.max(0,
+    Number(scroll.scrollHeight || 0) - Number(scroll.clientHeight || 0)
+    - Number(scroll.scrollTop || 0) - currentRevealSpace);
+  const revealSpace = Math.max(0, offset - remainingScroll);
+  if (revealSpace) scroll.style?.setProperty?.('--artist-info-reveal-space', `${Math.ceil(revealSpace)}px`);
+  else scroll.style?.removeProperty?.('--artist-info-reveal-space');
   scroll.scrollTop += offset;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
   requestAnimationFrame(() => {
@@ -495,7 +503,10 @@ function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {})
         if (galleryMainSurfaceController.current?.() === active) closeGalleryMainSurface(returnFocus, { immediate: true });
       }, { backdrop: document.querySelector?.('.mobile-artist-info-backdrop') })) return true;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
-  if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
+  if (active.surface.matches?.('.artist-info-overlay')) {
+    document.getElementById('albums-scroll')?.style?.removeProperty?.('--artist-info-reveal-space');
+    if (typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
+  }
   if (active.key === 'search-suggestions' && state.ui) {
     state.ui.recentSearchPopoverOpen = false;
     state.ui.recentSearchActiveIndex = -1;
@@ -1142,6 +1153,7 @@ function initGalleryMain() {
     updateGalleryMainChrome();
     const active = galleryMainSurfaceController?.current?.();
     if (active?.surface?.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(active.surface, active.anchor, active.key.startsWith('artist:') ? 'left' : 'right');
+    if (active?.surface?.matches?.('.artist-info-overlay')) revealGalleryArtistInfoSurface(active.surface, active.anchor);
     if (active?.surface?.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(active.surface, active.anchor);
     if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
   });

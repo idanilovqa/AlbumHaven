@@ -79,7 +79,11 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
     writer = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
     complete = writer._build_problematic_files_payload_uncached()
     fingerprint = complete.pop(browse._SNAPSHOT_FINGERPRINT_KEY)
-    writer._store_problematic_files_snapshot(json.dumps({**complete, browse._SNAPSHOT_FINGERPRINT_KEY: fingerprint}, default=str))
+    writer._store_problematic_files_snapshot(json.dumps({
+        **complete,
+        browse._SNAPSHOT_FINGERPRINT_KEY: fingerprint,
+        browse._PROBLEMATIC_SNAPSHOT_VERSION_KEY: browse._PROBLEMATIC_SNAPSHOT_VERSION,
+    }, default=str))
     cache_key = (database_url, "problematic-files")
 
     def restart_and_open_first_page():
@@ -96,11 +100,11 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
     assert browse._SNAPSHOT_FINGERPRINT_KEY not in page
 
     # Any later library change (a tag edit bumps the inventory revision) makes
-    # the stored list unusable: it may list merged or removed albums.
+    # the stored full list unusable; only its first-page keys may be revalidated.
     with psycopg.connect(database_url) as connection:
         connection.execute("""update library.libraries set metadata = jsonb_set(coalesce(metadata, '{}'::jsonb),
             '{inventory_mutation_revision}', to_jsonb(coalesce((metadata ->> 'inventory_mutation_revision')::bigint, 0) + 1))
             where library_kind = 'local' and name = 'Local Library'""")
         connection.commit()
-    assert restart_and_open_first_page()["projection_cache_status"] == "bounded"
+    assert restart_and_open_first_page()["projection_cache_status"] == "revalidated"
     browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)

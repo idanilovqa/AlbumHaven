@@ -8318,6 +8318,25 @@ test('Problematic Files keeps complete filter types while a bounded refresh is p
   assert.doesNotMatch(elements.problemFilterMenu.innerHTML, /Loading more problem types/);
 });
 
+test('Problematic Files keeps a cold incomplete problem filter disabled and closed', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.completeProblemReasonTypes = [];
+  context.state.utility.problematicFiles = [{ problem_reasons: ['Missing year'] }];
+  context.state.utility.problemDropdownOpen = true;
+  const elements = {
+    problemFilterButton: { disabled: false, classList: { toggle() {} }, setAttribute() {} },
+    problemFilterMenu: { hidden: false, innerHTML: '' },
+  };
+
+  context.renderProblemFilterControls(elements);
+
+  assert.equal(elements.problemFilterButton.disabled, true);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(elements.problemFilterMenu.hidden, true);
+  assert.doesNotMatch(elements.problemFilterMenu.innerHTML, /Loading more problem types/);
+});
+
 test('Problematic Files filter uses a shared inner scroll owner so its anchor outline stays fixed', () => {
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
   const menuRule = css.match(/\.utility-problem-filter-menu\s*\{([^}]*)\}/)?.[1] || '';

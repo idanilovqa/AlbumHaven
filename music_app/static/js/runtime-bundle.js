@@ -26671,6 +26671,9 @@ function renderProblemFilterControls(els) {
   const reasonTypes = getProblemReasonTypes();
   const selected = state.utility.selectedProblemFilters || [];
   const selectedSet = new Set(selected);
+  const completeReasonTypesAvailable = state.utility.problematicFilesComplete === true
+    || Boolean((state.utility.completeProblemReasonTypes || []).length);
+  if (!completeReasonTypesAvailable) state.utility.problemDropdownOpen = false;
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
@@ -26679,7 +26682,7 @@ function renderProblemFilterControls(els) {
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
-    els.problemFilterButton.disabled = !reasonTypes.length;
+    els.problemFilterButton.disabled = !completeReasonTypesAvailable || !reasonTypes.length;
   }
 
   if (els.problemFilterMenu) {
@@ -26692,16 +26695,14 @@ function renderProblemFilterControls(els) {
       syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
     }
     else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
-    const optionsHtml = reasonTypes.length
+    const optionsHtml = completeReasonTypesAvailable && reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">
             <span class="utility-problem-filter-check" aria-hidden="true">${selectedSet.has(reason) ? '<svg viewBox="0 0 16 16"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>' : ''}</span>
             <span class="utility-problem-filter-label">${escapeHtml(reason)}</span>
           </button>
-        `).join('') + (state.utility.problematicFilesComplete === false && !(state.utility.completeProblemReasonTypes || []).length
-        ? '<div class="utility-problem-filter-empty">Loading more problem types…</div>'
-        : '')
-      : '<div class="utility-problem-filter-empty">No problem types found.</div>';
+        `).join('')
+      : completeReasonTypesAvailable ? '<div class="utility-problem-filter-empty">No problem types found.</div>' : '';
     // List refreshes re-render the controls while the menu is open; rewriting
     // unchanged options would reset its scroll position and keyboard focus.
     if (renderedProblemFilterOptions.get(els.problemFilterMenu) !== optionsHtml) {

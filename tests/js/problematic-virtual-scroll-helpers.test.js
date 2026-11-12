@@ -132,6 +132,50 @@ for (const [label, url, response, ok] of [
 
 const droppedBody = () => new Error('Protocol error (Network.getResponseBody): No resource with given identifier found');
 
+function capturePageWithFallback(payload) {
+  const page = capturePage();
+  let requestedUrl = '';
+  Object.assign(page, {
+    url: () => 'https://app.test/settings',
+    context: () => ({ cookies: async () => [{
+      name: '__Host-album_haven_session', value: 'session', domain: 'app.test', path: '/',
+    }] }),
+    request: { get: async (url) => {
+      requestedUrl = url;
+      return { ok: () => true, json: async () => payload };
+    } },
+  });
+  return { page, requestedUrl: () => requestedUrl };
+}
+
+test('a dropped complete summary body is recovered through one authenticated unbounded read', async () => {
+  const { observeProblematicDetails } = await load();
+  const { page, requestedUrl } = capturePageWithFallback({
+    items: [{ key: 'first' }, { key: 'second' }], complete: true,
+  });
+  const capture = observeProblematicDetails(page);
+  page.emit('/utilities/problematic-files?limit=50', { items: [{ key: 'first' }], complete: false });
+  page.emit('/utilities/problematic-files', droppedBody());
+
+  assert.deepEqual((await capture.summary()).map(item => item.key), ['first', 'second']);
+  assert.equal(requestedUrl(), 'https://app.test/utilities/problematic-files');
+  await capture.dispose();
+});
+
+for (const [label, fallback, expected] of [
+  ['an incomplete fallback', { items: [{ key: 'first' }], complete: false }, /must be complete/],
+  ['duplicate fallback identities', { items: [{ key: 'first' }, { key: 'first' }], complete: true }, /must be unique/],
+]) {
+  test(`a dropped complete summary rejects ${label}`, async () => {
+    const { observeProblematicDetails } = await load();
+    const { page } = capturePageWithFallback(fallback);
+    const capture = observeProblematicDetails(page);
+    page.emit('/utilities/problematic-files', droppedBody());
+    await assert.rejects(capture.summary(), expected);
+    await capture.dispose();
+  });
+}
+
 test('a dropped older summary body is tolerated only while a newer complete summary is captured', async () => {
   const { observeProblematicDetails } = await load();
   const page = capturePage(); const capture = observeProblematicDetails(page);

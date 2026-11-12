@@ -27,32 +27,40 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   await expect(tagEditor.overlay).toBeHidden({ timeout });
   await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
   const previous = await tagEditor.readLibraryReturnState();
-  await beforeNavigation?.();
-  await appBar.openStatusMenu();
+  const presentations = autoDismisses
+    ? await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' })
+    : null;
   let deliveryError;
+  let restoreRequired = false;
   try {
-    if (autoDismisses) {
-      // Attach before navigation because Status can render and dismiss the toast before its ready wait returns.
-      const presentations = await tagEditor.recordRepairAlertPresentations();
-      try {
-        await scan.scanPage.openStatusPage.click();
-        // Navigation changes overlap geometry without mutating the alert, so sample both transition boundaries.
-        await tagEditor.captureRepairAlertPresentation(presentations);
-        await scan.waitForVisible({ timeout });
-        await tagEditor.captureRepairAlertPresentation(presentations);
-        await scan.waitForDedicatedPageVisible({ timeout });
-        await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
-      } finally {
-        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
-      }
+    await beforeNavigation?.();
+    await appBar.openStatusMenu();
+    await scan.scanPage.openStatusPage.click();
+    restoreRequired = true;
+    await scan.waitForVisible({ timeout });
+    if (presentations) {
+      await scan.waitForDedicatedPageVisible({ timeout });
+      await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
     } else {
-      await scan.scanPage.openStatusPage.click();
-      await scan.waitForVisible({ timeout });
       await scan.waitForDedicatedPageVisible({ timeout });
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }
   } catch (error) {
     deliveryError = error;
+  } finally {
+    if (presentations) {
+      try {
+        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+      } catch (cleanupError) {
+        deliveryError = deliveryError
+          ? new AggregateError([deliveryError, cleanupError], 'Saved notification delivery and recorder cleanup failed')
+          : cleanupError;
+      }
+    }
+  }
+  if (!restoreRequired) {
+    if (deliveryError) throw deliveryError;
+    return;
   }
   try {
     await scan.clickBack();

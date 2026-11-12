@@ -7403,6 +7403,15 @@ function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(surface, anchor);
 }
 
+function resolveCurrentGalleryAnchor(anchor) {
+  if (!anchor || anchor.isConnected !== false) return anchor;
+  const sectionKey = anchor.closest?.('[data-virtual-section-key]')?.dataset.virtualSectionKey;
+  if (!sectionKey) return anchor;
+  const section = Array.from(document.querySelectorAll?.('[data-virtual-section-key]') || [])
+    .find(candidate => candidate.dataset.virtualSectionKey === sectionKey);
+  return section?.querySelector?.('[data-artist-info-trigger]') || anchor;
+}
+
 function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!surface?.matches?.('.artist-info-overlay')
       || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
@@ -7417,7 +7426,12 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   if (!offset) return 0;
   scroll.scrollTop += offset;
   positionGalleryAnchoredSurface(surface, anchor, 'left');
-  requestAnimationFrame(() => positionGalleryAnchoredSurface(surface, anchor, 'left'));
+  requestAnimationFrame(() => {
+    const currentAnchor = resolveCurrentGalleryAnchor(anchor);
+    const active = galleryMainSurfaceController?.current?.();
+    if (active?.surface === surface) active.anchor = currentAnchor;
+    positionGalleryAnchoredSurface(surface, currentAnchor, 'left');
+  });
   return offset;
 }
 
@@ -8341,6 +8355,7 @@ function initGalleryMain() {
   scroll?.addEventListener('scroll', () => {
     const active = galleryMainSurfaceController?.current?.();
     if (active?.key?.startsWith?.('artist:') && active.surface.getAttribute?.('aria-modal') !== 'true') {
+      active.anchor = resolveCurrentGalleryAnchor(active.anchor);
       positionGalleryAnchoredSurface(active.surface, active.anchor, 'left');
     }
     if (galleryMainScrollFrame) return;

@@ -1591,24 +1591,38 @@ test('opening Artist Info scrolls the gallery enough to clear the bottom player 
     matches: selector => selector === '.artist-info-overlay',
     getBoundingClientRect: () => ({ bottom: 486 }),
   };
-  const anchor = {};
-  let positioned = 0;
+  const anchor = {
+    isConnected: false,
+    closest: selector => selector === '[data-virtual-section-key]'
+      ? { dataset: { virtualSectionKey: 'artist:all:14 Bis:0' } }
+      : null,
+  };
+  const currentAnchor = { isConnected: true };
+  const section = {
+    dataset: { virtualSectionKey: 'artist:all:14 Bis:0' },
+    querySelector: () => currentAnchor,
+  };
+  const positionedAnchors = [];
   const context = loadRuntime({
     window: { innerHeight: 500 },
     requestAnimationFrame: callback => { settle = callback; },
     document: {
       getElementById: id => (id === 'albums-scroll' ? scroll : null),
       querySelector: selector => (selector === '[data-shell-slot="bottom_player"]' ? player : null),
+      querySelectorAll: selector => (selector === '[data-virtual-section-key]' ? [section] : []),
     },
   });
-  context.positionGalleryAnchoredSurface = () => { positioned += 1; };
+  context.positionGalleryAnchoredSurface = (target, positionedAnchor) => {
+    assert.equal(target, surface);
+    positionedAnchors.push(positionedAnchor);
+  };
 
   requireContract(context, 'revealGalleryArtistInfoSurface')(surface, anchor);
 
   assert.equal(scroll.scrollTop, 156, 'the complete 76px overlap is revealed');
-  assert.equal(positioned, 1, 'the fixed panel follows its moved artist header immediately');
+  assert.deepEqual(positionedAnchors, [anchor], 'the fixed panel follows its moved artist header immediately');
   settle();
-  assert.equal(positioned, 2, 'the connector is recomputed after scrolling settles');
+  assert.deepEqual(positionedAnchors, [anchor, currentAnchor], 'the connector rebinds to the virtualized section header');
 });
 
 test('local artist information stays capability-bounded and leaves unavailable optional enrichment empty', () => {

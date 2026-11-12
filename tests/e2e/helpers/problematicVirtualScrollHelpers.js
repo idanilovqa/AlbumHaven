@@ -140,7 +140,11 @@ export function observeProblematicDetails(page) {
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
-    async summary() {
+    async summary({ timeout = 10000 } = {}) {
+      await expect.poll(() => summary !== null || errors.length > 0 || droppedSummarySequence > 0, {
+        timeout,
+        message: 'Complete problematic summary response was not captured',
+      }).toBe(true);
       await settle();
       if (!summary && droppedSummarySequence > 0) {
         const response = await authenticatedPageGet(page, '/utilities/problematic-files');

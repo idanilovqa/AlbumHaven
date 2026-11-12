@@ -1123,15 +1123,7 @@ function markTrackModalCoverTransitionPending(album) {
   const visual = document.querySelector('#track-modal-cover .track-modal-cover-visual');
   const image = visual?.querySelector?.('img');
   if (!visual || !image) return false;
-  image.remove();
-  visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
-  if (!visual.querySelector?.('.cover-placeholder')) {
-    const placeholder = document.createElement('span');
-    placeholder.className = 'cover-placeholder';
-    placeholder.setAttribute('aria-hidden', 'true');
-    visual.appendChild(placeholder);
-  }
   return true;
 }
 

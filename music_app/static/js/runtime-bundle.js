@@ -27919,6 +27919,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
+  if (state.utility.focusedTrackPath
+      && selectedAlbum?.detail_loading_deferred
+      && !selectedAlbum?.detail_loaded) {
+    els.list.querySelector?.('.utility-list-item.is-active')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
   if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(selectedAlbum)) {
     els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
     if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {
@@ -33702,15 +33708,7 @@ function markTrackModalCoverTransitionPending(album) {
   const visual = document.querySelector('#track-modal-cover .track-modal-cover-visual');
   const image = visual?.querySelector?.('img');
   if (!visual || !image) return false;
-  image.remove();
-  visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
-  if (!visual.querySelector?.('.cover-placeholder')) {
-    const placeholder = document.createElement('span');
-    placeholder.className = 'cover-placeholder';
-    placeholder.setAttribute('aria-hidden', 'true');
-    visual.appendChild(placeholder);
-  }
   return true;
 }
 
@@ -39721,6 +39719,7 @@ function restorePlayerState() {
     updatePlayerUi();
     const restoredRole = await restoredRolePromise;
     if (!restoredRole) return;
+    if (savedPaused) updatePlayerUi();
     if (typeof handleStreamingPlaybackWaveformReady === 'function') {
       try {
         const waveformReady = handleStreamingPlaybackWaveformReady({

@@ -3132,10 +3132,10 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.markTrackModalCoverTransitionPending({
     tracks: [{ path: 'C:/music/Kaipa/01.mp3' }],
   }), true);
-  assert.equal(image.removeCalled, 1);
-  assert.equal(visual.appended, placeholder);
+  assert.equal(image.removeCalled, 0);
+  assert.equal(visual.appended, undefined);
   assert.equal(visual['aria-busy'], 'true');
-  assert.equal(placeholder.className, 'cover-placeholder');
+  assert.equal(placeholder.className, '');
   assert.equal(context.markTrackModalCoverTransitionPending({
     tracks: [{ path: 'C:/music/Other/01.mp3' }],
   }), false);

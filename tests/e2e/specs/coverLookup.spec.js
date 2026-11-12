@@ -1613,12 +1613,13 @@ test('FTC-COVERS-037 local cover deletion stays foreground, works, and persists 
   stepLogger,
   trackModalActions,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   let deletedPath = '';
   let ownedPath = '';
+  let taskId = '';
 
   try {
-    await stepLogger.step('Delete an inactive local cover through the foreground confirmation', async () => {
+    await stepLogger.step('Add and select local art, then reopen its notification without stale LOCAL cards', async () => {
       await galleryActions.goto(COVER_LOOKUP_FILTERED_URL);
       await galleryActions.waitForGalleryReady();
       expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
@@ -1631,28 +1632,64 @@ test('FTC-COVERS-037 local cover deletion stays foreground, works, and persists 
         !item.isActive && /[\\/]Art[\\/]Back\.jpg$/i.test(item.sourcePath)
       ));
       expect(sourceCandidate).not.toBeUndefined();
+      expect(candidates.find((item) => item.isActive)?.sourcePath).toBeTruthy();
+      await coverLookupActions.setProviderFixtureMode('no-results');
+      const task = await coverLookupActions.startSearch();
+      taskId = String(task.task?.id || '').trim();
+      expect(taskId).not.toBe('');
+      await coverLookupActions.setProviderFixtureMode('normal');
       ownedPath = path.join(path.dirname(sourceCandidate.sourcePath), `delete-e2e-${process.pid}.jpg`);
       fs.copyFileSync(sourceCandidate.sourcePath, ownedPath);
       await coverLookupActions.closeModal();
-      await trackModalActions.openCoverLookup();
+      await trackModalActions.close();
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.openTaskById(taskId);
       await coverLookupActions.waitForModalReady();
+      await expect.poll(async () => (
+        (await coverLookupActions.readLocalCoverCandidates())
+          .map((candidate) => candidate.sourcePath)
+      ), {
+        message: 'Expected newly added local art on the first notification reopen.',
+        timeout: 30_000,
+      }).toContain(ownedPath);
       const ownedCandidates = await coverLookupActions.readLocalCoverCandidates();
       const candidate = ownedCandidates.find((item) => item.sourcePath === ownedPath);
       expect(candidate).not.toBeUndefined();
-      deletedPath = candidate.sourcePath;
-      expect(fs.existsSync(deletedPath)).toBe(true);
+      expect(fs.existsSync(candidate.sourcePath)).toBe(true);
 
+      await coverLookupActions.selectLocalCoverBySourcePathAndSave(ownedPath);
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.openTaskById(taskId);
+      await coverLookupActions.waitForModalReady();
+      const selectedReopen = await coverLookupActions.readLocalCoverCandidates();
+      expect(selectedReopen.find((item) => item.sourcePath === ownedPath)?.isActive).toBe(true);
+
+      deletedPath = ownedPath;
       const result = await coverLookupActions.deleteLocalCoverBySourcePath(deletedPath);
+
+      const afterDelete = await coverLookupActions.readLocalCoverCandidates();
+      const fallback = afterDelete.find((item) => item.isActive);
 
       expect(result.stacking.confirmationZIndex).toBeGreaterThan(result.stacking.lookupZIndex);
       expect(result.stacking.confirmationOwnsTopElement).toBe(true);
       expect(fs.existsSync(deletedPath)).toBe(false);
       await expect(coverLookupActions.coverLookup.modal).toBeVisible();
+      expect(afterDelete.map((item) => item.sourcePath)).not.toContain(deletedPath);
+      expect(fallback?.sourcePath).toBeTruthy();
+      expect(fallback?.sourcePath).not.toBe(deletedPath);
+
+      await coverLookupActions.closeModal();
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.openTaskById(taskId);
+      await coverLookupActions.waitForModalReady();
+      const deletedReopen = await coverLookupActions.readLocalCoverCandidates();
+      expect(deletedReopen.map((item) => item.sourcePath)).not.toContain(deletedPath);
+      expect(deletedReopen.find((item) => item.isActive)?.sourcePath).toBe(fallback.sourcePath);
     });
 
     await stepLogger.step('Reload and prove the deleted local cover does not return', async () => {
       await coverLookupActions.closeModal();
-      await trackModalActions.close();
+      await trackModalActions.closeIfOpen();
       await page.reload({ waitUntil: 'domcontentloaded' });
       await galleryActions.waitForGalleryReady();
       expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
@@ -1663,8 +1700,16 @@ test('FTC-COVERS-037 local cover deletion stays foreground, works, and persists 
       const reopened = await coverLookupActions.readLocalCoverCandidates();
       expect(reopened.map((candidate) => candidate.sourcePath)).not.toContain(deletedPath);
       expect(fs.existsSync(deletedPath)).toBe(false);
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+      await coverLookupActions.openDrawer();
+      const taskCard = coverLookupActions.coverLookup.taskCardById(taskId);
+      await taskCard.getByRole('button', { name: 'Delete notification', exact: true }).click();
+      await expect(taskCard).toHaveCount(0);
+      await coverLookupActions.closeDrawer();
     });
   } finally {
+    await coverLookupActions.setProviderFixtureMode('normal');
     if (ownedPath && fs.existsSync(ownedPath)) fs.unlinkSync(ownedPath);
   }
 });

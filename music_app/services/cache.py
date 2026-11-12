@@ -558,6 +558,7 @@ def persist_cover_selection_for_tracks_for_config(
     track_paths: set[str],
     selected_cover_path: Path | None,
     *,
+    selected_local_cover_source_path: Path | None = None,
     cover_revision: str | None = None,
     remote_cover_url: str | None = None,
     remote_cover_thumbnail_url: str | None = None,
@@ -585,6 +586,8 @@ def persist_cover_selection_for_tracks_for_config(
     persistence_options: dict[str, object] = {}
     if cover_revision:
         persistence_options["cover_revision"] = cover_revision
+    if selected_local_cover_source_path is not None:
+        persistence_options["selected_local_cover_source_path"] = selected_local_cover_source_path
     if remote_cover_url:
         persistence_options.update(
             remote_cover_url=remote_cover_url,

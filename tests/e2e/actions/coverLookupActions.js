@@ -1580,6 +1580,20 @@ export class CoverLookupActions {
     return this.selectLocalCoverCardAndSave(candidateCard, options);
   }
 
+  async selectLocalCoverBySourcePathAndSave(sourcePath, options = {}) {
+    const timeout = options.timeout || 30000;
+    const expectedPath = String(sourcePath || '').trim();
+    await expect(this.coverLookup.localCoverCards.first()).toBeVisible({ timeout });
+    const count = await this.coverLookup.localCoverCards.count();
+    for (let index = 0; index < count; index += 1) {
+      const candidateCard = this.coverLookup.localCoverCards.nth(index);
+      if (String(await candidateCard.getAttribute('data-select-local-cover') || '').trim() === expectedPath) {
+        return this.selectLocalCoverCardAndSave(candidateCard, options);
+      }
+    }
+    throw new Error(`Local cover candidate was not found: ${expectedPath}`);
+  }
+
   async selectLocalCoverCardAndSave(candidateCard, options = {}) {
     const timeout = options.timeout || 30000;
     const stableCoverLocator = options.stableCoverLocator || null;

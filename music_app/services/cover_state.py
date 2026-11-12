@@ -39,6 +39,23 @@ def active_cover_path_for_track_paths(
     return active_cover_path
 
 
+def _selected_local_cover_source_for_track_paths(
+    file_cache: dict[str, object] | None,
+    track_paths: set[str],
+) -> Path | None:
+    normalized_cache = file_cache if isinstance(file_cache, dict) else {}
+    for track_path in track_paths:
+        entry = normalized_cache.get(track_path)
+        source_value = (
+            str(entry.get("selected_local_cover_source_path") or "").strip()
+            if isinstance(entry, dict)
+            else ""
+        )
+        if source_value:
+            return Path(source_value)
+    return None
+
+
 def active_remote_cover_for_track_paths(
     file_cache: dict[str, object] | None,
     track_paths: set[str],
@@ -259,6 +276,34 @@ def selected_local_cover_source(
     return next(_matching_local_cover_sources(candidates, active_path, revision), str(active_path))
 
 
+def _validated_selected_local_cover_source(
+    candidates: list[dict[str, object]],
+    selected_source_path: Path | None,
+    active_cover_revision: str | None,
+) -> str | None:
+    if selected_source_path is None or not active_cover_revision:
+        return None
+    selected_key = os.path.normcase(os.path.abspath(str(selected_source_path)))
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if os.path.normcase(os.path.abspath(str(item.get("path") or ""))) == selected_key
+        ),
+        None,
+    )
+    if candidate is None:
+        return None
+    candidate_path = Path(str(candidate["path"]))
+    if not candidate_path.is_file():
+        return None
+    try:
+        candidate_revision = _file_sha256(candidate_path)
+    except OSError:
+        return None
+    return str(candidate["path"]) if candidate_revision == active_cover_revision else None
+
+
 def serialize_cover_gallery_payload(
     *,
     album_root: Path,
@@ -273,6 +318,10 @@ def serialize_cover_gallery_payload(
     local_inventory: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
+        file_cache,
+        track_paths,
+    )
+    persisted_selected_source = _selected_local_cover_source_for_track_paths(
         file_cache,
         track_paths,
     )
@@ -324,6 +373,15 @@ def serialize_cover_gallery_payload(
     else:
         selected_source_path = None if active_remote_cover else selected_local_cover_source(
             local_candidates, active_cover_path, active_cover_revision,
+        )
+    if not active_remote_cover:
+        selected_source_path = (
+            _validated_selected_local_cover_source(
+                local_candidates,
+                persisted_selected_source,
+                active_cover_revision,
+            )
+            or selected_source_path
         )
     if active_cover_path and not active_cover_revision and not active_remote_cover:
         if local_inventory is not None:
@@ -425,6 +483,7 @@ def apply_cover_selection_for_tracks(
     find_updated_albums,
     find_problematic_album,
     cover_path: Path | None = None,
+    selected_local_cover_source_path: Path | None = None,
     remote_cover_url: str | None = None,
     remote_cover_thumbnail_url: str | None = None,
     remote_cover_source: str | None = None,
@@ -438,6 +497,11 @@ def apply_cover_selection_for_tracks(
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     updated_file_cache = dict(library_state.get("file_cache", {}) or {})
     cover_value = str(cover_path) if cover_path else None
+    selected_source_value = (
+        str(selected_local_cover_source_path)
+        if cover_value and selected_local_cover_source_path is not None
+        else None
+    )
     revision_value = str(cover_revision or "").strip() or None
     remote_url_value = str(remote_cover_url or "").strip() or None
     remote_thumb_value = str(remote_cover_thumbnail_url or "").strip() or None
@@ -459,6 +523,7 @@ def apply_cover_selection_for_tracks(
             continue
         if (
             entry.get("cover_path") == cover_value
+            and (str(entry.get("selected_local_cover_source_path") or "").strip() or None) == selected_source_value
             and all(entry.get(key) == value for key, value in selection_authority.items())
             and (str(entry.get("cover_revision") or "").strip() or None) == revision_value
             and (str(entry.get("remote_cover_url") or "").strip() or None) == remote_url_value
@@ -473,6 +538,7 @@ def apply_cover_selection_for_tracks(
         next_entry = dict(entry)
         next_entry.update(selection_authority)
         next_entry["cover_path"] = cover_value
+        next_entry["selected_local_cover_source_path"] = selected_source_value
         next_entry["cover_revision"] = revision_value
         next_entry["remote_cover_url"] = remote_url_value
         next_entry["remote_cover_thumbnail_url"] = remote_thumb_value
@@ -499,6 +565,7 @@ def apply_cover_selection_for_tracks(
             continue
         for key, value in selection_authority.items():
             setattr(album, key, value)
+        setattr(album, "selected_local_cover_source_path", selected_source_value)
         _set_cover_fields(
             album,
             cover_value=cover_value,
@@ -517,6 +584,7 @@ def apply_cover_selection_for_tracks(
             if manual_selection:
                 track.local_cover_width = selection_authority["local_cover_width"]
                 track.local_cover_height = selection_authority["local_cover_height"]
+            setattr(track, "selected_local_cover_source_path", selected_source_value)
             _set_cover_fields(
                 track,
                 cover_value=cover_value,
@@ -552,6 +620,7 @@ def apply_authoritative_local_cover_fallback(
     track_paths: set[str],
     cover_path: Path,
     cover_revision: str,
+    selected_local_cover_source_path: Path | None = None,
 ) -> None:
     """Apply the minimal in-memory state required after a committed selection."""
     normalized_paths = {
@@ -593,6 +662,7 @@ def apply_authoritative_local_cover_fallback(
             entry,
             cover_value=cover_value,
             revision_value=revision_value,
+            selected_local_cover_source_path=selected_local_cover_source_path,
             local_cover_width=width or None,
             local_cover_height=height or None,
         )
@@ -602,6 +672,11 @@ def apply_authoritative_local_cover_fallback(
     for album, matching_tracks in matching_albums:
         album.cover_selection_origin = "user"
         album.cover_selection_provenance = "explicit"
+        album.selected_local_cover_source_path = (
+            str(selected_local_cover_source_path)
+            if selected_local_cover_source_path is not None
+            else None
+        )
         album.local_cover_width = width or None
         album.local_cover_height = height or None
         _set_cover_fields(
@@ -624,6 +699,11 @@ def apply_authoritative_local_cover_fallback(
         for track in matching_tracks:
             track.local_cover_width = width or None
             track.local_cover_height = height or None
+            track.selected_local_cover_source_path = (
+                str(selected_local_cover_source_path)
+                if selected_local_cover_source_path is not None
+                else None
+            )
             _set_cover_fields(
                 track,
                 cover_value=cover_value,
@@ -655,11 +735,17 @@ def _set_local_cover_fields_on_mapping(
     *,
     cover_value: str,
     revision_value: str,
+    selected_local_cover_source_path: Path | None,
     local_cover_width: int | None,
     local_cover_height: int | None,
 ) -> None:
     entry["cover_path"] = cover_value
     entry["cover_revision"] = revision_value
+    entry["selected_local_cover_source_path"] = (
+        str(selected_local_cover_source_path)
+        if selected_local_cover_source_path is not None
+        else None
+    )
     entry["cover_selection_origin"] = "user"
     entry["cover_selection_provenance"] = "explicit"
     entry["local_cover_width"] = local_cover_width

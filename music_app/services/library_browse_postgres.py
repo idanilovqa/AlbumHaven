@@ -3450,12 +3450,18 @@ class PostgresLibraryBrowseRepository:
             album_cover_path = str(row_payload.get("album_cover_path") or "").strip()
             if album_cover_path:
                 file_entry["cover_path"] = album_cover_path
+            album_metadata = _row_json_mapping(row_payload.get("album_metadata"))
             album_cover_revision = str(
-                _row_json_mapping(row_payload.get("album_metadata")).get("cover_revision")
+                album_metadata.get("cover_revision")
                 or ""
             ).strip()
             if album_cover_revision:
                 file_entry["cover_revision"] = album_cover_revision
+            selected_local_source = str(
+                album_metadata.get("selected_local_cover_source_path") or ""
+            ).strip()
+            if selected_local_source:
+                file_entry["selected_local_cover_source_path"] = selected_local_source
             file_entry.update(
                 {
                     "album_id": row_payload.get("album_id"),

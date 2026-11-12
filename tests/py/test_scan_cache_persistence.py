@@ -1577,10 +1577,12 @@ def test_postgres_cover_selection_updates_only_targeted_inventory_rows_transacti
         "C:/Generated Test Music/Kaipa/Kaipa/disc-2.mp3",
     }
     selected_cover_path = Path("C:/Generated Test Music/Kaipa/Kaipa/cover.jpg")
+    selected_source_path = Path("C:/Generated Test Music/Kaipa/Kaipa/Art/Front.jpg")
 
     result = adapter.persist_cover_selection(
         track_paths=track_paths,
         selected_cover_path=selected_cover_path,
+        selected_local_cover_source_path=selected_source_path,
         cover_revision="cover-revision-123",
         local_cover_width=2000, local_cover_height=2000,
     )
@@ -1610,12 +1612,14 @@ def test_postgres_cover_selection_updates_only_targeted_inventory_rows_transacti
         assert normalized_sql.count(stale_remote_field) >= 2
     assert normalized_sql.count("- array[") >= 2
     assert normalized_sql.count("%(selected_cover_path)s::text") >= 2
+    assert normalized_sql.count("%(selected_local_cover_source_path)s::text") >= 2
     assert normalized_sql.count("%(cover_revision)s::text") >= 2
     assert normalized_sql.count("%(local_cover_width)s::integer") == 2
     assert normalized_sql.count("%(local_cover_height)s::integer") == 2
     assert mutation_params == {
         "track_paths": sorted(track_paths),
         "selected_cover_path": str(selected_cover_path),
+        "selected_local_cover_source_path": str(selected_source_path),
         "cover_revision": "cover-revision-123",
         "local_cover_width": 2000, "local_cover_height": 2000,
     }
@@ -1729,6 +1733,7 @@ def test_postgres_cover_selection_explicit_clear_removes_album_and_track_authori
     for cleared_field in (
         "cover_path",
         "cover_revision",
+        "selected_local_cover_source_path",
         "cover_selection_origin",
         "remote_cover_url",
         "remote_cover_thumbnail_url",
@@ -1742,6 +1747,7 @@ def test_postgres_cover_selection_explicit_clear_removes_album_and_track_authori
     for cleared_track_field in (
         "cover_path",
         "cover_revision",
+        "selected_local_cover_source_path",
         "remote_cover_url",
         "remote_cover_thumbnail_url",
         "remote_cover_source",

@@ -91,7 +91,10 @@ _ALBUM_COVER_AUTHORITY_FIELDS = (
     "remote_cover_width", "remote_cover_height",
 )
 _ALBUM_COVER_METADATA_FIELDS = (
-    "cover_revision", "cover_selection_repair_previous", *_ALBUM_COVER_AUTHORITY_FIELDS,
+    "cover_revision",
+    "selected_local_cover_source_path",
+    "cover_selection_repair_previous",
+    *_ALBUM_COVER_AUTHORITY_FIELDS,
 )
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
     {"title", "genre", "track_number", "disc_number", "total_discs", "disc_subtitle", "album_type", "album_rating"}
@@ -165,6 +168,7 @@ class ScanCacheAdapter(Protocol):
         *,
         track_paths: set[str],
         selected_cover_path: Path | None,
+        selected_local_cover_source_path: Path | None = None,
         cover_revision: str | None = None,
         remote_cover_url: str | None = None,
         remote_cover_thumbnail_url: str | None = None,
@@ -360,6 +364,11 @@ class PostgresScanCacheAdapter:
                 "cover_selection_origin": str(payload.get("cover_selection_origin") or "").strip() or None,
                 **({"cover_selection_provenance": "explicit"} if payload.get("cover_selection_provenance") == "explicit" else {}),
                 **({"cover_revision": payload["cover_revision"]} if payload.get("cover_revision") else {}),
+                **(
+                    {"selected_local_cover_source_path": payload["selected_local_cover_source_path"]}
+                    if payload.get("selected_local_cover_source_path")
+                    else {}
+                ),
                 **({key: payload[key] for key in ("remote_cover_url", "remote_cover_width", "remote_cover_height") if payload.get(key) is not None} if payload.get("remote_cover_url") else {}),
             }
             for row in rows
@@ -936,6 +945,7 @@ class PostgresScanCacheAdapter:
         *,
         track_paths: set[str],
         selected_cover_path: Path | None,
+        selected_local_cover_source_path: Path | None = None,
         cover_revision: str | None = None,
         remote_cover_url: str | None = None,
         remote_cover_thumbnail_url: str | None = None,
@@ -1005,6 +1015,11 @@ class PostgresScanCacheAdapter:
         ):
             raise ValueError("Local cover dimensions require a selected local image and two positive integers.")
         resolved_cover_path = Path(selected_cover_path) if selected_cover_path is not None else None
+        resolved_source_path = (
+            Path(selected_local_cover_source_path)
+            if selected_local_cover_source_path is not None
+            else None
+        )
         normalized_remote_url = str(remote_cover_url or "").strip() or None
         if clear_selection and (resolved_cover_path is not None or normalized_remote_url is not None):
             raise ValueError("Clearing a cover selection cannot include a replacement cover.")
@@ -1012,6 +1027,10 @@ class PostgresScanCacheAdapter:
             raise ValueError("Cover selection requires a local path or linked remote URL.")
         if resolved_cover_path is not None and normalized_remote_url is not None:
             raise ValueError("Cover selection cannot persist local and linked remote covers together.")
+        if resolved_source_path is not None and (
+            resolved_cover_path is None or normalized_remote_url is not None or clear_selection
+        ):
+            raise ValueError("A selected local cover source requires a selected local cover.")
         if resolved_cover_path is not None and not cover_revision:
             from music_app.services.cover_workflow import cover_revision_for_path
 
@@ -1054,10 +1073,14 @@ class PostgresScanCacheAdapter:
                         include_explicit_selection=explicit_selection,
                         include_reject_explicit_selection=reject_if_explicit_selection,
                         include_local_dimensions=has_local_dimensions,
+                        include_selected_local_source=resolved_source_path is not None,
                     ),
                     {
                         "track_paths": normalized_track_paths,
                         "selected_cover_path": str(resolved_cover_path) if resolved_cover_path else None,
+                        "selected_local_cover_source_path": (
+                            str(resolved_source_path) if resolved_source_path else None
+                        ),
                         "cover_revision": str(cover_revision) if cover_revision else None,
                         **({"local_cover_width": local_cover_width, "local_cover_height": local_cover_height} if has_local_dimensions else {}),
                         **remote_params,
@@ -7092,6 +7115,7 @@ def _persist_local_cover_selection_sql(
     include_explicit_selection: bool = False,
     include_reject_explicit_selection: bool = False,
     include_local_dimensions: bool = False,
+    include_selected_local_source: bool = False,
 ) -> str:
     album_origin_json = (
         ", 'cover_selection_origin', %(cover_selection_origin)s::text"
@@ -7103,6 +7127,11 @@ def _persist_local_cover_selection_sql(
     local_dimensions_json = (
         ", 'local_cover_width', %(local_cover_width)s::integer, 'local_cover_height', %(local_cover_height)s::integer"
         if include_local_dimensions else ""
+    )
+    selected_local_source_json = (
+        ", 'selected_local_cover_source_path', %(selected_local_cover_source_path)s::text"
+        if include_selected_local_source
+        else ""
     )
     user_origin_guard = (
         """
@@ -7173,6 +7202,7 @@ def _persist_local_cover_selection_sql(
               - array[
                 'cover_path',
                 'cover_revision',
+                'selected_local_cover_source_path',
                 'cover_selection_origin',
                 'cover_selection_provenance',
                 'cover_selection_repair_previous',
@@ -7190,6 +7220,7 @@ def _persist_local_cover_selection_sql(
               (
                 coalesce(library.local_albums.metadata, '{}'::jsonb)
                 - array[
+                    'selected_local_cover_source_path',
                   'remote_cover_url',
                   'remote_cover_thumbnail_url',
                   'remote_cover_source',
@@ -7202,6 +7233,7 @@ def _persist_local_cover_selection_sql(
                 || jsonb_build_object(
                   'cover_path', %(selected_cover_path)s::text,
                   'cover_revision', %(cover_revision)s::text
+                __SELECTED_LOCAL_SOURCE_JSON__
                   __ALBUM_ORIGIN_JSON__
                   __LINKED_REMOTE_JSON__
                 )
@@ -7216,6 +7248,7 @@ def _persist_local_cover_selection_sql(
                   - array[
                     'cover_path',
                     'cover_revision',
+                'selected_local_cover_source_path',
                     'remote_cover_url',
                     'remote_cover_thumbnail_url',
                     'remote_cover_source',
@@ -7233,6 +7266,7 @@ def _persist_local_cover_selection_sql(
                       '{}'::jsonb
                     )
                     - array[
+                    'selected_local_cover_source_path',
                       'remote_cover_url',
                       'remote_cover_thumbnail_url',
                       'remote_cover_source',
@@ -7244,6 +7278,7 @@ def _persist_local_cover_selection_sql(
                   ) || jsonb_build_object(
                     'cover_path', %(selected_cover_path)s::text,
                     'cover_revision', %(cover_revision)s::text
+                __SELECTED_LOCAL_SOURCE_JSON__
                     __LINKED_REMOTE_JSON__
                   )
         """
@@ -7342,6 +7377,7 @@ def _persist_local_cover_selection_sql(
     return (
         sql.replace("__ALBUM_METADATA__", album_metadata)
         .replace("__FILE_ENTRY_METADATA__", file_entry_metadata)
+            .replace("__SELECTED_LOCAL_SOURCE_JSON__", selected_local_source_json)
         .replace("__ALBUM_ORIGIN_JSON__", album_origin_json)
         .replace("__LINKED_REMOTE_JSON__", local_dimensions_json + linked_remote_json)
         .replace("__USER_ORIGIN_GUARD__", user_origin_guard)
@@ -7499,6 +7535,7 @@ def _load_cover_selections_sql() -> str:
                album.metadata ->> 'cover_selection_origin' as cover_selection_origin,
                album.metadata ->> 'cover_selection_provenance' as cover_selection_provenance,
                album.metadata ->> 'cover_revision' as cover_revision,
+               album.metadata ->> 'selected_local_cover_source_path' as selected_local_cover_source_path,
                album.metadata ->> 'remote_cover_url' as remote_cover_url,
                (album.metadata ->> 'remote_cover_width')::integer as remote_cover_width,
                (album.metadata ->> 'remote_cover_height')::integer as remote_cover_height

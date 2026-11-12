@@ -1289,6 +1289,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                     logger=logger,
                     library_state=library_state,
                     cover_revision=cover_revision,
+                    selected_local_cover_source_path=resolved,
                     schedule_cache_update=False,
                     include_problematic_album=False,
                 )
@@ -1300,6 +1301,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                         track_paths=authoritative_track_paths,
                         cover_path=authoritative_cover,
                         cover_revision=cover_revision,
+                        selected_local_cover_source_path=resolved,
                     )
                 except Exception as fallback_exc:
                     runtime_fallback_error = fallback_exc
@@ -1338,6 +1340,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 config=config,
                 logger=logger,
                 cover_revision=cover_revision,
+                selected_local_cover_source_path=resolved,
                 cover_selection_origin="user",
                 explicit_selection=True,
                 commit_guard=commit_cover_selection,

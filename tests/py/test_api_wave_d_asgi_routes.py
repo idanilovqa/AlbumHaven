@@ -2417,15 +2417,17 @@ def test_asgi_local_cover_selection_persists_before_success_and_logs_safe_comple
         operations.append("persist")
         assert track_paths == {str(track_path)}
         assert cover_path == track_path.parent / "cover.jpg"
+        assert kwargs["selected_local_cover_source_path"] == selected_image
         assert kwargs["config"] is app.config
         assert kwargs["logger"] is asgi_app.state.logger
         assert kwargs["cover_revision"] == hashlib.sha256(selected_image.read_bytes()).hexdigest()
         assert kwargs["cover_selection_origin"] == "user"
         return {"album_rows_updated": 1, "track_file_rows_updated": 1}
 
-    def fake_apply_cover_path_for_tracks(track_paths, cover_path, **_kwargs):
+    def fake_apply_cover_path_for_tracks(track_paths, cover_path, **kwargs):
         operations.append("apply-runtime")
         assert track_paths == {str(track_path)}
+        assert kwargs["selected_local_cover_source_path"] == selected_image
         return [
             {
                 **_album_payload(track_path),

@@ -376,6 +376,37 @@ test('empty Loose Tracks does not offer Edit Tags', () => {
   assert.doesNotMatch(header.innerHTML, /data-open-non-album-tag-editor/);
 });
 
+test('artist-scoped Loose Tracks places Back before the header title', () => {
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.state.view = { selected_artist: 'Agalloch', non_album_tracks_deferred: false };
+  context.state.ui = {};
+  context.getVisibleNonAlbumTracks = () => [{ path: '/music/agalloch/loose.flac', title: 'Loose' }];
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  vm.runInContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'album-details-components.js'), 'utf8'),
+    context,
+  );
+
+  context.openNonAlbumModal({ libraryWide: false });
+
+  assert.match(
+    header.innerHTML,
+    /data-close-non-album-modal="1"[^>]*aria-label="Back to Agalloch"[\s\S]*?<h3[^>]*>Loose Tracks<\/h3>/,
+  );
+});
+
 test('initial artist loose tracks remain usable without a second gallery request', async () => {
   const { context } = loadHelper();
   const tracks = [{ path: '/music/agalloch/loose.flac', artist: 'Agalloch', title: 'Loose' }];

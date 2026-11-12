@@ -861,11 +861,21 @@ function openNonAlbumModal(options = {}) {
   const subtitle = hydrationPending
     ? (libraryWide ? 'Loading loose tracks across the library…' : 'Loading loose tracks…')
     : `${formatLooseTrackCount(looseTracks.length)}${scope}`;
+  const leadingHtml = !libraryWide && state.view.selected_artist
+    ? ButtonComponent.renderActionButton({
+      icon: 'back',
+      presentation: 'bare',
+      ariaLabel: `Back to ${state.view.selected_artist}`,
+      className: 'non-album-modal-back',
+      attributes: { 'data-close-non-album-modal': '1' },
+    })
+    : '';
   if (els.header) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       variant: 'copy',
       title: 'Loose Tracks',
       subtitle,
+      leadingHtml,
       titleId: 'non-album-modal-title',
       subtitleId: 'non-album-modal-subtitle',
       actionsHtml: looseTracks.length ? buildLooseTracksHeaderActionsHtml() : '',

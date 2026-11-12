@@ -27,27 +27,40 @@ export async function deliverSavedNotificationThroughStatus(tagEditor, expectedM
   await expect(tagEditor.overlay).toBeHidden({ timeout });
   await expect(tagEditor.confirmOverlay).toBeHidden({ timeout });
   const previous = await tagEditor.readLibraryReturnState();
-  await beforeNavigation?.();
-  await appBar.openStatusMenu();
+  const presentations = autoDismisses
+    ? await tagEditor.recordRepairAlertPresentations({ surfaceSelector: '#library-loader' })
+    : null;
   let deliveryError;
+  let restoreRequired = false;
   try {
+    await beforeNavigation?.();
+    await appBar.openStatusMenu();
     await scan.scanPage.openStatusPage.click();
+    restoreRequired = true;
     await scan.waitForVisible({ timeout });
-    if (autoDismisses) {
-      // Placement is judged on Status, where these cases assert it; recording starts there.
-      const presentations = await tagEditor.recordRepairAlertPresentations();
-      try {
-        await scan.waitForDedicatedPageVisible({ timeout });
-        await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
-      } finally {
-        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
-      }
+    if (presentations) {
+      await scan.waitForDedicatedPageVisible({ timeout });
+      await confirmTimedSavedNotification(tagEditor, presentations, expectedMessage, { timeout });
     } else {
       await scan.waitForDedicatedPageVisible({ timeout });
       await acknowledgeSavedNotification(tagEditor, expectedMessage, { timeout });
     }
   } catch (error) {
     deliveryError = error;
+  } finally {
+    if (presentations) {
+      try {
+        await tagEditor.stopRecordingRepairAlertPresentations(presentations);
+      } catch (cleanupError) {
+        deliveryError = deliveryError
+          ? new AggregateError([deliveryError, cleanupError], 'Saved notification delivery and recorder cleanup failed')
+          : cleanupError;
+      }
+    }
+  }
+  if (!restoreRequired) {
+    if (deliveryError) throw deliveryError;
+    return;
   }
   try {
     await scan.clickBack();

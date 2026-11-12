@@ -957,16 +957,23 @@ function openNonAlbumModal(options = {}) {
       : looseTracks.length
         ? buildNonAlbumTrackSectionsMarkup(looseTracks)
         : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
-  els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
-    const summary = details.querySelector?.('summary');
-    const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
-    syncExpanded();
-    details.addEventListener?.('toggle', syncExpanded);
-  });
-  installNonAlbumTrackSelection(els);
+  const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
+  els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
-  attachSharedPlayer();
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserAnimationFrame(() => {
+      if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
+      els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
+        const summary = details.querySelector?.('summary');
+        const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+        syncExpanded();
+        details.addEventListener?.('toggle', syncExpanded);
+      });
+      installNonAlbumTrackSelection(els);
+      attachSharedPlayer();
+    });
+  });
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide })
       .then(() => {

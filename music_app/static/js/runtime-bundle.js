@@ -26439,8 +26439,6 @@ function renderProblemFilterControls(els) {
 function getFilteredProblematicAlbums() {
   const items = state.utility.problematicFiles || [];
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
-  const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const problemReasonPattern = query ? new RegExp(`(^|[^a-z0-9])${escapedQuery}(?=[^a-z0-9]|$)`, 'i') : null;
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
@@ -26461,9 +26459,7 @@ function getFilteredProblematicAlbums() {
         String(row.repaired || ''),
       ]),
     ].join('\n').toLowerCase();
-    return haystack.includes(query) || (Array.isArray(album.problem_reasons) ? album.problem_reasons : []).some(
-      (reason) => problemReasonPattern.test(String(reason || '')),
-    );
+    return haystack.includes(query);
   });
 
   if (!(state.utility.selectedProblemFilters || []).length) return filtered;
@@ -32877,7 +32873,7 @@ function scheduleUtilityModalOpenWorkAfterPaint(generation, forceLoad) {
   scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(run));
 }
 
-function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
+function openUtilityModal({ resetSearch = false, resetSelection = true, forceLoad = true } = {}) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   const els = getUtilityModalElements();
   if (!els.overlay) return;

@@ -11992,6 +11992,7 @@ def test_postgres_library_browse_builds_problematic_files_projection_from_rows()
     assert "scan_file_entry_is_object" in candidate_sql
     sql_commands = [str(value) for value in executed if isinstance(value, str)]
     parameter_payloads = [value for value in executed if isinstance(value, dict)]
+    assert "SET LOCAL enable_seqscan = off" in sql_commands
     assert any(
         "requested_albums as materialized" in sql
         and "candidate_album_ids" in sql
@@ -15603,6 +15604,50 @@ def test_problematic_files_search_drops_narrowed_albums_the_list_filter_would_no
     assert [item["key"] for item in payload["items"]] == ["album-002"]
 
 
+def test_problematic_search_does_not_match_problem_reason_text():
+    from music_app.services.library_browse_postgres import (
+        _problematic_summary_matches_query,
+    )
+
+    assert not _problematic_summary_matches_query(
+        {
+            "name": "( )",
+            "album_artist": "Sigur Rós",
+            "problem_reasons": ["Poor art quality"],
+        },
+        "art",
+    )
+
+
+def test_problematic_summary_searches_only_tracks_shown_as_problematic():
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_summary_payload,
+    )
+
+    summary = _problematic_album_summary_payload(
+        {
+            "key": "album",
+            "name": "Album",
+            "album_artist": "Artist",
+            "tracks": [
+                {"path": "/clean.flac", "title": "Hidden Art Match"},
+                {"path": "/problem.flac", "title": "Visible Problem Track"},
+            ],
+        },
+        album_scope_reasons=[],
+        track_problem_rows=[
+            {
+                "path": "/problem.flac",
+                "filename": "problem.flac",
+                "reasons": ["Missing track number"],
+            }
+        ],
+    )
+
+    assert summary is not None
+    assert summary["search_text"] == "Visible Problem Track"
+
+
 def test_problematic_files_search_never_evaluates_albums_the_complete_list_would_not():
     """The real library returned 23 Art Zoyd albums before the list loaded and 4
     after: track-less edition albums matched by title were evaluated in
@@ -15906,6 +15951,35 @@ def test_problematic_files_snapshot_version_is_required_for_normal_serving(monke
     assert repository._load_problematic_files_snapshot(allow_outdated=True) == {
         "items": [{"key": "loose-source::old-root-hash"}],
     }
+
+
+def test_problematic_files_snapshot_version_3_is_rejected_after_search_semantics_change(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from music_app.services import library_browse_postgres as browse
+
+    snapshot = {
+        "items": [{"key": "album", "search_text": "clean hidden track"}],
+        browse._SNAPSHOT_FINGERPRINT_KEY: "current",
+        browse._PROBLEMATIC_SNAPSHOT_VERSION_KEY: 3,
+    }
+
+    class Connection:
+        def execute(self, _sql):
+            return SimpleNamespace(fetchone=lambda: {"payload": json.dumps(snapshot)})
+
+    @contextmanager
+    def connection_context():
+        yield Connection()
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/old-search-snapshot",
+    })
+    monkeypatch.setattr(repository, "_connect_to_database", connection_context)
+    monkeypatch.setattr(browse, "_problematic_inventory_fingerprint", lambda _connection: "current")
+
+    assert repository._load_problematic_files_snapshot() is None
 
 
 def test_problematic_first_page_after_a_library_change_re_evaluates_the_stored_lists_albums(monkeypatch):

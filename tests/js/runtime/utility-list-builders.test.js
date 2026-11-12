@@ -7063,7 +7063,7 @@ test('problematic search always includes structured summary fields beside compac
   }];
   context.state.utility.selectedProblemFilters = [];
 
-  for (const query of ['structured match album', 'structured raw artist', '2026', 'incomplete track order']) {
+  for (const query of ['structured match album', 'structured raw artist', '2026', 'only track title']) {
     context.state.utility.searchQuery = query;
     assert.deepEqual(
       Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
@@ -7072,13 +7072,13 @@ test('problematic search always includes structured summary fields beside compac
   }
 });
 
-test('problematic search does not treat a fragment inside a problem reason as content', () => {
+test('problematic search does not treat problem reasons as artist, album, or track content', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   context.state.utility.problematicFiles = [{
     key: 'reason-only-album',
     name: 'Unrelated Album',
     album_artist: 'Unrelated Performer',
-    problem_reasons: ['Album artist mismatch'],
+    problem_reasons: ['Album artist mismatch', 'Poor art quality'],
   }];
   context.state.utility.selectedProblemFilters = [];
 
@@ -7086,10 +7086,7 @@ test('problematic search does not treat a fragment inside a problem reason as co
   assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 
   context.state.utility.searchQuery = 'album artist mismatch';
-  assert.deepEqual(
-    Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
-    ['reason-only-album'],
-  );
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 });
 
 test('track problem navigation refreshes one stale loaded summary before selecting the exact track', async () => {

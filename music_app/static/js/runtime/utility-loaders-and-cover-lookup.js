@@ -1451,7 +1451,7 @@ function scheduleUtilityModalOpenWorkAfterPaint(generation, forceLoad) {
   scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(run));
 }
 
-function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
+function openUtilityModal({ resetSearch = false, resetSelection = true, forceLoad = true } = {}) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   const els = getUtilityModalElements();
   if (!els.overlay) return;

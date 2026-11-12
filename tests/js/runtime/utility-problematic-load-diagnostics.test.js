@@ -248,6 +248,23 @@ function loadHelper(overrides = {}) {
   return { context, calls };
 }
 
+test('reopening Problematic Files preserves the current query', () => {
+  const overlay = { hidden: true };
+  const { context } = loadHelper({
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
+      querySelectorAll() { return []; },
+    },
+    getUtilityModalElements() { return { overlay }; },
+  });
+  context.state.utility.searchQuery = 'art';
+
+  context.openUtilityModal({ forceLoad: false });
+
+  assert.equal(context.state.utility.searchQuery, 'art');
+});
+
 test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
   const overlay = { hidden: true };
   const requested = [];

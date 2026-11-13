@@ -376,9 +376,8 @@ function getDeferredNonAlbumScopeKey(url) {
 
 function needsNonAlbumHydration(options = {}) {
   const view = state.view || {};
-  if (view.non_album_tracks_deferred) return true;
-  if (options.libraryWide !== true) return false;
-  return !hasHydratedLibraryNonAlbumTracks();
+  if (options.libraryWide === true) return !hasHydratedLibraryNonAlbumTracks();
+  return Boolean(view.non_album_tracks_deferred);
 }
 
 let libraryNonAlbumHydrationRequest = null;
@@ -792,10 +791,10 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     collapsibleGroups: !collectionName,
     ariaLabel: collectionName || 'Loose tracks',
     idPrefix: 'loose-track-table',
-    optionalColumns: NON_ALBUM_RICH_TRACK_COLUMNS,
+    optionalColumns: collectionName ? NON_ALBUM_RICH_TRACK_COLUMNS : [],
     mobile: 'grouped',
     mobileColumns: '36px minmax(0, 1fr) 30px 54px minmax(54px, auto)',
-    mobileTitleSupplement: buildNonAlbumMobileMetaHtml,
+    mobileTitleSupplement: collectionName ? buildNonAlbumMobileMetaHtml : null,
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
@@ -806,7 +805,6 @@ function buildCustomCollectionDetailMarkup(items, collectionName) {
   const artbox = buildAlbumArtboxHtml({
     state: 'empty',
     label: `${name || 'Custom collection'} artwork`,
-    overlayHtml: '<span class="custom-collection-detail__plus" aria-hidden="true">+</span>',
   });
   const tracks = items.length
     ? buildNonAlbumTrackSectionsMarkup(items, { collectionName: name })

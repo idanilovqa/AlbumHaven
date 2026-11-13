@@ -359,9 +359,11 @@ test('library navigation uses the approved collection glyph and generic mobile c
 
   assert.equal(collectionActions.length, 2);
   for (const action of collectionActions) {
-    assert.match(action, /M9 18V5l11-2v13/);
-    assert.match(action, /circle cx="6" cy="18" r="3"/);
-    assert.match(action, /circle cx="17" cy="16" r="3"/);
+    assert.match(action, /M6 14V3\.5c2\.7 2\.2 5\.3 3\.4 8\.5 4\.6V14/);
+    assert.match(action, /ellipse cx="3\.5" cy="15" rx="3" ry="2\.2"/);
+    assert.match(action, /ellipse cx="11\.8" cy="15\.5" rx="3" ry="2\.2"/);
+    assert.match(action, /circle cx="15\.5" cy="15" r="5\.2"/);
+    assert.match(action, /m19\.2 18\.7 3\.3 3\.3/);
   }
   assert.doesNotMatch(template, /action_button\('Loose Tracks'[\s\S]*data-library-navigation-mode/);
   assert.match(template, /action_button\('Close library navigation'/);

@@ -46,10 +46,7 @@ display: grid;
 gap: 8px;
 }
 .custom-collection-detail { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: start; }
-.custom-collection-detail__art .album-artbox { width: 180px; aspect-ratio: 1; border: 0; background: transparent; box-shadow: none; }
-.custom-collection-detail__art .album-artbox__missing-mark { display: none; }
-.custom-collection-detail__art .album-artbox__overlay { inset: 0; display: grid; opacity: 1; transform: none; pointer-events: none; }
-.custom-collection-detail__plus { display: grid; place-items: center; width: 100%; height: 100%; font-size: 48px; font-weight: 300; color: var(--muted); }
+.custom-collection-detail__art .album-artbox { width: 180px; aspect-ratio: 1; }
 .custom-collection-detail__tracks { min-width: 0; }
 
 @media (max-width: 700px) {

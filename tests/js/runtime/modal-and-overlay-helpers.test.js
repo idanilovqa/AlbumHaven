@@ -404,6 +404,19 @@ test('library-wide Loose Tracks hydrates when only the selected-artist projectio
   assert.equal(context.needsNonAlbumHydration(), false);
 });
 
+test('hydrated library-wide Loose Tracks ignore the deferred artist projection', () => {
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.state.view = {
+    non_album_tracks_deferred: true,
+    library_non_album_tracks: [{ path: '/music/library/loose.flac' }],
+  };
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
+
+  assert.equal(context.needsNonAlbumHydration({ libraryWide: true }), false);
+  assert.equal(context.needsNonAlbumHydration(), true);
+});
+
 test('stale non-album hydration cannot reclaim a newer collection modal request', () => {
   const { context } = loadHelper();
   context.state.ui.nonAlbumLibraryWide = true;
@@ -1061,10 +1074,24 @@ test('collection detail filters exact assignments and shows paths only to the li
   const detail = context.buildCustomCollectionDetailMarkup(items, 'Night');
   assert.match(detail, /custom-collection-detail__art/);
   assert.match(detail, /album-artbox album-artbox--empty/);
-  assert.match(detail, /custom-collection-detail__plus[^>]*>\+</);
+  assert.doesNotMatch(detail, /custom-collection-detail__plus/);
   const emptyDetail = context.buildCustomCollectionDetailMarkup([], 'Night');
-  assert.match(emptyDetail, /custom-collection-detail__plus[^>]*>\+</);
+  assert.match(emptyDetail, /album-artbox album-artbox--empty/);
   assert.match(emptyDetail, /No tracks are assigned to this collection\./);
+});
+
+test('library-wide Loose Tracks keeps the established lightweight table', () => {
+  const { context } = loadHelper();
+  context.window.AlbumHavenCapabilities = { isCurrentLibraryOwner: () => true };
+  const markup = context.buildNonAlbumTrackSectionsMarkup([{
+    path: 'C:/Music/Loose.flac',
+    title: 'Loose',
+    exception_type: '',
+    track_preference: { rating: 4, love_tier: 'loved' },
+  }]);
+
+  assert.match(markup, />Track</);
+  assert.doesNotMatch(markup, />Rating<|>Popularity<|data-rating-choice/);
 });
 
 test('collection detail reuses the rich track columns and compact narrow metadata', () => {
@@ -1277,7 +1304,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) 104px 30px 76px 54px 48px minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
@@ -1286,7 +1313,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="rating"[^>]*>Rating<\/div><div role="columnheader" data-cdt-column="love"[^>]*>♥<\/div><div role="columnheader" data-cdt-column="popularity"[^>]*>Popularity<\/div><div role="columnheader" data-cdt-column="plays"[^>]*>Plays<\/div><div role="columnheader" data-cdt-column="year"[^>]*>Year<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
   assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);

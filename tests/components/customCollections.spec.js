@@ -53,7 +53,6 @@ async function mount(page, viewport) {
               <div class="custom-collection-detail__art">
                 <span class="album-artbox album-artbox--empty" aria-label="Night artwork">
                   <span class="album-artbox__missing-mark"></span>
-                  <span class="album-artbox__overlay"><span class="custom-collection-detail__plus" aria-hidden="true">+</span></span>
                 </span>
               </div>
               <div class="custom-collection-detail__tracks">
@@ -192,17 +191,15 @@ for (const viewport of [{ width: 1200, height: 800 }, { width: 390, height: 760 
     await expect(page.getByRole('navigation', { name: 'Library views' })).toBeVisible();
 
     const art = await page.locator('.custom-collection-detail__art .album-artbox').evaluate(element => {
-      const style = getComputedStyle(element);
       const box = element.getBoundingClientRect();
-      const plus = element.querySelector('.custom-collection-detail__plus').getBoundingClientRect();
+      const missing = element.querySelector('.album-artbox__missing-mark');
       return {
-        border: style.borderTopWidth,
-        background: style.backgroundColor,
-        centered: Math.abs((plus.x + plus.width / 2) - (box.x + box.width / 2)) < 1,
-        missingHidden: getComputedStyle(element.querySelector('.album-artbox__missing-mark')).display,
+        square: Math.round(box.width) === Math.round(box.height),
+        missingDisplay: getComputedStyle(missing).display,
       };
     });
-    expect(art).toEqual({ border: '0px', background: 'rgba(0, 0, 0, 0)', centered: true, missingHidden: 'none' });
+    expect(art.square).toBe(true);
+    expect(art.missingDisplay).toBe('grid');
 
     const columns = await page.locator('.custom-collection-detail').evaluate(element => getComputedStyle(element).gridTemplateColumns);
     if (viewport.width <= 700) {

@@ -334,6 +334,18 @@ def test_candidate_query_projects_only_json_fields_consumed_by_non_album_shaper(
     assert "library.local_track_files.metadata #> '{scan_cache,file_entry}'" in sql
     assert "'local_album_membership_problem'" in sql
     assert "library.library_roots.metadata as root_metadata" not in sql
+
+
+def test_candidate_query_reuses_scan_published_membership_problem_without_removed_cte():
+    sql = inventory_module._non_album_candidates_sql().lower()
+
+    assert not re.search(r"\b(from|join)\s+local_album_membership\b", sql)
+    assert (
+        "library.local_track_files.metadata #>> "
+        "'{scan_cache,file_entry,local_album_membership_problem}'"
+    ) in sql
+
+
 def test_candidate_query_prefilters_active_files_through_four_indexed_eligibility_paths():
     sql = inventory_module._non_album_candidates_sql().lower()
     assert "eligible_track_file_ids as (" in sql

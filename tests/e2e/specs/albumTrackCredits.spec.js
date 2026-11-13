@@ -235,6 +235,8 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       ]);
       expect(artworkBounds).not.toBeNull();
       expect(pathBounds).not.toBeNull();
+    expect(artworkBounds.width).toBe(52);
+    expect(artworkBounds.height).toBe(52);
       expect(pathBounds.x).toBeGreaterThanOrEqual(artworkBounds.x + artworkBounds.width);
       // UI-6 (owner, 11-08 evening): the open-folder button sits at the right edge of the path row.
       await expect(tagEditorActions.tagEditor.folderOpenButton).toBeVisible();
@@ -246,6 +248,11 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       });
       expect(Math.abs(folderRowRightGap)).toBeLessThanOrEqual(1);
       await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('Load all tracks from the folder');
+    await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('font-size', '13.44px');
+    await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('border-top-width', '0px');
+    await tagEditorActions.tagEditor.folderLoadButton.hover();
+    await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('text-decoration-line', 'underline');
 
       const pendingTitle = 'Pending folder expansion title';
       await tagEditorActions.setTrackName(pendingTitle);

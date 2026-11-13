@@ -53,7 +53,7 @@ async function mountSearchInput(page, filter = false) {
                   <span class="search-field-action">
                     <button class="search-field-button" type="button" aria-label="Clear search" data-search-clear>Clear</button>
                     <button class="search-field-button" type="submit" aria-label="Search" data-search-submit>Search</button>
-                    ${filter ? '<button class="search-field-button utility-problem-filter-button" type="button" aria-label="Filters">Filters</button>' : ''}
+                    ${filter ? '<button class="search-field-button utility-problem-filter-button" type="button" aria-label="Filters"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16l-6 7v7l-4 2v-9L4 4Z"></path></svg></button>' : ''}
                   </span>
                 </div>
               </div>
@@ -191,7 +191,7 @@ test('Settings hides Search on desktop, keeps Enter submission, and shows Search
 test('Settings filter dropdown right edge joins its anchor button', async ({ page }) => {
   await mountSearchInput(page, true);
   // Match the non-overlay scrollbar used by the desktop browser.
-  await page.addStyleTag({ content: '.utility-problem-filter-menu { scrollbar-gutter: stable; } .utility-problem-filter-menu::-webkit-scrollbar { width: 11px; height: 11px; }' });
+  await page.addStyleTag({ content: '.trigger-anchor-scroll { scrollbar-gutter: stable; } .trigger-anchor-scroll::-webkit-scrollbar { width: 11px; height: 11px; }' });
   await page.locator('html').evaluate((root) => {
     root.dataset.appearanceMode = 'light';
     root.dataset.appearancePalette = 'fixture';
@@ -200,38 +200,51 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   });
   await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/runtime/trigger-anchor.css') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/trigger-anchor.js') });
+  await page.locator('.utility-sidebar').evaluate(element => {
+    element.style.transform = 'translateY(0.296875px)';
+  });
+  const closedGeometry = await page.locator('.utility-problem-filter-button svg').evaluate((icon) => {
+    const bounds = icon.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+  });
   await page.locator('.utility-search-row').evaluate((row) => {
     const menu = document.createElement('div');
     menu.className = 'utility-problem-filter-menu';
+    const scroll = document.createElement('div');
+    scroll.className = 'trigger-anchor-scroll';
     for (let index = 0; index < 20; index += 1) {
       const option = document.createElement('button');
       option.className = 'utility-problem-filter-option';
       option.textContent = `Filter option ${index + 1}`;
-      menu.append(option);
+      scroll.append(option);
     }
+    menu.append(scroll);
     row.append(menu);
     syncTriggerAnchor(menu, row.querySelector('.utility-problem-filter-button'));
   });
-  await page.locator('.utility-sidebar').evaluate(element => {
-    element.style.transform = 'translateY(0.296875px)';
-  });
   const geometry = await page.evaluate(() => {
-    const button = document.querySelector('.utility-problem-filter-button').getBoundingClientRect();
     const field = document.querySelector('.search-field').getBoundingClientRect();
     const menu = document.querySelector('.utility-problem-filter-menu').getBoundingClientRect();
     const sidebar = document.querySelector('.utility-sidebar').getBoundingClientRect();
     return {
-      buttonRight: button.right,
       fieldLeft: field.left,
+      fieldRight: field.right,
       menuLeft: menu.left,
       menuRight: menu.right,
       sidebarRight: sidebar.right,
     };
   });
-  expect(geometry.menuLeft).toBeCloseTo(geometry.fieldLeft - 4, 0);
-  expect(geometry.menuRight).toBeCloseTo(geometry.buttonRight, 0);
-  await expect(page.locator('.utility-problem-filter-menu')).toHaveAttribute('data-trigger-anchor-side', 'right');
+  expect(geometry.menuLeft).toBeCloseTo(geometry.fieldLeft, 0);
+  expect(geometry.menuRight).toBeCloseTo(geometry.fieldRight, 0);
+  await expect(page.locator('.utility-problem-filter-menu')).toHaveAttribute('data-trigger-anchor-side', 'none');
+  await expect(page.locator('.search-field-control')).toHaveClass(/trigger-anchor-open/);
+  await expect(page.locator('.utility-problem-filter-button')).not.toHaveClass(/trigger-anchor-open/);
   await expect(page.locator('.search-field-control')).toHaveCSS('border-bottom-right-radius', '0px');
+  const openGeometry = await page.locator('.utility-problem-filter-button svg').evaluate((icon) => {
+    const bounds = icon.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+  });
+  expect(openGeometry).toEqual(closedGeometry);
   const edgeColors = await page.evaluate(() => {
     const button = document.querySelector('.utility-problem-filter-button');
     const menu = document.querySelector('.utility-problem-filter-menu');
@@ -251,10 +264,12 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   expect(edgeColors.connectorRight).toBe(edgeColors.connectorLeft);
   expect(edgeColors.connectorRightColor).toBe(edgeColors.connectorLeftColor);
   expect(edgeColors.edgeOverlay).toBe('none');
-  expect(edgeColors.topEdgeOverlay).toBe('none');
+  expect(edgeColors.topEdgeOverlay).toBe('block');
   expect(edgeColors.buttonSurface).toBe(edgeColors.menuSurface);
   expect(edgeColors.buttonBottomBorder).toBe('0px');
-  expect(await page.locator('.utility-problem-filter-menu').evaluate(menu => menu.scrollWidth <= menu.clientWidth)).toBe(true);
+  const horizontalOverflow = await page.locator('.trigger-anchor-scroll')
+    .evaluate(menu => menu.scrollWidth - menu.clientWidth);
+  expect(horizontalOverflow).toBeLessThanOrEqual(2);
   const screenshot = await page.screenshot();
   const seam = await page.evaluate(async base64 => {
     const image = new Image();
@@ -278,14 +293,22 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   }, screenshot.toString('base64'));
   for (const pixel of seam.join) expect(pixel).toEqual(seam.panel);
   for (const pixel of seam.acrossJoin) expect(pixel).toEqual(seam.panel);
-  const scrollEdge = await page.locator('.utility-problem-filter-menu').evaluate(menu => {
-    const before = getComputedStyle(menu).backgroundImage;
-    menu.scrollTop = 100;
-    return { before, after: getComputedStyle(menu).backgroundImage, scrollTop: menu.scrollTop };
+  const scrollEdge = await page.locator('.trigger-anchor-scroll').evaluate(scroll => {
+    const menu = scroll.parentElement;
+    const before = getComputedStyle(menu, '::after').backgroundImage;
+    scroll.scrollTop = 100;
+    return { before, after: getComputedStyle(menu, '::after').backgroundImage, scrollTop: scroll.scrollTop };
   });
   expect(scrollEdge.scrollTop).toBe(100);
   expect(scrollEdge.after).toBe(scrollEdge.before);
-  expect(scrollEdge.after).toContain('210px');
+  expect(scrollEdge.after).toContain('linear-gradient');
+  await page.locator('.utility-problem-filter-menu').evaluate(menu => clearTriggerAnchor(menu));
+  await expect(page.locator('.search-field-control')).not.toHaveClass(/trigger-anchor-open/);
+  const closedAgainGeometry = await page.locator('.utility-problem-filter-button svg').evaluate((icon) => {
+    const bounds = icon.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+  });
+  expect(closedAgainGeometry).toEqual(closedGeometry);
 });
 
 for (const [name, controlClass, stylesheet, shadow] of [

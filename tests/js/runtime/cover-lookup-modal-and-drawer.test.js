@@ -15,6 +15,10 @@ const helperPath = path.join(
   'cover-lookup-modal-and-drawer.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const notificationHelperSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'cover-lookup-notification-helpers.js'),
+  'utf8',
+);
 
 function loadHelper(overrides = {}) {
   const context = {
@@ -1599,10 +1603,12 @@ require('node:test')('pasted cover updates its notification before the save resp
   const drawerRenderCalls = [];
   let resolveRequest;
   const context = loadHelper({
+    buildTrackPathSignature: value => (value?.tracks || []).map(track => track.path).sort().join('\n'),
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
     getAlbumPathSignature: (value) => (value?.tracks || []).map((track) => track.path).join('::'),
     showToast: () => {},
   });
+  vm.runInContext(notificationHelperSource, context, { filename: 'cover-lookup-notification-helpers.js' });
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.tasks = [{
     id: 'aladdin-task',
@@ -6971,6 +6977,78 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
     'the first lagging inventory read after reopen must retain the newly saved image',
   );
   assert.equal(context.state.coverLookup.modal.localCovers[0].is_active, true);
+});
+
+require('node:test')('pasted cover is selected under LOCAL when reopened before save settles and rolls back on failure', async () => {
+  const album = {
+    key: 'last-trial',
+    name: 'Последнее испытание',
+    tracks: [{ path: 'N:/Last Trial/01.flac' }],
+  };
+  const pasted = {
+    id: 'owner-pasted-cover',
+    data_url: 'data:image/jpeg;base64,owner-pasted-cover',
+    mime_type: 'image/jpeg',
+    filename: 'owner-pasted-cover.jpg',
+    width: 600,
+    height: 543,
+  };
+  let resolveRequest;
+  const context = loadHelper({
+    deepCloneJson: value => JSON.parse(JSON.stringify(value)),
+    buildTrackPathSignature: value => (value?.tracks || []).map(track => track.path).sort().join('\n'),
+    buildAlbumDisplayCoverUrl: () => '/cover/optimistic.jpg',
+    getAlbumPathSignature: () => 'last-trial',
+    getAlbumRequestKey: value => String(value?.key || ''),
+    showToast: () => {},
+    fetch: () => new Promise(resolve => { resolveRequest = resolve; }),
+  });
+  vm.runInContext(notificationHelperSource, context, { filename: 'cover-lookup-notification-helpers.js' });
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal = { album, taskId: 'last-trial-a', pastedImages: [pasted] };
+  const previousTasks = [
+    { id: 'last-trial-a', status: 'completed', album_payload: album, notification_action_taken: false },
+    { id: 'last-trial-b', status: 'completed', album_payload: album, notification_action_taken: false },
+  ];
+  context.state.coverLookup.tasks = JSON.parse(JSON.stringify(previousTasks));
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Last Trial/old.jpg',
+    active_cover_path: 'N:/Last Trial/old.jpg',
+    local_covers: [{ path: 'N:/Last Trial/old.jpg', is_active: true }],
+    other_art: [],
+  });
+  context.closeCoverLookupModal = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.syncCoverLookupSaveButton = () => {};
+
+  const savePromise = context.savePastedCoverFromLookup(pasted.id);
+  await Promise.resolve();
+
+  assert.equal(context.isCoverLookupMutationPending(album), true);
+  const reopened = context.cachedCoverLookupGalleryPayload(album);
+  assert.equal(reopened.local_covers[0].preview_url, pasted.data_url);
+  assert.equal(reopened.local_covers[0].is_active, true);
+  assert.equal(reopened.selected_source_path, reopened.local_covers[0].path);
+  assert.equal(reopened.other_art.length, 0);
+  assert.equal(context.state.coverLookup.tasks.every(task => task.notification_action_taken), true);
+
+  resolveRequest({
+    ok: false,
+    json: async () => ({ ok: false, error: 'save failed' }),
+  });
+  await savePromise;
+
+  assert.equal(context.isCoverLookupMutationPending(album), false);
+  const rolledBack = context.cachedCoverLookupGalleryPayload(album);
+  assert.deepEqual(Array.from(rolledBack.local_covers, cover => cover.path), ['N:/Last Trial/old.jpg']);
+  assert.equal(rolledBack.selected_source_path, 'N:/Last Trial/old.jpg');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.coverLookup.tasks)), previousTasks);
 });
 
 require('node:test')('accepted remote save seeds and selects its new LOCAL card on immediate notification reopen', async () => {

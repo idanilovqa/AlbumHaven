@@ -112,6 +112,30 @@ def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path
     ]
 
 
+def test_cover_gallery_keeps_active_selected_non_square_art_under_local(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = album_root / "cover.jpg"
+    other_art = album_root / "booklet.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (220, 40, 40), size=(20, 12))
+    _write_jpeg(other_art, (40, 40, 220), size=(20, 12))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(active_cover)}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert payload["selected_source_path"] == str(active_cover)
+    assert [item["path"] for item in payload["local_covers"]] == [str(active_cover)]
+    assert [item["path"] for item in payload["other_art"]] == [str(other_art)]
+
+
 def test_cover_gallery_excludes_external_managed_active_preview(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     track_path = album_root / "song.mp3"

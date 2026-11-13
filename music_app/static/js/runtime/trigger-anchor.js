@@ -1,9 +1,11 @@
 function getTriggerAnchorGeometry(anchor, surface) {
   const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+  const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
+  const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
   return {
     edge,
-    side: Math.abs(anchor.left - surface.left) <= 2 ? 'left'
-      : Math.abs(surface.right - anchor.right) <= 2 ? 'right' : 'none',
+    side: alignedLeft && alignedRight ? 'none'
+      : alignedLeft ? 'left' : alignedRight ? 'right' : 'none',
     left: Math.max(0, anchor.left - surface.left),
     right: Math.max(0, surface.right - anchor.right),
     width: anchor.width,
@@ -42,9 +44,16 @@ function clearTriggerAnchor(surface) {
   binding.observer?.disconnect();
  binding.resizeObserver?.disconnect();
  binding.anchor.classList.remove('trigger-anchor-open');
+ binding.visualAnchor?.classList.remove('trigger-anchor-open');
  surface.classList.remove('trigger-anchor-surface');
  delete binding.anchor.dataset.triggerAnchorEdge;
  delete binding.anchor.dataset.triggerAnchorContext;
+ if (binding.visualAnchor && binding.visualAnchor !== binding.anchor) {
+   delete binding.visualAnchor.dataset.triggerAnchorEdge;
+   delete binding.visualAnchor.dataset.triggerAnchorContext;
+   binding.visualAnchor.style.removeProperty?.('--trigger-anchor-background');
+   binding.visualAnchor.style.removeProperty?.('--trigger-anchor-gap');
+ }
  delete surface.dataset.triggerAnchorContext;
  delete surface.dataset.triggerAnchorEdge;
   delete surface.dataset.triggerAnchorSide;
@@ -56,6 +65,9 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const visualAnchor = anchor.matches?.('.search-field-button')
+    ? anchor.closest?.('.search-field-control') || anchor
+    : anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -64,6 +76,7 @@ function syncTriggerAnchor(surface, anchor) {
   const contextChanged = surface.dataset.triggerAnchorContext !== anchorContext;
   if (contextChanged) surface.dataset.triggerAnchorContext = anchorContext;
   if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
+  if (visualAnchor.dataset.triggerAnchorContext !== anchorContext) visualAnchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
@@ -83,7 +96,7 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
-  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), bounds);
+  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds);
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -94,20 +107,20 @@ function syncTriggerAnchor(surface, anchor) {
     : surfaceStyle?.getPropertyValue?.('--trigger-anchor-background')?.trim();
   if (surfaceBackground) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
-    anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
+    visualAnchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
   if (anchor.matches?.('.search-field-button')) {
     if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
   }
   else delete surface.dataset.triggerAnchorSearch;
-  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+  if (!visualAnchor.classList.contains('trigger-anchor-open')) visualAnchor.classList.add('trigger-anchor-open');
  if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
-  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
-  anchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
   if (previous?.anchor === anchor) return;
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
     if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
@@ -119,9 +132,10 @@ function syncTriggerAnchor(surface, anchor) {
     if (surface.hidden) { clearTriggerAnchor(surface); return; }
     syncTriggerAnchor(surface, anchor);
   }) : null;
-  triggerAnchorBindings.set(surface, { anchor, observer, resizeObserver });
+  triggerAnchorBindings.set(surface, { anchor, visualAnchor, observer, resizeObserver });
   if (resizeObserver) {
     resizeObserver.observe(anchor);
+    if (visualAnchor !== anchor) resizeObserver.observe(visualAnchor);
     resizeObserver.observe(surface);
     if (anchor.parentElement) resizeObserver.observe(anchor.parentElement);
   }

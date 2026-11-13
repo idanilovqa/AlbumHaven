@@ -2821,7 +2821,9 @@ function mergeCoverLookupTaskSummaries(
 ) {
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const currentById = new Map(current.map((task) => [String(task?.id || ''), task]));
-  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks).map((task) => {
+  const incoming = reconcileCoverLookupOptimisticIdentityTasks(
+    mergeCoverLookupTasksWithNotifications(incomingTasks),
+  ).map((task) => {
     const currentTask = currentById.get(String(task?.id || ''));
     const currentSearchGeneration = String(currentTask?.search_generation || '').trim();
     const incomingSearchGeneration = String(task?.search_generation || '').trim();
@@ -3652,6 +3654,40 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
 const coverLookupSplitReleasesByTask = new Map();
 // UI-5 (owner): once the user chooses a split release for a notification, that choice is final.
 const coverLookupSplitChoiceByTask = new Map();
+const coverLookupOptimisticIdentityByTrackSignature = new Map();
+
+function buildCoverLookupTrackSetSignature(paths) {
+  return Array.from(paths || []).sort().join('\n');
+}
+
+function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
+  const incomingTasks = Array.isArray(tasks) ? tasks : [];
+  if (!coverLookupOptimisticIdentityByTrackSignature.size) return incomingTasks;
+  return incomingTasks.map((task) => {
+    const taskId = String(task?.id || '');
+    const signature = buildCoverLookupTrackSetSignature(getAlbumTrackPaths(task?.album_payload));
+    const transition = coverLookupOptimisticIdentityByTrackSignature.get(signature)
+      || Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).find((candidate) => (
+        candidate?.originalAlbum
+        && findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+      ));
+    if (!taskId || !transition) return task;
+    if (transition.releases) {
+      coverLookupSplitReleasesByTask.set(taskId, transition.releases);
+      return task;
+    }
+    if (!transition.replacement) return task;
+    coverLookupSplitReleasesByTask.delete(taskId);
+    coverLookupSplitChoiceByTask.delete(taskId);
+    return {
+      ...task,
+      artist: String(transition.replacement.album_artist || task.artist || ''),
+      album: String(transition.replacement.name || task.album || ''),
+      year: transition.replacement.year ?? task.year,
+      album_payload: transition.replacement,
+    };
+  });
+}
 
 function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const originalPaths = getAlbumTrackPaths(originalAlbum);
@@ -3676,6 +3712,51 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const isSplit = originalPaths.size >= 2
     && releases.length >= 2
     && coveredPaths.size === originalPaths.size;
+  let identitySignature = buildCoverLookupTrackSetSignature(originalPaths);
+  let previousIdentity = coverLookupOptimisticIdentityByTrackSignature.get(identitySignature);
+  let mergedReplacement = null;
+  let updatedSplitReleases = null;
+  if (!isSplit) {
+    const priorTransition = Array.from(coverLookupOptimisticIdentityByTrackSignature.entries())
+      .find(([, transition]) => {
+        if (!transition?.releases || !transition.paths) return false;
+        const matchingReleaseIndex = transition.releases.findIndex((release) => {
+          const releasePaths = getAlbumTrackPaths(release);
+          return releasePaths.size === originalPaths.size
+            && Array.from(originalPaths).every((path) => releasePaths.has(path));
+        });
+        if (matchingReleaseIndex < 0) return false;
+        mergedReplacement = candidates.find((album) => {
+          const paths = getAlbumTrackPaths(album);
+          return Array.from(transition.paths).every((path) => paths.has(path));
+        }) || null;
+        if (mergedReplacement) return true;
+        const renamedRelease = candidates.find((album) => {
+          const paths = getAlbumTrackPaths(album);
+          return paths.size === originalPaths.size
+            && Array.from(originalPaths).every((path) => paths.has(path));
+        });
+        if (!renamedRelease) return false;
+        updatedSplitReleases = transition.releases.map((release, index) => (
+          index === matchingReleaseIndex ? renamedRelease : release
+        ));
+        return true;
+      });
+    if (priorTransition) {
+      [identitySignature, previousIdentity] = priorTransition;
+    }
+  }
+  const nextIdentity = isSplit
+    ? { originalAlbum, releases, paths: new Set(originalPaths) }
+    : mergedReplacement ? {
+      originalAlbum: previousIdentity.originalAlbum || originalAlbum,
+      replacement: mergedReplacement,
+      paths: previousIdentity.paths,
+    } : updatedSplitReleases ? {
+      ...previousIdentity,
+      releases: updatedSplitReleases,
+    } : null;
+  if (nextIdentity) coverLookupOptimisticIdentityByTrackSignature.set(identitySignature, nextIdentity);
   const taskIds = [];
   const replacedTasks = [];
   const removedSplits = [];
@@ -3725,7 +3806,7 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
     taskIds.push(taskId);
     return optimisticTask;
   });
-  if (!taskIds.length) return null;
+  if (!taskIds.length && !nextIdentity) return null;
   if (replacedTasks.length) {
     state.coverLookup.tasks = nextTasks;
     if (typeof persistCoverLookupNotificationTasks === 'function') {
@@ -3735,10 +3816,44 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
       renderCoverLookupDrawer({ taskIds, preserveInteraction: false });
     }
   }
-  return { taskIds, releases, replacedTasks, removedSplits, removedChoices };
+  return {
+    taskIds,
+    releases,
+    replacedTasks,
+    removedSplits,
+    removedChoices,
+    identitySignature,
+    previousIdentity,
+    nextIdentity,
+  };
 }
 
 function clearCoverLookupOptimisticSplit(recordedSplit) {
+  if (
+    recordedSplit?.nextIdentity
+    && coverLookupOptimisticIdentityByTrackSignature.get(recordedSplit.identitySignature)
+      === recordedSplit.nextIdentity
+  ) {
+    if (recordedSplit.previousIdentity) {
+      coverLookupOptimisticIdentityByTrackSignature.set(
+        recordedSplit.identitySignature,
+        recordedSplit.previousIdentity,
+      );
+    } else {
+      coverLookupOptimisticIdentityByTrackSignature.delete(recordedSplit.identitySignature);
+    }
+  }
+  if (recordedSplit?.nextIdentity?.releases) {
+    coverLookupSplitReleasesByTask.forEach((releases, taskId) => {
+      if (releases !== recordedSplit.nextIdentity.releases) return;
+      if (recordedSplit.previousIdentity?.releases) {
+        coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+      } else {
+        coverLookupSplitReleasesByTask.delete(taskId);
+      }
+      coverLookupSplitChoiceByTask.delete(taskId);
+    });
+  }
   (recordedSplit?.taskIds || []).forEach((taskId) => {
     if (coverLookupSplitReleasesByTask.get(taskId) === recordedSplit.releases) {
       coverLookupSplitReleasesByTask.delete(taskId);
@@ -4103,6 +4218,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
           ? {
             ...task,
             status: 'running',
+            job_kind: 'candidate_lookup',
+            job_contract: {
+              ...(task.job_contract || {}),
+              job_kind: 'candidate_lookup',
+            },
             result_kind: '',
             progress: 0,
             progress_label: 'Searching...',
@@ -4147,6 +4267,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
         ? {
           ...data.task,
           status: 'running',
+        job_kind: 'candidate_lookup',
+        job_contract: {
+          ...(data.task.job_contract || {}),
+          job_kind: 'candidate_lookup',
+        },
           result_kind: '',
           progress_label: 'Searching...',
           started_at: data.task.started_at || new Date().toISOString(),
@@ -4630,16 +4755,70 @@ async function addRemoteCoverLinksFromLookup() {
 }
 
 async function savePastedCoverFromLookup(imageId) {
+  const session = coverLookupModalSession;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   const pastedItem = (state.coverLookup.modal.pastedImages || []).find((item) => String(item?.id || '') === String(imageId || ''));
-  if (!album || !pastedItem?.data_url) return;
+  if (!album || !pastedItem?.data_url || state.coverLookup.modal.saving
+      || isCoverLookupMutationPending(album)) return;
+  const mutationKey = buildCoverLookupMutationKey(album);
   const previousAlbum = deepCloneJson(album);
-  const previousTask = taskId
-    ? deepCloneJson((state.coverLookup.tasks || []).find((task) => String(task?.id || '') === taskId) || null)
-    : null;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const inventoryKey = buildCoverLookupGalleryCacheKey(album);
+  const previousInventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey);
+  const previousInventoryMutationSnapshot = previousInventoryMutation ? {
+    addedCovers: new Map(previousInventoryMutation.addedCovers),
+    deletedPaths: new Set(previousInventoryMutation.deletedPaths),
+    selectedPath: previousInventoryMutation.selectedPath,
+  } : null;
+  const optimisticPath = `pasted-image:${String(pastedItem.id || '')}`;
+  const restorePreviousInventory = () => {
+    if (previousInventoryMutationSnapshot) {
+      coverLookupLocalInventoryMutations.set(inventoryKey, previousInventoryMutationSnapshot);
+    } else {
+      coverLookupLocalInventoryMutations.delete(inventoryKey);
+    }
+    if (previousGallery) cacheCoverLookupGalleryPayload(album, previousGallery);
+    else invalidateCoverLookupGalleryCache(album);
+  };
+  const notificationFields = [
+    'notification_action_taken',
+    'notification_completed_at',
+    'notification_expires_at',
+    'current_user_cover_preview_url',
+  ];
+  const albumSignature = buildTrackPathSignature(album);
+  const previousTaskNotifications = new Map((state.coverLookup.tasks || [])
+    .filter((task) => {
+      if (!isCoverLookupTaskCompleted(task)) return false;
+      const idMatches = taskId && String(task?.id || '') === taskId;
+      const taskSignature = task?.album_payload ? buildTrackPathSignature(task.album_payload) : '';
+      return idMatches || (albumSignature && taskSignature === albumSignature);
+    })
+    .map((task) => [String(task.id), Object.fromEntries(notificationFields.map((field) => [
+      field,
+      {
+        present: Object.prototype.hasOwnProperty.call(task, field),
+        value: task[field],
+      },
+    ]))]));
+  coverLookupPendingMutations.add(mutationKey);
+  state.coverLookup.modal.saving = true;
+  syncCoverLookupSaveButton();
   try {
     const optimisticAlbum = applyOptimisticPastedCoverSelection(album, pastedItem);
+    cacheOptimisticLocalCoverGallery(album, {
+      path: optimisticPath,
+      preview_url: pastedItem.data_url,
+      filename: pastedItem.filename,
+      width: pastedItem.width,
+      height: pastedItem.height,
+    });
+    const optimisticGallery = cachedCoverLookupGalleryPayload(album);
+    if (optimisticGallery) {
+      applyCoverLookupGalleryPayload(optimisticGallery, { confirmLocalInventory: false });
+      renderCoverLookupModal();
+    }
     if (taskId && optimisticAlbum) {
       markCoverLookupTaskActionTaken(taskId, optimisticAlbum, { persist: false });
       renderCoverLookupDrawer({ taskIds: [taskId] });
@@ -4667,6 +4846,7 @@ async function savePastedCoverFromLookup(imageId) {
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
     const updatedAlbum = updatedAlbums[0];
+    restorePreviousInventory();
     if (updatedAlbum?.cover_path) {
       cacheOptimisticLocalCoverGallery(album, {
         path: updatedAlbum.cover_path,
@@ -4687,19 +4867,30 @@ async function savePastedCoverFromLookup(imageId) {
     });
     renderCoverLookupDrawer({ taskIds: actionedTaskIds });
   } catch (error) {
+    restorePreviousInventory();
     if (previousAlbum) {
+      clearOptimisticAlbumCovers([previousAlbum]);
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
-    if (previousTask) {
-      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
-        String(task?.id || '') === taskId ? previousTask : task
-      ));
-      renderCoverLookupDrawer({ taskIds: [taskId] });
+    if (previousTaskNotifications.size) {
+      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+        const snapshot = previousTaskNotifications.get(String(task?.id || ''));
+        if (!snapshot) return task;
+        const restored = { ...task };
+        notificationFields.forEach((field) => {
+          if (snapshot[field].present) restored[field] = snapshot[field].value;
+          else delete restored[field];
+        });
+        return restored;
+      });
+      renderCoverLookupDrawer({ taskIds: Array.from(previousTaskNotifications.keys()) });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
     showToast(error.message || 'Failed to save pasted image.', 'error', 2800);
+  } finally {
+    await finishCoverLookupMutation(mutationKey, session);
   }
 }
 

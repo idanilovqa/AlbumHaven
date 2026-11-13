@@ -345,8 +345,8 @@ box-shadow: none !important;
 :root .ui-dropdown-control > input:not(:disabled):not([readonly]) { cursor: pointer; }
 .ui-dropdown-control:has(> input:disabled),
 .ui-dropdown-control > input:disabled { cursor: not-allowed; }
-.ui-dropdown-control:has(> input[readonly]),
-.ui-dropdown-control > input[readonly] { cursor: default; }
+.ui-dropdown-control:has(> input[readonly]:not(:disabled)),
+.ui-dropdown-control > input[readonly]:not(:disabled) { cursor: pointer; caret-color: transparent; }
 .ui-dropdown-control::after {
   content: '';
   position: absolute;

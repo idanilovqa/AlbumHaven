@@ -2190,6 +2190,14 @@ function openTagEditorExceptionMenu() {
   return true;
 }
 
+function toggleTagEditorExceptionMenu(input) {
+  if (input?.getAttribute('aria-expanded') === 'true') {
+    closeTagEditorExceptionMenu();
+    return false;
+  }
+  return openTagEditorExceptionMenu();
+}
+
 function selectTagEditorExceptionOption(value) {
   const input = getTagEditorElements().form?.querySelector('[data-tag-field="exception_type"]');
   if (!input) return;

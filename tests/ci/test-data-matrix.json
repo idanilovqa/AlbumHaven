@@ -1656,6 +1656,31 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-041 unhydrated notification opens the optimistic split chooser immediately",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:unhydrated-split-notification"
+    ],
+    "filesystemScenarios": [
+      "media-copy:unhydrated-split-notification"
+    ],
+    "expectedContracts": [
+      "unhydrated-notification-binds-to-optimistic-split",
+      "split-selector-opens-before-tag-edit-response"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:unhydrated-split-notification",
+      "filesystemCopy": "media/cases/unhydrated-split-notification"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -1803,7 +1828,9 @@
     ],
     "expectedContracts": [
       "pasted-cover-revision-persistence",
-      "desktop-mobile-cover-cache-reconciliation"
+      "desktop-mobile-cover-cache-reconciliation",
+      "immediate-reopen-retains-selected-pasted-local-cover",
+      "pasted-cover-never-duplicates-into-other-art"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:pasted-cover-revision",
@@ -3934,6 +3961,26 @@
     "expectedContracts": [
       "populated-problem-summary",
       "automatic-problem-detail"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.utility-problematic-files.config.cjs",
+    "project": "utility-problematic-files",
+    "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI \u203a Problematic Files paints its bounded first page before the complete tree and keeps the filter icon stable",
+    "profile": "utility-problematic-files",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "utility-problematic-files:postgres-problematic-files-summary"
+    ],
+    "filesystemScenarios": [
+      "media:utility-problematic-files"
+    ],
+    "expectedContracts": [
+      "bounded-first-page-before-complete-tree",
+      "problematic-filter-icon-stable"
     ],
     "ownerApproval": "approved"
   },
@@ -9777,7 +9824,9 @@
     ],
     "expectedContracts": [
       "physical-album-membership",
-      "explicit-cover-authority"
+      "explicit-cover-authority",
+      "accent-insensitive-duplicate-source-identity",
+      "active-duplicate-source-tag-editor-routing"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:ftc-album-details-023",
@@ -10037,6 +10086,22 @@
     "expectedContracts": [
       "shared-dropdown-centered-neutral-chevron",
       "shared-dropdown-pointer-cursor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/dropdownControl.spec.js",
+    "case": "exception dropdown toggles its production menu on consecutive pointer clicks",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "predefined-dropdown-readonly-without-caret",
+      "production-dropdown-pointer-toggle"
     ],
     "ownerApproval": "approved"
   },

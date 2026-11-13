@@ -189,7 +189,8 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
   const pickerPath = path.resolve('music_app', 'static', 'images', pickerName);
   const expectedCover = findFixtureCoverBySubtitle(Object.values(MANUAL_PROVIDER_COVER).join(' - '));
   expect(expectedCover).not.toBeNull();
-  let previousLocalCover = null;
+  let previousSelectedIdentity = '';
+  let previousDistinctLocalCover = null;
   let savedCoverPath = '';
   let savedCoverRevision = '';
   let savedPreviewHash = '';
@@ -220,23 +221,72 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
-    previousLocalCover = (await coverLookupActions.readLocalCoverCandidates())
-      .find(candidate => candidate.isActive);
-    expect(previousLocalCover).toBeTruthy();
+    await expect(lookup.selectedCoverCards).toHaveCount(1);
+    const previousSelectedCard = lookup.selectedCoverCards.first();
+    const previousSelectedImage = lookup.localCoverImageWithin(previousSelectedCard);
+    const previousSelectedSource = String(
+      await previousSelectedImage.getAttribute('data-production-cover-src')
+      || await previousSelectedImage.getAttribute('src')
+      || '',
+    ).trim();
+    previousSelectedIdentity = previousSelectedSource
+      ? new URL(previousSelectedSource, page.url()).toString()
+      : '';
+    expect(previousSelectedIdentity).not.toBe('');
+    const previousDistinctLocalCard = lookup.inactiveLocalCoverCards.first();
+    await expect(previousDistinctLocalCard).toBeVisible();
+    previousDistinctLocalCover = await coverLookupActions.readLocalCoverCardEvidence(
+      previousDistinctLocalCard,
+      'previous distinct local cover',
+    );
+    expect(previousDistinctLocalCover.isActive).toBe(false);
     await coverLookupActions.chooseComposerImages([pickerPath]);
     await expect(lookup.pendingAttachmentByName(pickerName)).toBeVisible();
     await lookup.manualExtractButton.click();
     const stagedCover = lookup.stagedCoverCardByName(pickerName);
     await expect(stagedCover).toBeVisible();
+    const stagedCoverEvidence = await coverLookupActions.readDisplayedImageEvidence(
+      lookup.localCoverImageWithin(stagedCover),
+      'staged pasted cover',
+    );
     await expect(lookup.taskCardByTitle(USER_OWNED_IMPROVEMENT_TARGET.album)).not.toContainText('Art chosen');
     await coverLookupActions.selectOnlyCover(stagedCover);
     await expect(lookup.taskCardByTitle(USER_OWNED_IMPROVEMENT_TARGET.album)).not.toContainText('Art chosen');
 
+    const localHeading = lookup.sectionTitles.filter({ hasText: /^LOCAL(?:\s|·|$)/ }).first();
+    const localGallery = localHeading.locator(
+      'xpath=../following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " cover-lookup-gallery ")][1]',
+    );
+    const otherArtHeading = lookup.modalBody.locator('.cover-lookup-subsection-title', { hasText: 'Other art' });
+    const otherArtGallery = otherArtHeading.locator(
+      'xpath=following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " cover-lookup-gallery ")][1]',
+    );
+
+    const saveRequestPromise = page.waitForRequest((request) => (
+      request.method() === 'POST'
+      && new URL(request.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
+    ));
     const saveResponsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
     ));
     await lookup.saveRemoteButton.click();
+    await saveRequestPromise;
+    await expect(lookup.drawer).toBeVisible();
+    await trackModalActions.openCoverLookup();
+    await expect(lookup.modal).toBeVisible();
+    const immediateLocalCard = lookup.activeLocalCoverCard;
+    await expect(immediateLocalCard).toHaveClass(/\bis-active\b/);
+    await expect(lookup.selectedCoverCards).toHaveCount(1);
+    await expect(otherArtGallery.getByText(pickerName, { exact: true })).toHaveCount(0);
+    const immediateLocalEvidence = await coverLookupActions.readDisplayedImageEvidence(
+      lookup.localCoverImageWithin(immediateLocalCard),
+      'immediate reopened pasted LOCAL cover',
+    );
+    expect(immediateLocalEvidence.sha256).toBe(stagedCoverEvidence.sha256);
+    expect(immediateLocalEvidence.src).not.toBe(previousSelectedIdentity);
+    await coverLookupActions.closeModal();
+
     const saveResponse = await saveResponsePromise;
     const payload = await saveResponse.json();
     expect(saveResponse.status()).toBe(200);
@@ -249,12 +299,30 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(savedCoverRevision).toMatch(/^[a-f0-9]{64}$/i);
     expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
+
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const authoritativeLocalCard = lookup.activeLocalCoverCard;
+    await expect(authoritativeLocalCard).toHaveClass(/\bis-active\b/);
+    await expect(authoritativeLocalCard).toContainText('cover.jpg');
+    await expect(lookup.selectedCoverCards).toHaveCount(1);
+    await expect(otherArtGallery.getByText('cover.jpg', { exact: true })).toHaveCount(0);
+    const authoritativeLocalEvidence = await coverLookupActions.readDisplayedImageEvidence(
+      lookup.localCoverImageWithin(authoritativeLocalCard),
+      'authoritative reopened pasted LOCAL cover',
+      {
+        expectedCoverPath: savedCoverPath,
+        expectedCoverRevision: savedCoverRevision,
+      },
+    );
+    expect(authoritativeLocalEvidence.sha256).toBe(savedCoverRevision.toUpperCase());
+    await coverLookupActions.closeModal();
     await expect(lookup.modal).toBeHidden();
     // The notification must update while Album Details remains open.
     await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
     await expect(lookup.drawer).toBeVisible();
     await expect(lookup.taskCoverByTitle(USER_OWNED_IMPROVEMENT_TARGET.album))
-      .toHaveAttribute('src', new RegExp(savedCoverRevision));
+      .toHaveAttribute('data-gallery-cover-src', new RegExp(savedCoverRevision));
     await coverLookupActions.waitForTaskCoverDecoded(USER_OWNED_IMPROVEMENT_TARGET.album);
     await trackModalActions.close();
     await coverLookupActions.closeDrawer();
@@ -344,7 +412,9 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
     const candidates = await coverLookupActions.readLocalCoverCandidates();
-    const previous = candidates.find(candidate => candidate.image.sha256 === previousLocalCover.image.sha256);
+    const previous = candidates.find(
+      candidate => candidate.image.sha256 === previousDistinctLocalCover.image.sha256,
+    );
     expect(previous).toBeTruthy();
     expect(previous.isActive).toBe(false);
     await coverLookupActions.selectLocalCoverByNameAndSave(previous.name);
@@ -353,7 +423,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await coverLookupActions.waitForModalResultsReady();
     const reopened = await coverLookupActions.readLocalCoverCandidates();
     expect(reopened.find(candidate => candidate.isActive)?.image.sha256)
-      .toBe(previousLocalCover.image.sha256);
+      .toBe(previousDistinctLocalCover.image.sha256);
     const replacement = reopened.find(candidate => candidate.image.sha256 === savedPreviewHash);
     expect(replacement).toBeTruthy();
     expect(replacement.isActive).toBe(false);
@@ -1579,6 +1649,110 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
       task_id: taskId,
     });
   } finally {
+    await coverLookupActions.closeDrawer();
+    await trackModalActions.closeIfOpen();
+    if (splitApplied) {
+      await tagEditorActions.openForAlbum({
+        album: SPLIT_FIXTURE.splitAlbum,
+        artist: SPLIT_FIXTURE.artist,
+        expectedTrackCount: SPLIT_FIXTURE.filenames.length,
+        galleryActions,
+        trackModalActions,
+        year: SPLIT_FIXTURE.year,
+      });
+      await tagEditorActions.selectAllTracks();
+      await tagEditorActions.setAlbumName(SPLIT_FIXTURE.album);
+      await tagEditorActions.applyAndWaitForSavedFiles();
+      await trackModalActions.closeIfOpen();
+    }
+    if (taskId) {
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.clearTask(SPLIT_FIXTURE.album);
+      await coverLookupActions.closeDrawer();
+    }
+  }
+});
+
+test('FTC-COVERS-041 unhydrated notification opens the optimistic split chooser immediately', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  tagEditorActions,
+  trackModalActions,
+}) => {
+  test.setTimeout(180_000);
+  const splitFilenames = [12, 13, 14, 15, 16].map(
+    (number) => `${String(number).padStart(2, '0')}. Студийная запись ${number}.mp3`,
+  );
+  const artistUrl = `/?surface=albums&artist=${encodeURIComponent(SPLIT_FIXTURE.artist)}`;
+  let splitApplied = false;
+  let taskId = '';
+  try {
+    await galleryActions.goto(artistUrl);
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity({
+      album: SPLIT_FIXTURE.album,
+      artist: SPLIT_FIXTURE.artist,
+      year: SPLIT_FIXTURE.year,
+    })).toEqual({
+      album: SPLIT_FIXTURE.album,
+      artist: SPLIT_FIXTURE.artist,
+      year: SPLIT_FIXTURE.year,
+    });
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.setProviderFixtureMode('split-identity');
+    const task = await coverLookupActions.startSearch();
+    taskId = String(task.task?.id || '').trim();
+    expect(taskId).not.toBe('');
+    await coverLookupActions.waitForModalSearchCompleted();
+    await coverLookupActions.closeModal();
+    await trackModalActions.closeIfOpen();
+
+    // Reload without opening Notifications: the persisted task is not hydrated in client state.
+    await galleryActions.goto(artistUrl);
+    await galleryActions.waitForGalleryReady();
+    await tagEditorActions.openForAlbum({
+      album: SPLIT_FIXTURE.album,
+      artist: SPLIT_FIXTURE.artist,
+      expectedTrackCount: 16,
+      galleryActions,
+      trackModalActions,
+      year: SPLIT_FIXTURE.year,
+    });
+    await tagEditorActions.selectTracksByFilenames(splitFilenames);
+    await tagEditorActions.setAlbumName(SPLIT_FIXTURE.splitAlbum);
+    const edit = await tagEditorActions.applyAndObserveOptimisticState({
+      expectedField: 'album',
+      expectedFilenames: splitFilenames,
+      expectedValue: SPLIT_FIXTURE.splitAlbum,
+      readOptimisticState: async (phase) => {
+        if (phase !== 'before-edit-response') return { phase };
+        splitApplied = true;
+        await trackModalActions.closeIfOpen();
+        await coverLookupActions.openDrawer();
+        await coverLookupActions.waitForDrawerOpen();
+        await coverLookupActions.openTask(SPLIT_FIXTURE.album);
+        await expect(coverLookupActions.coverLookup.modal).toBeHidden();
+        await expect(coverLookupActions.coverLookup.splitReleaseChooser).toBeVisible();
+        await expect(coverLookupActions.coverLookup.splitReleaseChoices).toHaveCount(2);
+        await expect(coverLookupActions.coverLookup.splitReleaseOpenButton).toBeDisabled();
+        return {
+          phase,
+          releaseNames: await coverLookupActions.coverLookup.splitReleaseChoices
+            .allTextContents(),
+        };
+      },
+    });
+    expect(edit.optimisticState.phase).toBe('before-edit-response');
+    expect(edit.optimisticState.releaseNames.join(' ')).toContain(SPLIT_FIXTURE.album);
+    expect(edit.optimisticState.releaseNames.join(' ')).toContain(SPLIT_FIXTURE.splitAlbum);
+  } finally {
+    if (await coverLookupActions.coverLookup.splitReleaseChooser.isVisible()) {
+      await coverLookupActions.coverLookup.splitReleaseChooser
+        .getByRole('button', { name: 'Close', exact: true })
+        .click();
+    }
     if (await coverLookupActions.coverLookup.modal.isVisible()) {
       await coverLookupActions.closeModal();
     }
@@ -1588,7 +1762,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
       await tagEditorActions.openForAlbum({
         album: SPLIT_FIXTURE.splitAlbum,
         artist: SPLIT_FIXTURE.artist,
-        expectedTrackCount: SPLIT_FIXTURE.filenames.length,
+        expectedTrackCount: splitFilenames.length,
         galleryActions,
         trackModalActions,
         year: SPLIT_FIXTURE.year,

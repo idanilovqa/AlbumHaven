@@ -30,7 +30,7 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
   const exceptionInput = event.target.closest('#tag-editor-form [data-tag-field="exception_type"]');
-  if (exceptionInput) openTagEditorExceptionMenu();
+  if (exceptionInput) toggleTagEditorExceptionMenu(exceptionInput);
   else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
 
   const keepMissingAlbumButton = event.target.closest('#utility-modal [data-keep-missing-album="1"]');
@@ -1364,6 +1364,11 @@ function handleUtilityBootstrapKeyDown(event) {
     if (event.key === 'Enter' && exceptionOption) {
       event.preventDefault();
       selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+      return true;
+    }
+    if (exceptionInput && ['Enter', ' '].includes(event.key)) {
+      event.preventDefault();
+      toggleTagEditorExceptionMenu(exceptionInput);
       return true;
     }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {

@@ -7,7 +7,7 @@ test('shared dropdown keeps a centered neutral chevron and pointer cursor across
   await page.setContent(`
     <!doctype html>
     <div class="ui-dropdown-control" style="width:240px;--muted:rgb(126, 132, 141)">
-      <input type="text" aria-label="Exception" value="Custom Collection">
+      <input type="text" aria-label="Exception" value="Custom Collection" readonly>
     </div>
   `);
   await page.addStyleTag({
@@ -25,6 +25,7 @@ test('shared dropdown keeps a centered neutral chevron and pointer cursor across
     const chevronPointTarget = document.elementFromPoint(box.right - 16, box.top + (box.height / 2));
     return {
       inputCursor: getComputedStyle(element.querySelector('input')).cursor,
+      inputCaretColor: getComputedStyle(element.querySelector('input')).caretColor,
       chevronPointCursor: getComputedStyle(chevronPointTarget).cursor,
       chevronPointTarget: chevronPointTarget?.tagName,
       visualCenterOffset: (() => {
@@ -43,6 +44,7 @@ test('shared dropdown keeps a centered neutral chevron and pointer cursor across
   });
 
   expect(rendered.inputCursor).toBe('pointer');
+  expect(rendered.inputCaretColor).toBe('rgba(0, 0, 0, 0)');
   expect(rendered.chevronPointCursor).toBe('pointer');
   expect(rendered.chevronPointTarget).toBe('INPUT');
   expect(Math.abs(rendered.visualCenterOffset)).toBeLessThanOrEqual(2);
@@ -59,10 +61,56 @@ test('shared dropdown keeps a centered neutral chevron and pointer cursor across
   await expect(input).toHaveCSS('cursor', 'not-allowed');
   await expect(control).toHaveCSS('cursor', 'not-allowed');
 
-  await input.evaluate((element) => {
-    element.disabled = false;
-    element.readOnly = true;
+  await input.evaluate((element) => { element.disabled = false; });
+  await expect(input).toHaveCSS('cursor', 'pointer');
+  await expect(control).toHaveCSS('cursor', 'pointer');
+});
+
+test('exception dropdown toggles its production menu on consecutive pointer clicks', async ({ page }) => {
+  await page.setContent(`
+    <!doctype html>
+    <form id="tag-editor-form">
+      <div class="ui-dropdown-control" data-tag-editor-exception-anchor>
+        <input
+          type="text"
+          data-tag-field="exception_type"
+          role="combobox"
+          aria-expanded="false"
+          value="Custom Collection"
+          readonly
+        >
+      </div>
+      <div id="tag-editor-exception-menu" role="listbox" hidden></div>
+    </form>
+  `);
+  await page.addStyleTag({
+    path: path.join(repositoryRoot, 'music_app/static/css/button-component.css'),
   });
-  await expect(input).toHaveCSS('cursor', 'default');
-  await expect(control).toHaveCSS('cursor', 'default');
+  await page.addScriptTag({ content: `
+    var state = { view: { non_album_tracks: [] } };
+    function escapeHtml(value) { return String(value ?? ''); }
+    function getTagEditorElements() { return { form: document.getElementById('tag-editor-form') }; }
+  ` });
+  await page.addScriptTag({
+    path: path.join(repositoryRoot, 'music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'),
+  });
+  await page.addScriptTag({
+    path: path.join(repositoryRoot, 'music_app/static/js/runtime/bootstrap-utility-event-handlers.js'),
+  });
+  await page.evaluate(() => {
+    document.addEventListener('click', (event) => handleUtilityBootstrapClick(event));
+  });
+
+  const input = page.getByRole('combobox');
+  const menu = page.getByRole('listbox');
+  await expect(input).toHaveAttribute('readonly', '');
+  await expect(input).toHaveCSS('caret-color', 'rgba(0, 0, 0, 0)');
+
+  await input.click();
+  await expect(menu).toBeVisible();
+  await expect(input).toHaveAttribute('aria-expanded', 'true');
+
+  await input.click();
+  await expect(menu).toBeHidden();
+  await expect(input).toHaveAttribute('aria-expanded', 'false');
 });

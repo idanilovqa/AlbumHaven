@@ -16,6 +16,19 @@ const helperPath = path.join(
   'cover-lookup-modal-and-drawer.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+
+test('pasted cover is painted into the hidden modal before it can reopen', () => {
+  const saveStart = helperSource.indexOf('async function savePastedCoverFromLookup');
+  const saveEnd = helperSource.indexOf('\nasync function ', saveStart + 1);
+  const saveSource = helperSource.slice(saveStart, saveEnd < 0 ? undefined : saveEnd);
+  const cacheIndex = saveSource.indexOf('cacheOptimisticLocalCoverGallery(album');
+  const paintIndex = saveSource.indexOf('applyCoverLookupGalleryPayload(optimisticGallery');
+  const closeIndex = saveSource.indexOf('closeCoverLookupModal()');
+
+  assert.ok(cacheIndex >= 0);
+  assert.ok(paintIndex > cacheIndex, 'optimistic LOCAL inventory must be painted after it is cached');
+  assert.ok(closeIndex > paintIndex, 'the modal must retain the new pixels before it is hidden');
+});
 const tagEditHelperSource = fs.readFileSync(path.join(
   __dirname,
   '..',
@@ -192,6 +205,209 @@ test('an optimistic album split sends its existing notification straight to the 
 
   assert.equal(choices.length, 1, 'a rolled-back split must not leave a stale chooser');
   assert.equal(overlay.hidden, false);
+});
+
+test('an optimistic split late-binds a notification that hydrates after the tag edit', async () => {
+  class TestButton {}
+  const firstPath = 'N:/Music/DDT/Remixes/01.flac';
+  const secondPath = 'N:/Music/DDT/Remixes/02.flac';
+  const original = {
+    key: 'ddt::remixes',
+    name: 'Remixes',
+    tracks: [{ path: firstPath }, { path: secondPath }],
+  };
+  const releases = [
+    { key: 'ddt::remixes', name: 'Remixes', tracks: [{ path: firstPath }] },
+    { key: 'ddt::remixes 2', name: 'Remixes 2', tracks: [{ path: secondPath }] },
+  ];
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async current => choices.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, releases);
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'remixes-task',
+    album: original.name,
+    album_payload: { key: original.key, name: original.name },
+  }], 'replace');
+  await context.openCoverLookupModal(original, { taskId: 'remixes-task' });
+
+  assert.equal(choices.length, 1);
+  assert.deepEqual(Array.from(choices[0], release => release.name), ['Remixes', 'Remixes 2']);
+});
+
+test('a failed tag edit removes an unhydrated optimistic split before the notification loads', async () => {
+  class TestButton {}
+  const firstPath = 'N:/Music/DDT/Remixes/01.flac';
+  const secondPath = 'N:/Music/DDT/Remixes/02.flac';
+  const original = {
+    key: 'ddt::remixes',
+    name: 'Remixes',
+    tracks: [{ path: firstPath }, { path: secondPath }],
+  };
+  const releases = [
+    { key: 'ddt::remixes', name: 'Remixes', tracks: [{ path: firstPath }] },
+    { key: 'ddt::remixes 2', name: 'Remixes 2', tracks: [{ path: secondPath }] },
+  ];
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async current => choices.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  const optimisticSplit = context.recordCoverLookupOptimisticSplit(original, releases);
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'remixes-task', album: original.name, album_payload: original,
+  }], 'replace');
+  context.clearCoverLookupOptimisticSplit(optimisticSplit);
+  await context.openCoverLookupModal(original, { taskId: 'remixes-task' });
+
+  assert.equal(choices.length, 0);
+  assert.equal(overlay.hidden, false);
+});
+
+test('a later optimistic rename updates the matching release before notification hydration', async () => {
+  class TestButton {}
+  const firstPath = 'N:/Music/DDT/Remixes/01.flac';
+  const secondPath = 'N:/Music/DDT/Remixes/02.flac';
+  const original = {
+    key: 'ddt::remixes',
+    name: 'Remixes',
+    tracks: [{ path: firstPath }, { path: secondPath }],
+  };
+  const releases = [
+    { key: 'ddt::remixes', name: 'Remixes', tracks: [{ path: firstPath }] },
+    { key: 'ddt::remixes 2', name: 'Remixes 2', tracks: [{ path: secondPath }] },
+  ];
+  const renamedFirst = {
+    key: 'ddt::remixes renamed',
+    name: 'Remixes Renamed',
+    tracks: [{ path: firstPath }],
+  };
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async current => choices.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, releases);
+  context.recordCoverLookupOptimisticSplit(releases[0], [renamedFirst]);
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'remixes-task',
+    album: original.name,
+    album_payload: original,
+  }], 'replace');
+  await context.openCoverLookupModal(original, { taskId: 'remixes-task' });
+
+  assert.equal(choices.length, 1);
+  assert.deepEqual(
+    Array.from(choices[0], release => release.name),
+    ['Remixes Renamed', 'Remixes 2'],
+  );
+});
+
+test('an optimistic re-merge replaces an unhydrated split before the notification loads', async () => {
+  class TestButton {}
+  const firstPath = 'N:/Music/DDT/Remixes/01.flac';
+  const secondPath = 'N:/Music/DDT/Remixes/02.flac';
+  const original = {
+    key: 'ddt::remixes',
+    name: 'Remixes',
+    tracks: [{ path: firstPath }, { path: secondPath }],
+  };
+  const releases = [
+    { key: 'ddt::remixes', name: 'Remixes', tracks: [{ path: firstPath }] },
+    { key: 'ddt::remixes 2', name: 'Remixes 2', tracks: [{ path: secondPath }] },
+  ];
+  const merged = { ...original, tracks: [...original.tracks] };
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const context = {
+    window: {},
+    state: { coverLookup: { tasks: [], modal: { pastedImages: [] } } },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(track => track.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => (id === 'cover-lookup-modal' ? overlay : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choices = [];
+  context.presentCoverLookupSplitChoice = async current => choices.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, releases);
+  context.recordCoverLookupOptimisticSplit(releases[1], [merged]);
+  context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
+    id: 'remixes-task', album: original.name, album_payload: original,
+  }], 'replace');
+  await context.openCoverLookupModal(
+    context.state.coverLookup.tasks[0].album_payload,
+    { taskId: 'remixes-task' },
+  );
+
+  assert.equal(choices.length, 0);
+  assert.equal(context.state.coverLookup.modal.album.key, merged.key);
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.album.tracks, track => track.path).sort(),
+    [firstPath, secondPath],
+  );
 });
 
 test('an optimistic re-merge replaces a split notification with the current merged album', async () => {
@@ -1202,7 +1418,8 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   };
   const acceptedTask = {
     id: 'sola-scriptura-lookup',
-    status: 'running',
+    status: 'pending',
+    job_kind: 'save_remote_selection',
     progress: 5,
     progress_label: 'Searching providers...',
     album_payload: album,
@@ -1279,6 +1496,7 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
       tasks: context.state.coverLookup.tasks.map((task) => ({
         id: task.id,
         status: task.status,
+        jobKind: task.job_kind,
       })),
     });
   };
@@ -1296,7 +1514,9 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   assert.ok(renderSnapshots.some((snapshot) => (
     snapshot.manualBusy === false
     && snapshot.taskId === acceptedTask.id
-    && snapshot.tasks.some((task) => task.id === acceptedTask.id && task.status === 'running')
+    && snapshot.tasks.some((task) => task.id === acceptedTask.id
+      && task.status === 'running'
+      && task.jobKind === 'candidate_lookup')
   )));
 
   resolveTasksRequest({
@@ -1459,6 +1679,7 @@ test('retry immediately shows the existing notification as searching without add
     status: 'failed',
     result_kind: 'interrupted',
     progress_label: 'Interrupted',
+    job_kind: 'save_remote_selection',
     album_payload: album,
   };
   let resolveStartRequest;
@@ -1494,6 +1715,7 @@ test('retry immediately shows the existing notification as searching without add
       id: task.id,
       status: task.status,
       progressLabel: task.progress_label,
+      jobKind: task.job_kind,
     })));
   };
   context.loadCoverLookupTasks = async () => {};
@@ -1507,6 +1729,7 @@ test('retry immediately shows the existing notification as searching without add
     id: interruptedTask.id,
     status: 'running',
     progressLabel: 'Searching...',
+    jobKind: 'candidate_lookup',
   }]);
 
   resolveStartRequest({
@@ -1522,6 +1745,7 @@ test('retry immediately shows the existing notification as searching without add
   assert.equal(context.state.coverLookup.tasks[0].id, interruptedTask.id);
   assert.equal(context.state.coverLookup.tasks[0].status, 'running');
   assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Searching...');
+  assert.equal(context.state.coverLookup.tasks[0].job_kind, 'candidate_lookup');
 });
 
 

@@ -7016,10 +7016,12 @@ function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {
 
 function getTriggerAnchorGeometry(anchor, surface) {
   const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+  const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
+  const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
   return {
     edge,
-    side: Math.abs(anchor.left - surface.left) <= 2 ? 'left'
-      : Math.abs(surface.right - anchor.right) <= 2 ? 'right' : 'none',
+    side: alignedLeft && alignedRight ? 'none'
+      : alignedLeft ? 'left' : alignedRight ? 'right' : 'none',
     left: Math.max(0, anchor.left - surface.left),
     right: Math.max(0, surface.right - anchor.right),
     width: anchor.width,
@@ -7058,9 +7060,16 @@ function clearTriggerAnchor(surface) {
   binding.observer?.disconnect();
  binding.resizeObserver?.disconnect();
  binding.anchor.classList.remove('trigger-anchor-open');
+ binding.visualAnchor?.classList.remove('trigger-anchor-open');
  surface.classList.remove('trigger-anchor-surface');
  delete binding.anchor.dataset.triggerAnchorEdge;
  delete binding.anchor.dataset.triggerAnchorContext;
+ if (binding.visualAnchor && binding.visualAnchor !== binding.anchor) {
+   delete binding.visualAnchor.dataset.triggerAnchorEdge;
+   delete binding.visualAnchor.dataset.triggerAnchorContext;
+   binding.visualAnchor.style.removeProperty?.('--trigger-anchor-background');
+   binding.visualAnchor.style.removeProperty?.('--trigger-anchor-gap');
+ }
  delete surface.dataset.triggerAnchorContext;
  delete surface.dataset.triggerAnchorEdge;
   delete surface.dataset.triggerAnchorSide;
@@ -7072,6 +7081,9 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const visualAnchor = anchor.matches?.('.search-field-button')
+    ? anchor.closest?.('.search-field-control') || anchor
+    : anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -7080,6 +7092,7 @@ function syncTriggerAnchor(surface, anchor) {
   const contextChanged = surface.dataset.triggerAnchorContext !== anchorContext;
   if (contextChanged) surface.dataset.triggerAnchorContext = anchorContext;
   if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
+  if (visualAnchor.dataset.triggerAnchorContext !== anchorContext) visualAnchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
@@ -7099,7 +7112,7 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
-  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), bounds);
+  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds);
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -7110,20 +7123,20 @@ function syncTriggerAnchor(surface, anchor) {
     : surfaceStyle?.getPropertyValue?.('--trigger-anchor-background')?.trim();
   if (surfaceBackground) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
-    anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
+    visualAnchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
   if (anchor.matches?.('.search-field-button')) {
     if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
   }
   else delete surface.dataset.triggerAnchorSearch;
-  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+  if (!visualAnchor.classList.contains('trigger-anchor-open')) visualAnchor.classList.add('trigger-anchor-open');
  if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
-  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
-  anchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
   if (previous?.anchor === anchor) return;
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
     if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
@@ -7135,9 +7148,10 @@ function syncTriggerAnchor(surface, anchor) {
     if (surface.hidden) { clearTriggerAnchor(surface); return; }
     syncTriggerAnchor(surface, anchor);
   }) : null;
-  triggerAnchorBindings.set(surface, { anchor, observer, resizeObserver });
+  triggerAnchorBindings.set(surface, { anchor, visualAnchor, observer, resizeObserver });
   if (resizeObserver) {
     resizeObserver.observe(anchor);
+    if (visualAnchor !== anchor) resizeObserver.observe(visualAnchor);
     resizeObserver.observe(surface);
     if (anchor.parentElement) resizeObserver.observe(anchor.parentElement);
   }
@@ -7421,9 +7435,13 @@ function resolveVisibleGalleryArtistInfoAnchor(active, scroll) {
   if (!active?.key?.startsWith?.('artist:')) return active?.anchor || null;
   const artist = active.key.slice('artist:'.length);
   const resolved = resolveCurrentGalleryAnchor(active.anchor, active.anchorSectionKey);
-  return [resolved, ...Array.from(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
-    .find(candidate => String(candidate?.dataset?.artist || '') === artist
-      && isGalleryArtistInfoAnchorVisible(candidate, scroll)) || null;
+  const candidates = [resolved, ...Array.from(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
+    .filter((candidate, index, all) => all.indexOf(candidate) === index
+      && String(candidate?.dataset?.artist || '') === artist
+      && isGalleryArtistInfoAnchorVisible(candidate, scroll));
+  return candidates.find(candidate => candidate.closest?.('.family-artist-header'))
+    || candidates[0]
+    || null;
 }
 
 function isGalleryAnchorVisible(anchor, scroll) {
@@ -8443,12 +8461,7 @@ function initGalleryMain() {
       if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
         const previousAnchor = settled.anchor;
         const artist = settled.key.slice('artist:'.length);
-        let nextAnchor = resolveCurrentGalleryAnchor(previousAnchor, settled.anchorSectionKey);
-        if (String(nextAnchor?.dataset?.artist || '') !== artist || !isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
-          nextAnchor = Array.from(document.querySelectorAll?.('[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]') || [])
-            .find(candidate => String(candidate.dataset?.artist || '') === artist
-              && isGalleryArtistInfoAnchorVisible(candidate, scroll)) || nextAnchor;
-        }
+        const nextAnchor = resolveVisibleGalleryArtistInfoAnchor(settled, scroll);
         if (nextAnchor !== previousAnchor && String(nextAnchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
           previousAnchor?.setAttribute?.('aria-expanded', 'false');
@@ -17645,7 +17658,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
   // Rows this session edited were rendered optimistically, so they stay until canonical details land.
   const editedLocally = locallyEditedAlbumKeys.has(albumKey);
-  if (!editedLocally) renderTrackModalLoadingState(openAlbum);
+  if (!editedLocally && albumRequiresHydration(openAlbum)) renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
@@ -17941,7 +17954,10 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || !(button instanceof HTMLElement)) return album;
   const duplicateSources = Array.isArray(album?.duplicate_sources) ? album.duplicate_sources : [];
-  const sourceIndex = Number(button.getAttribute('data-duplicate-source-index'));
+  const sourceIndexAttribute = String(button.getAttribute('data-duplicate-source-index') || '').trim();
+  const sourceIndex = sourceIndexAttribute
+    ? Number(sourceIndexAttribute)
+    : getTrackModalDuplicateSourceIndex(album, duplicateSources);
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }
@@ -33918,6 +33934,14 @@ function openTagEditorExceptionMenu() {
   return true;
 }
 
+function toggleTagEditorExceptionMenu(input) {
+  if (input?.getAttribute('aria-expanded') === 'true') {
+    closeTagEditorExceptionMenu();
+    return false;
+  }
+  return openTagEditorExceptionMenu();
+}
+
 function selectTagEditorExceptionOption(value) {
   const input = getTagEditorElements().form?.querySelector('[data-tag-field="exception_type"]');
   if (!input) return;
@@ -37468,7 +37492,9 @@ function mergeCoverLookupTaskSummaries(
 ) {
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const currentById = new Map(current.map((task) => [String(task?.id || ''), task]));
-  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks).map((task) => {
+  const incoming = reconcileCoverLookupOptimisticIdentityTasks(
+    mergeCoverLookupTasksWithNotifications(incomingTasks),
+  ).map((task) => {
     const currentTask = currentById.get(String(task?.id || ''));
     const currentSearchGeneration = String(currentTask?.search_generation || '').trim();
     const incomingSearchGeneration = String(task?.search_generation || '').trim();
@@ -38299,6 +38325,40 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
 const coverLookupSplitReleasesByTask = new Map();
 // UI-5 (owner): once the user chooses a split release for a notification, that choice is final.
 const coverLookupSplitChoiceByTask = new Map();
+const coverLookupOptimisticIdentityByTrackSignature = new Map();
+
+function buildCoverLookupTrackSetSignature(paths) {
+  return Array.from(paths || []).sort().join('\n');
+}
+
+function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
+  const incomingTasks = Array.isArray(tasks) ? tasks : [];
+  if (!coverLookupOptimisticIdentityByTrackSignature.size) return incomingTasks;
+  return incomingTasks.map((task) => {
+    const taskId = String(task?.id || '');
+    const signature = buildCoverLookupTrackSetSignature(getAlbumTrackPaths(task?.album_payload));
+    const transition = coverLookupOptimisticIdentityByTrackSignature.get(signature)
+      || Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).find((candidate) => (
+        candidate?.originalAlbum
+        && findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+      ));
+    if (!taskId || !transition) return task;
+    if (transition.releases) {
+      coverLookupSplitReleasesByTask.set(taskId, transition.releases);
+      return task;
+    }
+    if (!transition.replacement) return task;
+    coverLookupSplitReleasesByTask.delete(taskId);
+    coverLookupSplitChoiceByTask.delete(taskId);
+    return {
+      ...task,
+      artist: String(transition.replacement.album_artist || task.artist || ''),
+      album: String(transition.replacement.name || task.album || ''),
+      year: transition.replacement.year ?? task.year,
+      album_payload: transition.replacement,
+    };
+  });
+}
 
 function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const originalPaths = getAlbumTrackPaths(originalAlbum);
@@ -38323,6 +38383,51 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const isSplit = originalPaths.size >= 2
     && releases.length >= 2
     && coveredPaths.size === originalPaths.size;
+  let identitySignature = buildCoverLookupTrackSetSignature(originalPaths);
+  let previousIdentity = coverLookupOptimisticIdentityByTrackSignature.get(identitySignature);
+  let mergedReplacement = null;
+  let updatedSplitReleases = null;
+  if (!isSplit) {
+    const priorTransition = Array.from(coverLookupOptimisticIdentityByTrackSignature.entries())
+      .find(([, transition]) => {
+        if (!transition?.releases || !transition.paths) return false;
+        const matchingReleaseIndex = transition.releases.findIndex((release) => {
+          const releasePaths = getAlbumTrackPaths(release);
+          return releasePaths.size === originalPaths.size
+            && Array.from(originalPaths).every((path) => releasePaths.has(path));
+        });
+        if (matchingReleaseIndex < 0) return false;
+        mergedReplacement = candidates.find((album) => {
+          const paths = getAlbumTrackPaths(album);
+          return Array.from(transition.paths).every((path) => paths.has(path));
+        }) || null;
+        if (mergedReplacement) return true;
+        const renamedRelease = candidates.find((album) => {
+          const paths = getAlbumTrackPaths(album);
+          return paths.size === originalPaths.size
+            && Array.from(originalPaths).every((path) => paths.has(path));
+        });
+        if (!renamedRelease) return false;
+        updatedSplitReleases = transition.releases.map((release, index) => (
+          index === matchingReleaseIndex ? renamedRelease : release
+        ));
+        return true;
+      });
+    if (priorTransition) {
+      [identitySignature, previousIdentity] = priorTransition;
+    }
+  }
+  const nextIdentity = isSplit
+    ? { originalAlbum, releases, paths: new Set(originalPaths) }
+    : mergedReplacement ? {
+      originalAlbum: previousIdentity.originalAlbum || originalAlbum,
+      replacement: mergedReplacement,
+      paths: previousIdentity.paths,
+    } : updatedSplitReleases ? {
+      ...previousIdentity,
+      releases: updatedSplitReleases,
+    } : null;
+  if (nextIdentity) coverLookupOptimisticIdentityByTrackSignature.set(identitySignature, nextIdentity);
   const taskIds = [];
   const replacedTasks = [];
   const removedSplits = [];
@@ -38372,7 +38477,7 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
     taskIds.push(taskId);
     return optimisticTask;
   });
-  if (!taskIds.length) return null;
+  if (!taskIds.length && !nextIdentity) return null;
   if (replacedTasks.length) {
     state.coverLookup.tasks = nextTasks;
     if (typeof persistCoverLookupNotificationTasks === 'function') {
@@ -38382,10 +38487,44 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
       renderCoverLookupDrawer({ taskIds, preserveInteraction: false });
     }
   }
-  return { taskIds, releases, replacedTasks, removedSplits, removedChoices };
+  return {
+    taskIds,
+    releases,
+    replacedTasks,
+    removedSplits,
+    removedChoices,
+    identitySignature,
+    previousIdentity,
+    nextIdentity,
+  };
 }
 
 function clearCoverLookupOptimisticSplit(recordedSplit) {
+  if (
+    recordedSplit?.nextIdentity
+    && coverLookupOptimisticIdentityByTrackSignature.get(recordedSplit.identitySignature)
+      === recordedSplit.nextIdentity
+  ) {
+    if (recordedSplit.previousIdentity) {
+      coverLookupOptimisticIdentityByTrackSignature.set(
+        recordedSplit.identitySignature,
+        recordedSplit.previousIdentity,
+      );
+    } else {
+      coverLookupOptimisticIdentityByTrackSignature.delete(recordedSplit.identitySignature);
+    }
+  }
+  if (recordedSplit?.nextIdentity?.releases) {
+    coverLookupSplitReleasesByTask.forEach((releases, taskId) => {
+      if (releases !== recordedSplit.nextIdentity.releases) return;
+      if (recordedSplit.previousIdentity?.releases) {
+        coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+      } else {
+        coverLookupSplitReleasesByTask.delete(taskId);
+      }
+      coverLookupSplitChoiceByTask.delete(taskId);
+    });
+  }
   (recordedSplit?.taskIds || []).forEach((taskId) => {
     if (coverLookupSplitReleasesByTask.get(taskId) === recordedSplit.releases) {
       coverLookupSplitReleasesByTask.delete(taskId);
@@ -38750,6 +38889,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
           ? {
             ...task,
             status: 'running',
+            job_kind: 'candidate_lookup',
+            job_contract: {
+              ...(task.job_contract || {}),
+              job_kind: 'candidate_lookup',
+            },
             result_kind: '',
             progress: 0,
             progress_label: 'Searching...',
@@ -38794,6 +38938,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
         ? {
           ...data.task,
           status: 'running',
+        job_kind: 'candidate_lookup',
+        job_contract: {
+          ...(data.task.job_contract || {}),
+          job_kind: 'candidate_lookup',
+        },
           result_kind: '',
           progress_label: 'Searching...',
           started_at: data.task.started_at || new Date().toISOString(),
@@ -39277,16 +39426,70 @@ async function addRemoteCoverLinksFromLookup() {
 }
 
 async function savePastedCoverFromLookup(imageId) {
+  const session = coverLookupModalSession;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   const pastedItem = (state.coverLookup.modal.pastedImages || []).find((item) => String(item?.id || '') === String(imageId || ''));
-  if (!album || !pastedItem?.data_url) return;
+  if (!album || !pastedItem?.data_url || state.coverLookup.modal.saving
+      || isCoverLookupMutationPending(album)) return;
+  const mutationKey = buildCoverLookupMutationKey(album);
   const previousAlbum = deepCloneJson(album);
-  const previousTask = taskId
-    ? deepCloneJson((state.coverLookup.tasks || []).find((task) => String(task?.id || '') === taskId) || null)
-    : null;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const inventoryKey = buildCoverLookupGalleryCacheKey(album);
+  const previousInventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey);
+  const previousInventoryMutationSnapshot = previousInventoryMutation ? {
+    addedCovers: new Map(previousInventoryMutation.addedCovers),
+    deletedPaths: new Set(previousInventoryMutation.deletedPaths),
+    selectedPath: previousInventoryMutation.selectedPath,
+  } : null;
+  const optimisticPath = `pasted-image:${String(pastedItem.id || '')}`;
+  const restorePreviousInventory = () => {
+    if (previousInventoryMutationSnapshot) {
+      coverLookupLocalInventoryMutations.set(inventoryKey, previousInventoryMutationSnapshot);
+    } else {
+      coverLookupLocalInventoryMutations.delete(inventoryKey);
+    }
+    if (previousGallery) cacheCoverLookupGalleryPayload(album, previousGallery);
+    else invalidateCoverLookupGalleryCache(album);
+  };
+  const notificationFields = [
+    'notification_action_taken',
+    'notification_completed_at',
+    'notification_expires_at',
+    'current_user_cover_preview_url',
+  ];
+  const albumSignature = buildTrackPathSignature(album);
+  const previousTaskNotifications = new Map((state.coverLookup.tasks || [])
+    .filter((task) => {
+      if (!isCoverLookupTaskCompleted(task)) return false;
+      const idMatches = taskId && String(task?.id || '') === taskId;
+      const taskSignature = task?.album_payload ? buildTrackPathSignature(task.album_payload) : '';
+      return idMatches || (albumSignature && taskSignature === albumSignature);
+    })
+    .map((task) => [String(task.id), Object.fromEntries(notificationFields.map((field) => [
+      field,
+      {
+        present: Object.prototype.hasOwnProperty.call(task, field),
+        value: task[field],
+      },
+    ]))]));
+  coverLookupPendingMutations.add(mutationKey);
+  state.coverLookup.modal.saving = true;
+  syncCoverLookupSaveButton();
   try {
     const optimisticAlbum = applyOptimisticPastedCoverSelection(album, pastedItem);
+    cacheOptimisticLocalCoverGallery(album, {
+      path: optimisticPath,
+      preview_url: pastedItem.data_url,
+      filename: pastedItem.filename,
+      width: pastedItem.width,
+      height: pastedItem.height,
+    });
+    const optimisticGallery = cachedCoverLookupGalleryPayload(album);
+    if (optimisticGallery) {
+      applyCoverLookupGalleryPayload(optimisticGallery, { confirmLocalInventory: false });
+      renderCoverLookupModal();
+    }
     if (taskId && optimisticAlbum) {
       markCoverLookupTaskActionTaken(taskId, optimisticAlbum, { persist: false });
       renderCoverLookupDrawer({ taskIds: [taskId] });
@@ -39314,6 +39517,7 @@ async function savePastedCoverFromLookup(imageId) {
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
     const updatedAlbum = updatedAlbums[0];
+    restorePreviousInventory();
     if (updatedAlbum?.cover_path) {
       cacheOptimisticLocalCoverGallery(album, {
         path: updatedAlbum.cover_path,
@@ -39334,19 +39538,30 @@ async function savePastedCoverFromLookup(imageId) {
     });
     renderCoverLookupDrawer({ taskIds: actionedTaskIds });
   } catch (error) {
+    restorePreviousInventory();
     if (previousAlbum) {
+      clearOptimisticAlbumCovers([previousAlbum]);
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
-    if (previousTask) {
-      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
-        String(task?.id || '') === taskId ? previousTask : task
-      ));
-      renderCoverLookupDrawer({ taskIds: [taskId] });
+    if (previousTaskNotifications.size) {
+      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+        const snapshot = previousTaskNotifications.get(String(task?.id || ''));
+        if (!snapshot) return task;
+        const restored = { ...task };
+        notificationFields.forEach((field) => {
+          if (snapshot[field].present) restored[field] = snapshot[field].value;
+          else delete restored[field];
+        });
+        return restored;
+      });
+      renderCoverLookupDrawer({ taskIds: Array.from(previousTaskNotifications.keys()) });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
     showToast(error.message || 'Failed to save pasted image.', 'error', 2800);
+  } finally {
+    await finishCoverLookupMutation(mutationKey, session);
   }
 }
 
@@ -49695,7 +49910,7 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
   const exceptionInput = event.target.closest('#tag-editor-form [data-tag-field="exception_type"]');
-  if (exceptionInput) openTagEditorExceptionMenu();
+  if (exceptionInput) toggleTagEditorExceptionMenu(exceptionInput);
   else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
 
   const keepMissingAlbumButton = event.target.closest('#utility-modal [data-keep-missing-album="1"]');
@@ -51031,6 +51246,11 @@ function handleUtilityBootstrapKeyDown(event) {
       selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
       return true;
     }
+    if (exceptionInput && ['Enter', ' '].includes(event.key)) {
+      event.preventDefault();
+      toggleTagEditorExceptionMenu(exceptionInput);
+      return true;
+    }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
       if (!menu || menu.hidden) openTagEditorExceptionMenu();
@@ -51398,7 +51618,7 @@ function handleGalleryBootstrapClick(event) {
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();
-    openTagEditor(resolveTrackModalActionAlbum(trackModalEditTagsButton), { tracksMode: 'all' });
+    openTagEditor(resolveTrackModalDuplicateSourceAlbum(trackModalEditTagsButton), { tracksMode: 'all' });
     return;
   }
 

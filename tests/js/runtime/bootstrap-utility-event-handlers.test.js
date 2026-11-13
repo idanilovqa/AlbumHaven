@@ -161,6 +161,7 @@ function createContext(stateOverrides = {}) {
     keptMissingAlbums: [],
     rescannedMissingAlbums: [],
     missingAlbumRemovalConfirms: [],
+    exceptionMenuToggles: [],
   };
   const filterMenu = {
     hidden: false,
@@ -178,6 +179,9 @@ function createContext(stateOverrides = {}) {
   const context = {
     getUtilityModalElements() { return utilityElements; },
     document: {
+      getElementById(id) {
+        return id === 'tag-editor-exception-menu' ? { hidden: true } : null;
+      },
       querySelectorAll() {
         return [];
       },
@@ -296,6 +300,10 @@ function createContext(stateOverrides = {}) {
       calls.pendingSyncs += 1;
     },
     updateWaveformAppearance() {},
+    toggleTagEditorExceptionMenu(input) {
+      calls.exceptionMenuToggles.push(input);
+      return true;
+    },
   };
 
   vm.createContext(context);
@@ -307,6 +315,34 @@ function createContext(stateOverrides = {}) {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
+
+for (const key of ['Enter', ' ']) {
+  test(`exception dropdown ${JSON.stringify(key)} activation uses the shared toggle`, () => {
+    const { context, calls } = createContext();
+    const input = createElement({ 'aria-expanded': 'false' });
+    const { event, wasPrevented } = createEvent({
+      '#tag-editor-form [data-tag-field="exception_type"]': input,
+    }, { key });
+
+    const handled = context.handleUtilityBootstrapKeyDown(event);
+
+    assert.equal(handled, true);
+    assert.equal(wasPrevented(), true);
+    assert.deepEqual(calls.exceptionMenuToggles, [input]);
+  });
+}
+
+test('clicking the exception dropdown uses the shared toggle', async () => {
+  const { context, calls } = createContext();
+  const input = createElement({ 'aria-expanded': 'true' });
+  const { event } = createEvent({
+    '#tag-editor-form [data-tag-field="exception_type"]': input,
+  });
+
+  await context.handleUtilityBootstrapClick(event);
+
+  assert.deepEqual(calls.exceptionMenuToggles, [input]);
+});
 
 test('clicking the filter search input dismisses only the dropdown without consuming input focus', async () => {
   const selected = ['Missing cover art'];

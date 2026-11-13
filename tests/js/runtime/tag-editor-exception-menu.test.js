@@ -23,7 +23,7 @@ function loadHelpers() {
   return context;
 }
 
-test('exception editor uses an owned anchored listbox and keeps custom values editable', () => {
+test('exception editor uses a predefined-only anchored listbox without a text caret', () => {
   const template = fs.readFileSync(
     path.join(root, 'music_app', 'templates', 'partials', 'primary-modals.html'),
     'utf8',
@@ -35,7 +35,7 @@ test('exception editor uses an owned anchored listbox and keeps custom values ed
 
   assert.match(template, /data-tag-editor-exception-anchor/);
   assert.match(template, /class="ui-dropdown-control"/);
-  assert.match(template, /role="combobox"/);
+  assert.match(template, /data-tag-field="exception_type"[^>]+role="combobox"[^>]+readonly/);
   assert.match(template, /aria-controls="tag-editor-exception-menu"/);
   assert.match(template, /id="tag-editor-exception-menu"[^>]+role="listbox"[^>]+hidden/);
   assert.doesNotMatch(template, /<datalist id="tag-editor-exception-types"/);
@@ -48,6 +48,32 @@ test('exception editor uses an owned anchored listbox and keeps custom values ed
     /\.ui-dropdown-control\s*\{[^}]*cursor:\s*pointer/s,
     'the shared dropdown envelope owns the pointer cursor under its chevron',
   );
+  assert.match(
+    componentCss,
+    /\.ui-dropdown-control\s*>\s*input\[readonly\]:not\(:disabled\)\s*\{[^}]*cursor:\s*pointer[^}]*caret-color:\s*transparent/s,
+    'readonly dropdowns remain clickable without displaying a text caret',
+  );
+});
+
+test('exception dropdown activation toggles the same menu for pointer and keyboard use', () => {
+  const context = loadHelpers();
+  const input = {
+    expanded: 'false',
+    getAttribute(name) { return name === 'aria-expanded' ? this.expanded : ''; },
+  };
+  let opens = 0;
+  let closes = 0;
+  context.openTagEditorExceptionMenu = () => { opens += 1; return true; };
+  context.closeTagEditorExceptionMenu = () => { closes += 1; };
+
+  assert.equal(context.toggleTagEditorExceptionMenu(input), true);
+  assert.equal(opens, 1);
+  assert.equal(closes, 0);
+
+  input.expanded = 'true';
+  assert.equal(context.toggleTagEditorExceptionMenu(input), false);
+  assert.equal(opens, 1);
+  assert.equal(closes, 1);
 });
 
 test('custom collection name is hidden at the form boundary unless selected', () => {

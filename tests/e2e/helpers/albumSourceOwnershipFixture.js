@@ -25,9 +25,10 @@ if source is None:
 owner.mkdir()
 records = []
 for folder, edition, discs in [("Real Album", "", [1, 2]), ("Complete copy", "", [1, 2]), ("Deluxe", "Deluxe", [1, 2])]:
+    album = "REAL ÄLBUM" if folder == "Real Album" else "Real Album"
     for disc in discs:
         for number in [1, 2]:
-            records.append((f"{folder}/CD{disc}/{number}.mp3", "Real Album", f"Disc {disc} Song {number}", disc, number, edition))
+            records.append((f"{folder}/CD{disc}/{number}.mp3", album, f"Disc {disc} Song {number}", disc, number, edition))
 records += [("Random songs/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, ""),
             ("Random songs/unrelated.mp3", "Unrelated Album", "Unrelated song", 1, 8, ""),
             ("Orphan/copied-song.mp3", "Real Album", "Disc 1 Song 1", 1, 1, ""),

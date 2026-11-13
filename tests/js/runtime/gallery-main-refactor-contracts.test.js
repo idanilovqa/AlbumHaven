@@ -351,6 +351,8 @@ test('artist info stays open and follows its header while the gallery scrolls', 
       querySelector: () => null,
       querySelectorAll: selector => selector === '[data-virtual-section-key]'
         ? [section]
+        : selector === '[data-artist-info-trigger]'
+          ? [stickyAnchor]
         : selector === '[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]'
           ? [stickyAnchor]
           : [],
@@ -410,6 +412,83 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   listeners.scroll();
   frames.shift()();
   assert.equal(surface.hidden, true, 'the popup closes once no visible trigger belongs to its artist');
+});
+
+test('artist info transfers between the gallery header and visible family separator', () => {
+  const listeners = {};
+  const frames = [];
+  const scroll = {
+    scrollTop: 0,
+    addEventListener: (type, callback) => { listeners[type] = callback; },
+    getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+  };
+  const galleryAnchor = {
+    isConnected: true,
+    dataset: { artist: 'Neal Morse' },
+    closest: selector => selector === '[data-gallery-bar-instance="gallery"]' ? {} : null,
+    setAttribute() {},
+    getBoundingClientRect: () => ({ top: 60, bottom: 80, left: 40, right: 60, width: 20, height: 20 }),
+  };
+  const familyAnchor = {
+    isConnected: true,
+    dataset: { artist: 'Neal Morse' },
+    closest: selector => selector === '.family-artist-header' ? {} : null,
+    setAttribute() {},
+    getBoundingClientRect: () => ({
+      top: 750 - scroll.scrollTop,
+      bottom: 770 - scroll.scrollTop,
+      left: 40,
+      right: 60,
+      width: 20,
+      height: 20,
+    }),
+  };
+  const context = loadRuntime({
+    document: {
+      getElementById: id => id === 'albums-scroll' ? scroll : null,
+      querySelector: () => null,
+      querySelectorAll: selector => selector === '[data-artist-info-trigger]'
+        ? [galleryAnchor, familyAnchor]
+        : selector === '[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]'
+          ? [galleryAnchor]
+          : [],
+      addEventListener() {},
+    },
+    window: { addEventListener() {}, innerHeight: 800, innerWidth: 1000 },
+    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+  });
+  context.ensureGalleryMainState = () => ({});
+  context.observeArtistFamilyPanelBounds = () => null;
+  context.updateGalleryMainChrome = () => {};
+  context.focusGalleryMainSurface = () => {};
+  context.initGalleryMain();
+  const surface = {
+    hidden: true,
+    matches: selector => selector.includes('.artist-info-overlay'),
+    setAttribute() {},
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ bottom: 300 }),
+    classList: { add() {}, remove() {} },
+    dataset: {},
+    style: { setProperty() {} },
+  };
+
+  context.openGalleryMainSurface('artist:Neal Morse', galleryAnchor, surface);
+  scroll.scrollTop = 100;
+  listeners.scroll();
+  frames.shift()();
+  context.familyAnchor = familyAnchor;
+  assert.equal(surface.hidden, false);
+  assert.equal(vm.runInContext('galleryMainSurfaceController.current().anchor === familyAnchor', context), true,
+    'the open panel follows the family separator when that artist presentation enters the viewport');
+
+  scroll.scrollTop = 0;
+  listeners.scroll();
+  frames.shift()();
+  context.galleryAnchor = galleryAnchor;
+  assert.equal(surface.hidden, false);
+  assert.equal(vm.runInContext('galleryMainSurfaceController.current().anchor === galleryAnchor', context), true,
+    'reverse scrolling returns the open panel to the gallery header');
 });
 
 test('Artist Info resolves its current rendered trigger after virtual resize', () => {

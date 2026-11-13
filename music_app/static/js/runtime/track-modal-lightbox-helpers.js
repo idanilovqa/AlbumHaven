@@ -609,7 +609,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   const albumVersionKey = getTrackModalAlbumVersionKey(openAlbum);
   // Rows this session edited were rendered optimistically, so they stay until canonical details land.
   const editedLocally = locallyEditedAlbumKeys.has(albumKey);
-  if (!editedLocally) renderTrackModalLoadingState(openAlbum);
+  if (!editedLocally && albumRequiresHydration(openAlbum)) renderTrackModalLoadingState(openAlbum);
   let refreshedAlbum = null;
   let loadError = null;
   try {
@@ -905,7 +905,10 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || !(button instanceof HTMLElement)) return album;
   const duplicateSources = Array.isArray(album?.duplicate_sources) ? album.duplicate_sources : [];
-  const sourceIndex = Number(button.getAttribute('data-duplicate-source-index'));
+  const sourceIndexAttribute = String(button.getAttribute('data-duplicate-source-index') || '').trim();
+  const sourceIndex = sourceIndexAttribute
+    ? Number(sourceIndexAttribute)
+    : getTrackModalDuplicateSourceIndex(album, duplicateSources);
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }

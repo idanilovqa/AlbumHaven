@@ -119,7 +119,7 @@ function handleGalleryBootstrapClick(event) {
   const trackModalEditTagsButton = event.target.closest('[data-open-track-modal-editor="1"]');
   if (trackModalEditTagsButton) {
     event.preventDefault();
-    openTagEditor(resolveTrackModalActionAlbum(trackModalEditTagsButton), { tracksMode: 'all' });
+    openTagEditor(resolveTrackModalDuplicateSourceAlbum(trackModalEditTagsButton), { tracksMode: 'all' });
     return;
   }
 

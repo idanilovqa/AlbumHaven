@@ -174,8 +174,13 @@ test('Load all tracks from the folder sits under the path only while the album f
   );
   assert.match(
     css,
-    /\.tag-editor-folder-load\s*\{[^}]*color:\s*color-mix\(in srgb, var\(--muted\) 70%, var\(--text\)\)[^}]*font-size:\s*0\.7rem[^}]*line-height:\s*1\.25/s,
-    'the action matches the path typography while remaining slightly brighter',
+    /\.tag-editor-folder-load\.ui-button\s*\{[^}]*font-size:\s*0\.84rem[^}]*line-height:\s*1\.25/s,
+    'the action matches the editor header subtitle instead of the larger Button default',
+  );
+  assert.match(
+    css,
+    /\.tag-editor-artwork img,[\s\S]*?\.tag-editor-artwork-placeholder\s*\{[^}]*width:\s*52px[^}]*height:\s*52px[^}]*aspect-ratio:\s*1\s*\/\s*1[^}]*flex:\s*0\s+0\s+52px/s,
+    'the artbox remains square when folder copy needs more width',
   );
   const buttonCss = fs.readFileSync(path.join(root, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
   assert.match(buttonCss, /\.ui-text-link,[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;/);

@@ -109,9 +109,13 @@ function resolveVisibleGalleryArtistInfoAnchor(active, scroll) {
   if (!active?.key?.startsWith?.('artist:')) return active?.anchor || null;
   const artist = active.key.slice('artist:'.length);
   const resolved = resolveCurrentGalleryAnchor(active.anchor, active.anchorSectionKey);
-  return [resolved, ...Array.from(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
-    .find(candidate => String(candidate?.dataset?.artist || '') === artist
-      && isGalleryArtistInfoAnchorVisible(candidate, scroll)) || null;
+  const candidates = [resolved, ...Array.from(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
+    .filter((candidate, index, all) => all.indexOf(candidate) === index
+      && String(candidate?.dataset?.artist || '') === artist
+      && isGalleryArtistInfoAnchorVisible(candidate, scroll));
+  return candidates.find(candidate => candidate.closest?.('.family-artist-header'))
+    || candidates[0]
+    || null;
 }
 
 function isGalleryAnchorVisible(anchor, scroll) {
@@ -1131,12 +1135,7 @@ function initGalleryMain() {
       if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
         const previousAnchor = settled.anchor;
         const artist = settled.key.slice('artist:'.length);
-        let nextAnchor = resolveCurrentGalleryAnchor(previousAnchor, settled.anchorSectionKey);
-        if (String(nextAnchor?.dataset?.artist || '') !== artist || !isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
-          nextAnchor = Array.from(document.querySelectorAll?.('[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]') || [])
-            .find(candidate => String(candidate.dataset?.artist || '') === artist
-              && isGalleryArtistInfoAnchorVisible(candidate, scroll)) || nextAnchor;
-        }
+        const nextAnchor = resolveVisibleGalleryArtistInfoAnchor(settled, scroll);
         if (nextAnchor !== previousAnchor && String(nextAnchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
           previousAnchor?.setAttribute?.('aria-expanded', 'false');

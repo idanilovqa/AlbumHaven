@@ -406,8 +406,18 @@ def serialize_cover_gallery_payload(
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
         "selected_source_path": selected_source_path,
         "remote_cover": active_remote_cover,
-        "local_covers": [item for item in local_candidates if item.get("is_squareish")],
-        "other_art": [item for item in local_candidates if not item.get("is_squareish")],
+        "local_covers": [
+            item for item in local_candidates
+            if item.get("is_squareish")
+            or item.get("is_active")
+            or item.get("path") == selected_source_path
+        ],
+        "other_art": [
+            item for item in local_candidates
+            if not item.get("is_squareish")
+            and not item.get("is_active")
+            and item.get("path") != selected_source_path
+        ],
         "task": task_payload if task_payload else None,
         "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
     }

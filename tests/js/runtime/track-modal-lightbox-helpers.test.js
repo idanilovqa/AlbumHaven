@@ -3296,11 +3296,11 @@ async function run() {
       duplicate_sources: [
         {
           folder_path: 'C:\\Music\\Album Alpha',
-          tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
+          tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac', album: 'Album Alpha' }],
         },
         {
           folder_path: 'D:\\Mirror\\Album Alpha',
-          tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac' }],
+          tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac', album: 'ALBUM ÄLPHA' }],
         },
       ],
     };
@@ -3308,22 +3308,39 @@ async function run() {
       initialAlbums: [duplicateAlbum],
     });
     context.state.modalReleases = [duplicateAlbum];
+    context.state.modalDuplicateSourceIndices = { alpha: 0 };
+    context.getTrackModalDuplicateSourceIndex = (album, duplicateSources) => {
+      const sourceIndex = Number(context.state.modalDuplicateSourceIndices[album.key]);
+      return Number.isInteger(sourceIndex) && sourceIndex >= 0 && sourceIndex < duplicateSources.length
+        ? sourceIndex
+        : 0;
+    };
     const button = new FakeHtmlElement('duplicate-folder-button');
     button.getAttribute = (name) => {
       if (name === 'data-album-key') return 'alpha';
-      if (name === 'data-duplicate-source-index') return '1';
       return '';
     };
 
-    const resolvedAlbum = context.resolveTrackModalDuplicateSourceAlbum(button);
+    const firstSourceAlbum = context.resolveTrackModalDuplicateSourceAlbum(button);
+    context.state.modalDuplicateSourceIndices.alpha = 1;
+    const secondSourceAlbum = context.resolveTrackModalDuplicateSourceAlbum(button);
 
-    assert.equal(resolvedAlbum.key, 'alpha');
+    assert.equal(firstSourceAlbum.key, 'alpha');
+    assert.equal(secondSourceAlbum.key, 'alpha');
     assert.deepEqual(
-      resolvedAlbum.tracks.map((track) => track.path),
+      firstSourceAlbum.tracks.map((track) => track.path),
+      ['C:\\Music\\Album Alpha\\01 Track.flac'],
+    );
+    assert.deepEqual(
+      secondSourceAlbum.tracks.map((track) => track.path),
       ['D:\\Mirror\\Album Alpha\\01 Track.flac'],
     );
     assert.deepEqual(
-      Array.from(resolvedAlbum.open_directory_paths),
+      [firstSourceAlbum, secondSourceAlbum].map((album) => album.tracks[0].album),
+      ['Album Alpha', 'ALBUM ÄLPHA'],
+    );
+    assert.deepEqual(
+      Array.from(secondSourceAlbum.open_directory_paths),
       ['D:\\Mirror\\Album Alpha'],
     );
   }

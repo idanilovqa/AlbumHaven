@@ -3037,6 +3037,49 @@ test('handleGalleryBootstrapClick resolves duplicate-folder actions from the cur
   assert.deepEqual(calls.openAlbumInExplorer, [{ key: 'duplicate-source-album' }]);
 });
 
+test('Album Details Edit Tags uses the active duplicate Files source', () => {
+  const { context } = createContext();
+  const sourceButtons = [{ sourceIndex: 0 }, { sourceIndex: 1 }];
+  const sourceAlbums = [
+    {
+      key: 'shared-album',
+      tracks: [{ path: 'C:/Music/Holy War/01.flac', album: 'Holy War' }],
+    },
+    {
+      key: 'shared-album',
+      tracks: [{ path: 'D:/Music/Holy War/01.flac', album: 'HOLY WÄR' }],
+    },
+  ];
+  const opened = [];
+  context.resolveTrackModalDuplicateSourceAlbum = (button) => sourceAlbums[button.sourceIndex];
+  context.openTagEditor = (album, options) => opened.push({ album, options });
+
+  for (const button of sourceButtons) {
+    context.handleGalleryBootstrapClick({
+      target: {
+        closest(selector) {
+          return selector === '[data-open-track-modal-editor="1"]' ? button : null;
+        },
+      },
+      preventDefault() {},
+    });
+  }
+
+  assert.deepEqual(
+    opened.map(({ album }) => album.tracks[0].path),
+    ['C:/Music/Holy War/01.flac', 'D:/Music/Holy War/01.flac'],
+  );
+  assert.deepEqual(
+    opened.map(({ album }) => album.tracks[0].album),
+    ['Holy War', 'HOLY WÄR'],
+  );
+  assert.deepEqual(opened.map(({ album }) => album.key), ['shared-album', 'shared-album']);
+  assert.deepEqual(opened.map(({ options }) => ({ ...options })), [
+    { tracksMode: 'all' },
+    { tracksMode: 'all' },
+  ]);
+});
+
 test('album context Edit Tags closes the menu before opening the full-album editor', () => {
   const { context } = createContext();
   const album = {

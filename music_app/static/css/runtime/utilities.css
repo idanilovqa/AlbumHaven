@@ -196,8 +196,8 @@
 .utility-problem-filter-menu {
   position: absolute;
   top: calc(100% + 6px);
-  left: -4px;
-  right: 3px;
+  left: 0;
+  right: 0;
   z-index: 40;
   width: auto;
   --trigger-anchor-scroll-max-height: 320px;
@@ -1606,7 +1606,7 @@
 .tag-editor-folder-copy { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0; }
 .tag-editor-track-name { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
 .tag-editor-track-folder { color: var(--muted); font-size: 0.7rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tag-editor-folder-load { color: color-mix(in srgb, var(--muted) 70%, var(--text)); font-size: 0.7rem; line-height: 1.25; }
+.tag-editor-folder-load.ui-button { color: color-mix(in srgb, var(--muted) 70%, var(--text)); font-size: 0.84rem; line-height: 1.25; }
 .tag-editor-folder-path {
   min-width: 0;
   max-width: 100%;
@@ -1619,6 +1619,8 @@
 .tag-editor-artwork-placeholder {
   width: 52px;
   height: 52px;
+  aspect-ratio: 1 / 1;
+  flex: 0 0 52px;
   border-radius: 10px;
   border: 1px solid var(--border);
   object-fit: var(--album-art-fit);

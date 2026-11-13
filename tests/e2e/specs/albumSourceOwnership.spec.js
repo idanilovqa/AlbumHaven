@@ -11,7 +11,7 @@ import { setOwnedLegacyCoverRepairProvider } from '../helpers/coverLookupProvide
 
 let ownedFixture;
 
-async function expectCompleteSourceTracks(album, fixture, trackModalActions) {
+async function expectCompleteSourceTracks(album, fixture, trackModalActions, tagEditorActions = null) {
   const sources = ['Real Album', 'Complete copy'].map(folder =>
     [1, 2].flatMap(disc => [1, 2].map(number => path.join(fixture.owner, folder, `CD${disc}`, `${number}.mp3`))),
   );
@@ -36,6 +36,7 @@ async function expectCompleteSourceTracks(album, fixture, trackModalActions) {
   await expect(trackModalActions.trackModal.duplicateSourceTabs).toHaveCount(2);
   const initialIndex = /\bis-active\b/u.test(await trackModalActions.trackModal.duplicateSourceTabs.nth(1).getAttribute('class') || '') ? 1 : 0;
   const displayedPaths = [];
+  const tagEditorSources = [];
   for (let index = 0; index < 2; index += 1) {
     await trackModalActions.trackModal.duplicateSourceTabs.nth(index).click();
     await expect(trackModalActions.trackModal.duplicateSourceTabs.nth(index)).toHaveClass(/\bis-active\b/u);
@@ -43,11 +44,38 @@ async function expectCompleteSourceTracks(album, fixture, trackModalActions) {
     await expect(trackModalActions.trackModal.trackRows).toHaveCount(4);
     const tracks = await Promise.all([0, 1, 2, 3].map(row => trackModalActions.readTrackAt(row)));
     const paths = tracks.map(track => track.path);
-    expect(sources.some(source => source.every(expected => paths.includes(expected)))).toBe(true);
+    const expectedSource = sources.find(source => source.every(expected => paths.includes(expected)));
+    expect(expectedSource).toBeTruthy();
+    const sourceRoot = path.dirname(path.dirname(expectedSource[0]));
     for (const excluded of fixture.excludedPaths) expect(paths).not.toContain(excluded);
     displayedPaths.push(...paths);
+    if (tagEditorActions) {
+      await trackModalActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 4 });
+      const editorPaths = await tagEditorActions.readTrackPaths();
+      const summary = await tagEditorActions.readSummary();
+      const { album: albumTag } = await tagEditorActions.readEditableValues(['album']);
+      const folderPath = String(await tagEditorActions.tagEditor.folderPath.textContent() || '').trim();
+      expect(new Set(editorPaths)).toEqual(new Set(paths));
+      expect(summary.trackFilenames.sort()).toEqual(editorPaths.map(value => path.basename(value)).sort());
+      const resolvedFolderPath = path.resolve(folderPath);
+      const resolvedSourceRoot = path.resolve(sourceRoot);
+      expect(
+        resolvedFolderPath === resolvedSourceRoot
+        || resolvedFolderPath.startsWith(`${resolvedSourceRoot}${path.sep}`),
+      ).toBe(true);
+      tagEditorSources.push({ albumTag, paths: editorPaths, sourceRoot });
+      await tagEditorActions.close();
+    }
   }
   expect(new Set(displayedPaths)).toEqual(new Set(expectedPaths));
+  if (tagEditorActions) {
+    expect(new Set(tagEditorSources.flatMap(source => source.paths))).toEqual(new Set(expectedPaths));
+    expect(new Set(tagEditorSources.map(source => source.sourceRoot))).toEqual(
+      new Set(['Real Album', 'Complete copy'].map(folder => path.join(fixture.owner, folder))),
+    );
+    expect(new Set(tagEditorSources.map(source => source.albumTag))).toEqual(new Set(['Real Album', 'REAL ÄLBUM']));
+  }
   await trackModalActions.trackModal.duplicateSourceTabs.nth(initialIndex).click();
   await expect(trackModalActions.trackModal.duplicateSourceTabs.nth(initialIndex)).toHaveClass(/\bis-active\b/u);
   await trackModalActions.waitForLoadedSummary();
@@ -143,13 +171,13 @@ test('FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is
 });
 
 test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan', { tag: '@area:album-details' }, async ({
-  galleryActions, trackModalActions, navigationPanelActions, artistPageSettingsActions,
+  galleryActions, trackModalActions, tagEditorActions, navigationPanelActions, artistPageSettingsActions,
   utilityTabBarActions, utilityProblematicFilesActions, settingsModalAppBarActions, page, appBarActions, stepLogger,
 }) => {
   test.setTimeout(240000);
   const fixture = ownedFixture;
   const target = { artist: fixture.artist, album: fixture.album, year: fixture.year };
-  const inspectAlbum = async () => {
+  const inspectAlbum = async ({ verifyTagEditor = false } = {}) => {
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(fixture.artist)}`);
     await galleryActions.waitForGalleryReady();
     const { album } = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
@@ -161,11 +189,13 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
     expect(album.local_cover_height).toBe(1600);
     expect(album.cover_path).not.toContain('Random songs');
     await trackModalActions.waitForLoadedSummary();
-    await expectCompleteSourceTracks(album, fixture, trackModalActions);
+    await expectCompleteSourceTracks(album, fixture, trackModalActions, verifyTagEditor ? tagEditorActions : null);
     await trackModalActions.close();
     return album;
   };
-  await stepLogger.step('Read only complete physical album sources with both discs and correct cover', inspectAlbum);
+  await stepLogger.step('Route Edit Tags to each active complete physical source', async () => {
+    await inspectAlbum({ verifyTagEditor: true });
+  });
   await stepLogger.step('Keep the complete tagged Deluxe edition separate from the original sources', async () => {
     const deluxe = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload({ ...target, year: '2027' });
     expect(deluxe.album.edition).toBe('Deluxe');

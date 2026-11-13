@@ -73,11 +73,12 @@ export async function waitForDisplayedImageDecode(element) {
   };
 }
 
-// Runs in the browser as a read-only observation of the exact displayed Blob.
+// Runs in the browser as a read-only observation of exact browser-owned image bytes.
 export async function readDisplayedBlobBytes(element, expected) {
   const sourceUrl = new URL(expected.currentSrc);
-  if (sourceUrl.protocol !== 'blob:' || sourceUrl.origin !== location.origin) {
-    throw new Error('Displayed blob evidence requires a same-origin blob URL.');
+  if (sourceUrl.protocol !== 'data:'
+      && (sourceUrl.protocol !== 'blob:' || sourceUrl.origin !== location.origin)) {
+    throw new Error('Displayed browser-owned evidence requires a data URL or same-origin blob URL.');
   }
   const matches = () => element instanceof HTMLImageElement
     && element.isConnected
@@ -88,12 +89,12 @@ export async function readDisplayedBlobBytes(element, expected) {
     && element.hasAttribute('data-cover-visual-state') === expected.hasVisualState
     && (!expected.hasVisualState || element.getAttribute('data-cover-visual-state') === 'ready')
     && element.complete && element.naturalWidth > 0;
-  if (!matches()) throw new Error('Displayed blob source changed before observation.');
-  // A blob URL reads browser-owned bytes; it never requests the production /cover route.
-  const response = await fetch(expected.currentSrc, { mode: 'same-origin' });
+  if (!matches()) throw new Error('Displayed browser-owned source changed before observation.');
+  // Browser-owned URLs never request the production /cover route.
+  const response = await fetch(expected.currentSrc);
   if (!response.ok) throw new Error('Displayed blob bytes could not be read.');
   const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!matches()) throw new Error('Displayed blob source changed during observation.');
+  if (!matches()) throw new Error('Displayed browser-owned source changed during observation.');
   if (!bytes.length) throw new Error('Displayed blob evidence is empty.');
   return Array.from(bytes);
 }
@@ -1369,7 +1370,9 @@ export class CoverLookupActions {
         return false;
       }
       let byteEvidence;
-      if (new URL(displayedState.currentSrc, this.coverLookup.page.url()).protocol === 'blob:') {
+      if (['blob:', 'data:'].includes(
+        new URL(displayedState.currentSrc, this.coverLookup.page.url()).protocol,
+      )) {
         // parity-check: allow-read-only-measurement-evaluate -- exact decoded displayed blob bytes, without a network request or cache mutation
         const bytes = await image.evaluate(readDisplayedBlobBytes, displayedState);
         byteEvidence = {
@@ -1568,8 +1571,9 @@ export class CoverLookupActions {
   async selectFirstInactiveLocalCoverAndSave(options = {}) {
     const timeout = options.timeout || 30000;
     await expect(this.coverLookup.inactiveLocalCoverCards.first()).toBeVisible({ timeout });
-    const candidateCard = this.coverLookup.inactiveLocalCoverCards.first();
-    return this.selectLocalCoverCardAndSave(candidateCard, options);
+    const sourcePath = await this.coverLookup.inactiveLocalCoverCards.first()
+      .getAttribute('data-select-local-cover');
+    return this.selectLocalCoverBySourcePathAndSave(sourcePath, options);
   }
 
   async selectLocalCoverByNameAndSave(name, options = {}) {

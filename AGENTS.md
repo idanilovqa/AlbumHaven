@@ -48,6 +48,30 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory pre-implementation data-volume gate
+
+- Before writing production code, trace each affected user interaction from its
+  event handler through rendering, API/service calls, queries, projections, and
+  storage. Record the expected production cardinality, number of calls or
+  passes, and synchronous work on the interaction path.
+- Reject a design before implementation if one click, navigation, render, or
+  refresh can trigger per-item rescans of a shared collection, N+1 queries,
+  full-library or full-snapshot loads, synchronous projection/index rebuilds,
+  filesystem-root traversal, or repeated parsing, sorting, or filtering of
+  unchanged data. Small fixtures or a fast development machine do not make
+  unbounded interaction work acceptable.
+- Reuse an existing indexed, cached, snapshot-backed, paginated, virtualized,
+  incremental, or otherwise bounded repository pattern when one exists. If the
+  proven implementation lives on another active branch, compare and preserve
+  its performance ownership before changing the UI around it.
+- Add a failing focused regression test before production code. Use
+  production-calibration cardinality where practical and assert bounded query,
+  traversal, rebuild, and helper-call counts in addition to correct output and
+  visible responsiveness.
+- Stop and redesign when bounded behavior cannot be demonstrated before
+  implementation. During review, treat an unbounded interaction path as a
+  correctness defect even when functional tests pass.
+
 ## Mandatory search regression gate
 
 - Immediately run `npm run test:search-regressions` after changing search

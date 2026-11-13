@@ -17,7 +17,7 @@ from tests.py.test_account_appearance_asgi import AGGREGATE_APPEARANCE
 
 
 FIELD = "library_source_indicators"
-DEFAULT = {"card_colors": False, "hover_outline_colors": False, "icons": True}
+DEFAULT = {"card_colors": False, "hover_outline_colors": True, "icons": True}
 CUSTOM = {"card_colors": True, "hover_outline_colors": True, "icons": False}
 
 

@@ -299,6 +299,7 @@ test('non-album tracks follow the displayed artist family instead of a retained 
 
 test('populated Loose Tracks paints the shared loading table before building all rows', () => {
   const { context, flushAnimationFrame } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
   const overlay = new FakeElement('non-album-modal');
   const header = new FakeElement('non-album-modal-header');
   const table = new FakeElement('non-album-modal-table');
@@ -314,11 +315,13 @@ test('populated Loose Tracks paints the shared loading table before building all
   context.document.querySelectorAll = () => [];
   context.document.addEventListener = () => {};
   context.document.removeEventListener = () => {};
+  context.document.body.appendChild(main);
   context.document.body.appendChild(overlay);
   context.document.body.appendChild(header);
   context.document.body.appendChild(table);
   context.buildAlbumDetailsHeaderHtml = () => '<h2>Loose Tracks</h2>';
-  context.buildLooseTracksHeaderActionsHtml = () => '';
+  let headerActionConfig = null;
+  context.buildLooseTracksHeaderActionsHtml = (config) => { headerActionConfig = config; return ''; };
   context.installNonAlbumTrackSelection = () => calls.push('selection');
   context.attachSharedPlayer = () => calls.push('shared-player');
   context.URL = URL;
@@ -334,6 +337,8 @@ test('populated Loose Tracks paints the shared loading table before building all
   context.openNonAlbumModal({ libraryWide: true });
 
   assert.equal(overlay.hidden, false);
+  assert.equal(main.children.includes(overlay), true);
+  assert.equal(headerActionConfig?.showClose, false);
   assert.match(table.innerHTML, /aria-busy="true"/);
   assert.doesNotMatch(table.innerHTML, /Loose/);
   assert.deepEqual(calls, []);
@@ -345,6 +350,30 @@ test('populated Loose Tracks paints the shared loading table before building all
   assert.match(table.innerHTML, /Loose/);
   assert.doesNotMatch(table.innerHTML, /aria-busy="true"/);
   assert.deepEqual(calls, ['collapsible', 'selection', 'shared-player']);
+});
+
+test('Loose Tracks disclosure toggles reuse cached sections without scanning track rows', () => {
+  const { context } = loadHelper();
+  const table = new FakeElement('non-album-modal-table');
+  const root = new FakeElement('album-track-table');
+  const details = new FakeElement('details');
+  const summary = new FakeElement('summary');
+  const handlers = {};
+  let sectionQueries = 0;
+  details.open = true;
+  details.querySelector = () => summary;
+  details.addEventListener = (type, handler) => { handlers[type] = handler; };
+  root.querySelectorAll = () => { sectionQueries += 1; return [details]; };
+  table.querySelector = () => root;
+
+  context.installNonAlbumCollapsibleSections({ table });
+  assert.equal(summary.getAttribute('aria-expanded'), 'true');
+  assert.equal(root.classList.contains('album-track-table--partially-collapsed'), false);
+  details.open = false;
+  handlers.toggle();
+  assert.equal(summary.getAttribute('aria-expanded'), 'false');
+  assert.equal(root.classList.contains('album-track-table--partially-collapsed'), true);
+  assert.equal(sectionQueries, 1, 'toggle must reuse the cached section list');
 });
 
 test('Loose Tracks indexes problematic paths and snapshots playback once per rendered group', () => {
@@ -836,15 +865,6 @@ test('an older deferred hydration cannot overwrite a newer scope for the same ar
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
-test('non-album metrics render missing values as unavailable', () => {
-  const { context } = loadHelper();
-
-  for (const value of [null, undefined, '', '   ']) {
-    assert.equal(context.formatNonAlbumTrackMetric(value), '—');
-  }
-  assert.equal(context.formatNonAlbumTrackMetric(0), '0');
-});
-
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
   const { context } = loadHelper();
   for (const filename of ['gallery-main-state.js', 'gallery-main-interactions.js']) {
@@ -1046,7 +1066,7 @@ test('custom exceptions and named collections render collapsible subsections in 
     { path: 'C:/Music/Random/c.mp3', display_path: 'Random/c.mp3', title: 'Song C', exception_type: 'Random songs' },
   ];
   const markup = context.buildNonAlbumTrackSectionsMarkup(items);
-  assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
+  assert.equal((markup.match(/class="album-track-table(?:\s|")/g) || []).length, 1);
   for (const label of ['Custom Collection', 'Road trip', 'Quiet evening', 'Random songs']) {
     assert.ok(markup.includes(label), `missing subsection ${label}`);
   }
@@ -1097,10 +1117,10 @@ test('library-wide Loose Tracks keeps the established lightweight table', () => 
   assert.doesNotMatch(markup, />Rating<|>Popularity<|data-rating-choice/);
 });
 
-test('collection detail reuses the rich track columns and compact narrow metadata', () => {
+test('collection detail and All Loose Tracks use the identical supported table columns', () => {
   const { context } = loadHelper();
   context.window.AlbumHavenCapabilities = { isCurrentLibraryOwner: () => true };
-  const markup = context.buildNonAlbumTrackSectionsMarkup([{
+  const track = {
     path: 'C:/Music/Night/a.flac',
     display_path: 'Night/a.flac',
     title: 'A',
@@ -1112,125 +1132,16 @@ test('collection detail reuses the rich track columns and compact narrow metadat
     track_preference: { rating: 4, love_tier: 'loved' },
     track_stats: { scrobble_count: 23 },
     track_popularity: { is_visible: true, scrobble_count: 4200 },
-  }], { collectionName: 'Night' });
-
-  for (const label of ['Rating', 'Popularity', 'Plays', 'Year', 'Length']) {
-    assert.match(markup, new RegExp(`>${label}<`));
+  };
+  const collection = context.buildNonAlbumTrackSectionsMarkup([track], { collectionName: 'Night' });
+  const looseTracks = context.buildNonAlbumTrackSectionsMarkup([{ ...track, exception_type: '' }]);
+  for (const markup of [collection, looseTracks]) {
+    for (const label of ['Track', 'File path', 'Length']) assert.match(markup, new RegExp(`>${label}<`));
+    assert.doesNotMatch(markup, />Rating<|>Popularity<|>Plays<|data-rating-choice|album-track-table__love/);
+    assert.match(markup, /--cdt-mobile-columns: 36px minmax\(0, 1fr\) minmax\(54px, auto\)/);
   }
-  assert.doesNotMatch(markup, />Availability</);
-  assert.match(markup, /aria-label="Loved"[^>]*>\u2665<\/span>/);
-  assert.match(markup, /data-cdt-column="popularity"[^>]*>[\s\S]*4,200/);
-  assert.match(markup, /data-cdt-column="plays"[^>]*>[\s\S]*23/);
-  assert.match(markup, /data-cdt-column="year"[^>]*>[\s\S]*2001/);
-  assert.match(markup, /album-track-table__mobile-meta[^>]*>[\s\S]*2001[\s\S]*4,200/);
-  assert.doesNotMatch(markup, /Lastfm plays/i);
-});
-
-test('non-album rating reuses the shared interactive renderer only when mutation is allowed', () => {
-  const { context } = loadHelper();
-  const calls = [];
-  context.buildGalleryRatingHtml = config => {
-    calls.push(config);
-    return '<div data-shared-rating></div>';
-  };
-  context.window.AlbumHavenCapabilities = {
-    allows: action => action === 'library.track_preferences.manage',
-  };
-  const ownerTrack = {
-    path: 'C:/Music/Night/a.flac',
-    track_preference: {
-      rating: 4,
-      allowed_actions: { can_rate: true },
-    },
-  };
-
-  assert.equal(context.buildNonAlbumTrackRatingHtml(ownerTrack), '<div data-shared-rating></div>');
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), {
-    value: 4,
-    maximum: 5,
-    label: 'Track rating 4/5',
-    className: 'album-track-table__track-rating',
-    interactive: true,
-    dataAttributes: { 'track-ref': 'C:/Music/Night/a.flac' },
-  });
-
-  calls.length = 0;
-  context.buildNonAlbumTrackRatingHtml({
-    media_ref: 'opaque-media-ref',
-    track_preference: { rating: null, allowed_actions: { can_rate: true } },
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].dataAttributes)), {
-    'media-ref': 'opaque-media-ref',
-  });
-
-  context.window.AlbumHavenCapabilities.allows = () => false;
-  context.buildNonAlbumTrackRatingHtml(ownerTrack);
-  assert.equal(calls.at(-1).interactive, undefined);
-});
-
-test('non-album rating saves an opaque member identity and updates shared browse state after success', async () => {
-  const { context } = loadHelper();
-  const localTrack = {
-    media_ref: 'opaque-media-ref',
-    track_preference: { rating: 2, love_tier: 'off', allowed_actions: { can_rate: true } },
-  };
-  const libraryTrack = JSON.parse(JSON.stringify(localTrack));
-  context.state.view.non_album_tracks = [localTrack];
-  context.state.view.library_non_album_tracks = [libraryTrack];
-  context.window.AlbumHavenCapabilities = { allows: () => true };
-  const requests = [];
-  context.fetch = async (url, options) => {
-    requests.push({ url, options });
-    return {
-      ok: true,
-      async json() {
-        return {
-          ok: true,
-          track_preference: {
-            rating: 5,
-            love_tier: 'off',
-            allowed_actions: { can_rate: true },
-          },
-        };
-      },
-    };
-  };
-  context.buildNonAlbumTrackRatingHtml = track => `<div data-updated-rating="${track.track_preference.rating}"></div>`;
-  const host = { outerHTML: '' };
-
-  assert.equal(await context.saveNonAlbumTrackRating({ mediaRef: 'opaque-media-ref', rating: 5, host }), true);
-
-  assert.deepEqual(JSON.parse(requests[0].options.body), {
-    media_ref: 'opaque-media-ref',
-    track_preference: { rating: 5 },
-  });
-  assert.equal(localTrack.track_preference.rating, 5);
-  assert.equal(libraryTrack.track_preference.rating, 5);
-  assert.equal(host.outerHTML, '<div data-updated-rating="5"></div>');
-});
-
-test('non-album rating keeps the prior value and uses the shared alert on failure', async () => {
-  const { context } = loadHelper();
-  const track = {
-    path: 'C:/Music/Night/a.flac',
-    track_preference: { rating: 2, love_tier: 'off', allowed_actions: { can_rate: true } },
-  };
-  context.state.view.non_album_tracks = [track];
-  context.window.AlbumHavenCapabilities = { allows: () => true };
-  context.fetch = async () => ({
-    ok: false,
-    async json() { return { ok: false, error: 'Rating could not be saved.' }; },
-  });
-  const alerts = [];
-  context.showRepairAlert = (...args) => alerts.push(args);
-
-  assert.equal(await context.saveNonAlbumTrackRating({
-    trackRef: track.path,
-    rating: 5,
-    host: { outerHTML: '' },
-  }), false);
-  assert.equal(track.track_preference.rating, 2);
-  assert.deepEqual(alerts, [['Rating could not be saved.', 'error']]);
+  const columns = markup => [...markup.matchAll(/data-cdt-column="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(columns(collection), columns(looseTracks));
 });
 
 test('non-album artist scope expands only aliases of the displayed family', () => {
@@ -1305,7 +1216,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     markup.indexOf('>Non-album rarity<') < markup.indexOf('>Interviews<'),
     'rarities must render before interviews regardless of payload order',
   );
-  assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
+  assert.equal((markup.match(/class="album-track-table(?:\s|")/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
   assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);

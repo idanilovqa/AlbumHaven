@@ -5404,25 +5404,35 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   ].join('');
 }
 
-function buildLooseTracksHeaderActionsHtml() {
+function buildLooseTracksHeaderActionsHtml(config = {}) {
   const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
   const canEditTags = typeof capabilities?.allows !== 'function'
     || capabilities.allows('library.files.edit_tags');
   const editLabel = canEditTags ? 'Edit tags' : 'Edit tags unavailable for your account';
   const editAttributes = { id: 'non-album-modal-edit-tags' };
   if (canEditTags) editAttributes['data-open-non-album-tag-editor'] = '1';
+  const selectionStatus = `<span class="album-details-header__selection-status" data-non-album-selection-status hidden><span class="album-details-header__selection-count" data-non-album-selection-count role="status" aria-live="polite"></span>${ButtonComponent.renderActionButton({
+    ariaLabel: 'Clear track selection',
+    title: 'Clear track selection',
+    presentation: 'bare',
+    className: 'album-details-header__selection-clear',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
+    attributes: { 'data-clear-non-album-track-selection': '1' },
+  })}</span>`;
   return [
-    '<span class="album-details-header__selection-count" data-non-album-selection-count role="status" aria-live="polite" hidden></span>',
+    selectionStatus,
     ButtonComponent.renderActionButton({
       ariaLabel: editLabel,
       title: editLabel,
       disabled: !canEditTags,
+      presentation: 'bare',
       className: 'track-modal-edit-tags album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
       attributes: editAttributes,
     }),
-    ButtonComponent.renderActionButton({
+    config.showClose === false ? '' : ButtonComponent.renderActionButton({
       ariaLabel: 'Close loose tracks',
+      presentation: 'bare',
       className: 'album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
       attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
@@ -14938,134 +14948,6 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   return request.promise;
 }
 
-function formatNonAlbumTrackMetric(value) {
-  if (value == null || String(value).trim() === '') return '—';
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric >= 0
-    ? Math.trunc(numeric).toLocaleString('en-US')
-    : '—';
-}
-
-function nonAlbumTrackPreference(track) {
-  return track?.trackPreference || track?.track_preference || track?.track_preference_overlay || {};
-}
-
-function nonAlbumTrackStats(track) {
-  return track?.trackStats || track?.track_stats || {};
-}
-
-function nonAlbumTrackPopularity(track) {
-  return track?.trackPopularity || track?.track_popularity || {};
-}
-
-function buildNonAlbumTrackRatingHtml(track) {
-  const rating = Number(nonAlbumTrackPreference(track).rating);
-  const trackRef = String(track?.path || '').trim();
-  const mediaRef = String(track?.media_ref || track?.mediaRef || '').trim();
-  const canRate = Boolean(trackRef || mediaRef)
-    && nonAlbumTrackPreference(track)?.allowed_actions?.can_rate === true
-    && window.AlbumHavenCapabilities?.allows?.('library.track_preferences.manage') === true;
-  const hasRating = Number.isInteger(rating) && rating >= 1 && rating <= 5;
-  return hasRating || canRate
-    ? buildGalleryRatingHtml({
-      value: hasRating ? rating : 0,
-      maximum: 5,
-      label: `Track rating ${hasRating ? rating : 0}/5`,
-      className: 'album-track-table__track-rating',
-      ...(canRate ? {
-        interactive: true,
-        dataAttributes: trackRef ? { 'track-ref': trackRef } : { 'media-ref': mediaRef },
-      } : {}),
-    })
-    : '<span class="album-track-table__metric-empty" aria-label="Not rated">—</span>';
-}
-
-async function saveNonAlbumTrackRating({ trackRef = '', mediaRef = '', rating, host } = {}) {
-  const normalizedTrackRef = String(trackRef || '').trim();
-  const normalizedMediaRef = String(mediaRef || '').trim();
-  const normalizedRating = Number(rating);
-  if (
-    (!normalizedTrackRef && !normalizedMediaRef)
-    || !Number.isInteger(normalizedRating)
-    || normalizedRating < 1
-    || normalizedRating > 5
-    || window.AlbumHavenCapabilities?.allows?.('library.track_preferences.manage') !== true
-  ) return false;
-
-  const lists = [state.view.non_album_tracks, state.view.library_non_album_tracks]
-    .filter(Array.isArray);
-  const matches = lists.flatMap(list => list.filter(track => (
-    normalizedTrackRef
-      ? String(track?.path || '').trim() === normalizedTrackRef
-      : String(track?.media_ref || track?.mediaRef || '').trim() === normalizedMediaRef
-  )));
-  if (!matches.some(track => nonAlbumTrackPreference(track)?.allowed_actions?.can_rate === true)) return false;
-
-  try {
-    const response = await fetch('/track-preferences', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...(normalizedTrackRef ? { track_ref: normalizedTrackRef } : { media_ref: normalizedMediaRef }),
-        track_preference: { rating: normalizedRating },
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok || payload?.ok !== true) {
-      showRepairAlert(payload?.error || 'Rating could not be saved.', 'error');
-      return false;
-    }
-    const savedPreference = payload.track_preference && typeof payload.track_preference === 'object'
-      ? payload.track_preference
-      : { rating: normalizedRating };
-    matches.forEach((track) => {
-      track.track_preference = { ...nonAlbumTrackPreference(track), ...savedPreference };
-    });
-    if (host) host.outerHTML = buildNonAlbumTrackRatingHtml(matches[0]);
-    return true;
-  } catch (_error) {
-    showRepairAlert('Rating could not be saved.', 'error');
-    return false;
-  }
-}
-
-function buildNonAlbumTrackLoveHtml(track) {
-  const tier = String(nonAlbumTrackPreference(track).love_tier || 'off').trim().toLocaleLowerCase();
-  const active = tier === 'loved' || tier === 'obsessed';
-  const label = tier === 'obsessed' ? 'Obsessed' : active ? 'Loved' : 'Not loved';
-  return `<span class="album-track-table__love${active ? ' is-active' : ''}" aria-label="${label}">${active ? '♥' : '♡'}</span>`;
-}
-
-function buildNonAlbumMobileMetaHtml(track) {
-  const rating = Number(nonAlbumTrackPreference(track).rating);
-  const popularity = nonAlbumTrackPopularity(track);
-  const values = [
-    track.year ? `<span>${escapeHtml(track.year)}</span>` : '',
-    Number.isInteger(rating) && rating >= 1 && rating <= 5 ? `<span>${rating}/5</span>` : '',
-    popularity.is_visible === true && Number.isFinite(Number(popularity.scrobble_count))
-      ? `<span aria-label="Last.fm popularity ${formatNonAlbumTrackMetric(popularity.scrobble_count)}">${formatNonAlbumTrackMetric(popularity.scrobble_count)}</span>`
-      : '',
-  ].filter(Boolean);
-  return values.join('<span aria-hidden="true">·</span>');
-}
-
-const NON_ALBUM_RICH_TRACK_COLUMNS = Object.freeze([
-  Object.freeze({ key: 'rating', label: 'Rating', width: '104px', visibility: 'desktop', cell: buildNonAlbumTrackRatingHtml }),
-  Object.freeze({ key: 'love', label: '♥', width: '30px', cell: buildNonAlbumTrackLoveHtml }),
-  Object.freeze({
-    key: 'popularity', label: 'Popularity', width: '76px', visibility: 'desktop',
-    cell: track => `<span class="album-track-table__metric">${nonAlbumTrackPopularity(track).is_visible === true ? formatNonAlbumTrackMetric(nonAlbumTrackPopularity(track).scrobble_count) : '—'}</span>`,
-  }),
-  Object.freeze({
-    key: 'plays', label: 'Plays', width: '54px',
-    cell: track => `<span class="album-track-table__metric">${formatNonAlbumTrackMetric(nonAlbumTrackStats(track).scrobble_count)}</span>`,
-  }),
-  Object.freeze({
-    key: 'year', label: 'Year', width: '48px', visibility: 'desktop',
-    cell: track => `<span class="album-track-table__metric">${track.year ? escapeHtml(track.year) : '—'}</span>`,
-  }),
-]);
-
 function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = buildProblematicAlbumTrackPathIndex()) {
   const playback = getPlayerPlaybackSnapshot();
   return items.map((item, offset) => {
@@ -15187,10 +15069,8 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     collapsibleGroups: !collectionName,
     ariaLabel: collectionName || 'Loose tracks',
     idPrefix: 'loose-track-table',
-    optionalColumns: collectionName ? NON_ALBUM_RICH_TRACK_COLUMNS : [],
     mobile: 'grouped',
-    mobileColumns: '36px minmax(0, 1fr) 30px 54px minmax(54px, auto)',
-    mobileTitleSupplement: collectionName ? buildNonAlbumMobileMetaHtml : null,
+    mobileColumns: '36px minmax(0, 1fr) minmax(54px, auto)',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
@@ -15300,20 +15180,41 @@ function hideGalleryOptionsMenu() {
 
 var nonAlbumTrackSelectionController = null;
 
+function installNonAlbumCollapsibleSections(els) {
+  const root = els?.table?.querySelector?.('.album-track-table') || els?.table;
+  if (!root) return;
+  const sections = Array.from(root.querySelectorAll?.('.album-track-table__disc--collapsible') || []);
+  const syncRoot = () => {
+    const partiallyCollapsed = sections.some(section => !section.open);
+    root.classList?.[partiallyCollapsed ? 'add' : 'remove']('album-track-table--partially-collapsed');
+  };
+  sections.forEach((details) => {
+    const summary = details.querySelector?.('summary');
+    const syncExpanded = () => {
+      summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+      syncRoot();
+    };
+    syncExpanded();
+    details.addEventListener?.('toggle', syncExpanded);
+  });
+}
+
 function installNonAlbumTrackSelection(els) {
   nonAlbumTrackSelectionController?.destroy?.();
   nonAlbumTrackSelectionController = null;
   if (typeof TrackSelectionController !== 'function' || !els?.table) return;
-  const status = els.header?.querySelector?.('[data-non-album-selection-count]');
+  const statusContainer = els.header?.querySelector?.('[data-non-album-selection-status]');
+  const status = statusContainer?.querySelector?.('[data-non-album-selection-count]')
+    || els.header?.querySelector?.('[data-non-album-selection-count]');
   const editButton = els.header?.querySelector?.('[data-open-non-album-tag-editor="1"]');
   nonAlbumTrackSelectionController = new TrackSelectionController(els.table, {
     scrollTarget: els.table.closest?.('.non-album-modal-table-wrap'),
     onChange(paths) {
       const count = paths.length;
       if (status) {
-        status.hidden = count === 0;
         status.textContent = count ? `${count} selected` : '';
       }
+      if (statusContainer) statusContainer.hidden = count === 0;
       if (editButton) {
         const label = count ? `Edit tags for ${count} selected ${count === 1 ? 'track' : 'tracks'}` : 'Edit tags';
         editButton.setAttribute?.('aria-label', label);
@@ -15321,6 +15222,10 @@ function installNonAlbumTrackSelection(els) {
       }
     },
   });
+}
+
+function clearNonAlbumTrackSelection() {
+  nonAlbumTrackSelectionController?.clear?.();
 }
 
 function isCurrentNonAlbumModalRequest(options = {}) {
@@ -15370,6 +15275,7 @@ function openNonAlbumModal(options = {}) {
   const collectionName = String(options.collectionName || '').trim();
   state.ui.nonAlbumLibraryWide = libraryWide;
   state.ui.nonAlbumCollectionName = collectionName;
+  const page = setNonAlbumPagePresentation(els.overlay, true);
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
   const subtitle = collectionName
@@ -15384,7 +15290,7 @@ function openNonAlbumModal(options = {}) {
       subtitle,
       titleId: 'non-album-modal-title',
       subtitleId: 'non-album-modal-subtitle',
-      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+      actionsHtml: buildLooseTracksHeaderActionsHtml({ showClose: !page }),
     });
   }
   if (typeof presentMobilePage === 'function') {
@@ -15401,7 +15307,7 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) {
+  if (!page && !els.overlay.classList.contains('is-mobile-page')) {
     document.body.classList.add('modal-open');
   }
   scheduleBrowserAnimationFrame(() => {
@@ -15412,12 +15318,7 @@ function openNonAlbumModal(options = {}) {
           ? buildCustomCollectionDetailMarkup(looseTracks, collectionName)
           : buildNonAlbumTrackSectionsMarkup(looseTracks);
       }
-      els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
-        const summary = details.querySelector?.('summary');
-        const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
-        syncExpanded();
-        details.addEventListener?.('toggle', syncExpanded);
-      });
+      installNonAlbumCollapsibleSections(els);
       installNonAlbumTrackSelection(els);
       attachSharedPlayer();
     });
@@ -22643,6 +22544,19 @@ function buildCompactDataTable(config = {}) {
   return `<div class="compact-data-table" id="${escapeHtml(tableId)}" role="table"${ariaLabel ? ` aria-label="${escapeHtml(ariaLabel)}"` : ''} data-cdt-headers="${headerMode}" data-cdt-density="${density}" data-cdt-overflow="${overflow}" data-cdt-mobile="${mobile}" data-cdt-frame="${frame}" data-cdt-selection="${selection}"${style}>${header}<div role="rowgroup" class="compact-data-table-body">${body}</div>${empty}${helper}</div>`;
 }
 
+function buildCompactDataTableDisclosure(config = {}) {
+  const className = String(config.className || '').split(/\s+/).filter(value => /^[a-zA-Z0-9_-]+$/.test(value)).join(' ');
+  const summaryClassName = String(config.summaryClassName || '').split(/\s+/).filter(value => /^[a-zA-Z0-9_-]+$/.test(value)).join(' ');
+  const contentClassName = String(config.contentClassName || '').split(/\s+/).filter(value => /^[a-zA-Z0-9_-]+$/.test(value)).join(' ');
+  const attributes = Object.entries(config.attributes || {}).map(([name, value]) => (
+    /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name) ? ` ${name}="${escapeHtml(value)}"` : ''
+  )).join('');
+  const summaryAttributes = Object.entries(config.summaryAttributes || {}).map(([name, value]) => (
+    /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name) ? ` ${name}="${escapeHtml(value)}"` : ''
+  )).join('');
+  return `<details${className ? ` class="${className}"` : ''}${config.open ? ' open' : ''}${attributes}><summary class="utility-section-toggle${summaryClassName ? ` ${summaryClassName}` : ''}"${summaryAttributes}><svg class="utility-section-chevron" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg>${config.summaryHtml || ''}</summary><div${contentClassName ? ` class="${contentClassName}"` : ''}>${config.contentHtml || ''}</div></details>`;
+}
+
 // END js/runtime/compact-data-table.js
 
 // BEGIN js/runtime/album-track-table.js
@@ -22814,7 +22728,15 @@ function buildAlbumTrackTableHtml(config = {}) {
       const heading = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : escapeHtml(label);
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${heading}</summary>${table}</details>`;
+      return buildCompactDataTableDisclosure({
+        className: `album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}`,
+        summaryClassName: 'album-track-table__disc-heading',
+        summaryAttributes: { 'aria-expanded': 'true' },
+        contentClassName: 'album-track-table__disc-content',
+        summaryHtml: `<span class="album-track-table__disc-summary">${heading}</span>`,
+        contentHtml: table,
+        open: true,
+      });
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -22834,7 +22756,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
   ].join('');
   const loading = groups.some((group) => group?.loadingRows);
-  return `<div class="album-track-table"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+  return `<div class="album-track-table${summaries ? ' album-track-table--has-total' : ''}"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
 }
 
 var TrackSelectionController = class {
@@ -22847,6 +22769,8 @@ var TrackSelectionController = class {
     this.gesture = null;
     this.holdTimer = 0;
     this.suppressClick = false;
+    this.rowList = Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
+    this.pathList = this.rowList.map(row => this.pathForRow(row)).filter(Boolean);
     this.handlers = {
       pointerdown: event => this.handlePointerDown(event),
       pointermove: event => this.handlePointerMove(event),
@@ -22865,7 +22789,7 @@ var TrackSelectionController = class {
   }
 
   rows() {
-    return Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
+    return this.rowList;
   }
 
   rowFromEvent(event) {
@@ -22879,7 +22803,7 @@ var TrackSelectionController = class {
   }
 
   getSelectedPaths() {
-    return this.rows().map(row => this.pathForRow(row)).filter(path => this.selectedPaths.has(path));
+    return this.pathList.filter(path => this.selectedPaths.has(path));
   }
 
   clearHold() {
@@ -22888,9 +22812,12 @@ var TrackSelectionController = class {
   }
 
   sync(nextPaths) {
+    const previousPaths = this.selectedPaths;
     this.selectedPaths = new Set(nextPaths);
     this.rows().forEach((row) => {
-      const selected = this.selectedPaths.has(this.pathForRow(row));
+      const path = this.pathForRow(row);
+      const selected = this.selectedPaths.has(path);
+      if (previousPaths.has(path) === selected) return;
       row.classList?.[selected ? 'add' : 'remove']('album-track-table__row--selected');
       if (selected) row.setAttribute?.('aria-selected', 'true');
       else row.removeAttribute?.('aria-selected');
@@ -22906,8 +22833,13 @@ var TrackSelectionController = class {
     this.sync(next);
   }
 
+  clear() {
+    this.anchorPath = '';
+    this.sync([]);
+  }
+
   selectRange(fromPath, toPath, additive = false) {
-    const paths = this.rows().map(row => this.pathForRow(row)).filter(Boolean);
+    const paths = this.pathList;
     const from = paths.indexOf(fromPath);
     const to = paths.indexOf(toPath);
     if (from < 0 || to < 0) return;
@@ -22921,6 +22853,7 @@ var TrackSelectionController = class {
     const row = this.rowFromEvent(event);
     const path = this.pathForRow(row);
     if (!path) return;
+    if (String(event.pointerType || 'mouse') !== 'touch') event.preventDefault?.();
     this.suppressClick = false;
     this.clearHold();
     this.gesture = {
@@ -23033,7 +22966,7 @@ var TrackSelectionController = class {
     const path = this.pathForRow(row);
     if (!path) return;
     if (event.key === 'Escape' && this.selectedPaths.size) {
-      this.sync([]);
+      this.clear();
       event.preventDefault?.();
       return;
     }
@@ -23672,7 +23605,17 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
     });
     // Native disclosure owns keyboard and open state. New payload markup starts
     // collapsed; CSS-only resize keeps the mounted disclosure intact.
-    return `<details class="duplicate-copy-review__copy"${copy.copy_ref ? ` data-copy-ref="${escapeHtml(copy.copy_ref)}"` : ''}><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+    return buildCompactDataTableDisclosure({
+      className: 'duplicate-copy-review__copy',
+      summaryClassName: 'duplicate-copy-review__heading',
+      contentClassName: 'duplicate-copy-review__content',
+      attributes: {
+        ...(copy.copy_ref ? { 'data-copy-ref': copy.copy_ref } : {}),
+      },
+      summaryAttributes: { id },
+      summaryHtml: `<span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}`,
+      contentHtml: table,
+    });
   }).join('');
   return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
 }
@@ -50950,17 +50893,6 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 function handleGalleryBootstrapClick(event) {
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   if (typeof handleLibraryNavigationClick === 'function' && handleLibraryNavigationClick(event)) return;
-  const nonAlbumRatingButton = event.target.closest('#non-album-modal [data-rating-choice]');
-  if (nonAlbumRatingButton) {
-    event.preventDefault();
-    void saveNonAlbumTrackRating({
-      trackRef: nonAlbumRatingButton.dataset.trackRef,
-      mediaRef: nonAlbumRatingButton.dataset.mediaRef,
-      rating: nonAlbumRatingButton.dataset.ratingChoice,
-      host: nonAlbumRatingButton.closest('.rating-row'),
-    });
-    return;
-  }
   const artistTreeAction = event.target.closest('[data-artist-tree-action="scroll-to-artist"]');
   if (artistTreeAction) {
     event.preventDefault();
@@ -51013,6 +50945,13 @@ function handleGalleryBootstrapClick(event) {
   if (closeNonAlbumModalButton || overlayClickStartedOnOverlay(document.getElementById('non-album-modal'), event)) {
     event.preventDefault();
     closeNonAlbumModal();
+    return;
+  }
+
+  const clearNonAlbumTrackSelectionButton = event.target.closest('[data-clear-non-album-track-selection="1"]');
+  if (clearNonAlbumTrackSelectionButton) {
+    event.preventDefault();
+    clearNonAlbumTrackSelection();
     return;
   }
 

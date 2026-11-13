@@ -23,6 +23,8 @@
 :root[data-library-source-icons="false"] .album-details-source-markers { display: none; }
 .album-details-header__actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .album-details-header__selection-count { color: var(--appearance-muted, var(--muted)); font-size: 0.75rem; white-space: nowrap; }
+.album-details-header__selection-status { display: inline-flex; align-items: center; gap: 2px; }
+.album-details-header__selection-status[hidden] { display: none; }
 .album-details-header__action-icon {
   display: block;
   width: 18px;

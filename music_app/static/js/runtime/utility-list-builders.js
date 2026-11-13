@@ -566,7 +566,17 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
     });
     // Native disclosure owns keyboard and open state. New payload markup starts
     // collapsed; CSS-only resize keeps the mounted disclosure intact.
-    return `<details class="duplicate-copy-review__copy"${copy.copy_ref ? ` data-copy-ref="${escapeHtml(copy.copy_ref)}"` : ''}><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+    return buildCompactDataTableDisclosure({
+      className: 'duplicate-copy-review__copy',
+      summaryClassName: 'duplicate-copy-review__heading',
+      contentClassName: 'duplicate-copy-review__content',
+      attributes: {
+        ...(copy.copy_ref ? { 'data-copy-ref': copy.copy_ref } : {}),
+      },
+      summaryAttributes: { id },
+      summaryHtml: `<span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}`,
+      contentHtml: table,
+    });
   }).join('');
   return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
 }

@@ -325,7 +325,7 @@ test('Album Details header actions use the approved outline icons instead of tex
   assert.match(html, /data-open-track-modal-folder="1"/);
 });
 
-test('Loose Tracks uses the shared Album Details header with custom copy and actions', () => {
+test('Loose Tracks main-window header uses bare Edit Tags and a frameless clearable selection status', () => {
   const context = loadComponents();
   const html = context.buildAlbumDetailsHeaderHtml({
     variant: 'copy',
@@ -333,7 +333,7 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
     subtitle: 'Non-album tracks found in Folkstone and family artist folders.',
     titleId: 'non-album-modal-title',
     subtitleId: 'non-album-modal-subtitle',
-    actionsHtml: context.buildLooseTracksHeaderActionsHtml(),
+    actionsHtml: context.buildLooseTracksHeaderActionsHtml({ showClose: false }),
   });
 
   assert.match(html, /class="album-details-header"/);
@@ -341,13 +341,15 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.match(html, /id="non-album-modal-title">Loose Tracks</);
   assert.match(html, /id="non-album-modal-subtitle">Non-album tracks found in Folkstone and family artist folders\.<\/div>/);
   assert.match(html, /id="non-album-modal-edit-tags"/);
-  assert.match(html, /data-non-album-selection-count[^>]*role="status"[^>]*hidden><\/span>/);
+  assert.match(html, /data-non-album-selection-status[^>]*hidden/);
+  assert.match(html, /data-non-album-selection-count[^>]*role="status"[^>]*><\/span>/);
   assert.doesNotMatch(html, /0 selected/);
   assert.match(html, /data-open-non-album-tag-editor="1"/);
   assert.match(html, /album-details-header__action-icon--edit/);
-  assert.match(html, /id="non-album-modal-close"/);
-  assert.match(html, /data-close-non-album-modal="1"/);
-  assert.match(html, /album-details-header__action-icon--close/);
+  assert.match(html, /data-clear-non-album-track-selection="1"/);
+  assert.match(html, /aria-label="Clear track selection"/);
+  assert.equal((html.match(/action-button--bare/g) || []).length, 2);
+  assert.doesNotMatch(html, /id="non-album-modal-close"|data-close-non-album-modal/);
   assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
 });

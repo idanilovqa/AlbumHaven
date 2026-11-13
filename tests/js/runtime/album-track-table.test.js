@@ -57,10 +57,11 @@ function createSelectionHarness(context) {
     addEventListener(type, handler) { scrollListeners.set(type, handler); },
     removeEventListener(type) { scrollListeners.delete(type); },
   };
+  let queryCount = 0;
   const root = {
     addEventListener(type, handler) { listeners.set(type, handler); },
     removeEventListener(type) { listeners.delete(type); },
-    querySelectorAll() { return rows; },
+    querySelectorAll() { queryCount += 1; return rows; },
     closest() { return scrollTarget; },
   };
   const dispatch = (type, row, overrides = {}) => listeners.get(type)?.({
@@ -84,7 +85,7 @@ function createSelectionHarness(context) {
       timer.callback();
     });
   };
-  return { root, rows, scrollTarget, scrollListeners, listeners, dispatch, runTimers };
+  return { root, rows, scrollTarget, scrollListeners, listeners, dispatch, runTimers, queryCount: () => queryCount };
 }
 
 test('AlbumTrackTable changes only the inner Play and Pause glyphs to centered shared SVGs', () => {
@@ -141,6 +142,20 @@ test('AlbumTrackTable renders shared loading rows with the real table geometry',
   assert.match(html, /album-track-table__skeleton--heading/);
   assert.match(html, /data-cdt-column="path"/);
   assert.doesNotMatch(html, />Loading<\/summary>/);
+});
+
+test('collapsible AlbumTrackTable groups reuse the PF shared disclosure component', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Custom Collection — Road trip', tracks: [{ path: 'one', title: 'One' }] }],
+    forceGroupLabels: true,
+    collapsibleGroups: true,
+  });
+
+  assert.match(html, /<summary class="utility-section-toggle album-track-table__disc-heading"/);
+  assert.match(html, /class="utility-section-chevron"[^>]*width="14" height="14"/);
+  assert.match(html, /class="album-track-table__disc-content"/);
+  assert.doesNotMatch(html, /summary::before/);
 });
 
 test('AlbumTrackTable marks named sections for shared row styling', () => {
@@ -295,6 +310,24 @@ test('TrackSelectionController supports desktop range drag and additive taps', (
   }
 });
 
+test('TrackSelectionController caches rows, suppresses native drag selection, and clears in one action', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  let pointerDownPrevented = 0;
+  const controller = new context.TrackSelectionController(harness.root);
+
+  harness.dispatch('pointerdown', harness.rows[0], { preventDefault: () => { pointerDownPrevented += 1; } });
+  harness.dispatch('pointermove', harness.rows[3], { clientY: 60 });
+  harness.dispatch('pointerup', harness.rows[3], { clientY: 60 });
+
+  assert.equal(pointerDownPrevented, 1);
+  assert.equal(harness.queryCount(), 1, 'drag selection must not rescan rendered rows');
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two', 'three', 'four']);
+  controller.clear();
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), []);
+  assert.equal(harness.queryCount(), 1, 'clear must reuse the cached row index');
+});
+
 test('TrackSelectionController requires a stationary 550 ms touch hold and cleans up', () => {
   const context = loadTrackTable();
   const harness = createSelectionHarness(context);
@@ -430,10 +463,8 @@ test('collapsing any loose-track section also collapses the aggregate length', (
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
     'utf8',
   );
-  assert.match(
-    css,
-    /\.album-track-table:has\(\.album-track-table__disc--collapsible:not\(\[open\]\)\) \.album-track-table__total\s*\{[^}]*display:\s*none/s,
-  );
+  assert.match(css, /\.album-track-table--partially-collapsed \.album-track-table__total\s*\{[^}]*display:\s*none/s);
+  assert.doesNotMatch(css, /:has\(\.album-track-table__disc--collapsible:not\(\[open\]\)\)/);
 });
 
 test('the final table right outline fades into the footer without a corner glow layer', () => {
@@ -443,7 +474,7 @@ test('the final table right outline fades into the footer without a corner glow 
   );
   assert.match(
     css,
-    /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:last-of-type \.compact-data-table\s*\{[^}]*border-bottom-right-radius:\s*0/s,
+    /\.album-track-table--has-total \.album-track-table__disc:last-of-type \.compact-data-table\s*\{[^}]*border-bottom-right-radius:\s*0/s,
   );
   assert.match(css, /\.album-track-table__total\s*\{[^}]*margin:\s*-1px 0 0 auto/s);
   assert.match(css, /\.album-track-table__total::before\s*\{[^}]*border-right:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 75%, transparent\)/s);
@@ -452,7 +483,7 @@ test('the final table right outline fades into the footer without a corner glow 
   assert.doesNotMatch(css.match(/\.album-track-table__total\s*\{[^}]*\}/s)[0], /mask-image:/);
   assert.match(
     css,
-    /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:last-of-type \.compact-data-table::after\s*\{[^}]*position:\s*absolute[^}]*right:\s*-1px[^}]*bottom:\s*-1px[^}]*width:\s*1px[^}]*background:\s*linear-gradient\(to bottom,\s*transparent[\s\S]*var\(--album-track-accent\) 75%/s,
+    /\.album-track-table--has-total \.album-track-table__disc:last-of-type \.compact-data-table::after\s*\{[^}]*position:\s*absolute[^}]*right:\s*-1px[^}]*bottom:\s*-1px[^}]*width:\s*1px[^}]*background:\s*linear-gradient\(to bottom,\s*transparent[\s\S]*var\(--album-track-accent\) 75%/s,
   );
   assert.doesNotMatch(css, /\.album-track-table__total::after/);
 });

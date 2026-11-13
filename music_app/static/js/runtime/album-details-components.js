@@ -178,25 +178,35 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   ].join('');
 }
 
-function buildLooseTracksHeaderActionsHtml() {
+function buildLooseTracksHeaderActionsHtml(config = {}) {
   const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
   const canEditTags = typeof capabilities?.allows !== 'function'
     || capabilities.allows('library.files.edit_tags');
   const editLabel = canEditTags ? 'Edit tags' : 'Edit tags unavailable for your account';
   const editAttributes = { id: 'non-album-modal-edit-tags' };
   if (canEditTags) editAttributes['data-open-non-album-tag-editor'] = '1';
+  const selectionStatus = `<span class="album-details-header__selection-status" data-non-album-selection-status hidden><span class="album-details-header__selection-count" data-non-album-selection-count role="status" aria-live="polite"></span>${ButtonComponent.renderActionButton({
+    ariaLabel: 'Clear track selection',
+    title: 'Clear track selection',
+    presentation: 'bare',
+    className: 'album-details-header__selection-clear',
+    iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
+    attributes: { 'data-clear-non-album-track-selection': '1' },
+  })}</span>`;
   return [
-    '<span class="album-details-header__selection-count" data-non-album-selection-count role="status" aria-live="polite" hidden></span>',
+    selectionStatus,
     ButtonComponent.renderActionButton({
       ariaLabel: editLabel,
       title: editLabel,
       disabled: !canEditTags,
+      presentation: 'bare',
       className: 'track-modal-edit-tags album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
       attributes: editAttributes,
     }),
-    ButtonComponent.renderActionButton({
+    config.showClose === false ? '' : ButtonComponent.renderActionButton({
       ariaLabel: 'Close loose tracks',
+      presentation: 'bare',
       className: 'album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
       attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },

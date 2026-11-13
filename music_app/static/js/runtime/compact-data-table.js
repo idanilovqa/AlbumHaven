@@ -93,3 +93,16 @@ function buildCompactDataTable(config = {}) {
   const helper = config.helperHtml ? `<div data-cdt-helper>${config.helperHtml}</div>` : '';
   return `<div class="compact-data-table" id="${escapeHtml(tableId)}" role="table"${ariaLabel ? ` aria-label="${escapeHtml(ariaLabel)}"` : ''} data-cdt-headers="${headerMode}" data-cdt-density="${density}" data-cdt-overflow="${overflow}" data-cdt-mobile="${mobile}" data-cdt-frame="${frame}" data-cdt-selection="${selection}"${style}>${header}<div role="rowgroup" class="compact-data-table-body">${body}</div>${empty}${helper}</div>`;
 }
+
+function buildCompactDataTableDisclosure(config = {}) {
+  const className = String(config.className || '').split(/\s+/).filter(value => /^[a-zA-Z0-9_-]+$/.test(value)).join(' ');
+  const summaryClassName = String(config.summaryClassName || '').split(/\s+/).filter(value => /^[a-zA-Z0-9_-]+$/.test(value)).join(' ');
+  const contentClassName = String(config.contentClassName || '').split(/\s+/).filter(value => /^[a-zA-Z0-9_-]+$/.test(value)).join(' ');
+  const attributes = Object.entries(config.attributes || {}).map(([name, value]) => (
+    /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name) ? ` ${name}="${escapeHtml(value)}"` : ''
+  )).join('');
+  const summaryAttributes = Object.entries(config.summaryAttributes || {}).map(([name, value]) => (
+    /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name) ? ` ${name}="${escapeHtml(value)}"` : ''
+  )).join('');
+  return `<details${className ? ` class="${className}"` : ''}${config.open ? ' open' : ''}${attributes}><summary class="utility-section-toggle${summaryClassName ? ` ${summaryClassName}` : ''}"${summaryAttributes}><svg class="utility-section-chevron" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg>${config.summaryHtml || ''}</summary><div${contentClassName ? ` class="${contentClassName}"` : ''}>${config.contentHtml || ''}</div></details>`;
+}

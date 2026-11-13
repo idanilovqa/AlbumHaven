@@ -165,7 +165,15 @@ function buildAlbumTrackTableHtml(config = {}) {
       const heading = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : escapeHtml(label);
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${heading}</summary>${table}</details>`;
+      return buildCompactDataTableDisclosure({
+        className: `album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}`,
+        summaryClassName: 'album-track-table__disc-heading',
+        summaryAttributes: { 'aria-expanded': 'true' },
+        contentClassName: 'album-track-table__disc-content',
+        summaryHtml: `<span class="album-track-table__disc-summary">${heading}</span>`,
+        contentHtml: table,
+        open: true,
+      });
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -185,7 +193,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
   ].join('');
   const loading = groups.some((group) => group?.loadingRows);
-  return `<div class="album-track-table"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+  return `<div class="album-track-table${summaries ? ' album-track-table--has-total' : ''}"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
 }
 
 var TrackSelectionController = class {
@@ -198,6 +206,8 @@ var TrackSelectionController = class {
     this.gesture = null;
     this.holdTimer = 0;
     this.suppressClick = false;
+    this.rowList = Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
+    this.pathList = this.rowList.map(row => this.pathForRow(row)).filter(Boolean);
     this.handlers = {
       pointerdown: event => this.handlePointerDown(event),
       pointermove: event => this.handlePointerMove(event),
@@ -216,7 +226,7 @@ var TrackSelectionController = class {
   }
 
   rows() {
-    return Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
+    return this.rowList;
   }
 
   rowFromEvent(event) {
@@ -230,7 +240,7 @@ var TrackSelectionController = class {
   }
 
   getSelectedPaths() {
-    return this.rows().map(row => this.pathForRow(row)).filter(path => this.selectedPaths.has(path));
+    return this.pathList.filter(path => this.selectedPaths.has(path));
   }
 
   clearHold() {
@@ -239,9 +249,12 @@ var TrackSelectionController = class {
   }
 
   sync(nextPaths) {
+    const previousPaths = this.selectedPaths;
     this.selectedPaths = new Set(nextPaths);
     this.rows().forEach((row) => {
-      const selected = this.selectedPaths.has(this.pathForRow(row));
+      const path = this.pathForRow(row);
+      const selected = this.selectedPaths.has(path);
+      if (previousPaths.has(path) === selected) return;
       row.classList?.[selected ? 'add' : 'remove']('album-track-table__row--selected');
       if (selected) row.setAttribute?.('aria-selected', 'true');
       else row.removeAttribute?.('aria-selected');
@@ -257,8 +270,13 @@ var TrackSelectionController = class {
     this.sync(next);
   }
 
+  clear() {
+    this.anchorPath = '';
+    this.sync([]);
+  }
+
   selectRange(fromPath, toPath, additive = false) {
-    const paths = this.rows().map(row => this.pathForRow(row)).filter(Boolean);
+    const paths = this.pathList;
     const from = paths.indexOf(fromPath);
     const to = paths.indexOf(toPath);
     if (from < 0 || to < 0) return;
@@ -272,6 +290,7 @@ var TrackSelectionController = class {
     const row = this.rowFromEvent(event);
     const path = this.pathForRow(row);
     if (!path) return;
+    if (String(event.pointerType || 'mouse') !== 'touch') event.preventDefault?.();
     this.suppressClick = false;
     this.clearHold();
     this.gesture = {
@@ -384,7 +403,7 @@ var TrackSelectionController = class {
     const path = this.pathForRow(row);
     if (!path) return;
     if (event.key === 'Escape' && this.selectedPaths.size) {
-      this.sync([]);
+      this.clear();
       event.preventDefault?.();
       return;
     }

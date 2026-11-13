@@ -46,6 +46,7 @@ function createContext(options = {}) {
     renderGalleryOptionsMenu: 0,
     setCombineSimilarArtistsPreference: [],
     openNonAlbumTagEditor: 0,
+    clearNonAlbumTrackSelection: 0,
     renderUtilityModalContent: 0,
     renderCoverLookupDrawer: 0,
     stopCoverLookupPollingIfIdle: 0,
@@ -169,6 +170,9 @@ function createContext(options = {}) {
     },
     openNonAlbumTagEditor() {
       calls.openNonAlbumTagEditor += 1;
+    },
+    clearNonAlbumTrackSelection() {
+      calls.clearNonAlbumTrackSelection += 1;
     },
     confirmMissingAlbumRemoval(album, runtimeOptions) {
       calls.missingAlbumRemovalConfirms.push({ album, runtimeOptions });
@@ -579,6 +583,23 @@ test('handleGalleryBootstrapClick opens all loose tracks in the tag editor', () 
 
   assert.equal(prevented, true);
   assert.equal(calls.openNonAlbumTagEditor, 1);
+});
+
+test('handleGalleryBootstrapClick clears Loose Tracks selection in one click', () => {
+  const { context, calls } = createContext();
+  let prevented = false;
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-clear-non-album-track-selection="1"]' ? {} : null;
+      },
+    },
+    preventDefault() { prevented = true; },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(calls.clearNonAlbumTrackSelection, 1);
 });
 
 test('selecting a related artist clears an active primary-only family filter', () => {

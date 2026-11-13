@@ -200,6 +200,7 @@ var TrackSelectionController = class {
   constructor(root, options = {}) {
     this.root = root;
     this.onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
+    this.onCountChange = typeof options.onCountChange === 'function' ? options.onCountChange : () => {};
     this.scrollTarget = options.scrollTarget || root?.closest?.('.non-album-modal-table-wrap') || root;
     this.selectedPaths = new Set();
     this.anchorPath = '';
@@ -208,6 +209,8 @@ var TrackSelectionController = class {
     this.suppressClick = false;
     this.rowList = Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
     this.pathList = this.rowList.map(row => this.pathForRow(row)).filter(Boolean);
+    this.rowByPath = new Map(this.rowList.map(row => [this.pathForRow(row), row]).filter(([path]) => path));
+    this.indexByPath = new Map(this.pathList.map((path, index) => [path, index]));
     this.handlers = {
       pointerdown: event => this.handlePointerDown(event),
       pointermove: event => this.handlePointerMove(event),
@@ -240,7 +243,7 @@ var TrackSelectionController = class {
   }
 
   getSelectedPaths() {
-    return this.pathList.filter(path => this.selectedPaths.has(path));
+    return Array.from(this.selectedPaths);
   }
 
   clearHold() {
@@ -251,15 +254,23 @@ var TrackSelectionController = class {
   sync(nextPaths) {
     const previousPaths = this.selectedPaths;
     this.selectedPaths = new Set(nextPaths);
-    this.rows().forEach((row) => {
-      const path = this.pathForRow(row);
-      const selected = this.selectedPaths.has(path);
-      if (previousPaths.has(path) === selected) return;
-      row.classList?.[selected ? 'add' : 'remove']('album-track-table__row--selected');
-      if (selected) row.setAttribute?.('aria-selected', 'true');
-      else row.removeAttribute?.('aria-selected');
+    const changedPaths = new Set([
+      ...[...previousPaths].filter(path => !this.selectedPaths.has(path)),
+      ...[...this.selectedPaths].filter(path => !previousPaths.has(path)),
+    ]);
+    changedPaths.forEach((path) => {
+      this.syncRow(path, this.selectedPaths.has(path));
     });
+    this.onCountChange(this.selectedPaths.size);
     this.onChange(this.getSelectedPaths());
+  }
+
+  syncRow(path, selected) {
+    const row = this.rowByPath.get(path);
+    if (!row) return;
+    row.classList?.[selected ? 'add' : 'remove']('album-track-table__row--selected');
+    if (selected) row.setAttribute?.('aria-selected', 'true');
+    else row.removeAttribute?.('aria-selected');
   }
 
   toggle(path) {
@@ -277,12 +288,45 @@ var TrackSelectionController = class {
 
   selectRange(fromPath, toPath, additive = false) {
     const paths = this.pathList;
-    const from = paths.indexOf(fromPath);
-    const to = paths.indexOf(toPath);
+    const from = this.indexByPath.get(fromPath) ?? -1;
+    const to = this.indexByPath.get(toPath) ?? -1;
     if (from < 0 || to < 0) return;
     const next = additive ? new Set(this.gesture?.baseSelection || this.selectedPaths) : new Set();
     paths.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(path => next.add(path));
     this.sync(next);
+  }
+
+  selectGestureRange(toPath) {
+    const gesture = this.gesture;
+    const from = this.indexByPath.get(gesture?.path) ?? -1;
+    const to = this.indexByPath.get(toPath) ?? -1;
+    if (!gesture || from < 0 || to < 0) return;
+    const previousTo = gesture.rangeToIndex;
+    const previousMin = previousTo === null ? 1 : Math.min(from, previousTo);
+    const previousMax = previousTo === null ? 0 : Math.max(from, previousTo);
+    const nextMin = Math.min(from, to);
+    const nextMax = Math.max(from, to);
+    const changes = new Map();
+    for (let index = previousMin; index <= previousMax; index += 1) {
+      if (index >= nextMin && index <= nextMax) continue;
+      const path = this.pathList[index];
+      changes.set(path, gesture.baseSelection.has(path));
+    }
+    for (let index = nextMin; index <= nextMax; index += 1) {
+      if (index >= previousMin && index <= previousMax) continue;
+      const path = this.pathList[index];
+      changes.set(path, gesture.rangeSelected);
+    }
+    changes.forEach((selected, path) => {
+      if (this.selectedPaths.has(path) === selected) return;
+      if (selected) this.selectedPaths.add(path);
+      else this.selectedPaths.delete(path);
+      this.syncRow(path, selected);
+    });
+    if (changes.size) {
+      this.onCountChange(this.selectedPaths.size);
+    }
+    gesture.rangeToIndex = to;
   }
 
   handlePointerDown(event) {
@@ -293,6 +337,8 @@ var TrackSelectionController = class {
     if (String(event.pointerType || 'mouse') !== 'touch') event.preventDefault?.();
     this.suppressClick = false;
     this.clearHold();
+    const startSelected = this.selectedPaths.has(path);
+    const additive = Boolean(event.ctrlKey || event.metaKey);
     this.gesture = {
       pointerId: event.pointerId,
       pointerType: String(event.pointerType || 'mouse'),
@@ -301,10 +347,12 @@ var TrackSelectionController = class {
       startY: Number(event.clientY || 0),
       startScrollTop: Number(this.scrollTarget?.scrollTop || 0),
       startScrollLeft: Number(this.scrollTarget?.scrollLeft || 0),
-      additive: Boolean(event.ctrlKey || event.metaKey),
+      additive,
       shift: Boolean(event.shiftKey),
       selectionWasActive: this.selectedPaths.size > 0,
-      baseSelection: new Set(this.selectedPaths),
+      baseSelection: new Set(startSelected || additive ? this.selectedPaths : []),
+      rangeSelected: !startSelected,
+      rangeToIndex: null,
       dragging: false,
       held: false,
       cancelled: false,
@@ -332,7 +380,7 @@ var TrackSelectionController = class {
       if (!path || path === gesture.path) return;
       gesture.dragging = true;
       this.anchorPath = gesture.path;
-      this.selectRange(gesture.path, path, true);
+      this.selectGestureRange(path);
       this.suppressClick = true;
       event.preventDefault?.();
       return;
@@ -341,7 +389,7 @@ var TrackSelectionController = class {
     if (!path || path === gesture.path) return;
     gesture.dragging = true;
     this.anchorPath = gesture.path;
-    this.selectRange(gesture.path, path, gesture.additive);
+    this.selectGestureRange(path);
     this.suppressClick = true;
     event.preventDefault?.();
   }
@@ -351,7 +399,11 @@ var TrackSelectionController = class {
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     this.clearHold();
     this.gesture = null;
-    if (gesture.cancelled || gesture.held || gesture.dragging) return;
+    if (gesture.dragging) {
+      this.onChange(this.getSelectedPaths());
+      return;
+    }
+    if (gesture.cancelled || gesture.held) return;
     if (gesture.pointerType === 'touch') {
       if (gesture.selectionWasActive) {
         this.toggle(gesture.path);
@@ -369,7 +421,10 @@ var TrackSelectionController = class {
   }
 
   handlePointerCancel(event) {
-    if (this.gesture && this.gesture.pointerId === event.pointerId) this.gesture = null;
+    if (this.gesture && this.gesture.pointerId === event.pointerId) {
+      if (this.gesture.dragging) this.onChange(this.getSelectedPaths());
+      this.gesture = null;
+    }
     this.clearHold();
   }
 

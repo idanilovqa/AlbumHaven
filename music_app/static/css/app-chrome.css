@@ -208,11 +208,42 @@
 :root .library-navigation-mode-action,
 :root .shell-navigation-compact-action { width: 40px; height: 40px; min-width: 40px; min-height: 40px; flex-basis: 40px; padding: 0; }
 .library-navigation-mode-action svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.library-navigation-mode-action.is-active { background: var(--app-active); }
+.library-navigation-mode-action.is-active,
+.shell-navigation-compact-action.is-active { background: var(--app-active); }
 :root .library-navigation-mode-action:hover:not(:disabled):not(.is-active) { background: color-mix(in srgb, var(--app-muted) 8%, transparent) !important; box-shadow: none; }
 :root .library-navigation-mode-action:focus-visible { outline-color: var(--app-muted); box-shadow: none; }
 .library-navigation-body #sidebar-list { min-width: 0; min-height: 0; overflow-y: auto; }
-.mobile-tree-edge-anchor { display: none; }
+.shell-navigation-rail.is-library-mode-rail-hidden .library-navigation-body { grid-template-columns: minmax(0, 1fr); padding-left: 12px; }
+.shell-navigation-rail.is-library-mode-rail-hidden .library-navigation-mode-rail { display: none; }
+:root .mobile-tree-edge-anchor {
+  display: none;
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  top: 50%;
+  width: 15px;
+  min-width: 15px;
+  height: 72px;
+  min-height: 72px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--appearance-panel-control, var(--app-control, #202938));
+  color: var(--appearance-panel-muted, var(--app-muted));
+  box-shadow: none;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+}
+:root .mobile-tree-edge-anchor:not([hidden]) { display: grid; place-items: center; }
+:root .mobile-tree-edge-anchor:is(:hover, :active, :focus-visible) {
+  background: var(--appearance-panel-control, var(--app-control, #202938));
+  border: 0;
+  box-shadow: none;
+}
+:root .mobile-tree-edge-anchor:active { cursor: grabbing; }
+:root .mobile-tree-edge-anchor:focus-visible { outline: 2px solid var(--app-muted); outline-offset: 2px; }
 .shell-navigation-rail .artist-link { border-color: transparent; }
 .shell-navigation-rail .artist-link:hover { background: #ffffff07; }
 .shell-navigation-rail .artist-link.active { background: var(--app-active); }

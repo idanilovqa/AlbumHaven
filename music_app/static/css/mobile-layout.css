@@ -121,34 +121,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .shell-navigation-rail.is-mobile-mode-rail-hidden { min-width: min(190px, calc(100vw - 56px)); }
   .shell-navigation-rail.is-mobile-mode-rail-hidden .library-navigation-body { grid-template-columns: minmax(0, 1fr); padding-left: 18px; }
   .shell-navigation-rail.is-mobile-mode-rail-hidden .library-navigation-mode-rail { display: none; }
-  :root .mobile-tree-edge-anchor {
-    position: absolute;
-    z-index: 2;
-    left: 0;
-    top: 50%;
-    width: 15px;
-    min-width: 15px;
-    height: 72px;
-    min-height: 72px;
-    padding: 0;
-    transform: translateY(-50%);
-    border: 0;
-    border-radius: 0 8px 8px 0;
-    background: var(--appearance-panel-control, var(--app-control, #202938));
-    color: var(--appearance-panel-muted, var(--app-muted));
-    box-shadow: none;
-    cursor: grab;
-    touch-action: pan-y;
-    user-select: none;
-  }
-  :root .mobile-tree-edge-anchor:not([hidden]) { display: grid; place-items: center; }
-  :root .mobile-tree-edge-anchor:is(:hover, :active, :focus-visible) {
-    background: var(--appearance-panel-control, var(--app-control, #202938));
-    border: 0;
-    box-shadow: none;
-  }
-  :root .mobile-tree-edge-anchor:active { cursor: grabbing; }
-  :root .mobile-tree-edge-anchor:focus-visible { outline: 2px solid var(--app-muted); outline-offset: 1px; }
   #sidebar-list { min-height: 0; overflow-y: auto; }
   .artist-family-panel { width: min(320px, 75vw) !important; max-width: 75vw; right: 0 !important; border-radius: 12px 0 0 12px; clip-path: inset(0 -80px -80px -80px) !important; transform: translateX(100%); transition: transform 200ms ease !important; }
   .artist-family-panel.is-open { transform: translateX(0); }

@@ -2,8 +2,32 @@ const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
 const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
 const MOBILE_LIBRARY_MODE_RAIL_HIDE_DELAY_MS = 3500;
+const DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS = 30000;
 let cancelPendingArtistTreeResize = null;
 let mobileLibraryModeRailHideTimer = null;
+let desktopLibraryModeRailHideTimer = null;
+
+function setDesktopLibraryModeRailVisible(visible) {
+  const rail = document.getElementById('shell-navigation-rail');
+  const anchor = document.getElementById('mobile-tree-edge-anchor');
+  const canHide = !isArtistsDrawerMobileViewport() && !state.ui.artistTreeFolded;
+  const show = !canHide || visible;
+  rail?.classList?.toggle('is-library-mode-rail-hidden', !show);
+  if (anchor && !isArtistsDrawerMobileViewport()) anchor.hidden = show;
+  if (!isArtistsDrawerMobileViewport()) {
+    const width = state.ui.artistTreeFolded ? '64px' : show ? '320px' : '261px';
+    document.documentElement?.style?.setProperty('--compact-rail-width', width);
+  }
+  if (desktopLibraryModeRailHideTimer !== null) clearTimeout(desktopLibraryModeRailHideTimer);
+  desktopLibraryModeRailHideTimer = null;
+  if (show && canHide && state.ui.libraryModeRailHovered !== true) {
+    desktopLibraryModeRailHideTimer = setTimeout(() => {
+      const focused = rail?.contains?.(document.activeElement);
+      setDesktopLibraryModeRailVisible(Boolean(focused || state.ui.libraryModeRailHovered));
+    }, DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS);
+  }
+  return show;
+}
 
 function setMobileLibraryModeRailVisible(visible) {
   const rail = document.getElementById('shell-navigation-rail');
@@ -25,6 +49,7 @@ function setMobileLibraryModeRailVisible(visible) {
 
 function installMobileLibraryModeRailGestures() {
   const rail = document.getElementById('shell-navigation-rail');
+  const anchor = document.getElementById('mobile-tree-edge-anchor');
   if (!rail || rail.dataset.mobileModeRailGestures === 'true') return;
   rail.dataset.mobileModeRailGestures = 'true';
   const list = document.getElementById('sidebar-list');
@@ -33,10 +58,27 @@ function installMobileLibraryModeRailGestures() {
       state.ui.mobileLibraryModeRailVisible !== false
       && state.ui.artistsDrawerOpen
       && isArtistsDrawerMobileViewport()
-    ) setMobileLibraryModeRailVisible(true);
+    ) {
+      setMobileLibraryModeRailVisible(true);
+    } else if (!isArtistsDrawerMobileViewport() && !state.ui.artistTreeFolded) {
+      setDesktopLibraryModeRailVisible(true);
+    }
   };
   list?.addEventListener('pointerdown', deferIdleHide, { passive: true });
   list?.addEventListener('scroll', deferIdleHide, { passive: true });
+  rail.addEventListener('pointerenter', () => {
+    if (isArtistsDrawerMobileViewport()) return;
+    state.ui.libraryModeRailHovered = true;
+    setDesktopLibraryModeRailVisible(true);
+  });
+  rail.addEventListener('pointerleave', () => {
+    if (isArtistsDrawerMobileViewport()) return;
+    state.ui.libraryModeRailHovered = false;
+    setDesktopLibraryModeRailVisible(true);
+  });
+  rail.addEventListener('focusin', deferIdleHide);
+  rail.addEventListener('focusout', deferIdleHide);
+  anchor?.addEventListener('pointerenter', () => setDesktopLibraryModeRailVisible(true));
   let gesture = null;
   rail.addEventListener('pointerdown', (event) => {
     const fromAnchor = event.target?.closest?.('[data-reveal-library-mode-rail="1"]');
@@ -113,6 +155,11 @@ async function setLibraryNavigationMode(mode) {
     return normalized;
   }
   const list = document.getElementById('sidebar-list');
+  const cachedLibraryTracks = Array.isArray(state.view?.library_non_album_tracks)
+    ? state.view.library_non_album_tracks
+    : [];
+  renderCustomCollectionNavigation(buildCustomCollectionIndex(cachedLibraryTracks));
+  setDesktopLibraryModeRailVisible(true);
   try {
     await hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
     if (state.ui.libraryNavigationMode !== normalized) return normalized;
@@ -239,6 +286,7 @@ function syncArtistsDrawerVisibility() {
     mobileLibraryModeRailHideTimer = null;
   }
   syncArtistTreeFoldVisibility();
+  setDesktopLibraryModeRailVisible(true);
 }
 
 function syncArtistTreeFoldVisibility(options = {}) {
@@ -273,6 +321,7 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
   if (list) list.hidden = isFolded;
   document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '320px');
+  if (!isArtistsDrawerMobileViewport()) setDesktopLibraryModeRailVisible(true);
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
 }

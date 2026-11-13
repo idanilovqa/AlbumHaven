@@ -11377,8 +11377,32 @@ const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
 const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
 const MOBILE_LIBRARY_MODE_RAIL_HIDE_DELAY_MS = 3500;
+const DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS = 30000;
 let cancelPendingArtistTreeResize = null;
 let mobileLibraryModeRailHideTimer = null;
+let desktopLibraryModeRailHideTimer = null;
+
+function setDesktopLibraryModeRailVisible(visible) {
+  const rail = document.getElementById('shell-navigation-rail');
+  const anchor = document.getElementById('mobile-tree-edge-anchor');
+  const canHide = !isArtistsDrawerMobileViewport() && !state.ui.artistTreeFolded;
+  const show = !canHide || visible;
+  rail?.classList?.toggle('is-library-mode-rail-hidden', !show);
+  if (anchor && !isArtistsDrawerMobileViewport()) anchor.hidden = show;
+  if (!isArtistsDrawerMobileViewport()) {
+    const width = state.ui.artistTreeFolded ? '64px' : show ? '320px' : '261px';
+    document.documentElement?.style?.setProperty('--compact-rail-width', width);
+  }
+  if (desktopLibraryModeRailHideTimer !== null) clearTimeout(desktopLibraryModeRailHideTimer);
+  desktopLibraryModeRailHideTimer = null;
+  if (show && canHide && state.ui.libraryModeRailHovered !== true) {
+    desktopLibraryModeRailHideTimer = setTimeout(() => {
+      const focused = rail?.contains?.(document.activeElement);
+      setDesktopLibraryModeRailVisible(Boolean(focused || state.ui.libraryModeRailHovered));
+    }, DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS);
+  }
+  return show;
+}
 
 function setMobileLibraryModeRailVisible(visible) {
   const rail = document.getElementById('shell-navigation-rail');
@@ -11400,6 +11424,7 @@ function setMobileLibraryModeRailVisible(visible) {
 
 function installMobileLibraryModeRailGestures() {
   const rail = document.getElementById('shell-navigation-rail');
+  const anchor = document.getElementById('mobile-tree-edge-anchor');
   if (!rail || rail.dataset.mobileModeRailGestures === 'true') return;
   rail.dataset.mobileModeRailGestures = 'true';
   const list = document.getElementById('sidebar-list');
@@ -11408,10 +11433,27 @@ function installMobileLibraryModeRailGestures() {
       state.ui.mobileLibraryModeRailVisible !== false
       && state.ui.artistsDrawerOpen
       && isArtistsDrawerMobileViewport()
-    ) setMobileLibraryModeRailVisible(true);
+    ) {
+      setMobileLibraryModeRailVisible(true);
+    } else if (!isArtistsDrawerMobileViewport() && !state.ui.artistTreeFolded) {
+      setDesktopLibraryModeRailVisible(true);
+    }
   };
   list?.addEventListener('pointerdown', deferIdleHide, { passive: true });
   list?.addEventListener('scroll', deferIdleHide, { passive: true });
+  rail.addEventListener('pointerenter', () => {
+    if (isArtistsDrawerMobileViewport()) return;
+    state.ui.libraryModeRailHovered = true;
+    setDesktopLibraryModeRailVisible(true);
+  });
+  rail.addEventListener('pointerleave', () => {
+    if (isArtistsDrawerMobileViewport()) return;
+    state.ui.libraryModeRailHovered = false;
+    setDesktopLibraryModeRailVisible(true);
+  });
+  rail.addEventListener('focusin', deferIdleHide);
+  rail.addEventListener('focusout', deferIdleHide);
+  anchor?.addEventListener('pointerenter', () => setDesktopLibraryModeRailVisible(true));
   let gesture = null;
   rail.addEventListener('pointerdown', (event) => {
     const fromAnchor = event.target?.closest?.('[data-reveal-library-mode-rail="1"]');
@@ -11488,6 +11530,11 @@ async function setLibraryNavigationMode(mode) {
     return normalized;
   }
   const list = document.getElementById('sidebar-list');
+  const cachedLibraryTracks = Array.isArray(state.view?.library_non_album_tracks)
+    ? state.view.library_non_album_tracks
+    : [];
+  renderCustomCollectionNavigation(buildCustomCollectionIndex(cachedLibraryTracks));
+  setDesktopLibraryModeRailVisible(true);
   try {
     await hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
     if (state.ui.libraryNavigationMode !== normalized) return normalized;
@@ -11614,6 +11661,7 @@ function syncArtistsDrawerVisibility() {
     mobileLibraryModeRailHideTimer = null;
   }
   syncArtistTreeFoldVisibility();
+  setDesktopLibraryModeRailVisible(true);
 }
 
 function syncArtistTreeFoldVisibility(options = {}) {
@@ -11648,6 +11696,7 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
   if (list) list.hidden = isFolded;
   document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '320px');
+  if (!isArtistsDrawerMobileViewport()) setDesktopLibraryModeRailVisible(true);
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
 }
@@ -14658,7 +14707,12 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
+const customCollectionIndexCache = new WeakMap();
+
 function buildCustomCollectionIndex(items = []) {
+  if (!Array.isArray(items)) return [];
+  const cached = customCollectionIndexCache.get(items);
+  if (cached) return cached;
   const collections = new Map();
   items.forEach((item) => {
     if (String(item?.exception_type || '').trim() !== 'Custom Collection') return;
@@ -14667,7 +14721,7 @@ function buildCustomCollectionIndex(items = []) {
     if (!collections.has(name)) collections.set(name, []);
     collections.get(name).push(item);
   });
-  return [...collections]
+  const index = [...collections]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, tracks]) => ({
       name,
@@ -14676,6 +14730,8 @@ function buildCustomCollectionIndex(items = []) {
         String(left?.path || '').localeCompare(String(right?.path || ''))
       )),
     }));
+  customCollectionIndexCache.set(items, index);
+  return index;
 }
 
 // The library-wide request is the current browse scope without the open
@@ -15207,20 +15263,19 @@ function installNonAlbumTrackSelection(els) {
   const status = statusContainer?.querySelector?.('[data-non-album-selection-count]')
     || els.header?.querySelector?.('[data-non-album-selection-count]');
   const editButton = els.header?.querySelector?.('[data-open-non-album-tag-editor="1"]');
+  const updateSelectionCount = (count) => {
+    if (status) status.textContent = count ? `${count} selected` : '';
+    if (statusContainer) statusContainer.hidden = count === 0;
+    if (editButton) {
+      const label = count ? `Edit tags for ${count} selected ${count === 1 ? 'track' : 'tracks'}` : 'Edit tags';
+      editButton.setAttribute?.('aria-label', label);
+      editButton.setAttribute?.('title', label);
+    }
+  };
   nonAlbumTrackSelectionController = new TrackSelectionController(els.table, {
     scrollTarget: els.table.closest?.('.non-album-modal-table-wrap'),
-    onChange(paths) {
-      const count = paths.length;
-      if (status) {
-        status.textContent = count ? `${count} selected` : '';
-      }
-      if (statusContainer) statusContainer.hidden = count === 0;
-      if (editButton) {
-        const label = count ? `Edit tags for ${count} selected ${count === 1 ? 'track' : 'tracks'}` : 'Edit tags';
-        editButton.setAttribute?.('aria-label', label);
-        editButton.setAttribute?.('title', label);
-      }
-    },
+    onCountChange: updateSelectionCount,
+    onChange: paths => updateSelectionCount(paths.length),
   });
 }
 
@@ -22763,6 +22818,7 @@ var TrackSelectionController = class {
   constructor(root, options = {}) {
     this.root = root;
     this.onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
+    this.onCountChange = typeof options.onCountChange === 'function' ? options.onCountChange : () => {};
     this.scrollTarget = options.scrollTarget || root?.closest?.('.non-album-modal-table-wrap') || root;
     this.selectedPaths = new Set();
     this.anchorPath = '';
@@ -22771,6 +22827,8 @@ var TrackSelectionController = class {
     this.suppressClick = false;
     this.rowList = Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
     this.pathList = this.rowList.map(row => this.pathForRow(row)).filter(Boolean);
+    this.rowByPath = new Map(this.rowList.map(row => [this.pathForRow(row), row]).filter(([path]) => path));
+    this.indexByPath = new Map(this.pathList.map((path, index) => [path, index]));
     this.handlers = {
       pointerdown: event => this.handlePointerDown(event),
       pointermove: event => this.handlePointerMove(event),
@@ -22803,7 +22861,7 @@ var TrackSelectionController = class {
   }
 
   getSelectedPaths() {
-    return this.pathList.filter(path => this.selectedPaths.has(path));
+    return Array.from(this.selectedPaths);
   }
 
   clearHold() {
@@ -22814,15 +22872,23 @@ var TrackSelectionController = class {
   sync(nextPaths) {
     const previousPaths = this.selectedPaths;
     this.selectedPaths = new Set(nextPaths);
-    this.rows().forEach((row) => {
-      const path = this.pathForRow(row);
-      const selected = this.selectedPaths.has(path);
-      if (previousPaths.has(path) === selected) return;
-      row.classList?.[selected ? 'add' : 'remove']('album-track-table__row--selected');
-      if (selected) row.setAttribute?.('aria-selected', 'true');
-      else row.removeAttribute?.('aria-selected');
+    const changedPaths = new Set([
+      ...[...previousPaths].filter(path => !this.selectedPaths.has(path)),
+      ...[...this.selectedPaths].filter(path => !previousPaths.has(path)),
+    ]);
+    changedPaths.forEach((path) => {
+      this.syncRow(path, this.selectedPaths.has(path));
     });
+    this.onCountChange(this.selectedPaths.size);
     this.onChange(this.getSelectedPaths());
+  }
+
+  syncRow(path, selected) {
+    const row = this.rowByPath.get(path);
+    if (!row) return;
+    row.classList?.[selected ? 'add' : 'remove']('album-track-table__row--selected');
+    if (selected) row.setAttribute?.('aria-selected', 'true');
+    else row.removeAttribute?.('aria-selected');
   }
 
   toggle(path) {
@@ -22840,12 +22906,45 @@ var TrackSelectionController = class {
 
   selectRange(fromPath, toPath, additive = false) {
     const paths = this.pathList;
-    const from = paths.indexOf(fromPath);
-    const to = paths.indexOf(toPath);
+    const from = this.indexByPath.get(fromPath) ?? -1;
+    const to = this.indexByPath.get(toPath) ?? -1;
     if (from < 0 || to < 0) return;
     const next = additive ? new Set(this.gesture?.baseSelection || this.selectedPaths) : new Set();
     paths.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(path => next.add(path));
     this.sync(next);
+  }
+
+  selectGestureRange(toPath) {
+    const gesture = this.gesture;
+    const from = this.indexByPath.get(gesture?.path) ?? -1;
+    const to = this.indexByPath.get(toPath) ?? -1;
+    if (!gesture || from < 0 || to < 0) return;
+    const previousTo = gesture.rangeToIndex;
+    const previousMin = previousTo === null ? 1 : Math.min(from, previousTo);
+    const previousMax = previousTo === null ? 0 : Math.max(from, previousTo);
+    const nextMin = Math.min(from, to);
+    const nextMax = Math.max(from, to);
+    const changes = new Map();
+    for (let index = previousMin; index <= previousMax; index += 1) {
+      if (index >= nextMin && index <= nextMax) continue;
+      const path = this.pathList[index];
+      changes.set(path, gesture.baseSelection.has(path));
+    }
+    for (let index = nextMin; index <= nextMax; index += 1) {
+      if (index >= previousMin && index <= previousMax) continue;
+      const path = this.pathList[index];
+      changes.set(path, gesture.rangeSelected);
+    }
+    changes.forEach((selected, path) => {
+      if (this.selectedPaths.has(path) === selected) return;
+      if (selected) this.selectedPaths.add(path);
+      else this.selectedPaths.delete(path);
+      this.syncRow(path, selected);
+    });
+    if (changes.size) {
+      this.onCountChange(this.selectedPaths.size);
+    }
+    gesture.rangeToIndex = to;
   }
 
   handlePointerDown(event) {
@@ -22856,6 +22955,8 @@ var TrackSelectionController = class {
     if (String(event.pointerType || 'mouse') !== 'touch') event.preventDefault?.();
     this.suppressClick = false;
     this.clearHold();
+    const startSelected = this.selectedPaths.has(path);
+    const additive = Boolean(event.ctrlKey || event.metaKey);
     this.gesture = {
       pointerId: event.pointerId,
       pointerType: String(event.pointerType || 'mouse'),
@@ -22864,10 +22965,12 @@ var TrackSelectionController = class {
       startY: Number(event.clientY || 0),
       startScrollTop: Number(this.scrollTarget?.scrollTop || 0),
       startScrollLeft: Number(this.scrollTarget?.scrollLeft || 0),
-      additive: Boolean(event.ctrlKey || event.metaKey),
+      additive,
       shift: Boolean(event.shiftKey),
       selectionWasActive: this.selectedPaths.size > 0,
-      baseSelection: new Set(this.selectedPaths),
+      baseSelection: new Set(startSelected || additive ? this.selectedPaths : []),
+      rangeSelected: !startSelected,
+      rangeToIndex: null,
       dragging: false,
       held: false,
       cancelled: false,
@@ -22895,7 +22998,7 @@ var TrackSelectionController = class {
       if (!path || path === gesture.path) return;
       gesture.dragging = true;
       this.anchorPath = gesture.path;
-      this.selectRange(gesture.path, path, true);
+      this.selectGestureRange(path);
       this.suppressClick = true;
       event.preventDefault?.();
       return;
@@ -22904,7 +23007,7 @@ var TrackSelectionController = class {
     if (!path || path === gesture.path) return;
     gesture.dragging = true;
     this.anchorPath = gesture.path;
-    this.selectRange(gesture.path, path, gesture.additive);
+    this.selectGestureRange(path);
     this.suppressClick = true;
     event.preventDefault?.();
   }
@@ -22914,7 +23017,11 @@ var TrackSelectionController = class {
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     this.clearHold();
     this.gesture = null;
-    if (gesture.cancelled || gesture.held || gesture.dragging) return;
+    if (gesture.dragging) {
+      this.onChange(this.getSelectedPaths());
+      return;
+    }
+    if (gesture.cancelled || gesture.held) return;
     if (gesture.pointerType === 'touch') {
       if (gesture.selectionWasActive) {
         this.toggle(gesture.path);
@@ -22932,7 +23039,10 @@ var TrackSelectionController = class {
   }
 
   handlePointerCancel(event) {
-    if (this.gesture && this.gesture.pointerId === event.pointerId) this.gesture = null;
+    if (this.gesture && this.gesture.pointerId === event.pointerId) {
+      if (this.gesture.dragging) this.onChange(this.getSelectedPaths());
+      this.gesture = null;
+    }
     this.clearHold();
   }
 

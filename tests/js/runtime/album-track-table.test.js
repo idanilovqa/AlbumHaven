@@ -328,6 +328,36 @@ test('TrackSelectionController caches rows, suppresses native drag selection, an
   assert.equal(harness.queryCount(), 1, 'clear must reuse the cached row index');
 });
 
+test('TrackSelectionController deselects an already-selected drag range without rescanning every row', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  const changes = [];
+  const counts = [];
+  const controller = new context.TrackSelectionController(harness.root, {
+    onChange: paths => changes.push([...paths]),
+    onCountChange: count => counts.push(count),
+  });
+
+  harness.dispatch('pointerdown', harness.rows[0]);
+  harness.dispatch('pointermove', harness.rows[2], { clientY: 40 });
+  harness.dispatch('pointerup', harness.rows[2], { clientY: 40 });
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two', 'three']);
+
+  let pathReads = 0;
+  const pathForRow = controller.pathForRow.bind(controller);
+  controller.pathForRow = row => { pathReads += 1; return pathForRow(row); };
+  harness.dispatch('pointerdown', harness.rows[0]);
+  harness.dispatch('pointermove', harness.rows[1], { clientY: 20 });
+  assert.equal(changes.length, 1, 'pointer movement must not rebuild the selected-path result');
+  harness.dispatch('pointerup', harness.rows[1], { clientY: 20 });
+
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['three']);
+  assert.deepEqual(changes.at(-1), ['three']);
+  assert.equal(counts.at(-1), 1);
+  assert.ok(pathReads <= 3, `drag update read ${pathReads} row paths instead of using the cached index`);
+  assert.equal(harness.queryCount(), 1);
+});
+
 test('TrackSelectionController requires a stationary 550 ms touch hold and cleans up', () => {
   const context = loadTrackTable();
   const harness = createSelectionHarness(context);

@@ -405,13 +405,14 @@ test('Loose Tracks indexes problematic paths and snapshots playback once per ren
 
 test('custom collection index derives only named custom assignments in stable order', () => {
   const { context } = loadHelper();
-  const index = context.buildCustomCollectionIndex([
+  const items = [
     { exception_type: 'Custom Collection', custom_collection_name: 'Road', path: '4' },
     { exception_type: 'Custom Collection', custom_collection_name: 'Night', path: '2' },
     { exception_type: 'Interview', custom_collection_name: 'Ignore', path: '3' },
     { exception_type: 'Custom Collection', custom_collection_name: 'Night', path: '1' },
     { exception_type: 'Custom Collection', custom_collection_name: '   ', path: '5' },
-  ]);
+  ];
+  const index = context.buildCustomCollectionIndex(items);
   assert.deepEqual(Array.from(index, ({ name, count, tracks }) => ({
     name,
     count,
@@ -420,6 +421,11 @@ test('custom collection index derives only named custom assignments in stable or
     { name: 'Night', count: 2, paths: ['1', '2'] },
     { name: 'Road', count: 1, paths: ['4'] },
   ]);
+  assert.equal(
+    context.buildCustomCollectionIndex(items),
+    index,
+    'opening the unchanged tree again must reuse its index instead of rescanning every loose track',
+  );
 });
 
 test('library-wide Loose Tracks hydrates when only the selected-artist projection is current', () => {
@@ -1097,6 +1103,8 @@ test('collection detail filters exact assignments and shows paths only to the li
   const detail = context.buildCustomCollectionDetailMarkup(items, 'Night');
   assert.match(detail, /custom-collection-detail__art/);
   assert.match(detail, /album-artbox album-artbox--empty/);
+  assert.match(detail, /album-artbox__missing-disc/);
+  assert.match(detail, /album-artbox__missing-slash/);
   assert.doesNotMatch(detail, /custom-collection-detail__plus/);
   const emptyDetail = context.buildCustomCollectionDetailMarkup([], 'Night');
   assert.match(emptyDetail, /album-artbox album-artbox--empty/);

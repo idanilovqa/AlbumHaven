@@ -76,7 +76,8 @@ test('folding Artist Tree reclaims layout width and preserves the persistent pla
   const after = await page.locator('#shell-main-surface').boundingBox();
   const resizeWidth = await page.evaluate(() => window.__artistTreeSettlementWidths[0]);
 
-  expect(before.x - after.x).toBe(176);
+  expect(before.x).toBe(320);
+  expect(before.x - after.x).toBe(256);
   expect(Math.round(resizeWidth)).toBe(Math.round(after.width));
   expect(await page.evaluate(() => window.__artistTreeResizeWidths.length)).toBe(0);
   await expect(page.locator('#artist-tree-expanded')).toBeHidden();
@@ -138,10 +139,10 @@ test('folding Artist Tree reclaims layout width and preserves the persistent pla
     expandedTreeHidden: false,
     artistListHidden: false,
     compactNavigationHidden: false,
-    expandedTreeDisplay: 'block',
-    expandedTreeWidth: 212,
+    expandedTreeDisplay: 'flex',
+    expandedTreeWidth: 292,
   });
-  await page.waitForTimeout(950);
+  await page.waitForTimeout(600);
   const lateExpansionFrame = await page.locator('#shell-navigation-rail').evaluate((rail) => ({
     isExpanding: rail.classList.contains('is-expanding'),
     treeOpacity: Number(getComputedStyle(document.getElementById('artist-tree-expanded')).opacity),

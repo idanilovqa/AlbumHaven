@@ -252,7 +252,12 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
+const customCollectionIndexCache = new WeakMap();
+
 function buildCustomCollectionIndex(items = []) {
+  if (!Array.isArray(items)) return [];
+  const cached = customCollectionIndexCache.get(items);
+  if (cached) return cached;
   const collections = new Map();
   items.forEach((item) => {
     if (String(item?.exception_type || '').trim() !== 'Custom Collection') return;
@@ -261,7 +266,7 @@ function buildCustomCollectionIndex(items = []) {
     if (!collections.has(name)) collections.set(name, []);
     collections.get(name).push(item);
   });
-  return [...collections]
+  const index = [...collections]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, tracks]) => ({
       name,
@@ -270,6 +275,8 @@ function buildCustomCollectionIndex(items = []) {
         String(left?.path || '').localeCompare(String(right?.path || ''))
       )),
     }));
+  customCollectionIndexCache.set(items, index);
+  return index;
 }
 
 // The library-wide request is the current browse scope without the open
@@ -801,20 +808,19 @@ function installNonAlbumTrackSelection(els) {
   const status = statusContainer?.querySelector?.('[data-non-album-selection-count]')
     || els.header?.querySelector?.('[data-non-album-selection-count]');
   const editButton = els.header?.querySelector?.('[data-open-non-album-tag-editor="1"]');
+  const updateSelectionCount = (count) => {
+    if (status) status.textContent = count ? `${count} selected` : '';
+    if (statusContainer) statusContainer.hidden = count === 0;
+    if (editButton) {
+      const label = count ? `Edit tags for ${count} selected ${count === 1 ? 'track' : 'tracks'}` : 'Edit tags';
+      editButton.setAttribute?.('aria-label', label);
+      editButton.setAttribute?.('title', label);
+    }
+  };
   nonAlbumTrackSelectionController = new TrackSelectionController(els.table, {
     scrollTarget: els.table.closest?.('.non-album-modal-table-wrap'),
-    onChange(paths) {
-      const count = paths.length;
-      if (status) {
-        status.textContent = count ? `${count} selected` : '';
-      }
-      if (statusContainer) statusContainer.hidden = count === 0;
-      if (editButton) {
-        const label = count ? `Edit tags for ${count} selected ${count === 1 ? 'track' : 'tracks'}` : 'Edit tags';
-        editButton.setAttribute?.('aria-label', label);
-        editButton.setAttribute?.('title', label);
-      }
-    },
+    onCountChange: updateSelectionCount,
+    onChange: paths => updateSelectionCount(paths.length),
   });
 }
 

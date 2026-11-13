@@ -240,6 +240,7 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
   assert.equal(renderedOptions.length, 2);
   assert.equal(renderedOptions[0].variant, 'panel');
   assert.equal(renderedOptions[0].key, 'all-loose-tracks');
+  assert.equal(renderedOptions[0].selected, false);
   assert.equal(renderedOptions[1].key, 'Night');
   assert.equal(renderedOptions[1].selected, false);
   assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
@@ -271,7 +272,7 @@ test('custom collections keeps the current tree visible until collection rows ar
   assert.equal(artistList.innerHTML, '<button data-open-loose-tracks="1">All Loose Tracks</button><div class="gallery-divider__line" role="separator" aria-label="Custom Collections"></div><button data-open-custom-collection="Night">Night:2</button>');
 });
 
-test('custom collections mode marks the open collection selected', async () => {
+test('custom collections mode opens with no selected row after a prior collection', async () => {
   const { context } = loadHelper();
   context.state.ui.nonAlbumCollectionName = 'Night';
   context.hydrateDeferredNonAlbumTracks = async () => {};
@@ -283,7 +284,7 @@ test('custom collections mode marks the open collection selected', async () => {
 
   await context.setLibraryNavigationMode('custom-collections');
 
-  assert.equal(renderedOptions.selected, true);
+  assert.equal(renderedOptions.selected, false);
 });
 
 test('library navigation delegates modes and routes Loose Tracks without per-row listeners', () => {

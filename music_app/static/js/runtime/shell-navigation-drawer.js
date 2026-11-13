@@ -87,7 +87,7 @@ function renderCustomCollectionNavigation(collections) {
     variant: 'panel',
     key: 'all-loose-tracks',
     label: 'All Loose Tracks',
-    selected: !String(state.ui?.nonAlbumCollectionName || '').trim(),
+    selected: false,
     attributes: { 'data-open-loose-tracks': '1' },
   });
   const collectionRows = collections.map(({ name, count }) => window.NavigationTree.renderItem({
@@ -96,7 +96,7 @@ function renderCustomCollectionNavigation(collections) {
       key: name,
       label: name,
       count,
-      selected: String(state.ui?.nonAlbumCollectionName || '').trim() === name,
+      selected: false,
       attributes: { 'data-open-custom-collection': name },
     })).join('');
   list.innerHTML = `${allLooseTracks}<div class="gallery-divider__line" role="separator" aria-label="Custom Collections"></div>${collectionRows}`;

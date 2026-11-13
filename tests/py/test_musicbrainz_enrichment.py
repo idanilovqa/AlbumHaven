@@ -348,6 +348,7 @@ def test_unconfirmed_recheck_does_not_refresh_from_an_incomplete_artist_snapshot
     )
 
     assert repository.projection_refreshes == []
+    assert repository.candidate_replacements == []
 
 
 @pytest.mark.parametrize("classification", ["invalid_response", "permanent_mismatch"])

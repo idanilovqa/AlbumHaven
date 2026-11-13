@@ -269,10 +269,17 @@ class MusicBrainzArtistEnrichmentProcessor:
             classification == "permanent_mismatch" and outcome.get("candidates")
         ):
             refreshed_artist = outcome.get("refreshed_artist") or {}
-            if (
+            preserves_stored_match = (
                 classification == "unconfirmed"
                 and context.get("existing_match_state") == "matched"
                 and stored_mbid
+                and any(
+                    str(candidate.get("artist_mbid") or "").lower() == stored_mbid
+                    for candidate in outcome.get("candidates") or []
+                )
+            )
+            if (
+                preserves_stored_match
                 and str(refreshed_artist.get("mbid") or "").lower() == stored_mbid
                 and _COMPLETE_ARTIST_PROJECTION_FIELDS <= refreshed_artist.keys()
             ):
@@ -281,6 +288,9 @@ class MusicBrainzArtistEnrichmentProcessor:
                     artist=refreshed_artist,
                     observed_at=observed_at,
                 )
+            elif preserves_stored_match:
+                # An incomplete lookup cannot invalidate accepted album identities.
+                pass
             else:
                 # Contradicted identities keep their candidates so the owner can
                 # compare and choose instead of facing an empty conflict.

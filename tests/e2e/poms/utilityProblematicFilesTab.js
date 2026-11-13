@@ -79,6 +79,8 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.musicBrainzFindManuallyButton = this.mainBody.detail.getByRole('button', { name: 'Find manually', exact: true });
     this.musicBrainzAssignButton = this.mainBody.detail.getByRole('button', { name: 'Assign MBID', exact: true });
     this.musicBrainzKeepCurrentButton = this.mainBody.detail.getByRole('button', { name: 'Keep current MBID', exact: true });
+    this.musicBrainzRetryButton = this.mainBody.detail.getByRole('button', { name: 'Retry now', exact: true });
+    this.musicBrainzRetryStatus = this.mainBody.detail.locator('.musicbrainz-retry-status');
     this.musicBrainzIdentityTable = this.mainBody.detail.locator('#musicbrainz-artist-identities');
     this.musicBrainzIdentityRows = this.musicBrainzIdentityTable.locator('.compact-data-table-row');
     this.musicBrainzAssignedToast = page.locator('#toast-layer .toast').filter({ hasText: 'MBID assigned.' });

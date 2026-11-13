@@ -341,9 +341,10 @@ function getGalleryFamilyPanelModel() {
 
 const galleryMainSurfaceCloseCallbacks = new WeakMap();
 
-function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
+function closeGalleryMainSurface(returnFocus = true, { immediate = false, reason = '' } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
+  active.closedReason = reason;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
   if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
   if (active.key === 'search-suggestions' && state.ui) {
@@ -745,11 +746,11 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
-function openGalleryArtistInfo(anchor) {
+function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
-  if (!overlay) return;
+  if (!overlay) return null;
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
@@ -765,10 +766,83 @@ function openGalleryArtistInfo(anchor) {
   const identities = buildGalleryArtistIdentitiesHtml(group.artist_musicbrainz);
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close artist information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
   overlay.innerHTML = `${closeAction}<header>${imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(imageUrl)}" alt="" width="176" height="176" decoding="async" fetchpriority="high">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>'}<div><span>Artist</span><h2>${escapeHtml(displayName)}</h2>${metadata ? `<div class="artist-info-overlay__metadata">${metadata}</div>` : ''}</div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-artist-info-summary${isLongBiography ? ' data-artist-info-long' : ''}>${escapeHtml(summary)} ${fullPage}</p>${links ? `<div class="artist-info-overlay__links">${links}</div>` : ''}${identities}${credit}${artist === 'Neal Morse' ? '<p class="artist-info-overlay__source">Biography adapted from Wikipedia.</p>' : ''}</div>`;
-  openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
   // A long biography that still fits in five lines needs no clamp or fade.
   const summaryElement = overlay.querySelector('[data-artist-info-long]');
   if (summaryElement && summaryElement.scrollHeight <= summaryElement.clientHeight + 1) summaryElement.removeAttribute('data-artist-info-long');
+  return overlay;
+}
+
+function refreshOpenGalleryArtistInfo() {
+  const active = galleryMainSurfaceController?.current?.();
+  if (!active?.key?.startsWith?.('artist:')) return false;
+  const artist = String(active.anchor?.dataset?.artist || '').trim();
+  if (!artist || active.key !== `artist:${artist}`) return false;
+  const focusable = 'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+  const focusedIndex = [...(active.surface.querySelectorAll?.(focusable) || [])].indexOf(document.activeElement);
+  const surfaceFocused = document.activeElement === active.surface;
+  if (!renderGalleryArtistInfo(active.anchor)) return false;
+  if (surfaceFocused) active.surface.focus?.({ preventScroll: true });
+  else if (focusedIndex >= 0) {
+    [...(active.surface.querySelectorAll?.(focusable) || [])][focusedIndex]?.focus?.({ preventScroll: true });
+  }
+  return true;
+}
+
+function galleryArtistInfoAnchorOwner(anchor) {
+  if (anchor?.closest?.('.family-artist-header')) return 'family-artist-header';
+  if (anchor?.closest?.('.gallery-bar__context')) return 'gallery-bar-context';
+  return '';
+}
+
+function captureOpenGalleryArtistInfo() {
+  const active = galleryMainSurfaceController?.current?.();
+  if (!active?.key?.startsWith?.('artist:')) return null;
+  const artist = String(active.anchor?.dataset?.artist || '').trim();
+  if (!artist || active.key !== `artist:${artist}`) return null;
+  const focusable = 'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+  return {
+    key: active.key,
+    anchor: active.anchor,
+    anchorOwner: galleryArtistInfoAnchorOwner(active.anchor),
+    surfaceState: active,
+    focusedIndex: [...(active.surface.querySelectorAll?.(focusable) || [])].indexOf(document.activeElement),
+    surfaceFocused: document.activeElement === active.surface,
+  };
+}
+
+function restoreOpenGalleryArtistInfo(captured) {
+  const artist = String(captured?.key || '').startsWith('artist:')
+    ? String(captured.key).slice('artist:'.length)
+    : '';
+  if (!artist || !captured?.anchor) return false;
+  const active = galleryMainSurfaceController?.current?.();
+  if (!active) {
+    if (captured.surfaceState?.closedReason !== 'gallery-scroll') return false;
+  } else {
+    if (active.key !== captured.key) return false;
+    if (active.anchor?.isConnected !== false) return refreshOpenGalleryArtistInfo();
+  }
+  closeGalleryMainSurface(false, { immediate: true });
+  const anchor = captured.anchor.isConnected === false
+    ? [...(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
+      .find((candidate) => String(candidate.dataset?.artist || '').trim() === artist
+        && galleryArtistInfoAnchorOwner(candidate) === captured.anchorOwner)
+    : captured.anchor;
+  const surface = anchor ? renderGalleryArtistInfo(anchor) : null;
+  if (!surface || !openGalleryMainSurface(captured.key, anchor, surface, 'left')) return false;
+  const focusable = 'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+  if (captured.surfaceFocused) surface.focus?.({ preventScroll: true });
+  else if (captured.focusedIndex >= 0) {
+    [...(surface.querySelectorAll?.(focusable) || [])][captured.focusedIndex]
+      ?.focus?.({ preventScroll: true });
+  }
+  return true;
+}
+
+function openGalleryArtistInfo(anchor) {
+  const artist = String(anchor.dataset.artist || '').trim();
+  const overlay = renderGalleryArtistInfo(anchor);
+  if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
 function handleGalleryMainClick(event) {
@@ -831,7 +905,7 @@ function initGalleryMain() {
     const active = galleryMainSurfaceController?.current?.();
     if (active?.key?.startsWith?.('artist:') && active.surface.getAttribute?.('aria-modal') !== 'true' && active.openingScrollPosition
         && (scroll.scrollTop !== active.openingScrollPosition.top
-          || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false);
+          || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false, { reason: 'gallery-scroll' });
     if (galleryMainScrollFrame) return;
     galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
   }, { passive: true });

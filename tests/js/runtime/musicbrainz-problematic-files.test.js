@@ -223,6 +223,91 @@ test('provider unavailable shows retry status and Retry now without candidate se
   assert.ok(requests.some(([method, url]) => method === 'POST' && url === '/api/musicbrainz/artists/7/retry'));
 });
 
+test('a queued retry polls only its artist detail then reloads Problematic Files once', async () => {
+  const item = artistItem();
+  item.musicbrainz_detail = detail({
+    problem_reason_code: 'musicbrainz_provider_retry_exhausted',
+    unresolved_reason: 'MusicBrainz: Provider unavailable',
+    last_attempt_at: '2026-11-04T12:00:00Z',
+  });
+  const { context, requests } = loadContext({ item });
+  let summaryLoads = 0;
+  let statusLoads = 0;
+  context.waitForBrowserTimeout = async () => {};
+  context.fetch = async (url, options = {}) => {
+    const method = options.method || 'GET';
+    requests.push([method, url, options.body ? JSON.parse(options.body) : undefined]);
+    if (method === 'POST') {
+      return { ok: true, status: 202, json: async () => ({ enqueued: true }) };
+    }
+    statusLoads += 1;
+    return statusLoads < 3
+      ? { ok: true, status: 200, json: async () => ({ artist: { problem_occurrence_id: 19 } }) }
+      : { ok: false, status: 404, json: async () => ({ detail: 'Artist was not found.' }) };
+  };
+  context.loadProblematicFiles = async () => {
+    summaryLoads += 1;
+    context.state.utility.problematicFiles = [];
+    return context.state.utility.problematicFiles;
+  };
+
+  await context.runMusicBrainzArtistMutation(
+    item,
+    () => context.postMusicBrainzArtistAction(item, 'retry', {}),
+    'MusicBrainz retry queued.',
+  );
+
+  assert.deepEqual(requests.map(([method, url]) => [method, url]), [
+    ['POST', '/api/musicbrainz/artists/7/retry'],
+    ['GET', '/api/musicbrainz/artists/7'],
+    ['GET', '/api/musicbrainz/artists/7'],
+    ['GET', '/api/musicbrainz/artists/7'],
+  ]);
+  assert.equal(summaryLoads, 1);
+  assert.deepEqual(context.state.utility.problematicFiles, []);
+});
+
+test('a queued retry stops when a new failed attempt updates last_attempt_at', async () => {
+  const item = artistItem();
+  item.musicbrainz_detail = detail({
+    problem_reason_code: 'musicbrainz_provider_retry_exhausted',
+    unresolved_reason: 'MusicBrainz: Provider unavailable',
+    last_attempt_at: '2026-11-04T12:00:00Z',
+  });
+  const { context, requests } = loadContext({ item });
+  let statusLoads = 0;
+  let summaryLoads = 0;
+  context.waitForBrowserTimeout = async () => {};
+  context.fetch = async (url, options = {}) => {
+    const method = options.method || 'GET';
+    requests.push([method, url]);
+    if (method === 'POST') return { ok: true, status: 202, json: async () => ({ enqueued: true }) };
+    statusLoads += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ artist: {
+        problem_occurrence_id: 19,
+        last_attempt_at: statusLoads === 1 ? null : '2026-11-04T12:01:00Z',
+      } }),
+    };
+  };
+  context.loadProblematicFiles = async () => { summaryLoads += 1; };
+
+  await context.runMusicBrainzArtistMutation(
+    item,
+    () => context.postMusicBrainzArtistAction(item, 'retry', {}),
+    'MusicBrainz retry queued.',
+  );
+
+  assert.deepEqual(requests, [
+    ['POST', '/api/musicbrainz/artists/7/retry'],
+    ['GET', '/api/musicbrainz/artists/7'],
+    ['GET', '/api/musicbrainz/artists/7'],
+  ]);
+  assert.equal(summaryLoads, 1);
+});
+
 test('persisted read-only artist detail disables unavailable mutations', () => {
   const item = artistItem();
   const { context } = loadContext({ item });
@@ -385,11 +470,30 @@ test('a changed artist status reloads the Gallery view so its links and pills up
     { local_artist_name: 'Angra', unresolved_reason: null, problem_occurrence_id: null, match_state: 'pending' }];
   const shown = ['Aina'];
   const reloads = [];
+  const overlayRefreshes = [];
+  const openArtistInfo = { key: 'artist:Aina', anchor: { dataset: { artist: 'Aina' } } };
+  const lifecycle = [];
+  let scheduledRestore = null;
   const context = {
     console,
     state: { status: { allowed_actions: { 'catalogue.enrichment.request': true } } },
     virtualGrid: { render: () => {} },
-    refreshCurrentViewAfterBackgroundCompletion: async () => { reloads.push('view'); return true; },
+    captureOpenGalleryArtistInfo: () => { lifecycle.push('capture'); return openArtistInfo; },
+    refreshCurrentViewAfterBackgroundCompletion: async () => {
+      lifecycle.push('reload');
+      reloads.push('view');
+      return true;
+    },
+    restoreOpenGalleryArtistInfo: (captured) => {
+      lifecycle.push('restore');
+      assert.equal(captured, openArtistInfo);
+      overlayRefreshes.push('artist');
+    },
+    scheduleBrowserAnimationFrame: (callback) => {
+      lifecycle.push('schedule');
+      scheduledRestore = callback;
+      return 1;
+    },
     getGalleryMainGroups: () => shown.map((artist) => ({ artist })),
     fetch: async () => ({ ok: true, json: async () => ({ artists }) }),
   };
@@ -398,9 +502,17 @@ test('a changed artist status reloads the Gallery view so its links and pills up
 
   await context.refreshGalleryArtistMusicBrainzStatus();
   assert.deepEqual(reloads, [], 'the first status load keeps the view it was loaded with');
+  assert.deepEqual(overlayRefreshes, []);
   artists = artists.filter((row) => row.local_artist_name !== 'Aina');
   await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  await Promise.resolve();
   assert.deepEqual(reloads, ['view'], 'a finished lookup of a shown artist reloads the shared Gallery projection');
+  assert.deepEqual(overlayRefreshes, [], 'the panel waits for refresh-induced layout movement to settle');
+  assert.deepEqual(lifecycle, ['capture', 'reload', 'schedule']);
+  scheduledRestore();
+  assert.deepEqual(overlayRefreshes, ['artist'], 'the refreshed projection repaints the still-open artist panel');
+  assert.deepEqual(lifecycle, ['capture', 'reload', 'schedule', 'restore'],
+    'the open panel is captured before Gallery replacement and restored afterward');
   await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
   assert.deepEqual(reloads, ['view'], 'an unchanged status does not reload again');
   artists = [];

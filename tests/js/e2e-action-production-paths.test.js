@@ -6765,12 +6765,22 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
 test('MusicBrainz identity E2E covers native names and every manual resolution path through owned actions', () => {
   const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
 
-  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readStoredArtist[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings/);
+  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings[\s\S]*readArtistInfoSnapshot/);
   assert.match(spec, /MBD1-11:[\s\S]*enterManualArtistReference/);
   assert.match(spec, /MBD1-12:[\s\S]*readMusicBrainzIdentityTable[\s\S]*expectMusicBrainzAssignmentDisabled[\s\S]*openMusicBrainzCandidate[\s\S]*selectMusicBrainzCandidate/);
   assert.match(spec, /MBD1-13:[\s\S]*readMusicBrainzIdentityTable[\s\S]*keepCurrentMusicBrainzIdentity/);
   assert.match(spec, /MBD1-20:[\s\S]*assignSelectedMusicBrainzIdentity/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
+});
+
+test('MusicBrainz retry status reads rendered label and value boundaries', () => {
+  const actions = read('tests/e2e/actions/utilityProblematicFilesActions.js');
+  const start = actions.indexOf('async readMusicBrainzRetryStatus()');
+  const method = actions.slice(start, actions.indexOf('async retryMusicBrainzIdentity', start));
+
+  assert.ok(start >= 0);
+  assert.match(method, /musicBrainzRetryStatus\.innerText\(\)/);
+  assert.doesNotMatch(method, /musicBrainzRetryStatus\.textContent\(\)/);
 });
 
 test('Edit Tags duration gates use the shared timing-budget helper', () => {

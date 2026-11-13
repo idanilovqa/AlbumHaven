@@ -10100,7 +10100,9 @@
     "executionWave": 2,
     "databaseScenarios": [
       "musicbrainz:matched-and-credited-artist",
-      "musicbrainz:native-ddt-and-aria"
+      "musicbrainz:native-ddt-and-aria",
+      "musicbrainz:held-header-hydration",
+      "musicbrainz:shamaani-duo-korpiklaani"
     ],
     "filesystemScenarios": [],
     "expectedContracts": [
@@ -10108,7 +10110,9 @@
       "mbid-panel-links",
       "mbid-credited-name",
       "mbid-native-name-surfaces",
-      "mbid-native-latin-storage"
+      "mbid-native-latin-storage",
+      "mbd1-04-header-info-hydration-race",
+      "mbd1-40-shamaani-duo-korpiklaani"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-matched-artist"
@@ -10151,7 +10155,9 @@
       "musicbrainz:unconfirmed-match",
       "musicbrainz:not-found-manual-assignment",
       "musicbrainz:multiple-match-assignment",
-      "musicbrainz:metadata-conflict-keep-current"
+      "musicbrainz:metadata-conflict-keep-current",
+      "musicbrainz:provider-outage-retry",
+      "problematic-files:file-rating-mismatch"
     ],
     "filesystemScenarios": [],
     "expectedContracts": [
@@ -10160,7 +10166,10 @@
       "mbid-not-found-manual-assignment",
       "mbid-multiple-candidate-table",
       "mbid-conflict-keep-current",
-      "mbid-gallery-after-manual-assignment"
+      "mbid-gallery-after-manual-assignment",
+      "mbd1-14-provider-outage-retry-timing",
+      "mbd1-39-resolved-row-disappears",
+      "mbd1-43-file-rating-mismatch-no-mutation"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"

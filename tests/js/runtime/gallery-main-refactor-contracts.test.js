@@ -165,6 +165,240 @@ function requireContract(context, name) {
   return context[name];
 }
 
+test('refreshing an open artist panel rebuilds it without toggling or refocusing the anchored surface', () => {
+  let renders = 0;
+  const previousControl = {};
+  const refreshedControl = { focusCalls: 0, focus() { this.focusCalls += 1; } };
+  let focusableControls = [previousControl];
+  const anchor = { dataset: { artist: 'Aina' }, focusCalls: 0, focus() { this.focusCalls += 1; } };
+  const surface = {
+    contains: target => focusableControls.includes(target),
+    querySelectorAll: () => focusableControls,
+  };
+  const context = loadRuntime({
+    document: { activeElement: previousControl },
+    testAnchor: anchor,
+    testSurface: surface,
+  });
+  const refreshOpenGalleryArtistInfo = requireContract(context, 'refreshOpenGalleryArtistInfo');
+  context.renderGalleryArtistInfo = currentAnchor => {
+    assert.equal(currentAnchor, anchor);
+    renders += 1;
+    focusableControls = [refreshedControl];
+    return surface;
+  };
+  vm.runInContext(
+    "galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist:Aina', anchor: testAnchor, surface: testSurface });",
+    context,
+  );
+
+  assert.equal(refreshOpenGalleryArtistInfo(), true);
+  assert.equal(renders, 1);
+  assert.equal(anchor.focusCalls, 0);
+  assert.equal(refreshedControl.focusCalls, 1);
+  assert.equal(vm.runInContext("galleryMainSurfaceController.current().key", context), 'artist:Aina');
+});
+
+test('an explicitly closed artist panel stays closed after its Gallery anchor is replaced', () => {
+  const previousControl = {};
+  const restoredControl = { focusCalls: 0, focus() { this.focusCalls += 1; } };
+  const oldAnchor = { dataset: { artist: 'Aina' }, isConnected: true };
+  const newAnchor = { dataset: { artist: 'Aina' }, isConnected: true };
+  const oldSurface = {
+    contains: target => target === previousControl,
+    querySelectorAll: () => [previousControl],
+  };
+  const newSurface = { querySelectorAll: () => [restoredControl] };
+  const context = loadRuntime({
+    document: {
+      activeElement: previousControl,
+      querySelectorAll: () => [newAnchor],
+    },
+    testAnchor: oldAnchor,
+    testSurface: oldSurface,
+  });
+  const captureOpenGalleryArtistInfo = requireContract(context, 'captureOpenGalleryArtistInfo');
+  const restoreOpenGalleryArtistInfo = requireContract(context, 'restoreOpenGalleryArtistInfo');
+  vm.runInContext(
+    "galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist:Aina', anchor: testAnchor, surface: testSurface });",
+    context,
+  );
+
+  const captured = captureOpenGalleryArtistInfo();
+  assert.equal(captured.key, 'artist:Aina');
+  assert.equal(captured.anchor, oldAnchor);
+  vm.runInContext('galleryMainSurfaceController.close(false)', context);
+  oldAnchor.isConnected = false;
+  let renders = 0;
+  let opens = 0;
+  context.renderGalleryArtistInfo = () => { renders += 1; return newSurface; };
+  context.openGalleryMainSurface = () => { opens += 1; return true; };
+
+  assert.equal(restoreOpenGalleryArtistInfo(captured), false);
+  assert.equal(renders, 0);
+  assert.equal(opens, 0);
+  assert.equal(restoredControl.focusCalls, 0);
+  assert.equal(vm.runInContext('galleryMainSurfaceController.current()', context), null);
+});
+
+test('an artist panel closed by preserved Gallery scroll reopens while its position is settling', () => {
+  const scroll = { scrollTop: 160, scrollLeft: 0 };
+  const anchor = {
+    dataset: { artist: 'Aina' },
+    isConnected: true,
+    setAttribute() {},
+  };
+  const surface = {
+    classList: { remove() {} },
+    matches: () => false,
+    querySelectorAll: () => [],
+    setAttribute() {},
+  };
+  const context = loadRuntime({
+    document: {
+      activeElement: null,
+      getElementById: id => (id === 'albums-scroll' ? scroll : null),
+    },
+    testAnchor: anchor,
+    testSurface: surface,
+  });
+  const capture = requireContract(context, 'captureOpenGalleryArtistInfo');
+  const restore = requireContract(context, 'restoreOpenGalleryArtistInfo');
+  vm.runInContext(
+    "galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist:Aina', anchor: testAnchor, surface: testSurface, openingScrollPosition: { top: 160, left: 0 } });",
+    context,
+  );
+  const captured = capture();
+  context.closeGalleryMainSurface(false, { immediate: true, reason: 'gallery-scroll' });
+  scroll.scrollTop = 0;
+  context.renderGalleryArtistInfo = currentAnchor => {
+    assert.equal(currentAnchor, anchor);
+    return surface;
+  };
+  context.openGalleryMainSurface = (key, currentAnchor, currentSurface) => {
+    assert.equal(key, 'artist:Aina');
+    assert.equal(currentAnchor, anchor);
+    assert.equal(currentSurface, surface);
+    return true;
+  };
+
+  assert.equal(restore(captured), true);
+});
+
+test('restoring an active artist panel rebinds a trigger replaced by Gallery rendering', () => {
+  const previousControl = {};
+  const restoredControl = { focusCalls: 0, focus() { this.focusCalls += 1; } };
+  const oldAnchor = {
+    dataset: { artist: 'Aina' }, isConnected: false, focusCalls: 0,
+    focus() { this.focusCalls += 1; },
+    closest(selector) { return selector === '.family-artist-header' ? {} : null; },
+  };
+  const stickyAnchor = {
+    dataset: { artist: 'Aina' }, isConnected: true,
+    closest(selector) { return selector === '.gallery-bar__context' ? {} : null; },
+  };
+  const newAnchor = {
+    dataset: { artist: 'Aina' }, isConnected: true,
+    closest(selector) { return selector === '.family-artist-header' ? {} : null; },
+  };
+  const oldSurface = { querySelectorAll: () => [previousControl] };
+  const newSurface = { querySelectorAll: () => [restoredControl] };
+  const context = loadRuntime({
+    document: { activeElement: previousControl, querySelectorAll: () => [stickyAnchor, newAnchor] },
+    testAnchor: oldAnchor,
+    testSurface: oldSurface,
+  });
+  const capture = requireContract(context, 'captureOpenGalleryArtistInfo');
+  const restore = requireContract(context, 'restoreOpenGalleryArtistInfo');
+  vm.runInContext(
+    "galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist:Aina', anchor: testAnchor, surface: testSurface });",
+    context,
+  );
+  const captured = capture();
+  let closes = 0;
+  let opens = 0;
+  let staleRefreshes = 0;
+  context.closeGalleryMainSurface = (returnFocus, options) => {
+    assert.equal(returnFocus, false);
+    assert.equal(options?.immediate, true);
+    closes += 1;
+    vm.runInContext('galleryMainSurfaceController.close(false)', context);
+    return true;
+  };
+  context.refreshOpenGalleryArtistInfo = () => { staleRefreshes += 1; return true; };
+  context.renderGalleryArtistInfo = anchor => {
+    assert.equal(anchor, newAnchor);
+    return newSurface;
+  };
+  context.openGalleryMainSurface = (key, anchor, surface, align) => {
+    assert.equal(key, 'artist:Aina');
+    assert.equal(anchor, newAnchor);
+    assert.equal(surface, newSurface);
+    assert.equal(align, 'left');
+    opens += 1;
+    return true;
+  };
+
+  assert.equal(restore(captured), true);
+  assert.equal(closes, 1);
+  assert.equal(opens, 1);
+  assert.equal(staleRefreshes, 0);
+  assert.equal(oldAnchor.focusCalls, 0);
+  assert.equal(restoredControl.focusCalls, 1);
+});
+
+test('restoring an artist panel refreshes it in place when the controller stayed open', () => {
+  const anchor = { dataset: { artist: 'Aina' }, isConnected: true };
+  const surface = { querySelectorAll: () => [] };
+  const context = loadRuntime({
+    document: { activeElement: null },
+    testAnchor: anchor,
+    testSurface: surface,
+  });
+  const captureOpenGalleryArtistInfo = requireContract(context, 'captureOpenGalleryArtistInfo');
+  const restoreOpenGalleryArtistInfo = requireContract(context, 'restoreOpenGalleryArtistInfo');
+  vm.runInContext(
+    "galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist:Aina', anchor: testAnchor, surface: testSurface });",
+    context,
+  );
+  const captured = captureOpenGalleryArtistInfo();
+  let refreshes = 0;
+  let opens = 0;
+  context.refreshOpenGalleryArtistInfo = () => { refreshes += 1; return true; };
+  context.openGalleryMainSurface = () => { opens += 1; return true; };
+
+  assert.equal(restoreOpenGalleryArtistInfo(captured), true);
+  assert.equal(refreshes, 1);
+  assert.equal(opens, 0, 'restoring must not toggle an already-open anchored surface closed');
+});
+
+test('restoring an artist panel does not replace a newer anchored surface', () => {
+  const artistAnchor = { dataset: { artist: 'Aina' }, isConnected: true };
+  const surface = { querySelectorAll: () => [] };
+  const context = loadRuntime({
+    document: { activeElement: null },
+    testAnchor: artistAnchor,
+    testSurface: surface,
+  });
+  const captureOpenGalleryArtistInfo = requireContract(context, 'captureOpenGalleryArtistInfo');
+  const restoreOpenGalleryArtistInfo = requireContract(context, 'restoreOpenGalleryArtistInfo');
+  vm.runInContext(
+    "galleryMainSurfaceController = createAnchoredSurfaceController(); galleryMainSurfaceController.activate({ key: 'artist:Aina', anchor: testAnchor, surface: testSurface });",
+    context,
+  );
+  const captured = captureOpenGalleryArtistInfo();
+  vm.runInContext(
+    "galleryMainSurfaceController.activate({ key: 'album-types', anchor: {}, surface: testSurface });",
+    context,
+  );
+  let opens = 0;
+  context.openGalleryMainSurface = () => { opens += 1; return true; };
+
+  assert.equal(restoreOpenGalleryArtistInfo(captured), false);
+  assert.equal(opens, 0);
+  assert.equal(vm.runInContext('galleryMainSurfaceController.current().key', context), 'album-types');
+});
+
 test('search gallery retains artist information and dividers in artist section headings', () => {
   const context = loadRuntime({ state: { view: { query: 'Neal Morse' } } });
   const config = { artist: 'Neal Morse', artistCount: 1, albumCount: 3, contextKind: 'artist' };
@@ -2078,7 +2312,7 @@ test('the artist panel ends its text with one disabled Open full page and lists 
     'no expand or collapse, no Read more, and no separate Full page action');
 
   assert.match(galleryMainInteractionsSource, /^const GALLERY_ARTIST_FULL_PAGE_LABEL = 'Open full page';$/m, 'one label constant');
-  const builder = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function openGalleryArtistInfo('));
+  const builder = galleryMainInteractionsSource.slice(galleryMainInteractionsSource.indexOf('function renderGalleryArtistInfo('));
   assert.match(builder, /const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">\$\{GALLERY_ARTIST_FULL_PAGE_LABEL\}<\/button>`;/,
     'disabled for every artist, with the same title Full page had');
   assert.match(builder, /<p data-artist-info-summary\$\{isLongBiography \? ' data-artist-info-long' : ''\}>\$\{escapeHtml\(summary\)\} \$\{fullPage\}<\/p>\$\{links \? `<div class="artist-info-overlay__links">\$\{links\}<\/div>` : ''\}/,

@@ -474,6 +474,16 @@ export class UtilityProblematicFilesActions {
     };
   }
 
+  async readMusicBrainzRetryStatus() {
+    return String(await this.utilityProblematicFilesTab.musicBrainzRetryStatus.innerText() || '')
+      .replace(/\s+/g, ' ').trim();
+  }
+
+  async retryMusicBrainzIdentity(artistName) {
+    await this.utilityProblematicFilesTab.musicBrainzRetryButton.click();
+    await expect(this.utilityProblematicFilesTab.listItemByTitle(artistName)).toBeHidden({ timeout: 60000 });
+  }
+
   async readMusicBrainzIdentityPresentation() {
     return this.utilityProblematicFilesTab.readMusicBrainzIdentityPresentation();
   }

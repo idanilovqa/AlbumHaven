@@ -190,7 +190,17 @@ MUSICBRAINZ_ARTIST_FIXTURES = {
     "0e2e0001-0000-4000-8000-000000000008": ("Functional Balance Artist 03", "US"),
     "0e2e0001-0000-4000-8000-000000000009": ("Compilation Signal Guest North", "CA"),
     "0e2e0001-0000-4000-8000-000000000010": ("Compilation Signal Guest South", "FI"),
+    "0e2e0001-0000-4000-8000-000000000013": ("Compilation Signal Guest", "FI"),
+    "0e2e0001-0000-4000-8000-000000000014": ("Provider Outage Artist", "US"),
+    "0e2e0001-0000-4000-8000-000000000018": ("Control Signal Partner", "FI"),
 }
+MUSICBRAINZ_HYDRATION_MBID = "0e2e0001-0000-4000-8000-000000000013"
+MUSICBRAINZ_OUTAGE_MBID = "0e2e0001-0000-4000-8000-000000000014"
+MUSICBRAINZ_OUTAGE_GROUP_MBID = "0e2e0001-0000-4000-8000-000000000114"
+MUSICBRAINZ_OUTAGE_RELEASE_MBID = "0e2e0001-0000-4000-8000-000000000214"
+MUSICBRAINZ_OUTAGE_ARTIST = "Provider Outage Artist"
+MUSICBRAINZ_OUTAGE_ALBUM = "Provider Outage Album"
+MUSICBRAINZ_HYDRATION_HEARTBEAT_SECONDS = 5.0
 
 
 def classify_fixture_profile_mode(fixture_profile: str) -> str:
@@ -4355,6 +4365,12 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.lastfm_scrobble_mode = "accept"
         self.cover_lookup_later_provider_gate = threading.Event()
         self.cover_lookup_later_provider_gate.set()
+        self.musicbrainz_hydration_gate = threading.Event()
+        if os.environ.get("ALBUM_HAVEN_E2E_MUSICBRAINZ_HYDRATION_HOLD") == "1":
+            self.musicbrainz_hydration_gate.clear()
+        else:
+            self.musicbrainz_hydration_gate.set()
+        self.musicbrainz_hydration_started = threading.Event()
         self.cover_lookup_candidate_image_gate = threading.Event()
         self.cover_lookup_candidate_image_gate.set()
         self.cover_lookup_mode = "no-results"
@@ -4460,6 +4476,30 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
     def record_accepted_lastfm_scrobble(self) -> None:
         with self.lastfm_state_lock:
             self.lastfm_playcount += 1
+
+    def wait_for_musicbrainz_hydration(
+        self,
+        mbid: str,
+        *,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> None:
+        if mbid != MUSICBRAINZ_HYDRATION_MBID:
+            return
+        self.musicbrainz_hydration_started.set()
+        while not self.musicbrainz_hydration_gate.wait(
+            MUSICBRAINZ_HYDRATION_HEARTBEAT_SECONDS
+        ):
+            if heartbeat is not None:
+                heartbeat()
+
+    def release_musicbrainz_hydration(self) -> None:
+        self.musicbrainz_hydration_gate.set()
+
+    def snapshot_musicbrainz_hydration(self) -> dict[str, bool]:
+        return {
+            "started": self.musicbrainz_hydration_started.is_set(),
+            "released": self.musicbrainz_hydration_gate.is_set(),
+        }
 
     def hold_cover_lookup_later_provider(self) -> None:
         self.reset_cover_lookup_evidence()
@@ -4650,6 +4690,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         if parsed.path.rstrip("/") == "/lastfm-fixture/control":
             self._serve_lastfm_control()
             return
+        if parsed.path.rstrip("/") == "/musicbrainz-fixture/control":
+            self._serve_musicbrainz_control()
+            return
         if parsed.path.rstrip("/") != "/lastfm":
             self.send_error(404)
             return
@@ -4668,6 +4711,12 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         if parts == ["lastfm-fixture", "state"]:
             self._send_json(
                 self.server.snapshot_lastfm_state(),
+                include_body=include_body,
+            )
+            return
+        if parts == ["musicbrainz-fixture", "state"]:
+            self._send_json(
+                self.server.snapshot_musicbrainz_hydration(),
                 include_body=include_body,
             )
             return
@@ -4703,8 +4752,17 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                 include_body=include_body,
             )
             return
-        if parts[:2] == ["musicbrainz", "release"]:
+        if parts == ["musicbrainz", "artist"]:
+            self._serve_musicbrainz_artist_search(query, include_body=include_body)
+            return
+        if parts == ["musicbrainz", "release-group"]:
+            self._serve_musicbrainz_release_groups(query, include_body=include_body)
+            return
+        if parts == ["musicbrainz", "release"]:
             self._serve_musicbrainz_releases(query, include_body=include_body)
+            return
+        if len(parts) == 3 and parts[:2] == ["musicbrainz", "release"]:
+            self._serve_musicbrainz_release(parts[2], include_body=include_body)
             return
         if len(parts) == 3 and parts[:2] == ["musicbrainz", "artist"]:
             self._serve_musicbrainz_artist(parts[2], include_body=include_body)
@@ -4804,6 +4862,19 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             self.send_error(400)
             return
         self._send_json(self.server.snapshot_lastfm_state(), include_body=True)
+
+    def _serve_musicbrainz_control(self) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError):
+            self.send_error(400)
+            return
+        if not isinstance(payload, dict) or payload.get("action") != "release-hydration":
+            self.send_error(400)
+            return
+        self.server.release_musicbrainz_hydration()
+        self._send_json(self.server.snapshot_musicbrainz_hydration(), include_body=True)
 
     def _serve_lastfm_request(self) -> None:
         try:
@@ -5110,7 +5181,19 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         self._send_payload(payload, "image/jpeg", include_body=include_body)
 
     def _serve_musicbrainz_releases(self, query: dict[str, list[str]], *, include_body: bool) -> None:
+        if query.get("release-group", [""])[0] == MUSICBRAINZ_OUTAGE_GROUP_MBID:
+            self._send_json(
+                {"release-count": 1, "releases": [self._musicbrainz_outage_release()]},
+                include_body=include_body,
+            )
+            return
         query_text = query.get("query", [""])[0]
+        if MUSICBRAINZ_OUTAGE_ALBUM.casefold() in query_text.casefold():
+            self._send_json(
+                {"count": 1, "releases": [self._musicbrainz_outage_release()]},
+                include_body=include_body,
+            )
+            return
         self.server.wait_for_cover_lookup_later_provider(query_text)
         specs = self._matching_specs(query_text)
         releases = [
@@ -5125,22 +5208,121 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         self._send_json({"count": len(releases), "releases": releases}, include_body=include_body)
         self.server.record_musicbrainz_completed()
 
+    def _serve_musicbrainz_artist_search(
+        self,
+        query: dict[str, list[str]],
+        *,
+        include_body: bool,
+    ) -> None:
+        query_text = query.get("query", [""])[0]
+        artists = []
+        if MUSICBRAINZ_OUTAGE_ARTIST.casefold() in query_text.casefold():
+            artists.append({
+                "id": MUSICBRAINZ_OUTAGE_MBID,
+                "name": MUSICBRAINZ_OUTAGE_ARTIST,
+                "score": 100,
+                "type": "Group",
+                "country": "US",
+            })
+        self._send_json({"count": len(artists), "artists": artists}, include_body=include_body)
+
+    def _serve_musicbrainz_release_groups(
+        self,
+        query: dict[str, list[str]],
+        *,
+        include_body: bool,
+    ) -> None:
+        groups = []
+        if query.get("artist", [""])[0] == MUSICBRAINZ_OUTAGE_MBID:
+            groups.append({
+                "id": MUSICBRAINZ_OUTAGE_GROUP_MBID,
+                "title": MUSICBRAINZ_OUTAGE_ALBUM,
+                "first-release-date": "2019",
+            })
+        self._send_json(
+            {"release-group-count": len(groups), "release-groups": groups},
+            include_body=include_body,
+        )
+
+    def _musicbrainz_outage_release(self) -> dict[str, Any]:
+        return {
+            "id": MUSICBRAINZ_OUTAGE_RELEASE_MBID,
+            "title": MUSICBRAINZ_OUTAGE_ALBUM,
+            "date": "2019-01-01",
+            "track-count": 18,
+            "release-group": {
+                "id": MUSICBRAINZ_OUTAGE_GROUP_MBID,
+                "title": MUSICBRAINZ_OUTAGE_ALBUM,
+            },
+            "artist-credit": [{
+                "name": MUSICBRAINZ_OUTAGE_ARTIST,
+                "artist": {"id": MUSICBRAINZ_OUTAGE_MBID, "name": MUSICBRAINZ_OUTAGE_ARTIST},
+            }],
+            "media": [{
+                "position": 1,
+                "track-count": 18,
+                "tracks": [
+                    {"title": f"The Pure Shine Track {index}", "length": 180000}
+                    for index in range(1, 19)
+                ],
+            }],
+        }
+
+    def _serve_musicbrainz_release(self, mbid: str, *, include_body: bool) -> None:
+        if mbid != MUSICBRAINZ_OUTAGE_RELEASE_MBID:
+            self.send_error(404)
+            return
+        self._send_json(self._musicbrainz_outage_release(), include_body=include_body)
+
     def _serve_musicbrainz_artist(self, mbid: str, *, include_body: bool) -> None:
         fixture = MUSICBRAINZ_ARTIST_FIXTURES.get(mbid)
         if fixture is None:
             self.send_error(404)
             return
         name, country = fixture
-        self._send_json({
+        genres = (
+            [
+                {"name": "progressive rock", "count": 12},
+                {"name": "art rock", "count": 8},
+                {"name": "doom metal", "count": 4},
+                {"name": "folk rock", "count": 2},
+            ]
+            if mbid == MUSICBRAINZ_HYDRATION_MBID
+            else [{"name": "rock", "count": 4}]
+            if mbid == MUSICBRAINZ_OUTAGE_MBID
+            else []
+        )
+        payload = {
             "id": mbid,
             "name": name,
             "sort-name": name,
             "type": "Group",
             "country": country,
             "aliases": [],
-            "genres": [],
+            "genres": genres,
             "tags": [],
-        }, include_body=include_body)
+        }
+        if mbid == MUSICBRAINZ_HYDRATION_MBID and include_body:
+            self._send_held_musicbrainz_json(mbid, payload)
+            return
+        self._send_json(payload, include_body=include_body)
+
+    def _send_held_musicbrainz_json(self, mbid: str, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def heartbeat() -> None:
+            self.wfile.write(b" ")
+            self.wfile.flush()
+
+        self.server.wait_for_musicbrainz_hydration(mbid, heartbeat=heartbeat)
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.close_connection = True
 
     def _serve_cover_art_archive(self, release_id: str, *, include_body: bool) -> None:
         # Read the failure mode only after a held search is released.
@@ -5411,6 +5593,7 @@ class ProviderFixtureService:
     def stop(self) -> None:
         self._server.release_cover_lookup_later_provider()
         self._server.release_cover_lookup_candidate_images()
+        self._server.release_musicbrainz_hydration()
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)

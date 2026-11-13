@@ -357,8 +357,11 @@ export class GalleryActions {
     };
   }
 
-  async openArtistInfoPanel() {
-    await this.galleryPage.artistInfoTrigger.click();
+  async openArtistInfoPanel(artist = null) {
+    const trigger = artist
+      ? this.galleryPage.familyArtistInfoTrigger(artist)
+      : this.galleryPage.artistInfoTrigger;
+    await trigger.click();
     await expect(this.galleryPage.artistInfoPanel).toBeVisible();
   }
 

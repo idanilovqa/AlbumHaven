@@ -181,6 +181,40 @@ def test_a_stored_mbid_without_album_agreement_is_never_accepted_on_its_own():
     assert [candidate["artist_mbid"] for candidate in outcome["candidates"]] == [AINA_INDIE]
 
 
+def test_unconfirmed_recheck_refreshes_metadata_from_the_authoritative_artist_lookup():
+    artists = {
+        **_AINA_ARTISTS,
+        AINA_INDIE: {
+            **_AINA_ARTISTS[AINA_INDIE],
+            "tags": [{"name": "indie rock", "count": 7}],
+            "genres": [{"name": "alternative rock", "count": 5}],
+        },
+    }
+    client, calls = _client(
+        {AINA_INDIE: ["Sevens"]},
+        artists=artists,
+        search=[{"id": AINA_INDIE, "name": "Aina", "score": 100, "type": "Group", "country": "ES"}],
+    )
+    context = {
+        "local_artist_id": 26,
+        "local_name": "Aina",
+        "albums": albums("Days Rising Doom - Metal Opera"),
+        "existing_artist_mbid": AINA_INDIE,
+        "existing_match_state": "matched",
+    }
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "unconfirmed"
+    assert outcome["refreshed_artist"]["tags"] == [
+        {"name": "indie rock", "normalized_name": "indie rock", "vote_count": 7},
+    ]
+    assert outcome["refreshed_artist"]["genres"] == [
+        {"name": "alternative rock", "normalized_name": "alternative rock", "vote_count": 5},
+    ]
+    assert sum(f"/artist/{AINA_INDIE}?" in url for url in calls) == 1
+
+
 def test_a_stored_mbid_still_finds_an_artist_search_misses_when_the_albums_agree():
     client, _calls = _client(_AINA_RELEASE_GROUPS, artists=_AINA_ARTISTS, search=[])
 

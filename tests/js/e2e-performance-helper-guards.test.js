@@ -2104,7 +2104,7 @@ test('generated preview storage timings start at search submission', () => {
   assert.doesNotMatch(relocation, /searchStartedAt/);
 });
 
-test('generated preview storage resolves a failed prior relocation before changing location', () => {
+test('generated preview storage fails closed on a dirty prior relocation', () => {
   const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
   const helper = spec.slice(
     spec.indexOf('async function openIdleStorageSettings'),
@@ -2112,21 +2112,12 @@ test('generated preview storage resolves a failed prior relocation before changi
   );
 
   assert.match(helper, /const activeStates = \['queued', 'running', 'cancel_requested'\]/);
-  assert.match(helper, /const retryableStates = \['completed_with_failures', 'failed', 'canceled'\]/);
-  assert.match(
-    helper,
-    /if \(retryableStates\.includes\(state\.operation_state\)\) \{[\s\S]*?authenticatedPagePost\(page, '\/admin\/server\/preview-storage\/retry'/,
-  );
-  assert.match(
-    helper,
-    /const status = response\.status\(\)[\s\S]*?const current = status === 409 \? await readStorageState\(page\) : null[\s\S]*?expect\(status === 202 \|\| \(status === 409 && activeStates\.includes\(current\?\.operation_state\)\)\)\.toBe\(true\)/,
-  );
-  assert.match(
-    helper,
-    /for \(let attempt = 0; attempt < 2 && retryableStates\.includes\(state\.operation_state\); attempt \+= 1\)/,
-  );
-  assert.match(helper, /expect\(state\.operation_state\)\.toBe\('completed'\)/);
-  assert.match(helper, /expect\(state\.requested_mode\)\.toBeNull\(\)/);
+  assert.match(helper, /const cleanStates = \['idle', 'completed'\]/);
+  assert.match(helper, /!cleanStates\.includes\(state\.operation_state\)/);
+  assert.match(helper, /state\.requested_mode !== null/);
+  assert.match(helper, /state\.failed_count !== 0/);
+  assert.match(helper, /Preview storage baseline is not clean: \$\{JSON\.stringify\(state\)\}/);
+  assert.doesNotMatch(helper, /authenticatedPagePost|\/retry|retryableStates/);
 });
 
 test('loop expiry E2E releases playback ownership before long clock advances', () => {

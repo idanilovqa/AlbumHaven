@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 
 import { expect, test } from '../support/baseFixtures.js';
 import { waitForDisplayedImageDecode } from '../actions/coverLookupActions.js';
-import { authenticatedPageGet, authenticatedPagePost } from '../helpers/authenticatedPageRequest.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 import {
   defineTimingBudget,
@@ -95,27 +95,17 @@ async function waitForStorageState(page, predicate, message) {
 // The controls stay disabled while a follow-up reconciliation of late previews runs.
 async function openIdleStorageSettings(page) {
   const activeStates = ['queued', 'running', 'cancel_requested'];
-  const retryableStates = ['completed_with_failures', 'failed', 'canceled'];
+  const cleanStates = ['idle', 'completed'];
   await page.goto('/admin/server');
-  let state = await waitForStorageState(
+  const state = await waitForStorageState(
     page,
     (current) => !activeStates.includes(current.operation_state),
     'preview storage should be idle before its controls are used',
   );
-  if (retryableStates.includes(state.operation_state)) {
-    for (let attempt = 0; attempt < 2 && retryableStates.includes(state.operation_state); attempt += 1) {
-      const response = await authenticatedPagePost(page, '/admin/server/preview-storage/retry', { data: {} });
-      const status = response.status();
-      const current = status === 409 ? await readStorageState(page) : null;
-      expect(status === 202 || (status === 409 && activeStates.includes(current?.operation_state))).toBe(true);
-      state = await waitForStorageState(
-        page,
-        (current) => !activeStates.includes(current.operation_state),
-        'prior failed preview relocation should retry cleanly',
-      );
-    }
-    expect(state.operation_state).toBe('completed');
-    expect(state.requested_mode).toBeNull();
+  if (!cleanStates.includes(state.operation_state)
+      || state.requested_mode !== null
+      || state.failed_count !== 0) {
+    throw new Error(`Preview storage baseline is not clean: ${JSON.stringify(state)}`);
   }
   await page.goto('/admin/server');
 }

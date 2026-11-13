@@ -664,46 +664,29 @@ class MusicBrainzEnrichmentPostgresRepository:
                     ))
         return bool(result.get("assigned"))
 
-    def replace_artist_tags(
+    def refresh_artist_projection(
         self,
         *,
-        artist_mbid: str,
-        tags: list[dict[str, object]],
+        local_artist_id: int,
+        artist: dict[str, object],
         observed_at: datetime,
-    ) -> int:
-        normalized = _tag_rows(tags)
+    ) -> bool:
+        projection = _artist_projection(artist, required=True)
         params = {
-            "artist_mbid": _mbid(artist_mbid),
+            "local_artist_id": _positive_id(local_artist_id),
             "observed_at": _aware_utc(observed_at),
-            "tags": [dict(item) for item in normalized],
-            **_tag_array_params(normalized),
+            **_projection_params(projection),
+            **_alias_array_params(projection["aliases"]),
+            **_tag_array_params(projection["tags"]),
         }
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
-                connection.execute(
-                    """
-                    with locked_artist as (
-                      select mbid
-                      from integration.musicbrainz_artists
-                      where mbid = %(artist_mbid)s::uuid
-                      for update
-                    )
-                    delete from integration.musicbrainz_artist_tags tags
-                    using locked_artist
-                    where tags.artist_mbid = locked_artist.mbid
-                    """,
-                    params,
-                )
-                connection.execute(_insert_artist_tags_sql(), params)
-                row = _row_mapping(connection.execute(
-                    """
-                    select count(*)::integer as stored_tag_count
-                    from integration.musicbrainz_artist_tags
-                    where artist_mbid = %(artist_mbid)s::uuid
-                    """,
-                    params,
-                ).fetchone())
-        return _integer(row.get("stored_tag_count"))
+                connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
+                row = _row_mapping(connection.execute(_refresh_artist_sql(), params).fetchone())
+                connection.execute(_refresh_aliases_sql(), params)
+                connection.execute(_refresh_country_sql(), params)
+                connection.execute(_refresh_tags_sql(), params)
+        return bool(row.get("refreshed"))
 
     def list_present_artist_review(self) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:
@@ -863,7 +846,7 @@ def _problem_label_sql() -> str:
 
 
 def _artist_attention_sql() -> str:
-    """Present artists that need owner attention: one active problem or a queued first lookup.
+    """Present artists with one active problem or an active enrichment job.
 
     Bounded by the active-problem and active-job indexes rather than scanning
     every artist's review projection.
@@ -885,12 +868,8 @@ def _artist_attention_sql() -> str:
           join ops.metadata_enrichment_jobs jobs
             on jobs.library_id = active_library.library_id
            and jobs.target_kind = 'artist'
-           and jobs.state in ('queued', 'leased')
-          left join library.local_artist_musicbrainz_matches matches
-            on matches.library_id = jobs.library_id
-           and matches.local_artist_id = jobs.local_artist_id
-          where matches.id is null
-            and not exists (select 1 from attention where attention.local_artist_id = jobs.local_artist_id)
+           and jobs.state in ('queued', 'leased', 'retry_wait')
+          where not exists (select 1 from attention where attention.local_artist_id = jobs.local_artist_id)
         ), wanted as (
           select local_artist_id, problem_occurrence_id, problem_reason_code as reason_code from attention
           union all
@@ -1840,6 +1819,98 @@ def _manual_artist_sql() -> str:
             refreshed_at = excluded.refreshed_at,
             updated_at = excluded.updated_at;
     """
+
+
+def _matched_artist_cte() -> str:
+    return _active_library_cte() + """
+        , matched_artist as (
+          select matches.artist_mbid
+          from active_library
+          join library.local_artist_musicbrainz_matches matches
+            on matches.library_id = active_library.library_id
+           and matches.local_artist_id = %(local_artist_id)s
+           and matches.state = 'matched'
+           and matches.artist_mbid = %(artist_mbid)s::uuid
+        )
+    """
+
+
+def _refresh_artist_sql() -> str:
+    return _matched_artist_cte() + """
+        insert into integration.musicbrainz_artists (
+          mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
+          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+        )
+        select artist_mbid, %(canonical_name)s, %(sort_name)s,
+               %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
+               %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+        from matched_artist
+        on conflict (mbid) do update
+        set canonical_name = excluded.canonical_name,
+            sort_name = excluded.sort_name,
+            preferred_native_name = excluded.preferred_native_name,
+            artist_kind = excluded.artist_kind,
+            disambiguation = excluded.disambiguation,
+            discogs_artist_id = excluded.discogs_artist_id,
+            refreshed_at = excluded.refreshed_at,
+            updated_at = excluded.updated_at
+        returning true as refreshed;
+    """
+
+
+def _refresh_aliases_sql() -> str:
+    return _matched_artist_cte() + """
+        , removed as (
+          delete from integration.musicbrainz_artist_aliases aliases
+          using matched_artist
+          where aliases.artist_mbid = matched_artist.artist_mbid
+          returning 1
+        )
+        insert into integration.musicbrainz_artist_aliases (
+          artist_mbid, alias_name, alias_normalized, sort_name, locale,
+          alias_kind, is_primary_for_locale, provenance, observed_at
+        )
+        select matched_artist.artist_mbid, rows.name, rows.normalized,
+               rows.sort_name, rows.locale, rows.kind, rows.is_primary,
+               'musicbrainz', %(observed_at)s
+        from matched_artist
+        cross join (select count(*) from removed) removed_count
+        cross join unnest(
+          %(alias_names)s::text[], %(alias_normalized)s::text[],
+          %(alias_sort_names)s::text[], %(alias_locales)s::text[],
+          %(alias_kinds)s::text[], %(alias_primary)s::boolean[]
+        ) as rows(name, normalized, sort_name, locale, kind, is_primary);
+    """
+
+
+def _refresh_country_sql() -> str:
+    return _matched_artist_cte() + """
+        , removed as (
+          delete from integration.musicbrainz_artist_countries countries
+          using matched_artist
+          where countries.artist_mbid = matched_artist.artist_mbid
+          returning 1
+        )
+        insert into integration.musicbrainz_artist_countries (
+          artist_mbid, country_code, country_name, provenance, observed_at
+        )
+        select matched_artist.artist_mbid, %(country_code)s, %(country_name)s,
+               'musicbrainz', %(observed_at)s
+        from matched_artist
+        cross join (select count(*) from removed) removed_count
+        where %(country_code)s::text is not null;
+    """
+
+
+def _refresh_tags_sql() -> str:
+    return _matched_artist_cte() + """
+        , removed as (
+          delete from integration.musicbrainz_artist_tags tags
+          using matched_artist
+          where tags.artist_mbid = matched_artist.artist_mbid
+          returning 1
+        )
+    """ + _insert_artist_tags_sql(source="matched_artist", barrier="removed")
 
 
 def _manual_aliases_sql() -> str:

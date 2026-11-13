@@ -3363,6 +3363,8 @@ async function openMusicBrainzArtistProblem(occurrenceId) {
 
 const MUSICBRAINZ_ARTIST_MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS = 350;
+const MUSICBRAINZ_RETRY_POLL_DELAY_MS = 500;
+const MUSICBRAINZ_RETRY_POLL_LIMIT = 90;
 
 function isMusicBrainzArtistProblem(item) {
   return item?.entity_kind === 'artist';
@@ -3605,9 +3607,32 @@ async function runMusicBrainzArtistMutation(item, perform, successMessage) {
   ui.error = '';
   renderProblematicFiles({ preserveProblematicTree: true });
   try {
-    await perform();
+    const result = await perform();
     if (typeof showToast === 'function') showToast(successMessage, 'info', 2600);
-    await loadProblematicFiles(true);
+    if (result?.enqueued === true) {
+      const occurrenceId = (problem) => String(problem?.musicbrainz_occurrence_id
+        ?? problem?.occurrence_id ?? problem?.problem_occurrence_id
+        ?? problem?.musicbrainz_detail?.problem_occurrence_id ?? '');
+      const previousOccurrenceId = occurrenceId(item);
+      const previousLastAttemptAt = String(item.musicbrainz_detail?.last_attempt_at || '');
+      for (let attempt = 0; attempt < MUSICBRAINZ_RETRY_POLL_LIMIT; attempt += 1) {
+        if (attempt > 0) await waitForBrowserTimeout(MUSICBRAINZ_RETRY_POLL_DELAY_MS);
+        try {
+          const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}`, { headers: { Accept: 'application/json' } });
+          const payload = await response.json().catch(() => ({}));
+          if (response.status === 404) break;
+          if (!response.ok || !payload?.artist) continue;
+          const currentLastAttemptAt = String(payload.artist.last_attempt_at || '');
+          if (occurrenceId(payload.artist) !== previousOccurrenceId
+              || (currentLastAttemptAt && currentLastAttemptAt !== previousLastAttemptAt)) break;
+        } catch {
+          // The bounded poll can recover from a transient status request failure.
+        }
+      }
+      await loadProblematicFiles(true, { preserveSelectedDetail: true });
+    } else {
+      await loadProblematicFiles(true);
+    }
     void refreshGalleryArtistMusicBrainzStatus({ force: true });
   } catch (error) {
     ui.error = error?.message || 'MusicBrainz action failed.';

@@ -539,6 +539,174 @@ def test_discogs_link_is_stored_with_the_match_and_refreshed_without_touching_it
             connection.execute("update integration.musicbrainz_artists set discogs_artist_id = 0 where mbid = %s", (GERMAN,))
 
 
+def test_automatic_outcome_persists_provider_genres_for_display(monkeypatch: pytest.MonkeyPatch):
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _library_id, artist_id = _seed_present_artist(setup_url, "provider-genres")
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id,
+        state="matched",
+        confidence=1,
+        evidence_summary="MusicBrainz search evidence agreed.",
+        observed_at=NOW,
+        artist={
+            "mbid": GERMAN,
+            "canonical_name": "Compilation Signal Guest",
+            "artist_type": "Group",
+            "country_code": "FI",
+            "tags": [],
+            "genres": [
+                {"name": "progressive rock", "normalized_name": "progressive rock", "vote_count": 12},
+                {"name": "art rock", "normalized_name": "art rock", "vote_count": 8},
+                {"name": "doom metal", "normalized_name": "doom metal", "vote_count": 4},
+                {"name": "folk rock", "normalized_name": "folk rock", "vote_count": 2},
+            ],
+        },
+    )
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        stored = connection.execute(
+            "select tag_name, vote_count, is_genre from integration.musicbrainz_artist_tags "
+            "where artist_mbid = %s order by vote_count desc",
+            (GERMAN,),
+        ).fetchall()
+        display = connection.execute(
+            "select tag_name from integration.musicbrainz_artist_display_genres "
+            "where artist_mbid = %s order by display_rank",
+            (GERMAN,),
+        ).fetchall()
+
+    assert stored == [
+        {"tag_name": "progressive rock", "vote_count": 12, "is_genre": True},
+        {"tag_name": "art rock", "vote_count": 8, "is_genre": True},
+        {"tag_name": "doom metal", "vote_count": 4, "is_genre": True},
+        {"tag_name": "folk rock", "vote_count": 2, "is_genre": True},
+    ]
+    assert [row["tag_name"] for row in display] == ["progressive rock", "art rock", "doom metal"]
+
+
+def test_projection_refresh_replaces_remote_metadata_without_rewriting_the_accepted_match(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    setup_url, _runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "projection-refresh")
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: isolatedPostgres._connect(setup_url),
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        album_id = connection.execute(
+            "select id from library.local_albums where artist_id = %s", (artist_id,)
+        ).fetchone()["id"]
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id,
+        state="matched",
+        confidence=0.97,
+        evidence_summary="MusicBrainz album evidence agreed.",
+        observed_at=NOW,
+        credit_name="Old Credit",
+        album_evidence=[{"local_album_id": album_id, "local_title": "Kingdom of the Night"}],
+        album_identities=[{"local_album_id": album_id, "artist_mbid": GERMAN}],
+        associated_artist_mbids=[TRANCE],
+        artist={
+            "mbid": GERMAN,
+            "canonical_name": "Old Name",
+            "sort_name": "Name, Old",
+            "preferred_native_name": "Old Native Name",
+            "artist_type": "Person",
+            "disambiguation": "stale",
+            "country_code": "DE",
+            "aliases": [{"name": "Old Alias", "normalized_name": "old alias"}],
+            "tags": [{"name": "old tag", "normalized_name": "old tag", "vote_count": 4}],
+            "genres": [],
+            "discogs_artist_id": 218108,
+        },
+    )
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        match_before = connection.execute(
+            "select to_jsonb(matches) as value from library.local_artist_musicbrainz_matches matches "
+            "where library_id = %s and local_artist_id = %s",
+            (library_id, artist_id),
+        ).fetchone()["value"]
+        identities_before = connection.execute(
+            "select to_jsonb(identities) as value from library.local_album_artist_identities identities "
+            "where library_id = %s order by album_key",
+            (library_id,),
+        ).fetchall()
+
+    assert repository.refresh_artist_projection(
+        local_artist_id=artist_id,
+        observed_at=NOW + timedelta(hours=1),
+        artist={
+            "mbid": GERMAN,
+            "canonical_name": "New Name",
+            "sort_name": "New Name",
+            "preferred_native_name": None,
+            "artist_type": "Group",
+            "disambiguation": None,
+            "country_code": "FI",
+            "source_url": f"https://musicbrainz.org/artist/{GERMAN}",
+            "aliases": [],
+            "tags": [{"name": "new tag", "normalized_name": "new tag", "vote_count": 0}],
+            "genres": [{"name": "art rock", "normalized_name": "art rock", "vote_count": -2}],
+            "discogs_artist_id": 999,
+        },
+    ) is True
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        projection = connection.execute(
+            "select artists.canonical_name, artists.sort_name, artists.preferred_native_name, "
+            "artists.artist_kind, artists.disambiguation, artists.discogs_artist_id, "
+            "countries.country_code "
+            "from integration.musicbrainz_artists artists "
+            "left join integration.musicbrainz_artist_countries countries on countries.artist_mbid = artists.mbid "
+            "where artists.mbid = %s",
+            (GERMAN,),
+        ).fetchone()
+        aliases = connection.execute(
+            "select alias_name from integration.musicbrainz_artist_aliases where artist_mbid = %s",
+            (GERMAN,),
+        ).fetchall()
+        tags = connection.execute(
+            "select tag_name, vote_count, is_genre from integration.musicbrainz_artist_tags "
+            "where artist_mbid = %s order by tag_name",
+            (GERMAN,),
+        ).fetchall()
+        match_after = connection.execute(
+            "select to_jsonb(matches) as value from library.local_artist_musicbrainz_matches matches "
+            "where library_id = %s and local_artist_id = %s",
+            (library_id, artist_id),
+        ).fetchone()["value"]
+        identities_after = connection.execute(
+            "select to_jsonb(identities) as value from library.local_album_artist_identities identities "
+            "where library_id = %s order by album_key",
+            (library_id,),
+        ).fetchall()
+
+    assert projection == {
+        "canonical_name": "New Name",
+        "sort_name": "New Name",
+        "preferred_native_name": None,
+        "artist_kind": "Group",
+        "disambiguation": None,
+        "discogs_artist_id": 999,
+        "country_code": "FI",
+    }
+    assert aliases == []
+    assert tags == [
+        {"tag_name": "art rock", "vote_count": -2, "is_genre": True},
+        {"tag_name": "new tag", "vote_count": 0, "is_genre": False},
+    ]
+    assert match_after == match_before
+    assert identities_after == identities_before
+
+
 def test_stored_artist_mbid_recheck_removes_only_automatic_matches_from_that_path(monkeypatch: pytest.MonkeyPatch):
     """0173: Aina-style matches accepted from a stored (Last.fm) artist MBID are re-checked; nothing else."""
     from tests.py.test_musicbrainz_artist_migration_postgres import MIGRATIONS_ROOT

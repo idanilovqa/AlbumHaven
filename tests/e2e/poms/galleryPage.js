@@ -400,6 +400,12 @@ export class GalleryPage extends BasePage {
       .locator(this.albumRowWithinSectionSelector);
   }
 
+  familyArtistInfoTrigger(artistName) {
+    return this.page.locator('.family-artist-header')
+      .getByRole('button', { name: `Information about ${artistName}`, exact: true })
+      .first();
+  }
+
   albumRowsByArtistAndAlbumName(artistName, albumName) {
     return this.albumRowsByArtistName(artistName).filter({
       has: this.page.locator(this.albumTitleButtonWithinSectionSelector).filter({

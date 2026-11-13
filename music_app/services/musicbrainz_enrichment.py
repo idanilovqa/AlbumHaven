@@ -42,6 +42,22 @@ _TRANSIENT_CLASSIFICATIONS = frozenset(
 # Outcomes that store their candidates for an owner decision. A single name
 # match without album agreement is "manual_review": not several matches.
 _CANDIDATE_MATCH_STATES = {"ambiguous": "ambiguous", "unconfirmed": "manual_review"}
+_COMPLETE_ARTIST_PROJECTION_FIELDS = frozenset(
+    {
+        "mbid",
+        "canonical_name",
+        "sort_name",
+        "preferred_native_name",
+        "artist_type",
+        "disambiguation",
+        "country_code",
+        "source_url",
+        "aliases",
+        "tags",
+        "genres",
+        "discogs_artist_id",
+    }
+)
 
 
 class MusicBrainzEnrichmentScheduler:
@@ -252,15 +268,29 @@ class MusicBrainzArtistEnrichmentProcessor:
         elif classification in _CANDIDATE_MATCH_STATES or (
             classification == "permanent_mismatch" and outcome.get("candidates")
         ):
-            # Contradicted identities keep their candidates so the owner can
-            # compare and choose instead of facing an empty conflict.
-            self._repository.replace_candidates(
-                local_artist_id=local_artist_id,
-                candidates=list(outcome.get("candidates") or []),
-                match_state=_CANDIDATE_MATCH_STATES.get(classification, "conflict"),
-                evidence_summary=evidence_summary,
-                observed_at=observed_at,
-            )
+            refreshed_artist = outcome.get("refreshed_artist") or {}
+            if (
+                classification == "unconfirmed"
+                and context.get("existing_match_state") == "matched"
+                and stored_mbid
+                and str(refreshed_artist.get("mbid") or "").lower() == stored_mbid
+                and _COMPLETE_ARTIST_PROJECTION_FIELDS <= refreshed_artist.keys()
+            ):
+                self._repository.refresh_artist_projection(
+                    local_artist_id=local_artist_id,
+                    artist=refreshed_artist,
+                    observed_at=observed_at,
+                )
+            else:
+                # Contradicted identities keep their candidates so the owner can
+                # compare and choose instead of facing an empty conflict.
+                self._repository.replace_candidates(
+                    local_artist_id=local_artist_id,
+                    candidates=list(outcome.get("candidates") or []),
+                    match_state=_CANDIDATE_MATCH_STATES.get(classification, "conflict"),
+                    evidence_summary=evidence_summary,
+                    observed_at=observed_at,
+                )
         else:
             self._repository.record_automatic_outcome(
                 local_artist_id=local_artist_id,
@@ -626,9 +656,23 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         summary = "One MusicBrainz artist has this name, but none of your albums confirm it."
     else:
         summary = "MusicBrainz candidates require manual review."
-    return {"classification": classification,
-            "candidates": [_candidate_for_storage(candidate) for candidate in candidates],
-            "evidence_summary": summary}
+    outcome = {
+        "classification": classification,
+        "candidates": [_candidate_for_storage(candidate) for candidate in candidates],
+        "evidence_summary": summary,
+    }
+    if classification == "unconfirmed" and context.get("existing_match_state") == "matched":
+        existing_mbid = str(context.get("existing_artist_mbid") or "").lower()
+        refreshed_artist = next(
+            (candidate for candidate in candidates
+             if str(candidate.get("mbid") or "").lower() == existing_mbid),
+            None,
+        )
+        if refreshed_artist is not None:
+            lookup = mirror.call("lookup_artist", existing_mbid, accept=("matched", "not_found"))
+            if lookup and lookup.get("classification") == "matched":
+                outcome["refreshed_artist"] = lookup["artist"]
+    return outcome
 
 
 def _person_of_member_bands(artists: list[dict[str, object]], mirror) -> dict[str, object] | None:

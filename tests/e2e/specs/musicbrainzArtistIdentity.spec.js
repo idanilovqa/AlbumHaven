@@ -3,17 +3,25 @@
 // match reaches Problematic Files. Acceptance case IDs are in each step name. The matcher's
 // own rules are covered at unit and replay level (tests/py/test_musicbrainz_*), not here.
 import { expect, test } from '../support/baseFixtures.js';
+import {
+  releaseMusicBrainzHydration,
+  waitForMusicBrainzHydrationRequest,
+} from '../helpers/musicbrainzProviderHelpers.js';
 import { createMusicBrainzIdentityFixture } from '../helpers/musicbrainzIdentityFixture.js';
 
 const GUEST = 'Compilation Signal Guest';
 const CREDITED = 'Functional Balance Artist 03';
 const LEAD = 'Compilation Signal Lead';
+const PERSON_BAND = 'Control Signal Lead';
 const NATIVE_ARTISTS = ['ДДТ', 'Ария'];
+const HYDRATING = 'Compilation Signal Guest';
+const ZERO_VOTE = 'Zero Vote Artist';
+const SHAMAANI = 'Shamaani Duo';
+const OUTAGE = 'Provider Outage Artist';
+const CONFLICT_ASSIGN = 'Control Signal Partner';
 // Its own artist, so the Problematic Files case never shares rows with the Gallery cases.
 const UNCONFIRMED = 'Album Rating Contract';
 const MBID = {
-  guest: '0e2e0001-0000-4000-8000-000000000001',
-  credited: '0e2e0001-0000-4000-8000-000000000002',
   leadUk: '0e2e0001-0000-4000-8000-000000000003',
   leadSweden: '0e2e0001-0000-4000-8000-000000000004',
   person: '0e2e0001-0000-4000-8000-000000000005',
@@ -24,6 +32,10 @@ const MBID = {
   guestSouth: '0e2e0001-0000-4000-8000-000000000010',
   nativeDdt: '0e2e0001-0000-4000-8000-000000000011',
   nativeAria: '0e2e0001-0000-4000-8000-000000000012',
+  hydrating: '0e2e0001-0000-4000-8000-000000000013',
+  zeroVote: '0e2e0001-0000-4000-8000-000000000016',
+  conflictAssign: '0e2e0001-0000-4000-8000-000000000018',
+  korpiklaani: 'd6b3e0a2-7c1d-4f7c-90bc-73c8bd2ac431',
 };
 
 async function openArtist({ galleryActions, searchToolbarActions }, artist, expectedTitle = artist) {
@@ -60,26 +72,15 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
   navigationPanelActions,
   searchToolbarActions,
   stepLogger,
-}) => {
-  const fixture = await createMusicBrainzIdentityFixture();
-  try {
-    await fixture.matchArtist(CREDITED, {
-      mbid: MBID.credited,
-      name: 'Signal Guest Collective',
-    }, { creditName: CREDITED });
+  trackModalActions,
+}, testInfo) => {
+    const fixture = await createMusicBrainzIdentityFixture();
     await stepLogger.step('MBD1-07: native-script names stay canonical while Latin forms remain stored only', async () => {
       const nativeCases = [
         { name: NATIVE_ARTISTS[0], mbid: MBID.nativeDdt, latin: 'DDT' },
         { name: NATIVE_ARTISTS[1], mbid: MBID.nativeAria, latin: 'Aria' },
       ];
       for (const nativeCase of nativeCases) {
-        await fixture.matchArtist(nativeCase.name, {
-          mbid: nativeCase.mbid,
-          name: nativeCase.name,
-          sortName: nativeCase.latin,
-          nativeName: nativeCase.name,
-          aliases: [{ name: nativeCase.latin, locale: 'en' }],
-        });
         expect(await fixture.readStoredArtist(nativeCase.mbid)).toEqual({
           aliases: [nativeCase.latin],
           canonicalName: nativeCase.name,
@@ -102,33 +103,48 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
         await galleryActions.closeArtistInfoPanel();
       }
     });
-    await stepLogger.step('MBD1-04, MBD1-06: the sticky header keeps the artist, country and top genres together', async () => {
-      await fixture.matchArtist(GUEST, {
-        mbid: MBID.guest, name: GUEST, country: { code: 'FI', name: 'Finland' },
-        genres: [
-          { name: 'progressive rock', voteCount: 12 },
-          { name: 'art rock', voteCount: 8 },
-          { name: 'doom metal', voteCount: 4 },
-          { name: 'folk rock', voteCount: 2 },
-          { name: 'melancholy', voteCount: 100, isGenre: false },
-        ],
-        discogsArtistId: 424242,
-      });
-      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+
+    await stepLogger.step('MBD1-04: the open artist information panel survives delayed metadata hydration', async () => {
+      await waitForMusicBrainzHydrationRequest(testInfo);
+      let hydrationReleased = false;
+      try {
+        await openArtist({ galleryActions, searchToolbarActions }, HYDRATING);
+        await galleryActions.scrollGalleryToMiddle();
+        await galleryActions.waitForContextName(HYDRATING);
+        expect((await galleryActions.readArtistContextLayout()).infoLabel).toBe(`Information about ${HYDRATING}`);
+        await galleryActions.openArtistInfoPanel();
+        await releaseMusicBrainzHydration(testInfo);
+        hydrationReleased = true;
+        await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+          expect.objectContaining({
+            heading: HYDRATING,
+            countries: ['Finland'],
+            genres: ['progressive rock', 'art rock', 'doom metal'],
+            links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.hydrating}`]),
+          }),
+        );
+        await galleryActions.closeArtistInfoPanel();
+      } finally {
+        if (!hydrationReleased) await releaseMusicBrainzHydration(testInfo);
+      }
+    });
+
+    await stepLogger.step('MBD1-06: the sticky header keeps the artist, country and top genres together', async () => {
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
       await galleryActions.scrollGalleryToMiddle();
       await expect.poll(async () => (
         await galleryActions.readGalleryScrollState()
       ).scrollTop, { timeout: 60000 }).toBeGreaterThan(0);
-      await galleryActions.waitForContextName(GUEST);
+      await galleryActions.waitForContextName(LEAD);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['Finland'],
         genres: ['progressive rock', 'art rock', 'doom metal'],
       });
       await expect.poll(() => galleryActions.readArtistContextLayout(), { timeout: 60000 }).toEqual({
-        name: GUEST,
-        infoLabel: `Information about ${GUEST}`,
+        name: LEAD,
+        infoLabel: `Information about ${LEAD}`,
         divider: '•',
-        albumCount: '12 albums',
+        albumCount: '21 albums',
         titleLineAligned: true,
         metadataBelowTitle: true,
         unclipped: true,
@@ -136,15 +152,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
     });
 
     await stepLogger.step('MBD1-06: zero-vote MusicBrainz genres remain visible', async () => {
-      await fixture.matchArtist(GUEST, {
-        mbid: MBID.guest, name: GUEST, country: { code: 'FI', name: 'Finland' },
-        genres: [
-          { name: 'dark wave', voteCount: 0 },
-          { name: 'ambient', voteCount: 0 },
-        ],
-        discogsArtistId: 424242,
-      });
-      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+      await openArtist({ galleryActions, searchToolbarActions }, ZERO_VOTE);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['Finland'],
         genres: ['ambient', 'dark wave'],
@@ -152,6 +160,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
     });
 
     await stepLogger.step('MBD1-19: the artist panel links to MusicBrainz and Discogs', async () => {
+      await openArtist({ galleryActions, searchToolbarActions }, ZERO_VOTE);
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
@@ -159,7 +168,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
           countries: ['Finland'],
           genres: ['ambient', 'dark wave'],
           links: expect.arrayContaining([
-            `https://musicbrainz.org/artist/${MBID.guest}`,
+            `https://musicbrainz.org/artist/${MBID.zeroVote}`,
             'https://www.discogs.com/artist/424242',
           ]),
         }),
@@ -176,9 +185,22 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
         }),
       );
     });
-  } finally {
-    await fixture.restore();
-  }
+
+    await stepLogger.step('MBD1-40: Shamaani Duo resolves through Hunka lunka to Korpiklaani', async () => {
+      await openArtist({ galleryActions, searchToolbarActions }, SHAMAANI, 'Korpiklaani');
+      await galleryActions.openArtistInfoPanel();
+      await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+        expect.objectContaining({
+          heading: 'Korpiklaani',
+          credit: [`Tagged as ${SHAMAANI} in your files.`],
+          links: expect.arrayContaining([`https://musicbrainz.org/artist/${MBID.korpiklaani}`]),
+        }),
+      );
+      await galleryActions.closeArtistInfoPanel();
+      expect(await albumDetailsTags({ galleryActions, trackModalActions }, 'Korpiklaani', 'Hunka lunka'))
+        .toContain('Tagged as Shamaani Duo');
+      await trackModalActions.closeIfOpen();
+    });
 });
 
 test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist', { tag: '@area:album-details' }, async ({
@@ -187,14 +209,7 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
   stepLogger,
   trackModalActions,
 }) => {
-  const fixture = await createMusicBrainzIdentityFixture();
-  try {
     await stepLogger.step('MBD1-37: the panel lists both same-named bands with their albums and links', async () => {
-      await fixture.splitArtist(LEAD, [
-        { mbid: MBID.leadUk, name: LEAD, disambiguation: 'UK band',
-          albums: ['Compilation Lead Solo', 'Functional Fixture Album 249'] },
-        { mbid: MBID.leadSweden, name: LEAD, disambiguation: 'Swedish band', albums: ['Functional Fixture Album 250'] },
-      ]);
       await openArtist({ galleryActions, searchToolbarActions }, LEAD);
       await galleryActions.openArtistInfoPanel();
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
@@ -220,17 +235,13 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
     });
 
     await stepLogger.step('Delivery 1.1: a person and the same-named band they belong to are one artist', async () => {
-      await fixture.restore();
-      await fixture.personWithBand(LEAD,
-        { mbid: MBID.person, name: LEAD, kind: 'Person', albums: ['Compilation Lead Solo'] },
-        { mbid: MBID.band, name: LEAD, disambiguation: 'the band', albums: ['Functional Fixture Album 249'] });
-      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
-      await galleryActions.openArtistInfoPanel();
+      await openArtist({ galleryActions, searchToolbarActions }, PERSON_BAND, `${PERSON_BAND} family`);
+      await galleryActions.openArtistInfoPanel(PERSON_BAND);
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
           identities: expect.stringContaining('Also on MusicBrainz as:'),
           identityRows: [
-            expect.stringMatching(/Compilation Signal Lead \(the band\) · 1 album/),
+            expect.stringMatching(/Control Signal Lead \(the band\) · 1 album/),
           ],
           links: expect.arrayContaining([
             `https://musicbrainz.org/artist/${MBID.person}`,
@@ -239,13 +250,10 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
         }),
       );
       await galleryActions.closeArtistInfoPanel();
-      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 249');
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, 'Control Signal Lead / Control Signal Partner', 'Non-Compilation Cross-Credits');
       expect(tags.filter((tag) => tag.startsWith('MusicBrainz:') || tag.startsWith('Tagged as'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });
-  } finally {
-    await fixture.restore();
-  }
 });
 
 test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page', { tag: '@area:problematic-files' }, async ({
@@ -257,22 +265,6 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
   utilityProblematicFilesActions,
   utilityTabBarActions,
 }) => {
-  const fixture = await createMusicBrainzIdentityFixture();
-  try {
-    await fixture.unconfirmedArtist(UNCONFIRMED, {
-      mbid: MBID.unconfirmed,
-      name: UNCONFIRMED,
-      country: { code: 'FI', name: 'Finland' },
-      disambiguation: 'Finnish band',
-    });
-    await fixture.notFoundArtist(CREDITED, { manualMbid: MBID.manual });
-    await fixture.multipleArtist(GUEST, [
-      { mbid: MBID.guestNorth, name: 'Compilation Signal Guest North', country: { code: 'CA', name: 'Canada' }, disambiguation: 'Canadian studio project' },
-      { mbid: MBID.guestSouth, name: 'Compilation Signal Guest South', country: { code: 'FI', name: 'Finland' }, disambiguation: 'Finnish live act' },
-    ]);
-    await fixture.conflictArtist(LEAD,
-      { mbid: MBID.leadUk, name: LEAD, country: { code: 'GB', name: 'United Kingdom' }, disambiguation: 'UK group' },
-      { mbid: MBID.leadSweden, name: LEAD, country: { code: 'SE', name: 'Sweden' }, disambiguation: 'Swedish group' });
     await stepLogger.step('MBD1-10, MBD1-21: the filter and the Artist row arrive with the first page', async () => {
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
@@ -409,28 +401,97 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
     });
 
     await stepLogger.step('MBD1-13: a metadata conflict can assign its suggested MBID and keep it after reload', async () => {
-      await fixture.conflictArtist(GUEST,
-        { mbid: MBID.guestNorth, name: GUEST, country: { code: 'CA', name: 'Canada' }, disambiguation: 'Canadian studio project' },
-        { mbid: MBID.guestSouth, name: GUEST, country: { code: 'FI', name: 'Finland' }, disambiguation: 'Finnish live act' });
       await openMusicBrainzProblem({ galleryActions, settingsModalAppBarActions, utilityProblematicFilesActions, utilityTabBarActions },
-        'MBID: Metadata conflict', GUEST);
-      await utilityProblematicFilesActions.selectMusicBrainzCandidate(`Select Suggested: ${GUEST}`);
-      await utilityProblematicFilesActions.assignSelectedMusicBrainzIdentity(GUEST);
+        'MBID: Metadata conflict', CONFLICT_ASSIGN);
+      await utilityProblematicFilesActions.selectMusicBrainzCandidate(`Select Suggested: ${CONFLICT_ASSIGN}`);
+      await utilityProblematicFilesActions.assignSelectedMusicBrainzIdentity(CONFLICT_ASSIGN);
       await settingsModalAppBarActions.closeSettings();
-      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
-      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
-        countries: ['Finland'],
-        genres: ['Genre unavailable'],
-      });
+      await openArtist({ galleryActions, searchToolbarActions }, CONFLICT_ASSIGN, `${CONFLICT_ASSIGN} family`);
       await page.reload();
       await galleryActions.waitForGalleryReady();
-      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+      await openArtist({ galleryActions, searchToolbarActions }, CONFLICT_ASSIGN, `${CONFLICT_ASSIGN} family`);
+      await galleryActions.openArtistInfoPanel(CONFLICT_ASSIGN);
+      await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+        expect.objectContaining({
+          heading: CONFLICT_ASSIGN,
+          countries: ['Finland'],
+          genres: ['Genre unavailable'],
+          links: expect.arrayContaining([
+            `https://musicbrainz.org/artist/${MBID.conflictAssign}`,
+          ]),
+        }),
+      );
+      await galleryActions.closeArtistInfoPanel();
+    });
+
+    await stepLogger.step('MBD1-14, MBD1-39: provider outage keeps local data and Retry now resolves and removes the row', async () => {
+      await openArtist({ galleryActions, searchToolbarActions }, OUTAGE);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
-        countries: ['Finland'],
-        genres: ['Genre unavailable'],
+        countries: ['United States'],
+        genres: ['rock'],
+      });
+      const detail = await openMusicBrainzProblem({ galleryActions, settingsModalAppBarActions, utilityProblematicFilesActions, utilityTabBarActions },
+        'MusicBrainz: Provider unavailable', OUTAGE);
+      expect(detail.problemReasons).toContain('MusicBrainz: Provider unavailable');
+      const retryStatus = await utilityProblematicFilesActions.readMusicBrainzRetryStatus();
+      expect(retryStatus).toMatch(/Last attempt .+ Next retry .+ Configured provider Local metadata service Local library Unaffected/);
+      await utilityProblematicFilesActions.retryMusicBrainzIdentity(OUTAGE);
+      await utilityProblematicFilesActions.clearProblemFilter('MusicBrainz: Provider unavailable');
+      await utilityProblematicFilesActions.search(OUTAGE);
+      await utilityProblematicFilesActions.waitForNoSearchResults(OUTAGE);
+      await settingsModalAppBarActions.closeSettings();
+      await openArtist({ galleryActions, searchToolbarActions }, OUTAGE);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['United States'],
+        genres: ['rock'],
       });
     });
-  } finally {
-    await fixture.restore();
-  }
+
+    await stepLogger.step('MBD1-39: a manually resolved Unconfirmed row stays absent after the re-check projection reloads', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await settingsModalAppBarActions.openSettings();
+      await utilityTabBarActions.openTab('problematic-files');
+      await utilityProblematicFilesActions.waitForReady();
+      await utilityProblematicFilesActions.search(UNCONFIRMED);
+      await utilityProblematicFilesActions.waitForSearchResults(UNCONFIRMED);
+      expect(await utilityProblematicFilesActions.readVisibleListItems()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({
+          title: UNCONFIRMED,
+          issues: 'Artist · MBID: Unconfirmed match',
+        })]),
+      );
+      await settingsModalAppBarActions.closeSettings();
+    });
+
+    await stepLogger.step('MBD1-43: File rating mismatch filters exact rows without changing app ratings', async () => {
+      const ratingCases = [
+        { artist: 'Arcade Fire', album: 'Reflektor', rating: 6 },
+        { artist: 'Orphaned Land', album: 'Mabool: the Story of the Three Sons of Seven', rating: 10 },
+      ];
+      const before = [];
+      for (const ratingCase of ratingCases) {
+        await openArtist({ galleryActions, searchToolbarActions }, ratingCase.artist);
+        const rating = await galleryActions.readAlbumRatingSurface(ratingCase.artist, ratingCase.album);
+        expect(rating.filledStarCount).toBe(ratingCase.rating);
+        before.push(rating);
+      }
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await settingsModalAppBarActions.openSettings();
+      await utilityTabBarActions.openTab('problematic-files');
+      await utilityProblematicFilesActions.waitForReady();
+      await utilityProblematicFilesActions.applySingleProblemFilter('File rating mismatch');
+      for (const ratingCase of ratingCases) {
+        const detail = await utilityProblematicFilesActions.selectAlbumByTitle(ratingCase.album);
+        expect(detail.artist).toBe(ratingCase.artist);
+        expect(detail.problemReasons).toContain('File rating mismatch');
+      }
+      await settingsModalAppBarActions.closeSettings();
+      for (let index = 0; index < ratingCases.length; index += 1) {
+        const ratingCase = ratingCases[index];
+        await openArtist({ galleryActions, searchToolbarActions }, ratingCase.artist);
+        expect(await galleryActions.readAlbumRatingSurface(ratingCase.artist, ratingCase.album)).toEqual(before[index]);
+      }
+    });
 });

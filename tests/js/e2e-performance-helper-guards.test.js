@@ -2103,3 +2103,28 @@ test('generated preview storage timings start at search submission', () => {
   assert.match(relocation, /firstDecodedCoverMs = performance\.now\(\) - searchSubmittedAt/);
   assert.doesNotMatch(relocation, /searchStartedAt/);
 });
+
+test('generated preview storage resolves a failed prior relocation before changing location', () => {
+  const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
+  const helper = spec.slice(
+    spec.indexOf('async function openIdleStorageSettings'),
+    spec.indexOf('async function selectStorage'),
+  );
+
+  assert.match(helper, /const activeStates = \['queued', 'running', 'cancel_requested'\]/);
+  assert.match(helper, /const retryableStates = \['completed_with_failures', 'failed', 'canceled'\]/);
+  assert.match(
+    helper,
+    /if \(retryableStates\.includes\(state\.operation_state\)\) \{[\s\S]*?authenticatedPagePost\(page, '\/admin\/server\/preview-storage\/retry'/,
+  );
+  assert.match(
+    helper,
+    /response\.status\(\) === 409[\s\S]*?const current = await readStorageState\(page\)[\s\S]*?expect\(activeStates\)\.toContain\(current\.operation_state\)[\s\S]*?else \{[\s\S]*?expect\(response\.status\(\)\)\.toBe\(202\)/,
+  );
+  assert.match(
+    helper,
+    /for \(let attempt = 0; attempt < 2 && retryableStates\.includes\(state\.operation_state\); attempt \+= 1\)/,
+  );
+  assert.match(helper, /expect\(state\.operation_state\)\.toBe\('completed'\)/);
+  assert.match(helper, /expect\(state\.requested_mode\)\.toBeNull\(\)/);
+});

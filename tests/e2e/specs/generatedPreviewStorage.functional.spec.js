@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 
 import { expect, test } from '../support/baseFixtures.js';
 import { waitForDisplayedImageDecode } from '../actions/coverLookupActions.js';
-import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+import { authenticatedPageGet, authenticatedPagePost } from '../helpers/authenticatedPageRequest.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 import {
   defineTimingBudget,
@@ -94,12 +94,32 @@ async function waitForStorageState(page, predicate, message) {
 
 // The controls stay disabled while a follow-up reconciliation of late previews runs.
 async function openIdleStorageSettings(page) {
+  const activeStates = ['queued', 'running', 'cancel_requested'];
+  const retryableStates = ['completed_with_failures', 'failed', 'canceled'];
   await page.goto('/admin/server');
-  await waitForStorageState(
+  let state = await waitForStorageState(
     page,
-    (state) => !['queued', 'running', 'cancel_requested'].includes(state.operation_state),
+    (current) => !activeStates.includes(current.operation_state),
     'preview storage should be idle before its controls are used',
   );
+  if (retryableStates.includes(state.operation_state)) {
+    for (let attempt = 0; attempt < 2 && retryableStates.includes(state.operation_state); attempt += 1) {
+      const response = await authenticatedPagePost(page, '/admin/server/preview-storage/retry', { data: {} });
+      if (response.status() === 409) {
+        const current = await readStorageState(page);
+        expect(activeStates).toContain(current.operation_state);
+      } else {
+        expect(response.status()).toBe(202);
+      }
+      state = await waitForStorageState(
+        page,
+        (current) => !activeStates.includes(current.operation_state),
+        'prior failed preview relocation should retry cleanly',
+      );
+    }
+    expect(state.operation_state).toBe('completed');
+    expect(state.requested_mode).toBeNull();
+  }
   await page.goto('/admin/server');
 }
 

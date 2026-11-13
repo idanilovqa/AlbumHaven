@@ -471,6 +471,47 @@ test('loadProblematicFiles paints a bounded page before atomically committing th
   assert.equal(context.state.utility.completeLoadPromise, null);
 });
 
+test('a bounded continuation preserves selected MusicBrainz detail and manual validation', async () => {
+  const fullResponse = createDeferred();
+  const response = (payload) => ({
+    ok: true,
+    status: 200,
+    async json() { return payload; },
+  });
+  const artist = {
+    key: 'musicbrainz-artist:6',
+    entity_kind: 'artist',
+    local_artist_id: 6,
+    name: 'Functional Balance Artist 03',
+    detail_loaded: false,
+  };
+  const { context } = loadHelper({
+    isMusicBrainzArtistProblem: (item) => item?.entity_kind === 'artist',
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return response({ complete: false, items: [{ ...artist }] });
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true);
+  await context.state.utility.initialLoadPromise;
+  context.state.utility.selectedProblematicKey = artist.key;
+  const selected = context.state.utility.problematicFiles[0];
+  selected.musicbrainz_detail = { problem_reason_code: 'musicbrainz_artist_not_found' };
+  selected.musicbrainz_ui = {
+    manualValue: '0e2e0001-0000-4000-8000-000000000008',
+    validated: { canonical_name: artist.name },
+  };
+
+  fullResponse.resolve(response({ items: [{ ...artist }] }));
+  await load;
+
+  assert.equal(context.state.utility.problematicFiles[0], selected);
+  assert.equal(context.state.utility.problematicFiles[0].musicbrainz_ui.validated.canonical_name, artist.name);
+});
+
 test('a render-suppressed complete load paints the refreshed detail that replaced a clicked album request', async () => {
   const fullResponse = createDeferred();
   const clickedDetail = createDeferred();

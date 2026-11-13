@@ -2119,7 +2119,7 @@ test('generated preview storage resolves a failed prior relocation before changi
   );
   assert.match(
     helper,
-    /response\.status\(\) === 409[\s\S]*?const current = await readStorageState\(page\)[\s\S]*?expect\(activeStates\)\.toContain\(current\.operation_state\)[\s\S]*?else \{[\s\S]*?expect\(response\.status\(\)\)\.toBe\(202\)/,
+    /const status = response\.status\(\)[\s\S]*?const current = status === 409 \? await readStorageState\(page\) : null[\s\S]*?expect\(status === 202 \|\| \(status === 409 && activeStates\.includes\(current\?\.operation_state\)\)\)\.toBe\(true\)/,
   );
   assert.match(
     helper,
@@ -2127,4 +2127,23 @@ test('generated preview storage resolves a failed prior relocation before changi
   );
   assert.match(helper, /expect\(state\.operation_state\)\.toBe\('completed'\)/);
   assert.match(helper, /expect\(state\.requested_mode\)\.toBeNull\(\)/);
+});
+
+test('loop expiry E2E releases playback ownership before long clock advances', () => {
+  const spec = readRepoFile('tests/e2e/specs/loop-edit-expiry.functional.spec.js');
+  const savedLoopStart = spec.indexOf('await utilityLoopsActions.playLoopByName(SAVED_LOOP_NAME)');
+  const savedLoopEnd = spec.indexOf('await globalPlayerActions.installLoopEditExpiryClock()');
+  const renewalStart = spec.indexOf('await globalPlayerActions.pauseLoopEditExpiryClockBeforeRenewal()');
+  const renewalEnd = spec.indexOf('await globalPlayerActions.resumeLoopEditExpiryClock()');
+
+  assert.ok(savedLoopStart >= 0 && savedLoopEnd > savedLoopStart);
+  assert.ok(renewalStart >= 0 && renewalEnd > renewalStart);
+  const savedLoopStep = spec.slice(savedLoopStart, savedLoopEnd);
+  const renewalStep = spec.slice(renewalStart, renewalEnd);
+
+  assert.doesNotMatch(savedLoopStep, /globalPlayerActions\.resumeIfPaused\(\)/);
+  assert.match(
+    renewalStep,
+    /dragLoopBoundary\('end', 0\.8\)[\s\S]*?pauseToReleasePlaybackClaim\(\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)[\s\S]*?dragLoopBoundary\('end', 0\.75\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)/,
+  );
 });

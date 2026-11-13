@@ -45,18 +45,24 @@ export async function createMusicBrainzIdentityFixture() {
     return row;
   }
 
-  async function upsertMusicBrainzArtist({ mbid, name, disambiguation = null, kind = 'Group', country = null,
-    genres = [], discogsArtistId = null }) {
+  async function upsertMusicBrainzArtist({ mbid, name, sortName = name, nativeName = null, aliases = [],
+    disambiguation = null, kind = 'Group', country = null, genres = [], discogsArtistId = null }) {
     seededMbids.add(mbid);
     await sql(`begin;
-      insert into integration.musicbrainz_artists (mbid, canonical_name, sort_name, disambiguation, artist_kind,
+      insert into integration.musicbrainz_artists (mbid, canonical_name, sort_name, preferred_native_name, disambiguation, artist_kind,
         discogs_artist_id, refreshed_at)
-      values ('${mbid}', ${literal(name)}, ${literal(name)}, ${literal(disambiguation)}, ${literal(kind)},
+      values ('${mbid}', ${literal(name)}, ${literal(sortName)}, ${literal(nativeName)}, ${literal(disambiguation)}, ${literal(kind)},
         ${discogsArtistId === null ? 'null' : Number(discogsArtistId)}, now())
-      on conflict (mbid) do update set canonical_name = excluded.canonical_name, disambiguation = excluded.disambiguation,
-        artist_kind = excluded.artist_kind, discogs_artist_id = excluded.discogs_artist_id;
+      on conflict (mbid) do update set canonical_name = excluded.canonical_name, sort_name = excluded.sort_name,
+        preferred_native_name = excluded.preferred_native_name, disambiguation = excluded.disambiguation, artist_kind = excluded.artist_kind,
+        discogs_artist_id = excluded.discogs_artist_id;
+      delete from integration.musicbrainz_artist_aliases where artist_mbid = '${mbid}';
       delete from integration.musicbrainz_artist_countries where artist_mbid = '${mbid}';
       delete from integration.musicbrainz_artist_tags where artist_mbid = '${mbid}';
+      ${aliases.map((alias) => `insert into integration.musicbrainz_artist_aliases
+        (artist_mbid, alias_name, alias_normalized, sort_name, locale, alias_kind, is_primary_for_locale, provenance, observed_at)
+        values ('${mbid}', ${literal(alias.name)}, ${literal(alias.name.toLowerCase())}, ${literal(alias.sortName || alias.name)},
+          ${literal(alias.locale || null)}, ${literal(alias.kind || null)}, ${alias.primary ? 'true' : 'false'}, 'musicbrainz', now());`).join('\n')}
       ${country ? `insert into integration.musicbrainz_artist_countries (artist_mbid, country_code, country_name, provenance, observed_at)
         values ('${mbid}', ${literal(country.code)}, ${literal(country.name)}, 'musicbrainz', now());` : ''}
       ${genres.map((genre) => `insert into integration.musicbrainz_artist_tags
@@ -75,6 +81,21 @@ export async function createMusicBrainzIdentityFixture() {
       on conflict (library_id, local_artist_id) do update set artist_mbid = excluded.artist_mbid, state = excluded.state,
         decision_source = excluded.decision_source, matcher_version = excluded.matcher_version,
         credit_name = excluded.credit_name, associated_artist_mbids = excluded.associated_artist_mbids`);
+  }
+
+  async function writeProblem(artist, reasonCode, candidateCount) {
+    await sql(`insert into library.metadata_enrichment_problems (library_id, local_artist_id, reason_code, lifecycle_state,
+        safe_display_context, candidate_count, observed_at, first_observed_at, last_observed_at)
+      values (${artist.library}, ${artist.artist}, '${reasonCode}', 'active',
+        (select name from library.local_artists where id = ${artist.artist}), ${Number(candidateCount)}, now(), now(), now())`);
+  }
+
+  async function writeCandidates(artist, candidates) {
+    await sql(`delete from library.local_artist_musicbrainz_candidates where local_artist_id = ${artist.artist};
+      ${candidates.map((candidate) => `insert into library.local_artist_musicbrainz_candidates
+        (library_id, local_artist_id, artist_mbid, candidate_score, evidence_summary, observed_at)
+        values (${artist.library}, ${artist.artist}, '${candidate.mbid}', 1,
+          ${literal(candidate.evidence || '1 of 1 album agree')}, now());`).join('\n')}`);
   }
 
   return {
@@ -98,6 +119,36 @@ export async function createMusicBrainzIdentityFixture() {
       await upsertMusicBrainzArtist(band);
       await writeMatch(artist, { state: 'matched', mbid: person.mbid, associated: [band.mbid] });
       await this.assignAlbums(artist, [person, band]);
+    },
+    async notFoundArtist(name, { manualMbid = null } = {}) {
+      const artist = await localArtist(name);
+      if (manualMbid) seededMbids.add(manualMbid);
+      await writeMatch(artist, { state: 'not_found' });
+      await writeProblem(artist, 'musicbrainz_artist_not_found', 0);
+    },
+    async readStoredArtist(mbid) {
+      return JSON.parse(await sql(`select jsonb_build_object(
+          'canonicalName', artist.canonical_name,
+          'sortName', artist.sort_name,
+          'nativeName', artist.preferred_native_name,
+          'aliases', coalesce((select jsonb_agg(alias.alias_name order by alias.alias_name)
+            from integration.musicbrainz_artist_aliases alias where alias.artist_mbid = artist.mbid), '[]'::jsonb))
+        from integration.musicbrainz_artists artist where artist.mbid = '${mbid}'`) || 'null');
+    },
+    async multipleArtist(name, candidates) {
+      const artist = await localArtist(name);
+      for (const candidate of candidates) await upsertMusicBrainzArtist(candidate);
+      await writeMatch(artist, { state: 'ambiguous' });
+      await writeCandidates(artist, candidates);
+      await writeProblem(artist, 'musicbrainz_artist_ambiguous', candidates.length);
+    },
+    async conflictArtist(name, current, suggestion) {
+      const artist = await localArtist(name);
+      await upsertMusicBrainzArtist(current);
+      await upsertMusicBrainzArtist(suggestion);
+      await writeMatch(artist, { state: 'conflict', mbid: current.mbid });
+      await writeCandidates(artist, [suggestion]);
+      await writeProblem(artist, 'musicbrainz_artist_metadata_conflict', 1);
     },
     async assignAlbums(artist, owners) {
       for (const owner of owners) {
@@ -126,11 +177,8 @@ export async function createMusicBrainzIdentityFixture() {
         insert into library.local_artist_musicbrainz_candidates (library_id, local_artist_id, artist_mbid,
           candidate_score, evidence_summary, observed_at)
         values (${artist.library}, ${artist.artist}, '${suggestion.mbid}', 1, '0 of 1 album agree', now());
-        insert into library.metadata_enrichment_problems (library_id, local_artist_id, reason_code, lifecycle_state,
-          safe_display_context, candidate_count, observed_at, first_observed_at, last_observed_at)
-        values (${artist.library}, ${artist.artist}, 'musicbrainz_manual_review_required', 'active',
-          ${literal(name)}, 1, now(), now(), now());
         commit;`);
+      await writeProblem(artist, 'musicbrainz_manual_review_required', 1);
     },
     async restore() {
       const artists = [...seededArtists].join(',');

@@ -14,6 +14,7 @@ const baseFixturesPath = path.join(repoRoot, 'tests', 'e2e', 'support', 'baseFix
 const autoplayConfigPath = path.join(repoRoot, 'playwright.autoplay-allowed.config.js');
 const validatorExists = fs.existsSync(validatorPath);
 const validatorTest = validatorExists ? test : test.skip;
+const MUSICBRAINZ_WORKER_DISABLED_CASE = 'FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page';
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
@@ -66,7 +67,7 @@ function clone(value) {
 
 function invocationIsolationFixture() {
   const rows = [
-    { case: 'reads baseline A', stateMode: 'read-only', setupScope: 'suite' },
+    { case: MUSICBRAINZ_WORKER_DISABLED_CASE, stateMode: 'read-only', setupScope: 'suite' },
     { case: 'reads baseline B', stateMode: 'read-only', setupScope: 'suite' },
     { case: 'mutates baseline A', stateMode: 'owned-mutation' },
     { case: 'mutates baseline B', stateMode: 'owned-mutation' },
@@ -240,10 +241,10 @@ validatorTest('execution waves share readers and isolate each mutator despite sh
   const { shard, matrix } = invocationIsolationFixture();
   const [wave] = loadValidator().executionWavesForShard(shard, matrix);
   const readerInvocation = wave.invocations.find((invocation) => (
-    invocation.cases.some((ownedCase) => ownedCase.case === 'reads baseline A')
+    invocation.cases.some((ownedCase) => ownedCase.case === MUSICBRAINZ_WORKER_DISABLED_CASE)
   ));
   assert.deepEqual(readerInvocation.cases.map((ownedCase) => ownedCase.case), [
-    'reads baseline A', 'reads baseline B',
+    MUSICBRAINZ_WORKER_DISABLED_CASE, 'reads baseline B',
   ]);
   assert.equal(wave.invocations.length, 6);
   for (const row of matrix.filter((candidate) => candidate.stateMode !== 'read-only')) {
@@ -318,6 +319,16 @@ validatorTest(name, () => {
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
     assert.equal(checkpointCalls.length, cleanupFailed ? 2 : 5);
     assert.equal(playwrightCalls.length, cleanupFailed ? 2 : 3);
+    const musicbrainzCall = playwrightCalls.find((call) => (
+      call.args[call.args.indexOf('--grep') + 1].includes(MUSICBRAINZ_WORKER_DISABLED_CASE)
+    ));
+    assert.equal(musicbrainzCall.options.env.MUSICBRAINZ_ENRICHMENT_ENABLED, '1');
+    assert.equal(musicbrainzCall.options.env.MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED, '0');
+    const ordinaryCall = playwrightCalls.find((call) => (
+      call.args[call.args.indexOf('--grep') + 1].includes('mutates baseline A')
+    ));
+    assert.equal(ordinaryCall.options.env.MUSICBRAINZ_ENRICHMENT_ENABLED, undefined);
+    assert.equal(ordinaryCall.options.env.MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED, undefined);
     assert.deepEqual(mediaCalls.map((call) => call.args[1]), cleanupFailed ? ['--mode=restore'] : [
       '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
     ]);
@@ -329,7 +340,7 @@ validatorTest(name, () => {
     );
     const expectedCalls = [
       'database:--mode=capture',
-      'reads baseline A, reads baseline B',
+      `${MUSICBRAINZ_WORKER_DISABLED_CASE}, reads baseline B`,
       'media:--mode=restore',
       'database:--mode=restore',
       'mutates baseline A',

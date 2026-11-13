@@ -105,12 +105,9 @@ async function openIdleStorageSettings(page) {
   if (retryableStates.includes(state.operation_state)) {
     for (let attempt = 0; attempt < 2 && retryableStates.includes(state.operation_state); attempt += 1) {
       const response = await authenticatedPagePost(page, '/admin/server/preview-storage/retry', { data: {} });
-      if (response.status() === 409) {
-        const current = await readStorageState(page);
-        expect(activeStates).toContain(current.operation_state);
-      } else {
-        expect(response.status()).toBe(202);
-      }
+      const status = response.status();
+      const current = status === 409 ? await readStorageState(page) : null;
+      expect(status === 202 || (status === 409 && activeStates.includes(current?.operation_state))).toBe(true);
       state = await waitForStorageState(
         page,
         (current) => !activeStates.includes(current.operation_state),

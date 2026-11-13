@@ -425,6 +425,79 @@ export class UtilityProblematicFilesActions {
     )))).filter(Boolean);
   }
 
+  async enterManualArtistReference(value) {
+    const input = this.utilityProblematicFilesTab.musicBrainzManualArtistInput;
+    await input.fill(value);
+    return {
+      assignEnabled: await this.utilityProblematicFilesTab.musicBrainzAssignButton.isEnabled(),
+      openEnabled: await this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton.isEnabled(),
+    };
+  }
+
+  async waitForVerifiedManualArtist(name) {
+    await expect(this.utilityProblematicFilesTab.musicBrainzManualStatus).toHaveText(`Verified: ${name}`, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignButton).toBeEnabled();
+    await expect(this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton).toBeEnabled();
+  }
+
+  async openEnteredMusicBrainzArtist(expectedUrl) {
+    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
+    await this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton.click();
+    const popup = await opened;
+    await popup.waitForURL(expectedUrl, { timeout: 60000 });
+    await popup.close();
+  }
+
+  async openMusicBrainzManualSearch(expectedUrl) {
+    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
+    await this.utilityProblematicFilesTab.musicBrainzFindManuallyButton.click();
+    const popup = await opened;
+    await popup.waitForURL(expectedUrl, { timeout: 60000 });
+    await popup.close();
+  }
+
+  async selectMusicBrainzCandidate(name) {
+    await this.utilityProblematicFilesTab.musicBrainzIdentityChoice(name).check();
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignButton).toBeEnabled();
+  }
+
+  async expectMusicBrainzAssignmentDisabled() {
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignButton).toBeDisabled();
+  }
+
+  async readMusicBrainzIdentityTable() {
+    const table = this.utilityProblematicFilesTab.musicBrainzIdentityTable;
+    return {
+      frame: await table.getAttribute('data-cdt-frame'),
+      headers: (await table.getByRole('columnheader').allTextContents()).map((value) => value.trim()).filter(Boolean),
+      rows: (await this.utilityProblematicFilesTab.musicBrainzIdentityRows.allTextContents()).map((value) => value.trim()),
+    };
+  }
+
+  async readMusicBrainzIdentityPresentation() {
+    return this.utilityProblematicFilesTab.readMusicBrainzIdentityPresentation();
+  }
+
+  async openMusicBrainzCandidate(name, expectedUrl) {
+    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
+    await this.utilityProblematicFilesTab.musicBrainzArtistLink(name).click();
+    const popup = await opened;
+    await popup.waitForURL(expectedUrl, { timeout: 60000 });
+    await popup.close();
+  }
+
+  async assignSelectedMusicBrainzIdentity(artistName) {
+    await this.utilityProblematicFilesTab.musicBrainzAssignButton.click();
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignedToast).toBeVisible({ timeout: 60000 });
+    await this.utilityProblematicFilesTab.listItemByTitle(artistName).waitFor({ state: 'detached', timeout: 60000 });
+  }
+
+  async keepCurrentMusicBrainzIdentity(artistName) {
+    await this.utilityProblematicFilesTab.musicBrainzKeepCurrentButton.click();
+    await expect(this.utilityProblematicFilesTab.musicBrainzKeptToast).toBeVisible({ timeout: 60000 });
+    await this.utilityProblematicFilesTab.listItemByTitle(artistName).waitFor({ state: 'detached', timeout: 60000 });
+  }
+
   async selectListItemByIndex(index) {
     const target = this.utilityProblematicFilesTab.listItems.nth(index);
     const key = (await target.getAttribute('data-problematic-album-key')) || '';

@@ -10099,13 +10099,16 @@
     "stateMode": "owned-mutation",
     "executionWave": 2,
     "databaseScenarios": [
-      "musicbrainz:matched-and-credited-artist"
+      "musicbrainz:matched-and-credited-artist",
+      "musicbrainz:native-ddt-and-aria"
     ],
     "filesystemScenarios": [],
     "expectedContracts": [
       "mbid-header-pills",
       "mbid-panel-links",
-      "mbid-credited-name"
+      "mbid-credited-name",
+      "mbid-native-name-surfaces",
+      "mbid-native-latin-storage"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-matched-artist"
@@ -10145,15 +10148,22 @@
     "stateMode": "owned-mutation",
     "executionWave": 2,
     "databaseScenarios": [
-      "musicbrainz:unconfirmed-match"
+      "musicbrainz:unconfirmed-match",
+      "musicbrainz:not-found-manual-assignment",
+      "musicbrainz:multiple-match-assignment",
+      "musicbrainz:metadata-conflict-keep-current"
     ],
     "filesystemScenarios": [],
     "expectedContracts": [
       "mbid-filter-first-page",
-      "mbid-suggested-artist"
+      "mbid-suggested-artist",
+      "mbid-not-found-manual-assignment",
+      "mbid-multiple-candidate-table",
+      "mbid-conflict-keep-current",
+      "mbid-gallery-after-manual-assignment"
     ],
     "mutationOwnership": {
-      "databaseIdentity": "case:musicbrainz-unconfirmed-artist"
+      "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
     "ownerApproval": "approved"
   }

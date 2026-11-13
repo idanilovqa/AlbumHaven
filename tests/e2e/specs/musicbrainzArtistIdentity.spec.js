@@ -8,6 +8,7 @@ import { createMusicBrainzIdentityFixture } from '../helpers/musicbrainzIdentity
 const GUEST = 'Compilation Signal Guest';
 const CREDITED = 'Functional Balance Artist 03';
 const LEAD = 'Compilation Signal Lead';
+const NATIVE_ARTISTS = ['ДДТ', 'Ария'];
 // Its own artist, so the Problematic Files case never shares rows with the Gallery cases.
 const UNCONFIRMED = 'Album Rating Contract';
 const MBID = {
@@ -18,6 +19,11 @@ const MBID = {
   person: '0e2e0001-0000-4000-8000-000000000005',
   band: '0e2e0001-0000-4000-8000-000000000006',
   unconfirmed: '0e2e0001-0000-4000-8000-000000000007',
+  manual: '0e2e0001-0000-4000-8000-000000000008',
+  guestNorth: '0e2e0001-0000-4000-8000-000000000009',
+  guestSouth: '0e2e0001-0000-4000-8000-000000000010',
+  nativeDdt: '0e2e0001-0000-4000-8000-000000000011',
+  nativeAria: '0e2e0001-0000-4000-8000-000000000012',
 };
 
 async function openArtist({ galleryActions, searchToolbarActions }, artist, expectedTitle = artist) {
@@ -34,8 +40,24 @@ async function albumDetailsTags({ galleryActions, trackModalActions }, artist, a
   return trackModalActions.readHeaderTags();
 }
 
+async function openMusicBrainzProblem({
+  galleryActions,
+  settingsModalAppBarActions,
+  utilityProblematicFilesActions,
+  utilityTabBarActions,
+}, filter, artist) {
+  await galleryActions.goto('/?surface=albums');
+  await galleryActions.waitForGalleryReady();
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('problematic-files');
+  await utilityProblematicFilesActions.waitForReady();
+  await utilityProblematicFilesActions.applySingleProblemFilter(filter);
+  return utilityProblematicFilesActions.selectAlbumByTitle(artist);
+}
+
 test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres and links', { tag: '@area:gallery-search' }, async ({
   galleryActions,
+  navigationPanelActions,
   searchToolbarActions,
   stepLogger,
 }) => {
@@ -45,6 +67,41 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
       mbid: MBID.credited,
       name: 'Signal Guest Collective',
     }, { creditName: CREDITED });
+    await stepLogger.step('MBD1-07: native-script names stay canonical while Latin forms remain stored only', async () => {
+      const nativeCases = [
+        { name: NATIVE_ARTISTS[0], mbid: MBID.nativeDdt, latin: 'DDT' },
+        { name: NATIVE_ARTISTS[1], mbid: MBID.nativeAria, latin: 'Aria' },
+      ];
+      for (const nativeCase of nativeCases) {
+        await fixture.matchArtist(nativeCase.name, {
+          mbid: nativeCase.mbid,
+          name: nativeCase.name,
+          sortName: nativeCase.latin,
+          nativeName: nativeCase.name,
+          aliases: [{ name: nativeCase.latin, locale: 'en' }],
+        });
+        expect(await fixture.readStoredArtist(nativeCase.mbid)).toEqual({
+          aliases: [nativeCase.latin],
+          canonicalName: nativeCase.name,
+          nativeName: nativeCase.name,
+          sortName: nativeCase.latin,
+        });
+        await openArtist({ galleryActions, searchToolbarActions }, nativeCase.name);
+        expect(await navigationPanelActions.readSidebarArtistLabel(nativeCase.name)).toBe(nativeCase.name);
+        const headings = await galleryActions.readArtistHeadings();
+        expect(headings).toContain(nativeCase.name);
+        expect(headings).not.toContain(nativeCase.latin);
+        await galleryActions.openArtistInfoPanel();
+        await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
+          expect.objectContaining({
+            heading: nativeCase.name,
+            credit: [],
+            identityRows: [],
+          }),
+        );
+        await galleryActions.closeArtistInfoPanel();
+      }
+    });
     await stepLogger.step('MBD1-04, MBD1-06: the sticky header keeps the artist, country and top genres together', async () => {
       await fixture.matchArtist(GUEST, {
         mbid: MBID.guest, name: GUEST, country: { code: 'FI', name: 'Finland' },
@@ -193,6 +250,8 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
 
 test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page', { tag: '@area:problematic-files' }, async ({
   galleryActions,
+  page,
+  searchToolbarActions,
   settingsModalAppBarActions,
   stepLogger,
   utilityProblematicFilesActions,
@@ -200,7 +259,20 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
 }) => {
   const fixture = await createMusicBrainzIdentityFixture();
   try {
-    await fixture.unconfirmedArtist(UNCONFIRMED, { mbid: MBID.unconfirmed, name: UNCONFIRMED, disambiguation: 'Finnish band' });
+    await fixture.unconfirmedArtist(UNCONFIRMED, {
+      mbid: MBID.unconfirmed,
+      name: UNCONFIRMED,
+      country: { code: 'FI', name: 'Finland' },
+      disambiguation: 'Finnish band',
+    });
+    await fixture.notFoundArtist(CREDITED, { manualMbid: MBID.manual });
+    await fixture.multipleArtist(GUEST, [
+      { mbid: MBID.guestNorth, name: 'Compilation Signal Guest North', country: { code: 'CA', name: 'Canada' }, disambiguation: 'Canadian studio project' },
+      { mbid: MBID.guestSouth, name: 'Compilation Signal Guest South', country: { code: 'FI', name: 'Finland' }, disambiguation: 'Finnish live act' },
+    ]);
+    await fixture.conflictArtist(LEAD,
+      { mbid: MBID.leadUk, name: LEAD, country: { code: 'GB', name: 'United Kingdom' }, disambiguation: 'UK group' },
+      { mbid: MBID.leadSweden, name: LEAD, country: { code: 'SE', name: 'Sweden' }, disambiguation: 'Swedish group' });
     await stepLogger.step('MBD1-10, MBD1-21: the filter and the Artist row arrive with the first page', async () => {
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
@@ -224,8 +296,139 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       const detail = await utilityProblematicFilesActions.selectAlbumByTitle(UNCONFIRMED);
       expect(detail.title).toBe(UNCONFIRMED);
       expect(detail.problemReasons).toContain('MBID: Unconfirmed match');
-      await expect.poll(() => utilityProblematicFilesActions.readSelectedDetailLinks(), { timeout: 60000 })
-        .toContain(`https://musicbrainz.org/artist/${MBID.unconfirmed}`);
+      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityTable()).toEqual({
+        frame: 'outline',
+        headers: ['Candidate artist / MBID', 'Local evidence', 'Actions'],
+        rows: [expect.stringMatching(new RegExp(
+          `${UNCONFIRMED}.*Finland.*Group.*Finnish band.*${MBID.unconfirmed}.*0 of 1 album agree`, 's',
+        ))],
+      });
+      await utilityProblematicFilesActions.openMusicBrainzCandidate(
+        UNCONFIRMED,
+        `https://musicbrainz.org/artist/${MBID.unconfirmed}`,
+      );
+      await utilityProblematicFilesActions.selectMusicBrainzCandidate(`Select ${UNCONFIRMED}`);
+      await utilityProblematicFilesActions.assignSelectedMusicBrainzIdentity(UNCONFIRMED);
+      await settingsModalAppBarActions.closeSettings();
+      await openArtist({ galleryActions, searchToolbarActions }, UNCONFIRMED);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['Finland'],
+        genres: ['Genre unavailable'],
+      });
+    });
+
+    await stepLogger.step('MBD1-11: an invalid manual value stays disabled and a verified artist can be assigned', async () => {
+      await openMusicBrainzProblem({ galleryActions, settingsModalAppBarActions, utilityProblematicFilesActions, utilityTabBarActions },
+        'MBID: Not found', CREDITED);
+      await utilityProblematicFilesActions.openMusicBrainzManualSearch(
+        `https://musicbrainz.org/search?query=${encodeURIComponent(CREDITED)}&type=artist&method=indexed`,
+      );
+      expect(await utilityProblematicFilesActions.enterManualArtistReference(
+        'https://musicbrainz.org/release/0e2e0001-0000-4000-8000-000000000008',
+      )).toEqual({ assignEnabled: false, openEnabled: false });
+      const artistUrl = `https://musicbrainz.org/artist/${MBID.manual}`;
+      await utilityProblematicFilesActions.enterManualArtistReference(artistUrl);
+      await utilityProblematicFilesActions.waitForVerifiedManualArtist(CREDITED);
+      await utilityProblematicFilesActions.openEnteredMusicBrainzArtist(artistUrl);
+      await utilityProblematicFilesActions.assignSelectedMusicBrainzIdentity(CREDITED);
+      await settingsModalAppBarActions.closeSettings();
+      await openArtist({ galleryActions, searchToolbarActions }, CREDITED);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['United States'],
+        genres: ['Genre unavailable'],
+      });
+    });
+
+    await stepLogger.step('MBD1-12: a candidate stays unassigned until its radio is selected', async () => {
+      await openMusicBrainzProblem({ galleryActions, settingsModalAppBarActions, utilityProblematicFilesActions, utilityTabBarActions },
+        'MBID: Multiple matches', GUEST);
+      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityTable()).toEqual({
+        frame: 'outline',
+        headers: ['Candidate artist / MBID', 'Local evidence', 'Actions'],
+        rows: [
+          expect.stringMatching(new RegExp(`Compilation Signal Guest North.*Canada.*Group.*Canadian studio project.*${MBID.guestNorth}.*1 of 1 album agree`, 's')),
+          expect.stringMatching(new RegExp(`Compilation Signal Guest South.*Finland.*Group.*Finnish live act.*${MBID.guestSouth}.*1 of 1 album agree`, 's')),
+        ],
+      });
+      const expectedPresentation = {
+        selection: 'single',
+        mobile: 'preserve',
+        rows: [
+          { cellCount: 3, cellLines: true, radioInIdentity: true, iconOnlyAction: true, fullHeightAction: true },
+          { cellCount: 3, cellLines: true, radioInIdentity: true, iconOnlyAction: true, fullHeightAction: true },
+        ],
+        assignBelowTable: true,
+        assignPrimary: true,
+        keepCurrentHollow: null,
+      };
+      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityPresentation()).toEqual(expectedPresentation);
+      const originalViewport = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await utilityProblematicFilesActions.selectAlbumByTitle(GUEST);
+      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityPresentation()).toEqual(expectedPresentation);
+      if (originalViewport) await page.setViewportSize(originalViewport);
+      await utilityProblematicFilesActions.expectMusicBrainzAssignmentDisabled();
+      await utilityProblematicFilesActions.openMusicBrainzCandidate(
+        'Compilation Signal Guest South',
+        `https://musicbrainz.org/artist/${MBID.guestSouth}`,
+      );
+      await utilityProblematicFilesActions.selectMusicBrainzCandidate('Select Compilation Signal Guest South');
+      await utilityProblematicFilesActions.assignSelectedMusicBrainzIdentity(GUEST);
+      await settingsModalAppBarActions.closeSettings();
+    });
+
+    await stepLogger.step('MBD1-13: a metadata conflict can keep its current MBID', async () => {
+      await openMusicBrainzProblem({ galleryActions, settingsModalAppBarActions, utilityProblematicFilesActions, utilityTabBarActions },
+        'MBID: Metadata conflict', LEAD);
+      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityTable()).toEqual({
+        frame: 'outline',
+        headers: ['Artist identity / MBID', 'Local evidence', 'Actions'],
+        rows: [
+          expect.stringMatching(new RegExp(`Currently assigned: Compilation Signal Lead.*United Kingdom.*Group.*UK group.*${MBID.leadUk}`, 's')),
+          expect.stringMatching(new RegExp(`Suggested: Compilation Signal Lead.*Sweden.*Group.*Swedish group.*${MBID.leadSweden}`, 's')),
+        ],
+      });
+      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityPresentation()).toEqual({
+        selection: 'single',
+        mobile: 'preserve',
+        rows: [
+          { cellCount: 3, cellLines: true, radioInIdentity: true, iconOnlyAction: true, fullHeightAction: true },
+          { cellCount: 3, cellLines: true, radioInIdentity: true, iconOnlyAction: true, fullHeightAction: true },
+        ],
+        assignBelowTable: true,
+        assignPrimary: true,
+        keepCurrentHollow: true,
+      });
+      await utilityProblematicFilesActions.keepCurrentMusicBrainzIdentity(LEAD);
+      await settingsModalAppBarActions.closeSettings();
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['United Kingdom'],
+        genres: ['Genre unavailable'],
+      });
+    });
+
+    await stepLogger.step('MBD1-13: a metadata conflict can assign its suggested MBID and keep it after reload', async () => {
+      await fixture.conflictArtist(GUEST,
+        { mbid: MBID.guestNorth, name: GUEST, country: { code: 'CA', name: 'Canada' }, disambiguation: 'Canadian studio project' },
+        { mbid: MBID.guestSouth, name: GUEST, country: { code: 'FI', name: 'Finland' }, disambiguation: 'Finnish live act' });
+      await openMusicBrainzProblem({ galleryActions, settingsModalAppBarActions, utilityProblematicFilesActions, utilityTabBarActions },
+        'MBID: Metadata conflict', GUEST);
+      await utilityProblematicFilesActions.selectMusicBrainzCandidate(`Select Suggested: ${GUEST}`);
+      await utilityProblematicFilesActions.assignSelectedMusicBrainzIdentity(GUEST);
+      await settingsModalAppBarActions.closeSettings();
+      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['Finland'],
+        genres: ['Genre unavailable'],
+      });
+      await page.reload();
+      await galleryActions.waitForGalleryReady();
+      await openArtist({ galleryActions, searchToolbarActions }, GUEST);
+      await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
+        countries: ['Finland'],
+        genres: ['Genre unavailable'],
+      });
     });
   } finally {
     await fixture.restore();

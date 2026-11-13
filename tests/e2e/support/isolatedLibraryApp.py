@@ -183,6 +183,14 @@ PRELOADED_FIXTURE_PROFILES = frozenset(
     {"functional-core", "synthetic-large-library", "utility-problematic-files"}
 )
 GENERATED_FIXTURE_PROFILES = frozenset({"playback-media", "scan-library"})
+MUSICBRAINZ_ARTIST_FIXTURES = {
+    "0e2e0001-0000-4000-8000-000000000003": ("Compilation Signal Lead", "GB"),
+    "0e2e0001-0000-4000-8000-000000000004": ("Compilation Signal Lead", "SE"),
+    "0e2e0001-0000-4000-8000-000000000007": ("Album Rating Contract", "FI"),
+    "0e2e0001-0000-4000-8000-000000000008": ("Functional Balance Artist 03", "US"),
+    "0e2e0001-0000-4000-8000-000000000009": ("Compilation Signal Guest North", "CA"),
+    "0e2e0001-0000-4000-8000-000000000010": ("Compilation Signal Guest South", "FI"),
+}
 
 
 def classify_fixture_profile_mode(fixture_profile: str) -> str:
@@ -4698,6 +4706,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         if parts[:2] == ["musicbrainz", "release"]:
             self._serve_musicbrainz_releases(query, include_body=include_body)
             return
+        if len(parts) == 3 and parts[:2] == ["musicbrainz", "artist"]:
+            self._serve_musicbrainz_artist(parts[2], include_body=include_body)
+            return
         if len(parts) == 3 and parts[:2] == ["coverartarchive", "release"]:
             self._serve_cover_art_archive(parts[2], include_body=include_body)
             return
@@ -5113,6 +5124,23 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         ]
         self._send_json({"count": len(releases), "releases": releases}, include_body=include_body)
         self.server.record_musicbrainz_completed()
+
+    def _serve_musicbrainz_artist(self, mbid: str, *, include_body: bool) -> None:
+        fixture = MUSICBRAINZ_ARTIST_FIXTURES.get(mbid)
+        if fixture is None:
+            self.send_error(404)
+            return
+        name, country = fixture
+        self._send_json({
+            "id": mbid,
+            "name": name,
+            "sort-name": name,
+            "type": "Group",
+            "country": country,
+            "aliases": [],
+            "genres": [],
+            "tags": [],
+        }, include_body=include_body)
 
     def _serve_cover_art_archive(self, release_id: str, *, include_body: bool) -> None:
         # Read the failure mode only after a held search is released.

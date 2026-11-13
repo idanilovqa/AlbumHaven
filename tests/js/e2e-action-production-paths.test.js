@@ -5838,7 +5838,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
   assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
-  assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
+  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseToReleasePlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'end', 0\.75\)/);
@@ -6760,6 +6760,17 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
       },
     }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
   }
+});
+
+test('MusicBrainz identity E2E covers native names and every manual resolution path through owned actions', () => {
+  const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
+
+  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readStoredArtist[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings/);
+  assert.match(spec, /MBD1-11:[\s\S]*enterManualArtistReference/);
+  assert.match(spec, /MBD1-12:[\s\S]*readMusicBrainzIdentityTable[\s\S]*expectMusicBrainzAssignmentDisabled[\s\S]*openMusicBrainzCandidate[\s\S]*selectMusicBrainzCandidate/);
+  assert.match(spec, /MBD1-13:[\s\S]*readMusicBrainzIdentityTable[\s\S]*keepCurrentMusicBrainzIdentity/);
+  assert.match(spec, /MBD1-20:[\s\S]*assignSelectedMusicBrainzIdentity/);
+  assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
 });
 
 test('Edit Tags duration gates use the shared timing-budget helper', () => {

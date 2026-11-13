@@ -954,6 +954,16 @@ test('library-wide Loose Tracks keep the whole library when a search found no lo
   assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
 });
 
+test('opening library-wide Loose Tracks resolves beyond a completed search probe', () => {
+  const start = helperSource.indexOf('function openNonAlbumModal(options = {})');
+  const end = helperSource.indexOf('function openNonAlbumTagEditor()', start);
+  assert.ok(start >= 0 && end > start);
+  assert.match(
+    helperSource.slice(start, end),
+    /hydrateDeferredNonAlbumTracks\(\{\s*libraryWide,\s*resolveLibrary:\s*true\s*\}\)/,
+  );
+});
+
 test('a search starts its Loose Tracks request with the search and the indicator reuses it', async () => {
   // The follow-up used to start only after the gallery committed: a second
   // round trip (~0.5 s synthetic, 1-2 s real library) before the search settled.

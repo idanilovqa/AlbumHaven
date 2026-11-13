@@ -209,7 +209,10 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
   const { context, artistList, navigationHeading } = loadHelper();
   artistList.dataset.sidebarStructureSignature = 'cached-artists';
   context.renderSidebar = () => { throw new Error('Artists must not render in collection mode'); };
-  context.hydrateDeferredNonAlbumTracks = async ({ libraryWide }) => {
+  let hydrationOptions = null;
+  context.hydrateDeferredNonAlbumTracks = async (options) => {
+    hydrationOptions = options;
+    const { libraryWide } = options;
     assert.equal(libraryWide, true);
     context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
   };
@@ -228,6 +231,7 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
 
   await context.setLibraryNavigationMode('custom-collections');
 
+  assert.equal(hydrationOptions.resolveLibrary, true, 'Custom Collections must resolve beyond a completed search probe');
   assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
   assert.equal(navigationHeading.textContent, 'Custom Collections');
   assert.match(artistList.innerHTML, /^<button data-open-loose-tracks="1">All Loose Tracks:/);

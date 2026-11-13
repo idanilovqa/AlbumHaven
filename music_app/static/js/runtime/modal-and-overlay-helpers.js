@@ -1016,7 +1016,7 @@ function openNonAlbumModal(options = {}) {
     });
   });
   if (hydrationPending) {
-    hydrateDeferredNonAlbumTracks({ libraryWide })
+    hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
         if (!els.overlay.hidden && isCurrentNonAlbumModalRequest(options)) openNonAlbumModal(options);
       })

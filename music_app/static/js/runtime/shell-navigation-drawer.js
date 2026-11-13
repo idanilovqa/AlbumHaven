@@ -114,7 +114,7 @@ async function setLibraryNavigationMode(mode) {
   }
   const list = document.getElementById('sidebar-list');
   try {
-    await hydrateDeferredNonAlbumTracks({ libraryWide: true });
+    await hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
     if (state.ui.libraryNavigationMode !== normalized) return normalized;
     renderCustomCollectionNavigation(buildCustomCollectionIndex(
       state.view?.library_non_album_tracks || state.view?.non_album_tracks || [],

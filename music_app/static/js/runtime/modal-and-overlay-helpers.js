@@ -812,6 +812,16 @@ function buildCustomCollectionDetailMarkup(items, collectionName) {
   return `<div class="custom-collection-detail"><div class="custom-collection-detail__art">${artbox}</div><div class="custom-collection-detail__tracks">${tracks}</div></div>`;
 }
 
+function buildNonAlbumTrackLoadingMarkup() {
+  return buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Loading', loadingRows: 4 }],
+    showPath: window.AlbumHavenCapabilities?.isCurrentLibraryOwner?.() === true,
+    collapsibleGroups: true,
+    ariaLabel: 'Loading loose tracks',
+    idPrefix: 'loose-track-loading',
+  });
+}
+
 const LIBRARY_CATEGORY_LABELS = Object.freeze({
   main_library: 'Main Library',
   hoard: 'Hoard',
@@ -988,13 +998,10 @@ function openNonAlbumModal(options = {}) {
       subtitle,
     });
   }
-  els.table.innerHTML = hydrationPending
-    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
-    : collectionName
-      ? buildCustomCollectionDetailMarkup(looseTracks, collectionName)
-      : looseTracks.length
-        ? buildNonAlbumTrackSectionsMarkup(looseTracks)
-        : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  const populated = looseTracks.length > 0;
+  els.table.innerHTML = hydrationPending || populated
+    ? buildNonAlbumTrackLoadingMarkup()
+    : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
@@ -1004,6 +1011,11 @@ function openNonAlbumModal(options = {}) {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
+      if (!hydrationPending && populated) {
+        els.table.innerHTML = collectionName
+          ? buildCustomCollectionDetailMarkup(looseTracks, collectionName)
+          : buildNonAlbumTrackSectionsMarkup(looseTracks);
+      }
       els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
         const summary = details.querySelector?.('summary');
         const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');

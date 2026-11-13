@@ -15208,6 +15208,16 @@ function buildCustomCollectionDetailMarkup(items, collectionName) {
   return `<div class="custom-collection-detail"><div class="custom-collection-detail__art">${artbox}</div><div class="custom-collection-detail__tracks">${tracks}</div></div>`;
 }
 
+function buildNonAlbumTrackLoadingMarkup() {
+  return buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Loading', loadingRows: 4 }],
+    showPath: window.AlbumHavenCapabilities?.isCurrentLibraryOwner?.() === true,
+    collapsibleGroups: true,
+    ariaLabel: 'Loading loose tracks',
+    idPrefix: 'loose-track-loading',
+  });
+}
+
 const LIBRARY_CATEGORY_LABELS = Object.freeze({
   main_library: 'Main Library',
   hoard: 'Hoard',
@@ -15384,13 +15394,10 @@ function openNonAlbumModal(options = {}) {
       subtitle,
     });
   }
-  els.table.innerHTML = hydrationPending
-    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
-    : collectionName
-      ? buildCustomCollectionDetailMarkup(looseTracks, collectionName)
-      : looseTracks.length
-        ? buildNonAlbumTrackSectionsMarkup(looseTracks)
-        : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  const populated = looseTracks.length > 0;
+  els.table.innerHTML = hydrationPending || populated
+    ? buildNonAlbumTrackLoadingMarkup()
+    : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
@@ -15400,6 +15407,11 @@ function openNonAlbumModal(options = {}) {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
+      if (!hydrationPending && populated) {
+        els.table.innerHTML = collectionName
+          ? buildCustomCollectionDetailMarkup(looseTracks, collectionName)
+          : buildNonAlbumTrackSectionsMarkup(looseTracks);
+      }
       els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
         const summary = details.querySelector?.('summary');
         const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
@@ -22703,6 +22715,22 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   };
 }
 
+function buildAlbumTrackTableSkeletonRow(index) {
+  const line = (modifier, width = '') => `<span class="album-track-table__skeleton album-track-table__skeleton--${modifier}"${width ? ` style="width:${width}%"` : ''}></span>`;
+  const widths = [62, 48, 70, 55];
+  return {
+    key: `skeleton-${index + 1}`,
+    className: 'album-track-table__row album-track-table__row--skeleton',
+    cells: {
+      number: { content: line('number') },
+      title: { content: `${line('title', widths[index % widths.length])}${line('secondary', 28)}` },
+      path: { content: line('path', 74) },
+      problem: { content: '' },
+      duration: { content: line('duration') },
+    },
+  };
+}
+
 function isValidAlbumRating(value) {
   return Number.isInteger(value) && value >= 1 && value <= 10;
 }
@@ -22771,17 +22799,22 @@ function buildAlbumTrackTableHtml(config = {}) {
       columns: columnTracks,
       mobileColumns: config.mobileColumns,
       columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, {
-        ...config,
-        optionalColumns,
-      })),
+      rows: group?.loadingRows
+        ? Array.from({ length: Number(group.loadingRows) }, (_, index) => buildAlbumTrackTableSkeletonRow(index))
+        : tracks.map((track, index) => buildAlbumTrackTableRow(track, index, {
+          ...config,
+          optionalColumns,
+        })),
       density: 'compact',
       frame: 'outline',
       overflow: 'none',
       mobile,
     });
-    if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+    if (collapsibleGroups && (showLabel || group?.loadingRows)) {
+      const heading = group?.loadingRows
+        ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
+        : escapeHtml(label);
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${heading}</summary>${table}</details>`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -22800,7 +22833,8 @@ function buildAlbumTrackTableHtml(config = {}) {
     mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
     bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
   ].join('');
-  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+  const loading = groups.some((group) => group?.loadingRows);
+  return `<div class="album-track-table"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
 }
 
 var TrackSelectionController = class {
@@ -23448,6 +23482,12 @@ function openAlbumOnDiscogs(album) {
   window.open(buildDiscogsSearchUrl(album), '_blank', 'noopener,noreferrer');
 }
 
+function buildMusicBrainzReleaseSearchUrl(album) {
+  const query = [album?.album_artist, album?.name, album?.year]
+    .map(value => String(value ?? '').trim()).filter(Boolean).join(' ');
+  return `https://musicbrainz.org/search?query=${encodeURIComponent(query)}&type=release&method=indexed`;
+}
+
 function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
   const collapsed = Boolean(state.utility.collapsedSections?.[sectionKey]);
   const cardClass = String(sectionKey || '').startsWith('rule-problem-ignore:') ? ' utility-detail-section-card' : '';
@@ -23604,25 +23644,27 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
       columnsConfig,
       rows: tracks.map((track, index) => {
         const number = track.track_number ?? '—';
-        const disc = track.disc_number ? `Disc ${track.disc_number} · ` : '';
+        const position = `${track.disc_number ? `${track.disc_number}.` : ''}${number}`;
         const title = track.title || track.file_name || 'Unknown track';
         const file = track.path || track.file_name || 'Unknown file';
         const artist = track.artist || 'Unknown';
         const year = track.year ?? 'Unknown';
         const format = track.format || 'Unknown';
+        const bitDepth = track.bit_depth == null && ['MP3', 'AAC', 'OGG', 'OPUS', 'M4A'].includes(String(format).toUpperCase())
+          ? 'Not applicable' : track.bit_depth == null ? 'Unknown' : `${track.bit_depth}-bit`;
         const quality = [
           `Codec: ${track.codec || 'Unknown'}`,
           `Bitrate: ${track.bitrate == null ? 'Unknown' : `${track.bitrate / 1000} kbps`}`,
           `Sample rate: ${track.sample_rate == null ? 'Unknown' : `${track.sample_rate / 1000} kHz`}`,
-          `Bit depth: ${track.bit_depth == null ? 'Unknown' : `${track.bit_depth}-bit`}`,
+          `Bit depth: ${bitDepth}`,
         ].map(meta).join('');
         const length = lengthLabel(track.duration_seconds);
-        const trackHtml = `<span>${escapeHtml(title)}</span>${meta(file)}`;
+        const trackHtml = `<span class="duplicate-copy-review__track-title">${escapeHtml(title)}</span><span class="duplicate-copy-review__meta duplicate-copy-review__path">${escapeHtml(file)}</span>`;
         return { key: String(index + 1), cells: {
-          number: escapeHtml(`${disc}${number}`), track: trackHtml,
+          number: escapeHtml(position), track: trackHtml,
           artist: escapeHtml(artist), year: escapeHtml(year), format: escapeHtml(format),
           quality, length: escapeHtml(length),
-          'mobile-track': `<span>${escapeHtml(`${disc}${number}. ${title}`)}</span>${meta(`${artist} · ${year}`)}${meta(file)}`,
+          'mobile-track': `<span>${escapeHtml(`${position} · ${title}`)}</span>${meta(`${artist} · ${year}`)}${meta(file)}`,
           'mobile-technical': `<span>${escapeHtml(format)}</span>${quality}${meta(`Length: ${length}`)}`,
         } };
       }),
@@ -23630,7 +23672,7 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
     });
     // Native disclosure owns keyboard and open state. New payload markup starts
     // collapsed; CSS-only resize keeps the mounted disclosure intact.
-    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+    return `<details class="duplicate-copy-review__copy"${copy.copy_ref ? ` data-copy-ref="${escapeHtml(copy.copy_ref)}"` : ''}><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
   }).join('');
   return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
 }
@@ -23684,11 +23726,14 @@ function buildProblematicAlbumDetail(album) {
           </button>
         ` : ''}
       </div>
+        <div class="utility-detail-service-actions">
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', presentation: 'bare', className: 'ui-external-link--discogs', iconClass: 'ui-external-link__icon', attributes: { 'data-find-on-discogs': '1' } })}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on MusicBrainz', title: 'Find on MusicBrainz', presentation: 'bare', className: 'ui-external-link--musicbrainz', iconClass: 'ui-external-link__icon', attributes: { 'data-open-musicbrainz-url': buildMusicBrainzReleaseSearchUrl(album) } })}
+        </div>
         <div class="utility-detail-context-actions">
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
           ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
@@ -29198,13 +29243,27 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
   initializeRepairSelections(selectedAlbum);
-  // Layout rerenders keep native disclosure state only for the mounted, unchanged review.
+  // Keep native nodes when unchanged; newer data for the same album keeps the user's disclosure state.
   const priorReview = problematicDuplicateReviewContent.get(els.detail);
+  const priorReviewForAlbum = priorReview
+    && priorReview.albumKey === selectedAlbum.key
+    && priorReview.element === els.detail.querySelector?.('.duplicate-copy-review')
+    ? priorReview.element : null;
+  const priorDetails = Array.from(priorReviewForAlbum?.querySelectorAll?.('details') || []);
+  const openReviewRefs = new Set(priorDetails
+    .filter(detail => detail.open)
+    .map(detail => detail.getAttribute?.('data-copy-ref'))
+    .filter(Boolean));
+  const openReviewIndexes = new Set(priorDetails.flatMap((detail, index) => (
+    detail.open && !detail.getAttribute?.('data-copy-ref') ? [index] : []
+  )));
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+  const focusedReviewIndex = priorDetails.findIndex(detail => detail.contains?.(activeElement));
+  const focusedReviewRef = priorDetails[focusedReviewIndex]?.getAttribute?.('data-copy-ref');
   const retainReview = priorReview
     && priorReview.albumKey === selectedAlbum.key
     && priorReview.payload === selectedAlbum.duplicate_copy_review
     && priorReview.element === els.detail.querySelector?.('.duplicate-copy-review');
-  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
   const focusedReviewElement = retainReview && priorReview.element.contains(activeElement)
     ? activeElement : null;
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
@@ -29213,6 +29272,18 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     reviewElement.replaceWith(priorReview.element);
     reviewElement = priorReview.element;
     focusedReviewElement?.focus({ preventScroll: true });
+  } else if (priorReviewForAlbum && reviewElement) {
+    const nextDetails = Array.from(reviewElement.querySelectorAll?.('details') || []);
+    nextDetails.forEach((detail, index) => {
+      const copyRef = detail.getAttribute?.('data-copy-ref');
+      detail.open = copyRef ? openReviewRefs.has(copyRef) : openReviewIndexes.has(index);
+    });
+    if (focusedReviewIndex >= 0) {
+      const focused = focusedReviewRef
+        ? nextDetails.find(detail => detail.getAttribute?.('data-copy-ref') === focusedReviewRef)
+        : nextDetails[focusedReviewIndex];
+      focused?.querySelector?.('summary')?.focus?.({ preventScroll: true });
+    }
   }
   if (reviewElement) {
     problematicDuplicateReviewContent.set(els.detail, {
@@ -41115,7 +41186,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
     if (group.discSubtitle) {
-      discLabel = group.discSubtitle;
+      discLabel = [discLabel, group.discSubtitle].filter(Boolean).join(' • ');
     } else if (group.isBonus) {
       discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }
@@ -44910,7 +44981,10 @@ class VirtualArtistGrid {
       const first = a.section(key), second = b.section(key);
       if (!first || !second) return;
       const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
-      preview.contextLabelBottoms.set(key, mix(first.top, second.top) + headerHeight);
+      preview.contextLabelBottoms.set(
+        key,
+        Number(preview.contentOffset || 0) + mix(first.top, second.top) + headerHeight,
+      );
     });
     preview.cards.forEach((card, key) => {
       const first = a.point(key), second = b.point(key);

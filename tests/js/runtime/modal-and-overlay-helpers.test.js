@@ -297,7 +297,7 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
-test('populated Loose Tracks paints before deferred table enhancements run', () => {
+test('populated Loose Tracks paints the shared loading table before building all rows', () => {
   const { context, flushAnimationFrame } = loadHelper();
   const overlay = new FakeElement('non-album-modal');
   const header = new FakeElement('non-album-modal-header');
@@ -334,13 +334,16 @@ test('populated Loose Tracks paints before deferred table enhancements run', () 
   context.openNonAlbumModal({ libraryWide: true });
 
   assert.equal(overlay.hidden, false);
+  assert.match(table.innerHTML, /aria-busy="true"/);
+  assert.doesNotMatch(table.innerHTML, /Loose/);
+  assert.deepEqual(calls, []);
+
+  flushAnimationFrame();
+  assert.deepEqual(calls, []);
+
+  flushAnimationFrame();
   assert.match(table.innerHTML, /Loose/);
-  assert.deepEqual(calls, []);
-
-  flushAnimationFrame();
-  assert.deepEqual(calls, []);
-
-  flushAnimationFrame();
+  assert.doesNotMatch(table.innerHTML, /aria-busy="true"/);
   assert.deepEqual(calls, ['collapsible', 'selection', 'shared-player']);
 });
 

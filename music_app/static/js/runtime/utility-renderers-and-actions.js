@@ -182,13 +182,27 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
   initializeRepairSelections(selectedAlbum);
-  // Layout rerenders keep native disclosure state only for the mounted, unchanged review.
+  // Keep native nodes when unchanged; newer data for the same album keeps the user's disclosure state.
   const priorReview = problematicDuplicateReviewContent.get(els.detail);
+  const priorReviewForAlbum = priorReview
+    && priorReview.albumKey === selectedAlbum.key
+    && priorReview.element === els.detail.querySelector?.('.duplicate-copy-review')
+    ? priorReview.element : null;
+  const priorDetails = Array.from(priorReviewForAlbum?.querySelectorAll?.('details') || []);
+  const openReviewRefs = new Set(priorDetails
+    .filter(detail => detail.open)
+    .map(detail => detail.getAttribute?.('data-copy-ref'))
+    .filter(Boolean));
+  const openReviewIndexes = new Set(priorDetails.flatMap((detail, index) => (
+    detail.open && !detail.getAttribute?.('data-copy-ref') ? [index] : []
+  )));
+  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
+  const focusedReviewIndex = priorDetails.findIndex(detail => detail.contains?.(activeElement));
+  const focusedReviewRef = priorDetails[focusedReviewIndex]?.getAttribute?.('data-copy-ref');
   const retainReview = priorReview
     && priorReview.albumKey === selectedAlbum.key
     && priorReview.payload === selectedAlbum.duplicate_copy_review
     && priorReview.element === els.detail.querySelector?.('.duplicate-copy-review');
-  const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
   const focusedReviewElement = retainReview && priorReview.element.contains(activeElement)
     ? activeElement : null;
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
@@ -197,6 +211,18 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     reviewElement.replaceWith(priorReview.element);
     reviewElement = priorReview.element;
     focusedReviewElement?.focus({ preventScroll: true });
+  } else if (priorReviewForAlbum && reviewElement) {
+    const nextDetails = Array.from(reviewElement.querySelectorAll?.('details') || []);
+    nextDetails.forEach((detail, index) => {
+      const copyRef = detail.getAttribute?.('data-copy-ref');
+      detail.open = copyRef ? openReviewRefs.has(copyRef) : openReviewIndexes.has(index);
+    });
+    if (focusedReviewIndex >= 0) {
+      const focused = focusedReviewRef
+        ? nextDetails.find(detail => detail.getAttribute?.('data-copy-ref') === focusedReviewRef)
+        : nextDetails[focusedReviewIndex];
+      focused?.querySelector?.('summary')?.focus?.({ preventScroll: true });
+    }
   }
   if (reviewElement) {
     problematicDuplicateReviewContent.set(els.detail, {

@@ -48,6 +48,9 @@ test('review renders real escaped DTO metadata in collapsed native disclosures w
     assert.ok(html.includes(text), `Missing DTO presentation: ${text}`);
   }
   assert.match(html, /unknown|unavailable/i);
+  assert.match(html, /data-cdt-column="number"[^>]*>2\.1</);
+  assert.doesNotMatch(html, /Disc\s*2/);
+  assert.match(html, /duplicate-copy-review__track-title[^>]*>A &lt;song&gt;<\/span><span class="duplicate-copy-review__meta duplicate-copy-review__path"/);
   assert.doesNotMatch(html, /RAW_PRIVATE_CANARY|RAW_TRACK_CANARY|<button\b|<audio\b|<a\b|onclick=|data-(?:delete|play|edit|open-folder)/i);
 });
 
@@ -89,6 +92,14 @@ test('review uses shared grouped table with seven desktop and two mobile columns
     assert.equal(config.columnsConfig.filter(column => column.visibility === 'mobile').length, 2);
     assert.equal(config.rows.length, 1);
   }
+  assert.equal(configs[0].rows[0].cells.number, '2.1');
+});
+
+test('review disclosure uses the enlarged centered shared chevron treatment', () => {
+  const html = load().buildDuplicateCopyReviewHtml(album());
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  assert.match(html, /utility-section-chevron[^>]*width="14" height="14"/);
+  assert.match(css, /\.duplicate-copy-review__heading \.utility-section-chevron\s*\{[^}]*flex:\s*0 0 16px[^}]*align-self:\s*center[^}]*margin-top:\s*0/s);
 });
 
 test('distinct surface IDs have unique header references and replacement payload starts collapsed', () => {
@@ -158,6 +169,7 @@ test('authorized DTO paths are escaped and missing duration is not rendered as z
 
 test('actual Problematic Files detail composes the real shared review output', () => {
   const c = load();
+  const actions = [];
   Object.assign(c, {
     state: { utility: {} },
     getProblematicAlbumDisplayValue: (_album, field) => field === 'album' ? 'Release' : 'Artist',
@@ -166,7 +178,7 @@ test('actual Problematic Files detail composes the real shared review output', (
     getAvailableAlbumMoveActions: () => [],
     buildUtilityAlbumArtbox: () => '<span>Existing cover</span>',
     buildDetectedProblemsHtml: () => '<p>Existing problem list</p>',
-    ButtonComponent: { renderActionButton: () => '<button>Existing action</button>' },
+    ButtonComponent: { renderActionButton: (config) => { actions.push(config); return '<button>Existing action</button>'; } },
   });
   const input = album();
   const expected = c.buildDuplicateCopyReviewHtml(input);
@@ -175,6 +187,12 @@ test('actual Problematic Files detail composes the real shared review output', (
   assert.ok(actual.includes('Existing problem list'));
   assert.ok(actual.includes('Existing cover'));
   assert.equal((actual.match(/<details\b/g) || []).length, 2);
+  const discogs = actions.find(action => action.attributes?.['data-find-on-discogs']);
+  const musicbrainz = actions.find(action => action.attributes?.['data-open-musicbrainz-url']);
+  assert.deepEqual([discogs.presentation, discogs.className, discogs.iconClass], ['bare', 'ui-external-link--discogs', 'ui-external-link__icon']);
+  assert.deepEqual([musicbrainz.presentation, musicbrainz.className, musicbrainz.iconClass], ['bare', 'ui-external-link--musicbrainz', 'ui-external-link__icon']);
+  assert.match(musicbrainz.attributes['data-open-musicbrainz-url'], /^https:\/\/musicbrainz\.org\/search\?/);
+  assert.equal(discogs.icon, undefined);
 });
 
 function loadAlbumComposition() {
@@ -274,6 +292,9 @@ function disclosureDetailHost(document) {
         details: [...match[0].matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/g)].map((entry) => ({
           open: /(?:^|\s)open(?:\s|=|$)/.test(entry[1]),
           textContent: entry[2],
+          getAttribute(name) {
+            return entry[1].match(new RegExp(`${name}="([^"]*)"`))?.[1] || null;
+          },
         })),
         get isConnected() { return this.parentNode?.review === this; },
         replaceWith(replacement) { this.parentNode.replaceChild(replacement, this); },
@@ -346,22 +367,24 @@ test('PF layout rerender retains mounted disclosure for identical loaded DTO and
   assert.equal(disclosure.open, true);
 });
 
-test('PF replacement or reordered DTO resets disclosure instead of applying old copy state', () => {
-  for (const reordered of [false, true]) {
-    const { c, detail, input } = loadProblematicDisclosureLifecycle();
-    c.renderProblematicFiles();
-    const mounted = detail.querySelector('.duplicate-copy-review');
-    mounted.querySelectorAll('details')[0].open = true;
-    const replacement = JSON.parse(JSON.stringify(input.duplicate_copy_review));
-    if (reordered) replacement.reverse();
-    c.state.utility.problematicFiles = [{ ...input, duplicate_copy_review: replacement }];
-    c.renderProblematicFiles();
-    const next = detail.querySelector('.duplicate-copy-review');
-    assert.notEqual(next, mounted);
-    assert.equal(mounted.isConnected, false);
-    assert.ok(next.querySelectorAll('details').every(node => !node.open));
-    assert.match(next.querySelectorAll('details')[0].textContent, reordered ? /Other folder/ : /雪 &lt;folder&gt;/);
-  }
+test('PF newer DTO for the same selected album preserves the expanded disclosure', () => {
+  const { c, detail, input } = loadProblematicDisclosureLifecycle();
+  input.duplicate_copy_review[0].copy_ref = 'dcr1.7.first';
+  input.duplicate_copy_review[1].copy_ref = 'dcr1.7.second';
+  c.renderProblematicFiles();
+  const mounted = detail.querySelector('.duplicate-copy-review');
+  mounted.querySelectorAll('details')[0].open = true;
+  const replacement = JSON.parse(JSON.stringify(input.duplicate_copy_review));
+  replacement[0].tracks[0].title = 'Updated title';
+  replacement.reverse();
+  c.state.utility.problematicFiles = [{ ...input, duplicate_copy_review: replacement }];
+  c.renderProblematicFiles();
+  const next = detail.querySelector('.duplicate-copy-review');
+  assert.notEqual(next, mounted);
+  assert.equal(mounted.isConnected, false);
+  assert.equal(next.querySelectorAll('details')[0].open, false);
+  assert.equal(next.querySelectorAll('details')[1].open, true);
+  assert.match(next.querySelectorAll('details')[1].textContent, /Updated title/);
 });
 
 test('PF switching album key clears disclosure even when a DTO reference is reused', () => {

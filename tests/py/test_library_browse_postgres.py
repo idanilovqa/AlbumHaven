@@ -27,6 +27,8 @@ def test_duplicate_reconstruction_reuses_cover_paths_without_changing_payloads(m
                 "track_number": number, "cover_path": covers[number == 3],
                 "edition": folder, "library_root_id": f"root-{copy_index}",
                 "library_root_category": "main_library" if copy_index == 0 else "hoard",
+                "codec": "MP3", "bitrate": 320000, "sample_rate": 44100,
+                "bit_depth": None,
             }
             entries[path] = dict(entry)
             rows.append({
@@ -46,6 +48,12 @@ def test_duplicate_reconstruction_reuses_cover_paths_without_changing_payloads(m
     assert actual == expected
     assert all(result["has_duplicate_files"] for result in actual.values())
     assert len(actual["Copy A"]["duplicate_sources"]) == 2
+    assert all(
+        (track["codec"], track["bitrate"], track["sample_rate"], track["bit_depth"])
+        == ("MP3", 320000, 44100, None)
+        for source in actual["Copy A"]["duplicate_sources"]
+        for track in source["tracks"]
+    )
     assert actual["Copy A"]["root_provenance"]["root_ids"] == ["root-0", "root-1"]
     assert rows == original_rows
     assert entries == original_entries

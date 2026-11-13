@@ -6712,6 +6712,63 @@ for (const mode of ['cards', 'covers']) {
       }
     });
   }
+
+  test(`mobile ${mode} pinch keeps context on the artist containing the anchored cover`, () => {
+    const { context, scrollEl, containerEl } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    scrollEl.clientWidth = 390;
+    const artist = (sectionKey, name, count) => ({
+      kind: 'artist', sectionKey, group: {
+        artist: name,
+        albums: Array.from({ length: count }, (_, index) => ({ key: `${sectionKey}-${index}`, name: `Album ${index}` })),
+      },
+    });
+    grid.sections = [
+      artist('before', 'Before', 3),
+      artist('three-inches', '3 Inches of Blood', 7),
+      artist('35007', '35007', 3),
+      artist('third-world', '3rd World Electric', 3),
+      artist('five-bridges', '5Bridges', 3),
+    ];
+    const sectionNodes = new Map(grid.sections.map(section => [
+      `artist:${section.sectionKey}`,
+      { querySelector: () => null, querySelectorAll: () => [] },
+    ]));
+    const preview = {
+      mode, blocksByColumns: new Map(), headerHeights: new Map(), bodyHeights: new Map(), cards: new Map(),
+      sections: sectionNodes,
+      sectionByKey: new Map(grid.sections.map(section => [`artist:${section.sectionKey}`, section])),
+      anchor: { scrollTop: 1000, artworkFraction: .5, artworkInset: 0, artworkTrim: 0, offsetTop: 100 },
+      contentOffset: 2400, density: 3,
+    };
+    const initialLayout = grid.buildPinchLayout(3, preview);
+    preview.anchorKey = [...initialLayout.cards.keys()]
+      .filter(key => key.startsWith('artist:three-inches\u0000'))[6];
+    initialLayout.cards.forEach((_point, key) => {
+      preview.cards.set(key, { style: {}, getBoundingClientRect() {
+        const width = Number.parseFloat(this.style.width);
+        return { height: width + (mode === 'cards' ? 72 : 0) };
+      } });
+    });
+    containerEl.style = {};
+    grid.primeVisibleCoverImages = () => {};
+    grid._pinchPreview = preview;
+
+    for (const density of [3, 2.8, 2.5, 2.1, 1.8, 1.4, 1]) {
+      preview.density = density;
+      grid.drawPinchPreview(preview);
+      const groups = grid.sections.map(section => ({
+        artist: section.group.artist,
+        albumCount: section.group.albums.length,
+        labelBottom: preview.contextLabelBottoms.get(`artist:${section.sectionKey}`),
+      }));
+      assert.equal(
+        context.resolveGalleryBarContext({ scrollTop: scrollEl.scrollTop, groups }).artist,
+        '3 Inches of Blood',
+        `density ${density} must not select an artist below the anchored cover`,
+      );
+    }
+  });
 }
 
 test('mobile pinch animation coalesces a frame and cannot redraw after cancellation', () => {

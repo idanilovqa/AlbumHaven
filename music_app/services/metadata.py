@@ -27,7 +27,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 8
+FILE_METADATA_SCHEMA_VERSION = 9
 # What each reader version changed in a file entry. A version that only adds
 # or re-derives the listed fields names them, and an unchanged file stored by an
 # older reader takes just those fields from its fresh read; "fields": None means
@@ -50,6 +50,11 @@ FILE_METADATA_SCHEMA_CHANGES: dict[int, dict[str, object]] = {
     },
     # Embedded CUE text exists only in the media tags.
     8: {"fields": ("embedded_cue",), "requires_file_read": True},
+    # Technical audio properties come from Mutagen's already-open scan object.
+    9: {
+        "fields": ("codec", "bitrate", "sample_rate", "bit_depth"),
+        "requires_file_read": True,
+    },
 }
 _OLDEST_UPGRADABLE_SCHEMA_VERSION = 2
 
@@ -93,6 +98,7 @@ def file_metadata_schema_is_current(entry: object) -> bool:
         and value == FILE_METADATA_SCHEMA_VERSION
         and "release_date" in entry
         and "embedded_cue" in entry
+        and all(field in entry for field in ("codec", "bitrate", "sample_rate", "bit_depth"))
     )
 
 
@@ -246,12 +252,19 @@ def read_tags(path: Path) -> dict[str, object]:
                 data[str(key).lower()] = value
             for key, value in _full_tag_aliases(data).items():
                 data.setdefault(key, value)
-        if (
-            audio_full is not None
-            and getattr(audio_full, "info", None)
-            and getattr(audio_full.info, "length", None)
-        ):
-            data["duration_seconds"] = int(audio_full.info.length)
+        info = getattr(audio_full, "info", None)
+        if info and getattr(info, "length", None):
+            data["duration_seconds"] = int(info.length)
+        if info:
+            mime = next(iter(getattr(audio_full, "mime", ()) or ()), "")
+            data["codec"] = {
+                "audio/mpeg": "MP3",
+                "audio/mp3": "MP3",
+                "audio/flac": "FLAC",
+            }.get(mime, path.suffix.lstrip(".").upper() or None)
+            data["bitrate"] = getattr(info, "bitrate", None)
+            data["sample_rate"] = getattr(info, "sample_rate", None)
+            data["bit_depth"] = getattr(info, "bits_per_sample", None)
         for key, value in read_apev2_tags(path).items():
             data.setdefault(key, value)
         return data
@@ -845,6 +858,10 @@ def _read_metadata_for_file(path: Path) -> dict[str, object]:
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_type": album_type, "album_rating": album_rating,
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        "codec": tags.get("codec"),
+        "bitrate": tags.get("bitrate"),
+        "sample_rate": tags.get("sample_rate"),
+        "bit_depth": tags.get("bit_depth"),
         "text_corrections": text_corrections,
         "embedded_cue": embedded_cue,
     }

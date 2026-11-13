@@ -5228,6 +5228,7 @@ def _duplicate_sources_from_rows(
     albums = {}
     seen_paths = set()
     rows_by_path = {}
+    entries_by_path = {}
     cover_paths = {}
     file_entries_by_path = file_entries_by_path or {}
     # SQL row order is unspecified; provenance preserves first encounter order.
@@ -5266,6 +5267,7 @@ def _duplicate_sources_from_rows(
             continue
         seen_paths.add((key, path))
         rows_by_path[path] = payload
+        entries_by_path[path] = entry
         album = albums.get(key)
         if album is None:
             album = albums[key] = Album(key=key, name=str(entry.get("album") or ""), album_artist=str(entry.get("album_artist") or ""))
@@ -5306,6 +5308,9 @@ def _duplicate_sources_from_rows(
                 row = rows_by_path[track["path"]]
                 track["key"] = row.get("track_key")
                 track["track_ref"] = row.get("track_key")
+                entry = entries_by_path[track["path"]]
+                for field in ("codec", "bitrate", "sample_rate", "bit_depth"):
+                    track[field] = entry.get(field)
         return sources
 
     results = {}
@@ -5835,6 +5840,10 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         "total_discs": file_entry.get("total_discs"),
         "disc_subtitle": file_entry.get("disc_subtitle"),
         "duration_seconds": file_entry.get("duration_seconds", row_payload.get("duration_seconds")),
+        "codec": file_entry.get("codec"),
+        "bitrate": file_entry.get("bitrate"),
+        "sample_rate": file_entry.get("sample_rate"),
+        "bit_depth": file_entry.get("bit_depth"),
         "cover_path": file_entry.get("cover_path", row_payload.get("album_cover_path")),
         "cover_revision": file_entry.get("cover_revision", row_payload.get("album_cover_revision")),
         "year": raw_year,

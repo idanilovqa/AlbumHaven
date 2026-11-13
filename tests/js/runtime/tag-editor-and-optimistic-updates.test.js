@@ -1134,7 +1134,7 @@ test('Album Details labels a numeric bonus medium from its separate disc title',
     [{ discLabel: 'CD2', discSubtitle: 'Bonus', isBonus: true }],
   );
   context.buildTrackListHtml(tracks);
-  assert.equal(renderedConfig.groups[0].discLabel, 'Bonus');
+  assert.equal(renderedConfig.groups[0].discLabel, 'CD 2 • Bonus');
   assert.equal(renderedConfig.groups[0].namedSection, true);
 });
 

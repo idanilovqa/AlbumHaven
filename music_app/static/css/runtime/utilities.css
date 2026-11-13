@@ -1055,14 +1055,16 @@
   font-size: 0.6875rem;
   line-height: 1.5;
 }
+.duplicate-copy-review__track-title { display: block; }
+.duplicate-copy-review__path { margin-top: 4px; }
 .duplicate-copy-review__delete {
   flex: 0 0 auto;
   margin-left: auto;
 }
 .duplicate-copy-review__heading .utility-section-chevron {
-  flex: 0 0 10px;
-  align-self: flex-start;
-  margin-top: 3px;
+  flex: 0 0 16px;
+  align-self: center;
+  margin-top: 0;
   transform: rotate(0deg);
 }
 .duplicate-copy-review__copy[open] > .duplicate-copy-review__heading .utility-section-chevron {
@@ -2092,12 +2094,16 @@
 .utility-problem-suggestion { user-select: none; touch-action: pan-y; }
 #utility-modal .utility-detail-header { grid-template-columns: 88px minmax(0, 1fr) auto; }
 .utility-detail-summary { min-width: 0; overflow-wrap: anywhere; }
-.utility-detail-context-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: start; gap: 8px; margin: 0; }
+.utility-detail-header > .utility-detail-cover { grid-column: 1; grid-row: 1 / span 2; }
+.utility-detail-header > .utility-detail-summary { grid-column: 2; grid-row: 1; }
+.utility-detail-service-actions { grid-column: 3; grid-row: 1; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.utility-detail-service-actions .action-button { border: 0; background: transparent; box-shadow: none; }
+.utility-detail-context-actions { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: start; gap: 8px; margin: 0; }
 @media (max-width: 760px) {
-  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr); }
+  #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr) auto; }
   .utility-detail-header > .utility-detail-cover { grid-column: 1; grid-row: 1 / span 2; }
-  .utility-detail-header > .utility-detail-context-actions { grid-column: 2; grid-row: 1; }
-  .utility-detail-header > .utility-detail-summary { grid-column: 2; grid-row: 2; }
+  .utility-detail-header > .utility-detail-context-actions { grid-column: 2 / -1; grid-row: 2; }
+  .utility-detail-header > .utility-detail-summary { grid-column: 2; grid-row: 1; }
 }
 
 .utility-rule-problem-labels { flex-wrap: wrap; }.utility-rule-target { display: flex; align-items: center; gap: 10px; min-width: 0; }

@@ -5,6 +5,13 @@ const vm = require('node:vm');
 const test = require('node:test');
 const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
 const preferences = require('../../../music_app/static/js/client-device-preferences.js');
+
+test('shared mobile Settings hamburger uses the bare aligned GalleryBar action', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/partials/gallery-bar.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/mobile-layout.css'), 'utf8');
+  assert.match(template, /action_button\('Settings sections'[^\n]*presentation='bare'/);
+  assert.match(css, /#mobile-page-header:not\(\[data-album-identity-in-body="true"\]\) > :is\([^}]*\.mobile-bar-action\)\s*\{\s*align-self:\s*center;/s);
+});
 function load(name, globals = {}) {
   const context = vm.createContext({
     window: { innerWidth: 390 },

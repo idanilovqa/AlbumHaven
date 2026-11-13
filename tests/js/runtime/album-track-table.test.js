@@ -127,6 +127,22 @@ test('AlbumTrackTable composes CompactDataTable compact rows and preserves playb
   assert.match(html, /class="album-track-table__total"/);
 });
 
+test('AlbumTrackTable renders shared loading rows with the real table geometry', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ discLabel: 'Loading', loadingRows: 4 }],
+    showPath: true,
+    collapsibleGroups: true,
+    ariaLabel: 'Loading loose tracks',
+  });
+
+  assert.match(html, /aria-busy="true"/);
+  assert.equal((html.match(/album-track-table__row--skeleton/g) || []).length, 4);
+  assert.match(html, /album-track-table__skeleton--heading/);
+  assert.match(html, /data-cdt-column="path"/);
+  assert.doesNotMatch(html, />Loading<\/summary>/);
+});
+
 test('AlbumTrackTable marks named sections for shared row styling', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

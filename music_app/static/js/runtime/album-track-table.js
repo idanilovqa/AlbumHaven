@@ -66,6 +66,22 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   };
 }
 
+function buildAlbumTrackTableSkeletonRow(index) {
+  const line = (modifier, width = '') => `<span class="album-track-table__skeleton album-track-table__skeleton--${modifier}"${width ? ` style="width:${width}%"` : ''}></span>`;
+  const widths = [62, 48, 70, 55];
+  return {
+    key: `skeleton-${index + 1}`,
+    className: 'album-track-table__row album-track-table__row--skeleton',
+    cells: {
+      number: { content: line('number') },
+      title: { content: `${line('title', widths[index % widths.length])}${line('secondary', 28)}` },
+      path: { content: line('path', 74) },
+      problem: { content: '' },
+      duration: { content: line('duration') },
+    },
+  };
+}
+
 function isValidAlbumRating(value) {
   return Number.isInteger(value) && value >= 1 && value <= 10;
 }
@@ -134,17 +150,22 @@ function buildAlbumTrackTableHtml(config = {}) {
       columns: columnTracks,
       mobileColumns: config.mobileColumns,
       columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, {
-        ...config,
-        optionalColumns,
-      })),
+      rows: group?.loadingRows
+        ? Array.from({ length: Number(group.loadingRows) }, (_, index) => buildAlbumTrackTableSkeletonRow(index))
+        : tracks.map((track, index) => buildAlbumTrackTableRow(track, index, {
+          ...config,
+          optionalColumns,
+        })),
       density: 'compact',
       frame: 'outline',
       overflow: 'none',
       mobile,
     });
-    if (collapsibleGroups && showLabel) {
-      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
+    if (collapsibleGroups && (showLabel || group?.loadingRows)) {
+      const heading = group?.loadingRows
+        ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
+        : escapeHtml(label);
+      return `<details class="album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}" open><summary class="album-track-table__disc-heading" aria-expanded="true">${heading}</summary>${table}</details>`;
     }
     const headingHtml = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
@@ -163,7 +184,8 @@ function buildAlbumTrackTableHtml(config = {}) {
     mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
     bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
   ].join('');
-  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+  const loading = groups.some((group) => group?.loadingRows);
+  return `<div class="album-track-table"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
 }
 
 var TrackSelectionController = class {

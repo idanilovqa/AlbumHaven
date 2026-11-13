@@ -2524,7 +2524,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     }
     discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
     if (group.discSubtitle) {
-      discLabel = group.discSubtitle;
+      discLabel = [discLabel, group.discSubtitle].filter(Boolean).join(' • ');
     } else if (group.isBonus) {
       discLabel = discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD';
     }

@@ -376,6 +376,12 @@ function openAlbumOnDiscogs(album) {
   window.open(buildDiscogsSearchUrl(album), '_blank', 'noopener,noreferrer');
 }
 
+function buildMusicBrainzReleaseSearchUrl(album) {
+  const query = [album?.album_artist, album?.name, album?.year]
+    .map(value => String(value ?? '').trim()).filter(Boolean).join(' ');
+  return `https://musicbrainz.org/search?query=${encodeURIComponent(query)}&type=release&method=indexed`;
+}
+
 function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
   const collapsed = Boolean(state.utility.collapsedSections?.[sectionKey]);
   const cardClass = String(sectionKey || '').startsWith('rule-problem-ignore:') ? ' utility-detail-section-card' : '';
@@ -532,25 +538,27 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
       columnsConfig,
       rows: tracks.map((track, index) => {
         const number = track.track_number ?? '—';
-        const disc = track.disc_number ? `Disc ${track.disc_number} · ` : '';
+        const position = `${track.disc_number ? `${track.disc_number}.` : ''}${number}`;
         const title = track.title || track.file_name || 'Unknown track';
         const file = track.path || track.file_name || 'Unknown file';
         const artist = track.artist || 'Unknown';
         const year = track.year ?? 'Unknown';
         const format = track.format || 'Unknown';
+        const bitDepth = track.bit_depth == null && ['MP3', 'AAC', 'OGG', 'OPUS', 'M4A'].includes(String(format).toUpperCase())
+          ? 'Not applicable' : track.bit_depth == null ? 'Unknown' : `${track.bit_depth}-bit`;
         const quality = [
           `Codec: ${track.codec || 'Unknown'}`,
           `Bitrate: ${track.bitrate == null ? 'Unknown' : `${track.bitrate / 1000} kbps`}`,
           `Sample rate: ${track.sample_rate == null ? 'Unknown' : `${track.sample_rate / 1000} kHz`}`,
-          `Bit depth: ${track.bit_depth == null ? 'Unknown' : `${track.bit_depth}-bit`}`,
+          `Bit depth: ${bitDepth}`,
         ].map(meta).join('');
         const length = lengthLabel(track.duration_seconds);
-        const trackHtml = `<span>${escapeHtml(title)}</span>${meta(file)}`;
+        const trackHtml = `<span class="duplicate-copy-review__track-title">${escapeHtml(title)}</span><span class="duplicate-copy-review__meta duplicate-copy-review__path">${escapeHtml(file)}</span>`;
         return { key: String(index + 1), cells: {
-          number: escapeHtml(`${disc}${number}`), track: trackHtml,
+          number: escapeHtml(position), track: trackHtml,
           artist: escapeHtml(artist), year: escapeHtml(year), format: escapeHtml(format),
           quality, length: escapeHtml(length),
-          'mobile-track': `<span>${escapeHtml(`${disc}${number}. ${title}`)}</span>${meta(`${artist} · ${year}`)}${meta(file)}`,
+          'mobile-track': `<span>${escapeHtml(`${position} · ${title}`)}</span>${meta(`${artist} · ${year}`)}${meta(file)}`,
           'mobile-technical': `<span>${escapeHtml(format)}</span>${quality}${meta(`Length: ${length}`)}`,
         } };
       }),
@@ -558,7 +566,7 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
     });
     // Native disclosure owns keyboard and open state. New payload markup starts
     // collapsed; CSS-only resize keeps the mounted disclosure intact.
-    return `<details class="duplicate-copy-review__copy"><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
+    return `<details class="duplicate-copy-review__copy"${copy.copy_ref ? ` data-copy-ref="${escapeHtml(copy.copy_ref)}"` : ''}><summary class="utility-section-toggle duplicate-copy-review__heading" id="${escapeHtml(id)}"><svg class="utility-section-chevron" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m5 4 6 4-6 4z"/></svg><span class="duplicate-copy-review__summary"><span><strong>${escapeHtml(copyLabel)}</strong> · ${escapeHtml(copy.track_count)} ${copy.track_count === 1 ? 'track' : 'tracks'} · ${escapeHtml(lengthLabel(copy.total_duration_seconds))}</span>${meta(copy.folder_path || copy.folder_name || 'Unknown folder')}</span>${deleteButton}</summary><div class="duplicate-copy-review__content">${table}</div></details>`;
   }).join('');
   return `<section class="utility-detail-section duplicate-copy-review"><h4 class="utility-detail-section-title">Duplicate copies</h4>${content}</section>`;
 }
@@ -612,11 +620,14 @@ function buildProblematicAlbumDetail(album) {
           </button>
         ` : ''}
       </div>
+        <div class="utility-detail-service-actions">
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', presentation: 'bare', className: 'ui-external-link--discogs', iconClass: 'ui-external-link__icon', attributes: { 'data-find-on-discogs': '1' } })}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on MusicBrainz', title: 'Find on MusicBrainz', presentation: 'bare', className: 'ui-external-link--musicbrainz', iconClass: 'ui-external-link__icon', attributes: { 'data-open-musicbrainz-url': buildMusicBrainzReleaseSearchUrl(album) } })}
+        </div>
         <div class="utility-detail-context-actions">
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
           ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}

@@ -1,4 +1,5 @@
 const path = require('node:path');
+const fs = require('node:fs');
 const { test, expect } = require('@playwright/test');
 const { renderActionButton } = require('../../music_app/static/js/button-component.js');
 
@@ -110,11 +111,13 @@ async function mount(page, viewport) {
 test('mobile tree title aligns with Gallery and the approved edge handle is easy to grab', async ({ page }) => {
   await mount(page, { width: 390, height: 760 });
   const geometry = await page.locator('#shell-navigation-rail').evaluate((rail) => {
+    const expandedWidth = rail.getBoundingClientRect().width;
     rail.classList.add('is-mobile-mode-rail-hidden');
     const anchor = rail.querySelector('#mobile-tree-edge-anchor');
     anchor.hidden = false;
     const heading = rail.querySelector('#library-navigation-heading').getBoundingClientRect();
     const firstRow = rail.querySelector('#sidebar-list .artist-link').getBoundingClientRect();
+    const firstLabel = rail.querySelector('#sidebar-list .artist-name-label').getBoundingClientRect();
     const galleryTitle = document.querySelector('.gallery-bar__title').getBoundingClientRect();
     const railBox = rail.getBoundingClientRect();
     const anchorBox = anchor.getBoundingClientRect();
@@ -127,15 +130,34 @@ test('mobile tree title aligns with Gallery and the approved edge handle is easy
       anchorWidth: anchorBox.width,
       anchorHeight: anchorBox.height,
       anchorCursor: getComputedStyle(anchor).cursor,
+      anchorRight: anchorBox.right,
+      firstLabelLeft: firstLabel.left,
+      widthReduction: expandedWidth - railBox.width,
     };
   });
 
   expect(geometry.titleCenterOffset).toBeLessThanOrEqual(1);
   expect(geometry.titleToFirstRow).toBeLessThanOrEqual(10);
-  expect(geometry.anchorLeft).toBe(19);
+  expect(geometry.anchorLeft).toBe(0);
   expect(geometry.anchorWidth).toBe(15);
   expect(geometry.anchorHeight).toBe(72);
   expect(geometry.anchorCursor).toBe('grab');
+  expect(geometry.anchorRight).toBeLessThanOrEqual(geometry.firstLabelLeft);
+  expect(geometry.widthReduction).toBeGreaterThanOrEqual(45);
+});
+
+test('library mode rail is divided from the tree and page headers have no bottom rule', async ({ page }) => {
+  await mount(page, { width: 1200, height: 800 });
+  const styles = await page.locator('.library-navigation-mode-rail').evaluate((modeRail) => ({
+    border: getComputedStyle(modeRail).borderRightWidth,
+  }));
+  expect(styles.border).toBe('1px');
+
+  const css = await fs.promises.readFile(
+    path.join(repositoryRoot, 'music_app/static/css/runtime/non-album-and-player.css'),
+    'utf8',
+  );
+  expect(css).toMatch(/\.non-album-modal--page \.non-album-modal-header\s*\{[^}]*border-bottom:\s*0/s);
 });
 
 test('desktop navigation keeps its header fixed while only the tree list scrolls', async ({ page }) => {

@@ -30,6 +30,15 @@
 .album-track-table__disc--collapsible > summary::before { content: '\203A'; display: inline-block; margin-right: 7px; transition: transform 120ms ease; }
 .album-track-table__disc--collapsible[open] > summary::before { transform: rotate(90deg); }
 .album-track-table:has(.album-track-table__disc--collapsible:not([open])) .album-track-table__total { display: none; }
+@keyframes album-track-table-skeleton { to { background-position: -200% 0; } }
+.album-track-table__skeleton { display: block; height: 10px; border-radius: 999px; background: linear-gradient(90deg, color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, transparent) 25%, color-mix(in srgb, var(--appearance-ink, var(--text)) 16%, transparent) 50%, color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, transparent) 75%); background-size: 200% 100%; animation: album-track-table-skeleton 1.2s ease-in-out infinite; }
+.album-track-table__skeleton--number { width: 14px; margin: 0 auto; }
+.album-track-table__skeleton--title { height: 11px; }
+.album-track-table__skeleton--secondary { height: 8px; margin-top: 6px; }
+.album-track-table__skeleton--path { height: 8px; }
+.album-track-table__skeleton--duration { width: 34px; margin-left: auto; }
+.album-track-table__skeleton--heading { width: 150px; height: 11px; }
+@media (prefers-reduced-motion: reduce) { .album-track-table__skeleton { animation: none; } }
 .album-track-table .compact-data-table,
 :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table {
   border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 72%, transparent);

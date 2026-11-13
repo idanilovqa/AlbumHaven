@@ -203,8 +203,8 @@
 }
 .shell-navigation-rail h2 { margin-left: 12px; }
 #artist-tree-expanded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.library-navigation-body { display: grid; flex: 1 1 auto; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; min-height: 0; overflow: hidden; }
-.library-navigation-mode-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.library-navigation-body { display: grid; flex: 1 1 auto; grid-template-columns: 51px minmax(0, 1fr); gap: 8px; min-height: 0; overflow: hidden; }
+.library-navigation-mode-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-right: 8px; border-right: 1px solid color-mix(in srgb, var(--app-muted) 24%, transparent); }
 :root .library-navigation-mode-action,
 :root .shell-navigation-compact-action { width: 40px; height: 40px; min-width: 40px; min-height: 40px; flex-basis: 40px; padding: 0; }
 .library-navigation-mode-action svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }

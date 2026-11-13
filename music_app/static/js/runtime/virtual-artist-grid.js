@@ -861,7 +861,10 @@ class VirtualArtistGrid {
       const first = a.section(key), second = b.section(key);
       if (!first || !second) return;
       const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
-      preview.contextLabelBottoms.set(key, mix(first.top, second.top) + headerHeight);
+      preview.contextLabelBottoms.set(
+        key,
+        Number(preview.contentOffset || 0) + mix(first.top, second.top) + headerHeight,
+      );
     });
     preview.cards.forEach((card, key) => {
       const first = a.point(key), second = b.point(key);

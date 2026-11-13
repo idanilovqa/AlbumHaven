@@ -2611,7 +2611,7 @@ async function startBrowserStreamingTrack(track, {
   let sampleRate = 0;
   try {
     await prepareStreamingPlaybackEngine();
-    if (typeof ensureStreamingDecoders === 'function') await ensureStreamingDecoders();
+    if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     await requestStreamingSampleRate(track);
     sampleRate = streamingPlaybackRate(track);
     if (engine.startRequestId === startRequestId && !sampleRate) {

@@ -10594,7 +10594,7 @@ async function startBrowserStreamingTrack(track, {
   let sampleRate = 0;
   try {
     await prepareStreamingPlaybackEngine();
-    if (typeof ensureStreamingDecoders === 'function') await ensureStreamingDecoders();
+    if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     await requestStreamingSampleRate(track);
     sampleRate = streamingPlaybackRate(track);
     if (engine.startRequestId === startRequestId && !sampleRate) {
@@ -12521,6 +12521,29 @@ function sendAndroidBridgeCommand(name, payload = {}) {
     }));
   });
 }
+
+function foregroundDocumentHealthy() {
+  const loader = document.getElementById?.('library-loader');
+  const loadingSelection = loader && !loader.hidden
+    && document.getElementById?.('library-loader-title')?.textContent === 'Loading selection';
+  return document.visibilityState !== 'hidden' && !loadingSelection;
+}
+
+// The native shell replaces a foregrounded document only when it cannot paint and report healthy.
+function acknowledgeAndroidForeground(token) {
+  if (!isAndroidShell() || !Number.isSafeInteger(token) || token <= 0) return false;
+  const deadline = Date.now() + 4000;
+  const afterPaint = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (foregroundDocumentHealthy()) {
+      void sendAndroidBridgeCommand('shell.foregroundReady', { token }).catch(() => {});
+    } else if (Date.now() < deadline) {
+      setTimeout(afterPaint, 100);
+    }
+  }));
+  afterPaint();
+  return true;
+}
+window.AlbumHavenForegroundHealth = acknowledgeAndroidForeground;
 
 // A shell that negotiated outside this site's range, or lacks a required capability, cannot run it.
 // Current shells refuse such a handshake themselves; this also covers one that did not.

@@ -564,8 +564,8 @@
         'player-handle': style?.handles.color || player.edge,
       });
     }
-    return { main: palette?.main || (value.main_surface_color == null ? '#111C2C' : hex(value.main_surface_color)),
-      panel: palette ? palette.panels[index][1] : (value.panel_background_color == null ? '#0E1B2B' : hex(value.panel_background_color)),
+    return { main: palette?.main || (value.main_surface_color == null ? '#000000' : hex(value.main_surface_color)),
+      panel: palette ? palette.panels[index][1] : (value.panel_background_color == null ? '#000000' : hex(value.panel_background_color)),
       tokens, player: { ...player }, mode: palette?.mode || 'dark' };
   }
   // Representative editor colors for native CSS treatments. Only explicit

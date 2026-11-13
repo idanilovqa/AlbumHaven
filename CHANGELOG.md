@@ -5,6 +5,7 @@
 - Kept known appearance settings when a newer client stored fields this build does not recognize.
 - Made the unsaved and recovery appearance solid black with library-source outlines enabled.
 - Recovered an unresponsive Android page after returning to the app while preserving native playback, queue, and position.
+- Kept first web playback responsive while browser decoder verification finishes in the background.
 
 ## 0.11.3 - 2026-11-12
 

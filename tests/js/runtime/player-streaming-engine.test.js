@@ -337,6 +337,7 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
     handleStreamingPlaybackEnded: options.handleStreamingPlaybackEnded,
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
+    ensureStreamingDecoders: options.ensureStreamingDecoders,
     updatePlayerUi: options.updatePlayerUi,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
@@ -389,6 +390,23 @@ function createEngineHarness(options = {}) {
     },
   };
 }
+
+test('first playback does not wait for background decoder verification', async () => {
+  let finishDecoderVerification;
+  const decoderVerification = new Promise((resolve) => {
+    finishDecoderVerification = resolve;
+  });
+  const harness = createEngineHarness({
+    ensureStreamingDecoders: () => decoderVerification,
+  });
+
+  const start = harness.api.start(makeTrack());
+  await harness.settle();
+
+  assert.equal(harness.sent('open').length, 1);
+  finishDecoderVerification([]);
+  await start;
+});
 
 test('accepted rendered PCM credits each captured session before queued promotion and excludes stale wire messages', async () => {
   const boundaries=[];

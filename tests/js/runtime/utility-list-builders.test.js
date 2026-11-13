@@ -223,6 +223,18 @@ test('Appearance navigation exposes the Album page editor', () => {
   assert.match(utilityRendererSource, /mountAlbumPageAppearanceEditor/);
 });
 
+test('problematic track index preserves the first matching album', () => {
+  const context = loadHelpers();
+  const first = { key: 'first', track_paths: ['D:/Music/Shared.flac', 'D:/Music/First.flac'] };
+  const second = { key: 'second', problematic_track_paths: ['D:/Music/Shared.flac', 'D:/Music/Second.flac'] };
+  context.state.utility = { problematicFiles: [first, second] };
+
+  const index = context.buildProblematicAlbumTrackPathIndex();
+
+  assert.strictEqual(index.get('D:/Music/Shared.flac'), first);
+  assert.strictEqual(index.get('D:/Music/Second.flac'), second);
+});
+
 function loadPlayerAlbumResolutionHelpers() {
   const context = loadHelpers();
   context.state.modalReleases = [];

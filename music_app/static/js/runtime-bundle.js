@@ -15067,17 +15067,17 @@ const NON_ALBUM_RICH_TRACK_COLUMNS = Object.freeze([
   }),
 ]);
 
-function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
+function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = buildProblematicAlbumTrackPathIndex()) {
+  const playback = getPlayerPlaybackSnapshot();
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
     const mediaRef = String(item.media_ref || item.mediaRef || '');
     const trackIdentity = trackPath || mediaRef;
-    const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackIdentity;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
-    const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
+    const problematicAlbum = problematicIndex.get(trackPath) || null;
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -15162,10 +15162,11 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
+  const problematicIndex = buildProblematicAlbumTrackPathIndex();
   const groups = collectionName ? [{
     discLabel: '',
     sectionKey: 'custom-collection',
-    tracks: buildNonAlbumTrackRowsMarkup(visibleItems, 0),
+    tracks: buildNonAlbumTrackRowsMarkup(visibleItems, 0, problematicIndex),
   }] : sectionDefinitions.map((section) => {
     const sectionItems = visibleItems.filter((item) => (
       exceptionType(item) === section.exceptionType
@@ -15175,7 +15176,7 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
       )
     ));
     if (!sectionItems.length) return null;
-    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex, problematicIndex);
     runningIndex += sectionItems.length;
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
@@ -26260,6 +26261,20 @@ function getProblematicAlbumForTrackPath(trackPath) {
     (Array.isArray(album.problematic_track_paths) && album.problematic_track_paths.includes(normalized))
     || (Array.isArray(album.track_paths) && album.track_paths.includes(normalized))
   ) || null;
+}
+
+function buildProblematicAlbumTrackPathIndex() {
+  const index = new Map();
+  for (const album of state.utility.problematicFiles || []) {
+    for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        const key = String(path || '');
+        if (!index.has(key)) index.set(key, album);
+      }
+    }
+  }
+  return index;
 }
 
 async function openUtilityModalForTrack(trackPath) {

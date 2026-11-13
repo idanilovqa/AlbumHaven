@@ -216,6 +216,9 @@ function loadHelper() {
     getProblematicAlbumForTrackPath() {
       return null;
     },
+    buildProblematicAlbumTrackPathIndex() {
+      return new Map();
+    },
     getCurrentGalleryPreferenceArtist() {
       return '';
     },
@@ -339,6 +342,33 @@ test('populated Loose Tracks paints before deferred table enhancements run', () 
 
   flushAnimationFrame();
   assert.deepEqual(calls, ['collapsible', 'selection', 'shared-player']);
+});
+
+test('Loose Tracks indexes problematic paths and snapshots playback once per rendered group', () => {
+  const { context } = loadHelper();
+  let indexBuilds = 0;
+  let playbackSnapshots = 0;
+  context.buildProblematicAlbumTrackPathIndex = () => {
+    indexBuilds += 1;
+    return new Map([['D:/Music/Two.flac', { key: 'problematic' }]]);
+  };
+  context.getProblematicAlbumForTrackPath = () => {
+    throw new Error('Loose Tracks must not scan every problematic album per row');
+  };
+  context.getPlayerPlaybackSnapshot = () => {
+    playbackSnapshots += 1;
+    return { paused: true, ended: true };
+  };
+
+  const markup = context.buildNonAlbumTrackSectionsMarkup([
+    { path: 'D:/Music/One.flac', title: 'One', exception_type: 'Interview' },
+    { path: 'D:/Music/Two.flac', title: 'Two', exception_type: 'Interview' },
+    { path: 'D:/Music/Three.flac', title: 'Three', exception_type: 'Interview' },
+  ]);
+
+  assert.match(markup, /Two/);
+  assert.equal(indexBuilds, 1);
+  assert.equal(playbackSnapshots, 1);
 });
 
 test('custom collection index derives only named custom assignments in stable order', () => {

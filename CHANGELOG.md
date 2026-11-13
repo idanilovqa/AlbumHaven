@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.4 - 2026-11-12
+
+- Kept known appearance settings when a newer client stored fields this build does not recognize.
+- Made the unsaved and recovery appearance solid black with library-source outlines enabled.
+- Recovered an unresponsive Android page after returning to the app while preserving native playback, queue, and position.
+
 ## 0.11.3 - 2026-11-12
 
 - Improved MusicBrainz matching across localized, original-script, alternate, split, re-release and compilation titles, with bounded typo and mojibake handling and exact track evidence.

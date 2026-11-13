@@ -124,6 +124,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private lateinit var lastScreenView: ImageView
     private lateinit var sandboxWarning: View
     private val handshakes = HandshakeWatch(originPolicy.channel)
+    private val foregrounds = ForegroundWatch()
+    private var returnedFromBackground = false
     private val handshakeTimeout = Runnable {
         if (!handshakes.timedOut() || recovery.choosingSandbox) return@Runnable
         Log.w(TAG, "bridge_handshake_timeout")
@@ -244,10 +246,14 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 download()
             }
         }
+        if (returnedFromBackground) probeForegroundDocument()
+        returnedFromBackground = false
     }
 
     override fun onPause() {
         super.onPause()
+        returnedFromBackground = true
+        foregrounds.cancel()
         CookieManager.getInstance().flush()
         // Only a page the user actually sees is pictured; never a native screen or an older picture.
         val url = page.url
@@ -280,6 +286,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     override fun onBridgeConnected() {
         handshakes.answered()
         sandboxWarning.isVisible = false
+    }
+
+    override fun onForegroundReady(token: Long) {
+        foregrounds.answered(token)
     }
 
     override fun onIncompatibleWeb(webProtocols: IntRange) {
@@ -412,9 +422,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
      * view, which draws at once; else with the picture of it [asLeft] by the user when there is one,
      * else with the Connecting screen, which also replaces a picture that waits too long.
      */
-    private fun open(url: String, asLeft: Boolean = false) {
+    private fun open(url: String, asLeft: Boolean = false, useCachedCopy: Boolean = true) {
         mainFrameFailed = false
-        val cached = copies.exists(siteOrigin)
+        val cached = useCachedCopy && copies.exists(siteOrigin)
         val picture = if (asLeft && !cached) lastScreen.load(siteOrigin, url, resources.configuration.orientation) else null
         hideLastScreen()
         if (cached) {
@@ -463,11 +473,31 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     /** The document goes with its bridge, its unanswered messages and the wait for its handshake. */
     private fun documentGone() {
+        foregrounds.cancel()
         earlyBridgeMessages.clear()
         if (::bridge.isInitialized) bridge.reset()
         handshakes.pageStarted()
         mainHandler.removeCallbacks(handshakeTimeout)
         sandboxWarning.isVisible = false
+    }
+
+    private fun probeForegroundDocument() {
+        if (!::siteOrigin.isInitialized || page.url == null || recovery.showing || webView.visibility != View.VISIBLE) return
+        val token = foregrounds.start()
+        webView.evaluateJavascript(
+            "typeof window.AlbumHavenForegroundHealth === 'function' ? window.AlbumHavenForegroundHealth($token) : false",
+        ) { result ->
+            // Older compatible pages have no health hook; do not reload them merely for version skew.
+            if (result == "false") foregrounds.answered(token)
+        }
+        mainHandler.postDelayed({
+            if (!foregrounds.timedOut(token) || recovery.showing
+                || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@postDelayed
+            val url = page.url ?: return@postDelayed
+            Log.w(TAG, "foreground_document_timeout")
+            replaceWebView()
+            open(url, asLeft = true, useCachedCopy = false)
+        }, FOREGROUND_TIMEOUT_MS)
     }
 
     private fun originHost(): String = siteOrigin.toUri().host.orEmpty()
@@ -687,6 +717,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         /** As long as the page's own bridge commands, its handshake among them, wait for the shell. */
         const val BRIDGE_TIMEOUT_MS = 15_000L
+        const val FOREGROUND_TIMEOUT_MS = 5_000L
 
         /** A page still not drawn after this long shows the Connecting screen, so a picture never looks frozen. */
         const val LAST_SCREEN_MAX_MS = 6_000L

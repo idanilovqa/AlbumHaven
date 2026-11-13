@@ -14,7 +14,7 @@ const defaults = () => ({
   docked_compact_player_regular_style: false,
   compact_player_motion: 'normal', floating_player_edge: { source: 'player', color: null },
   album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled',
-  library_source_indicators: { card_colors: false, hover_outline_colors: false, icons: true },
+  library_source_indicators: { card_colors: false, hover_outline_colors: true, icons: true },
   alert_family: 'ember', loop_control_style: 'capsule',
   action_button_outlines: true, device_profiles: {},
 });
@@ -26,6 +26,12 @@ const playerStyle = () => ({
   controls: { fill: '#24B86B', border: '#86EFAC' },
   waveform: { fill: '#387F68', edge: '#AFD8C2' },
   handles: { color: '#AFD8C2' },
+});
+
+test('unsaved appearance resolves to a solid black canvas', () => {
+  const appearance = runtime().resolveAppearance(defaults());
+  assert.equal(appearance.main, '#000000');
+  assert.equal(appearance.panel, '#000000');
 });
 const interactions = source => ({
   item_hover: null,

@@ -28,7 +28,7 @@ EXTENDED_DEFAULTS = {
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
     "loop_control_style": "capsule",
-    "library_source_indicators": {"card_colors": False, "hover_outline_colors": False, "icons": True},
+    "library_source_indicators": {"card_colors": False, "hover_outline_colors": True, "icons": True},
 }
 AGGREGATE_DEFAULTS = {
     "revision": 0,

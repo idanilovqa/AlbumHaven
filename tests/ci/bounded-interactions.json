@@ -4737,14 +4737,36 @@
         "js:music_app/static/js/runtime/utility-loop-playback.js#initializeUtilityLoopPlayer:event:timeupdate"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-loop-playback.js"
+        "music_app/static/js/runtime/utility-loop-playback.js",
+        "music_app/static/js/runtime/player-waveform-peaks.js",
+        "music_app/static/js/runtime/loop-range-controls.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "requests": 0,
+        "domQueries": 110,
+        "domMutations": 40,
+        "renderCommits": 10,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "domQueries",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loop-playback.test.js",
+      "testIdentity": "bounded interaction: saved-loop timeline input redraws one loop among 1,000 saved loops",
+      "performanceTargets": [],
+      "rollback": "Test-only registration; timeline scrubbing already updates only its own loop and reuses cached waveform peaks, so removing the contract changes no product behavior."
     },
     {
       "id": "js:runtime/utility-loop-playback.js#renderUtilityLoopPitchPreview",
@@ -4808,7 +4830,26 @@
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "requests": 0,
+        "domQueries": 0,
+        "domMutations": 17,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "domMutations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loop-playback.test.js",
+      "testIdentity": "bounded interaction: page scroll closes a loop speed menu among 1,000 saved loops",
+      "performanceTargets": [],
+      "rollback": "Test-only registration; closing the menu already moves only its own options back, so removing the contract changes no product behavior."
     },
     {
       "id": "js:runtime/utility-renderers-and-actions.js#bindProblematicFocusUserInput",

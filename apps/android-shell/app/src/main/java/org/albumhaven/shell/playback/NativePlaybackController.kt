@@ -578,7 +578,7 @@ class NativePlaybackController(
 
     /** Whether the item after [itemIndex] is the next track of the same album: one web queue is one `queueGroup`. */
     private fun consecutiveAlbumSuccessor(itemIndex: Int): Boolean =
-        queue.getOrNull(itemIndex + 1)?.queueGroup.let { it != null && it == queue.getOrNull(itemIndex)?.queueGroup }
+        queue.getOrNull(itemIndex + 1)?.queueGroup?.let { it == queue.getOrNull(itemIndex)?.queueGroup } == true
 
     /** The web keeps playing a track whose queue changed under it; only the queue around it is replaced. */
     private fun keepCurrent(load: QueueLoad): Boolean {

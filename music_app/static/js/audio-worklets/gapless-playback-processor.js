@@ -82,10 +82,11 @@
     return { removableFrames: confident ? quietFrames : 0, edgeRmsDb, contentRmsDb, confident };
   }
 
-  function copyRingFrames(ring, offsetFrames, frameCount) {
+  // The next `frameCount` buffered frames, without consuming them.
+  function copyRingFrames(ring, frameCount) {
     const copy = new Float32Array(frameCount * CHANNELS);
     for (let frame = 0; frame < frameCount; frame += 1) {
-      const source = ((ring.readFrame + offsetFrames + frame) % ring.capacityFrames) * CHANNELS;
+      const source = ((ring.readFrame + frame) % ring.capacityFrames) * CHANNELS;
       copy[frame * CHANNELS] = ring.samples[source];
       copy[(frame * CHANNELS) + 1] = ring.samples[source + 1];
     }
@@ -382,7 +383,7 @@
           || this.loopActive || this.pendingSeek || this.pendingBufferedSeek) return;
       const inspectedFrames = ring.bufferedFrames;
       const decision = classifyBoundaryPadding(
-        copyRingFrames(ring, 0, inspectedFrames), this.sampleRate, 'suffix',
+        copyRingFrames(ring, inspectedFrames), this.sampleRate, 'suffix',
       );
       ring.bufferedFrames -= decision.removableFrames;
       ring.writeFrame = (ring.writeFrame - decision.removableFrames + ring.capacityFrames)
@@ -395,7 +396,7 @@
       const ring = this.current;
       const inspectedFrames = Math.min(ring.bufferedFrames, this.boundaryWindowFrames());
       const decision = classifyBoundaryPadding(
-        copyRingFrames(ring, 0, inspectedFrames), this.sampleRate, 'prefix',
+        copyRingFrames(ring, inspectedFrames), this.sampleRate, 'prefix',
       );
       ring.readFrame = (ring.readFrame + decision.removableFrames) % ring.capacityFrames;
       ring.bufferedFrames -= decision.removableFrames;

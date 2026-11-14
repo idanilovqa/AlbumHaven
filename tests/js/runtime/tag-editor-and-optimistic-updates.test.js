@@ -4941,3 +4941,35 @@ test('Album Details matches a numbered second disc rating by its disc tag (All t
     [['CD 1', null], ['CD 2', 8]],
   );
 });
+
+// MusicBrainz Delivery 2 (owner 2026-11-08): the matched release decides where the main
+// album ends; without that decision the local guess stays.
+const MAIN_THEN_UNNAMED_BONUS = [
+  { path: 'C:\Music\A\CD1\01.mp3', disc_number: 1, disc_number_raw: '1', track_number: 1, duration_seconds: 100 },
+  { path: 'C:\Music\A\CD2\01.mp3', disc_number: 2, disc_number_raw: '2', track_number: 1, duration_seconds: 60 },
+  { path: 'C:\Music\A\CD3\01.mp3', disc_number: 3, disc_number_raw: '3', track_number: 1, duration_seconds: 30 },
+];
+
+test('Album Details ends the main album after the disc MusicBrainz names', () => {
+  const context = loadHelper([]);
+  const grouped = context.groupAlbumTracks(MAIN_THEN_UNNAMED_BONUS, {
+    musicbrainz_release: { last_main_disc_number: 2 },
+  });
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false, true]);
+});
+
+test('Album Details keeps the local guess without a MusicBrainz main-album end', () => {
+  const context = loadHelper([]);
+  for (const album of [null, {}, { musicbrainz_release: { last_main_disc_number: null } }]) {
+    const grouped = context.groupAlbumTracks(MAIN_THEN_UNNAMED_BONUS, album);
+    assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false, false]);
+  }
+});
+
+test('A named Bonus disc MusicBrainz counts as main album stays main', () => {
+  const context = loadHelper([]);
+  const tracks = MAIN_THEN_UNNAMED_BONUS.slice(0, 2).map((track, index) => (
+    index === 1 ? { ...track, disc_subtitle: 'Bonus' } : track));
+  const grouped = context.groupAlbumTracks(tracks, { musicbrainz_release: { last_main_disc_number: 2 } });
+  assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false]);
+});

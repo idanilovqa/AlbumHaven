@@ -2102,7 +2102,7 @@ function renderTrackModalRelease(album) {
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
     ? activeDuplicateSource.tracks
     : (Array.isArray(album.tracks) ? album.tracks : []);
-  const grouped = groupAlbumTracks(tracks);
+  const grouped = groupAlbumTracks(tracks, album);
   const bonusGroups = grouped.groups.filter((group) => group.isBonus);
   const mainGroups = grouped.groups.filter((group) => !group.isBonus);
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
@@ -2208,8 +2208,11 @@ function isBonusDiscTrack(track) {
 }
 
 
-function groupAlbumTracks(tracks) {
+function groupAlbumTracks(tracks, album = null) {
   const safeTracks = orderAlbumTracks(tracks);
+  // The matched MusicBrainz release decides where the main album ends; without it the
+  // disc labels and tags are the local guess.
+  const lastMainDisc = Number(album?.musicbrainz_release?.last_main_disc_number) || 0;
 
   const explicitDiscs = Array.from(new Set(
     safeTracks
@@ -2278,7 +2281,9 @@ function groupAlbumTracks(tracks) {
       discNumber: groups.get(key).discNumber,
       discLabel: groups.get(key).discLabel,
       discSubtitle: groups.get(key).discSubtitle,
-      isBonus: Boolean(groups.get(key).isBonus),
+      isBonus: lastMainDisc
+        ? (groups.get(key).discNumber || 1) > lastMainDisc
+        : Boolean(groups.get(key).isBonus),
       tracks: groups.get(key).tracks,
     })),
   };
@@ -2286,7 +2291,7 @@ function groupAlbumTracks(tracks) {
 
 
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
-  const grouped = groupAlbumTracks(tracks);
+  const grouped = groupAlbumTracks(tracks, album);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const trackRows = Array.isArray(album?.track_rows) ? album.track_rows : [];

@@ -201,3 +201,50 @@ def test_the_album_queue_waits_until_no_artist_job_is_due(monkeypatch):
     combined.process_next(worker_id="w")
     combined.process_next(worker_id="w")
     assert calls == ["artist", ("queue", 7), "artist", "album"]
+
+
+def test_album_details_name_the_last_main_disc_only_when_musicbrainz_decided(monkeypatch):
+    from music_app.services.library_browse_postgres import _album_musicbrainz_release
+
+    setup_url, repository, ids, albums = _seed(monkeypatch)
+    from music_app.services import musicbrainz_release_identity as module
+
+    def outcome(context):
+        result = _outcome(context)
+        for album in result["albums"]:
+            if album["state"] == "release":
+                album["main_disc"] = {"main_disc_count": 2, "source": "original_release"}
+        return result
+
+    monkeypatch.setattr(module, "resolve_album_releases", lambda context, client: outcome(context))
+    processor = MusicBrainzAlbumReleaseProcessor(repository=repository, client=FakeResolverClient(), now=lambda: NOW)
+    repository.enqueue(reason="test", observed_at=NOW, local_artist_id=ids["angra"], force=True)
+    processor.process_next(worker_id="w")
+    three_discs = [{"disc_number": 1}, {"disc_number": 2}, {"disc_number": 3}]
+    with isolatedPostgres._connect(setup_url) as connection:
+        release = _album_musicbrainz_release(connection, albums["cry"], three_discs)
+        assert (release["state"], release["release_mbid"], release["last_main_disc_number"]) == ("release", RELEASE, 2)
+        assert release["track_artists"][0]["artist"] == "Angra"
+        # Every local disc is main: nothing to split.
+        assert _album_musicbrainz_release(connection, albums["cry"], three_discs[:2])["last_main_disc_number"] is None
+        # Unresolved and undecided albums keep the local guess.
+        assert _album_musicbrainz_release(connection, albums["holy"], three_discs) is None
+        assert _album_musicbrainz_release(connection, albums["none"], three_discs) is None
+
+
+def test_lost_track_artists_show_the_release_credit_and_readable_ones_stay():
+    from music_app.services.library_browse_postgres import _apply_musicbrainz_track_artists
+
+    album = {"album_artist": "天門", "musicbrainz_release": {"track_artists": [
+        {"disc_number": 1, "track_number": 1, "artist": "天門"},
+        {"disc_number": 1, "track_number": 2, "artist": "天門 & Guest"}]},
+        "track_rows": [{"disc_number": 1, "track_number": 1, "secondary_artist": "??"},
+                       {"disc_number": 1, "track_number": 2, "secondary_artist": "??"},
+                       {"disc_number": 1, "track_number": 3, "secondary_artist": "Someone"}],
+        "tracks": [{"artist": "??"}]}
+    rows = _apply_musicbrainz_track_artists(album)["track_rows"]
+    assert [row["secondary_artist"] for row in rows] == [None, "天門 & Guest", "Someone"]
+    # The tags the editor reads are untouched.
+    assert album["tracks"] == [{"artist": "??"}]
+    assert _apply_musicbrainz_track_artists({"track_rows": [{"secondary_artist": "??"}]})["track_rows"] == [
+        {"secondary_artist": "??"}]

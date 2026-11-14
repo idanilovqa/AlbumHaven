@@ -1885,6 +1885,10 @@ class PostgresLibraryBrowseRepository:
         musicbrainz_artist = _album_musicbrainz_artist(connection, first_row_payload.get("album_id"))
         if musicbrainz_artist:
             detail_album["musicbrainz_artist"] = musicbrainz_artist
+        musicbrainz_release = _album_musicbrainz_release(connection, first_row_payload.get("album_id"),
+                                                         detail_album.get("tracks") or [])
+        if musicbrainz_release:
+            detail_album["musicbrainz_release"] = musicbrainz_release
         _annotate_album_payload_problematic_tracks([detail_album], rows)
         detail_album["poor_art_quality"] = (
             "Poor art quality" in _problematic_album_reasons(detail_album)
@@ -1893,12 +1897,12 @@ class PostgresLibraryBrowseRepository:
 
         from music_app.services.album_details import _attach_album_detail_track_rows
 
-        return _attach_album_detail_track_rows(
+        return _apply_musicbrainz_track_artists(_attach_album_detail_track_rows(
             detail_album,
             client_surface_class=client_surface_class,
             config=None,
             viewer_opinion_preferences={},
-        )
+        ))
 
     def build_non_album_detail_payload(
         self,
@@ -8191,6 +8195,66 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     return {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
             "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
             "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
+
+
+def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[object]) -> dict[str, object] | None:
+    """The album's MusicBrainz release decision for album details: where the main album
+    ends (as the last main disc number) and the track artists shown for tags that lost them.
+    Display only; tags never change here."""
+    if not album_id:
+        return None
+    rows = connection.execute(
+        """
+        select decision.state, decision.release_group_mbid::text, decision.release_mbid::text,
+               decision.main_disc_count, decision.main_disc_source, decision.track_artists
+        from library.local_albums album
+        join library.local_album_musicbrainz_releases decision
+          on decision.library_id = album.library_id and decision.album_key = album.album_key
+        where album.id = %(album_id)s and decision.state <> 'unresolved'
+        """,
+        {"album_id": album_id},
+    ).fetchall()
+    row = _row_mapping(rows[0]) if rows else {}
+    if not row.get("release_group_mbid"):
+        return None
+    discs = sorted({_positive_number(track.get("disc_number") if isinstance(track, Mapping)
+                                     else getattr(track, "disc_number", None)) or 1 for track in tracks})
+    count = _positive_number(row.get("main_disc_count")) or 0
+    track_artists = row.get("track_artists")
+    if isinstance(track_artists, str):
+        track_artists = json.loads(track_artists)
+    return {
+        "state": row["state"], "release_group_mbid": row["release_group_mbid"],
+        "release_mbid": row.get("release_mbid") or None,
+        # Discs after this number are bonus discs; absent keeps the local guess.
+        "last_main_disc_number": discs[count - 1] if 0 < count <= len(discs) and count < len(discs) else None,
+        "track_artists": [item for item in track_artists or [] if isinstance(item, Mapping) and item.get("artist")],
+    }
+
+
+def _positive_number(value: object) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _apply_musicbrainz_track_artists(album: dict[str, object] | None) -> dict[str, object] | None:
+    """Show the matched release's credit for tracks whose artist tag was lost ("??"):
+    nothing when it is the album artist, the credit otherwise. Track rows only, so the
+    tag editor still sees the tags as they are."""
+    release = (album or {}).get("musicbrainz_release") or {}
+    credits = {(int(item.get("disc_number") or 1), int(item.get("track_number") or 0)): str(item["artist"])
+               for item in release.get("track_artists") or []}
+    if not credits:
+        return album
+    album_artist = str(album.get("album_artist") or "").strip().casefold()
+    for row in album.get("track_rows") or []:
+        credit = credits.get((_positive_number(row.get("disc_number")) or 1, _positive_number(row.get("track_number")) or 0))
+        if credit is not None:
+            row["secondary_artist"] = None if credit.strip().casefold() == album_artist else credit
+    return album
 
 
 def _projected_identities(identities: object) -> list[dict[str, object]]:

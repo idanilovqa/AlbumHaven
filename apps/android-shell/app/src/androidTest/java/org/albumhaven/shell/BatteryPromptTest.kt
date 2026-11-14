@@ -2,6 +2,7 @@ package org.albumhaven.shell
 
 import android.content.Context
 import android.content.Intent
+import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.View
@@ -192,7 +193,9 @@ class BatteryPromptTest {
     private fun ignoringOptimizations() = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
 
     private fun setUnrestricted(on: Boolean) {
-        instrumentation.uiAutomation.executeShellCommand("dumpsys deviceidle whitelist ${if (on) "+" else "-"}$packageName").close()
+        // Read to the end: closing the output early can end the command before it changes anything.
+        val output = instrumentation.uiAutomation.executeShellCommand("dumpsys deviceidle whitelist ${if (on) "+" else "-"}$packageName")
+        ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes() }
         waitUntil("Unrestricted=$on") { ignoringOptimizations() == on }
     }
 

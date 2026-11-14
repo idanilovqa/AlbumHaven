@@ -16258,6 +16258,7 @@ function openLocallyEditedSplitRelease(albumKey, album, releases) {
     && String(release?.year || '') === String(album?.year || '')
   ));
   if (matches.length !== 1) return false;
+  rememberLocallyEditedAlbum({ key: matches[0].album_key || matches[0].key });
   state.ui.trackModalIdentitySplitChoices = releases;
   return selectTrackModalCurrentRelease(matches[0].album_id);
 }

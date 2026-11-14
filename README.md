@@ -11,7 +11,7 @@ from a web interface.
 > roadmap are not yet available unless they also appear in the current-feature
 > section below.
 
-Current release: `0.11.5`
+Current release: `0.11.6`
 
 ## What Album Haven does today
 

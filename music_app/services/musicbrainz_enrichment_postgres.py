@@ -34,6 +34,10 @@ _ARTIST_ENRICHMENT_LOCK_SQL = (
     "select pg_advisory_xact_lock(hashtextextended("
     "'album-haven:musicbrainz-artist:' || %(local_artist_id)s::text, 0))"
 )
+_MUSICBRAINZ_ENTITY_LOCK_SQL = (
+    "select pg_advisory_xact_lock(hashtextextended("
+    "'album-haven:musicbrainz-entity:' || %(artist_mbid)s::text, 0))"
+)
 _PRESENT_ALBUM_ARTIST_SQL = """exists (
           select 1
           from library.local_albums owned_albums
@@ -606,6 +610,8 @@ class MusicBrainzEnrichmentPostgresRepository:
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
                 connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
+                if params["artist_mbid"]:
+                    connection.execute(_MUSICBRAINZ_ENTITY_LOCK_SQL, params)
                 row = _row_mapping(connection.execute(_automatic_outcome_sql(), params).fetchone())
                 connection.execute(_mark_matcher_version_sql(), params)
                 if not row.get("protected"):
@@ -657,6 +663,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
                 connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
+                connection.execute(_MUSICBRAINZ_ENTITY_LOCK_SQL, params)
                 cursors = [connection.execute(sql, params) for sql in statements]
                 result = _row_mapping(cursors[-1].fetchone())
                 if result.get("assigned"):
@@ -683,6 +690,7 @@ class MusicBrainzEnrichmentPostgresRepository:
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
                 connection.execute(_ARTIST_ENRICHMENT_LOCK_SQL, params)
+                connection.execute(_MUSICBRAINZ_ENTITY_LOCK_SQL, params)
                 row = _row_mapping(connection.execute(_refresh_artist_sql(), params).fetchone())
                 connection.execute(_refresh_aliases_sql(), params)
                 connection.execute(_refresh_country_sql(), params)

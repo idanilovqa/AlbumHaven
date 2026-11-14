@@ -3416,3 +3416,26 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+// Request-capture contract (tests/ci/bounded-interactions.json): repeated Album Details opens
+// share one /album-details request and the cached result; a rejected album_id adds one retry.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: Album Details opens fetch /album-details once per album', async () => {
+  const id = 'js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails';
+  await measureInteractionContract(id, async (opens) => {
+    const { context } = loadHelper({
+      onFetchAlbumDetails: ({ url }) => (url.includes('album_id=')
+        ? { ok: false, status: 400, json: () => Promise.resolve({ ok: false, error: 'Unsupported album-details query parameter', unsupported_parameters: ['album_id'] }) }
+        : { ok: true, status: 200, json: () => Promise.resolve({ ok: true, album: { key: new URL(url, 'http://localhost').searchParams.get('album_key'), tracks: [] } }) }),
+    });
+    const loadMany = albumKey => Promise.all(Array.from({ length: opens }, () => context.loadTrackModalAlbumDetails(albumKey)));
+    await loadMany('alpha');
+    await loadMany('alpha');
+    await context.loadTrackModalAlbumDetails('beta', { albumId: 7 });
+    const urls = context.fetchCalls.map(call => call.url);
+    assert.deepEqual(urls, ['/album-details?album_key=alpha', '/album-details?album_key=beta&album_id=7', '/album-details?album_key=beta']);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
+});

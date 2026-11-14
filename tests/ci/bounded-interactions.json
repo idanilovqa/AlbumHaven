@@ -4161,7 +4161,7 @@
     },
     {
       "id": "js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails",
-      "action": "fetch requests installed by fetchTrackModalAlbumDetails",
+      "action": "Open the same album repeatedly, then an album whose album_id an older server rejects",
       "entrypoints": [
         "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails:request:fetch"
       ],
@@ -4173,13 +4173,37 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/album-details"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/track-modal-lightbox-helpers.test.js",
+      "testIdentity": "request capture: Album Details opens fetch /album-details once per album",
+      "performanceTargets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only request-capture contract; Album Details loading is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/track-modal-lightbox-helpers.js#preloadTrackModalArtwork",

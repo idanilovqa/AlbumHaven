@@ -1204,13 +1204,39 @@
         "js:music_app/static/js/runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners:event:scroll"
       ],
       "owners": [
-        "music_app/static/js/runtime/core-state-and-helpers.js"
+        "music_app/static/js/runtime/core-state-and-helpers.js",
+        "music_app/static/js/navigation-tree.js",
+        "music_app/static/js/runtime/render-markup-helpers.js",
+        "music_app/static/js/runtime/browser-navigation-helpers.js"
       ],
       "rules": [
         "BI-01"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 400,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 160,
+        "renderCommits": 1,
+        "domMutations": 1,
+        "markupBytes": 64000,
+        "domQueries": 2,
+        "animationFrames": 2,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/sidebar-virtualization.test.js",
+      "testIdentity": "bounded interaction: sidebar window scroll renders only the new window at 14,000 artists",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the per-list sidebar artist-signature cache; window scrolls then rescan every artist again, with no data or API change."
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#<top-level>",

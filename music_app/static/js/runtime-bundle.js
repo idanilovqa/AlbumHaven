@@ -4314,16 +4314,29 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   return html;
 }
 
+// Sidebar artist lists are replaced, never edited in place, so each list's
+// signature is computed once and window scrolls reuse it instead of
+// rescanning every artist.
+const sidebarArtistSignatures = new WeakMap();
+function sidebarArtistSignature(sidebarArtists) {
+  let signature = sidebarArtistSignatures.get(sidebarArtists);
+  if (signature === undefined) {
+    signature = sidebarArtists.map((item) => [
+      String(item?.artist || ''),
+      String(item?.artist_display || item?.artist || ''),
+      String(item?.count ?? ''),
+    ].join('\u001f')).join('\u001e');
+    sidebarArtistSignatures.set(sidebarArtists, signature);
+  }
+  return signature;
+}
+
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
-  const artistSignature = sidebarArtists.map((item) => [
-    String(item?.artist || ''),
-    String(item?.artist_display || item?.artist || ''),
-    String(item?.count ?? ''),
-  ].join('\u001f')).join('\u001e');
+  const artistSignature = sidebarArtistSignature(sidebarArtists);
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';

@@ -46626,7 +46626,8 @@ function initCompactPlayer() {
     if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
     if (!compactPlayerDrag.didDrag) {
       compactPlayerDrag.didDrag = didCompactPlayerDrag({
-        ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY,
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
       });
       if (compactPlayerDrag.didDrag) els.player.classList.add('is-compact-player-dragging');
     }
@@ -46658,7 +46659,12 @@ function initCompactPlayer() {
   });
   els.cover?.addEventListener('pointermove', event => {
     if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
-    if (!compactPlayerDrag.didDrag) compactPlayerDrag.didDrag = didCompactPlayerDrag({ ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY });
+    if (!compactPlayerDrag.didDrag) {
+      compactPlayerDrag.didDrag = didCompactPlayerDrag({
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
+      });
+    }
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
       y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 105, playerHeight: 105,

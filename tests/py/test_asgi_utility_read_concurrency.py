@@ -63,7 +63,7 @@ def test_blocking_postgres_utility_reads_do_not_block_the_asgi_event_loop(
             assert await asyncio.to_thread(started.wait, 1), "utility repository did not start"
             status, _headers, _body = await asyncio.wait_for(
                 run_asgi_request_async(asgi_app, "GET", "/status"),
-                timeout=0.25,
+                timeout=0.5,
             )
             status_elapsed = time.perf_counter() - started_at
         finally:

@@ -33,6 +33,45 @@ def test_music_dir_has_no_machine_specific_default():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("enrichment_enabled", "worker_enabled", "expected"),
+    [
+        ("1", None, True),
+        ("0", None, False),
+        ("0", "1", True),
+        ("1", "0", False),
+    ],
+)
+def test_musicbrainz_enrichment_worker_enabled_defaults_and_overrides(
+    enrichment_enabled,
+    worker_enabled,
+    expected,
+):
+    environment = dict(os.environ)
+    environment["MUSICBRAINZ_ENRICHMENT_ENABLED"] = enrichment_enabled
+    if worker_enabled is None:
+        environment.pop("MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED", None)
+    else:
+        environment["MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED"] = worker_enabled
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from config import Config; "
+                f"assert Config.MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED is {expected!r}"
+            ),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_utility_projection_prewarm_is_opt_in():
     environment = dict(os.environ)
     environment.pop("ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED", None)

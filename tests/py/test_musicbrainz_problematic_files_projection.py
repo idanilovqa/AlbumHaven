@@ -30,7 +30,9 @@ def _request(rows, *, owner=True, fail=False):
     return SimpleNamespace(
         state=SimpleNamespace(current_actor=_actor(owner=owner)),
         app=SimpleNamespace(state=SimpleNamespace(
-            musicbrainz_enrichment_api_service=service, logger=logging.getLogger("test"),
+            musicbrainz_enrichment_api_service=service,
+            config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"},
+            logger=logging.getLogger("test"),
         )),
     )
 
@@ -60,6 +62,19 @@ def test_owner_sees_artist_rows_merged_by_name_without_reordering_album_rows():
     fixture = Path(__file__).resolve().parents[1] / "fixtures" / "musicbrainz" / "problematic-artist-summary-item.json"
     assert payload["items"][0] == json.loads(fixture.read_text(encoding="utf-8"))
     assert payload["count"] == 3
+
+
+def test_owner_reads_seeded_artist_rows_without_the_background_enrichment_service(monkeypatch):
+    request = _request(ROWS)
+    request.app.state.musicbrainz_enrichment_api_service = None
+    monkeypatch.setattr(
+        "music_app.routes.musicbrainz_enrichment_asgi.MusicBrainzEnrichmentPostgresRepository",
+        lambda config: SimpleNamespace(list_artist_attention=lambda: ROWS),
+    )
+
+    assert [item["key"] for item in load_problematic_artist_items(request)] == [
+        "musicbrainz-artist:7"
+    ]
 
 
 def test_non_owners_and_failures_leave_the_existing_payload_unchanged():

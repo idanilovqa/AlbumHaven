@@ -193,7 +193,10 @@ test('Problems readers include both album and file reasons while excluding propo
     } });
   }
   const Pom = loadPom('utilityProblematicFilesTab.js', 'UtilityProblematicFilesTab', {
-    BasePage: class {}, UtilityMainBody: class {}, UtilitySearchSection: class {}, UtilitySidebarSection: class {},
+    BasePage: class {},
+    UtilityMainBody: class { constructor(page) { this.detail = page; } },
+    UtilitySearchSection: class {},
+    UtilitySidebarSection: class {},
   });
   const page = locator();
   new Pom(page);

@@ -57,6 +57,15 @@ export class UtilityProblematicFilesActions {
       };
       const activeTab = modal?.querySelector(expected.activeTabSelector);
       if (!visible(activeTab) || activeTab.getAttribute('data-utility-tab') !== 'problematic-files') return false;
+      if (expected.problemType) {
+        const filter = Array.from(modal.querySelectorAll(expected.filterOptionSelector))
+          .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
+        const album = Array.from(modal.querySelectorAll(expected.listItemSelector)).find((item) => {
+          const title = String(item.querySelector(expected.listItemTitleSelector)?.textContent || '').trim();
+          return title === expected.albumTitle || title.startsWith(`${expected.albumTitle} / `);
+        });
+        return visible(filter) && visible(album);
+      }
       const hasVisibleItem = Array.from(modal.querySelectorAll(expected.listItemSelector)).some(visible);
       const selected = modal.querySelector(expected.activeListItemSelector);
       const title = modal.querySelector(expected.detailTitleSelector);
@@ -73,7 +82,71 @@ export class UtilityProblematicFilesActions {
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
       listEmptyStateSelector: this.utilityProblematicFilesTab.listEmptyStateSelector,
       detailEmptyStateSelector: this.utilityProblematicFilesTab.detailEmptyStateSelector,
+      problemType: options.problemType || '',
+      albumTitle: options.albumTitle || '',
+      filterOptionSelector: this.utilityProblematicFilesTab.searchSection?.problemFilterOptionSelector || '',
+      listItemTitleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
     });
+  }
+
+  async waitForBoundedPageEvidence(problemType, albumTitle, options = {}) {
+    const timeout = options.timeout || 60000;
+    const rendered = this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
+      if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
+      const filter = Array.from(document.querySelectorAll(expected.filterOptionSelector))
+        .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
+      const item = Array.from(document.querySelectorAll(expected.listItemSelector)).find((candidate) => {
+        const title = String(candidate.querySelector(expected.listItemTitleSelector)?.textContent || '').trim();
+        return title === expected.albumTitle || title.startsWith(`${expected.albumTitle} / `);
+      });
+      return Boolean(filter && item && item.getClientRects().length);
+    }, { timeout }, {
+      albumTitle,
+      problemType,
+      filterOptionSelector: this.utilityProblematicFilesTab.searchSection.problemFilterOptionSelector,
+      listItemSelector: this.utilityProblematicFilesTab.listItemSelector,
+      listItemTitleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
+    });
+    const responsePromise = this.utilityProblematicFilesTab.page.waitForResponse((candidate) => {
+      const url = new URL(candidate.url());
+      return candidate.ok()
+        && candidate.request().method() === 'GET'
+        && url.pathname === '/utilities/problematic-files'
+        && url.searchParams.has('limit');
+    }, { timeout });
+    const [response] = await Promise.all([responsePromise, rendered]);
+    const payload = await response.json();
+    assert.equal(payload.complete, false, 'Expected the first bounded Problematic Files response.');
+    const item = payload.items?.find((candidate) => String(candidate?.name || '') === albumTitle);
+    assert.ok(item, `Expected ${albumTitle} in the first bounded Problematic Files response.`);
+    assert.ok(item.problem_reasons?.includes(problemType), `Expected ${problemType} on ${albumTitle}.`);
+    await Promise.all([
+      this.utilityProblematicFilesTab.searchSection.filterOptionByValue(problemType)
+        .waitFor({ state: 'visible', timeout }),
+      this.utilityProblematicFilesTab.listItemByTitle(albumTitle)
+        .waitFor({ state: 'visible', timeout }),
+    ]);
+  }
+
+  async openProblemFilterMenu(options = {}) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (!await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+    }
+    await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu, {
+      timeout: options.timeout || 60000,
+    });
+  }
+
+  async closeProblemFilterMenu(options = {}) {
+    const searchSection = this.utilityProblematicFilesTab.searchSection;
+    if (await searchSection.problemFilterMenu.isVisible()) {
+      await searchSection.problemFilterButton.click();
+      await searchSection.problemFilterMenu.waitFor({
+        state: 'hidden',
+        timeout: options.timeout || 60000,
+      });
+    }
   }
 
   async expectCoreLayoutVisible(options = {}) {
@@ -284,8 +357,7 @@ export class UtilityProblematicFilesActions {
     if (await searchSection.filterChipByValue(problemType).count()) {
       return;
     }
-    await searchSection.problemFilterButton.click();
-    await this.utilityProblematicFilesTab.waitForVisible(searchSection.problemFilterMenu);
+    await this.openProblemFilterMenu();
     await searchSection.filterOptionByValue(problemType).click();
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
       if (typeof state === 'undefined') return false;
@@ -344,6 +416,98 @@ export class UtilityProblematicFilesActions {
     };
   }
 
+  async readSelectedDetailLinks() {
+    const links = await this.utilityProblematicFilesTab.detailLinks.all();
+    return (await Promise.all(links.map(async (link) => (
+      await link.isVisible()
+        ? (await link.getAttribute('href')) || link.getAttribute('data-open-musicbrainz-url')
+        : null
+    )))).filter(Boolean);
+  }
+
+  async enterManualArtistReference(value) {
+    const input = this.utilityProblematicFilesTab.musicBrainzManualArtistInput;
+    await input.fill(value);
+    return {
+      assignEnabled: await this.utilityProblematicFilesTab.musicBrainzAssignButton.isEnabled(),
+      openEnabled: await this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton.isEnabled(),
+    };
+  }
+
+  async waitForVerifiedManualArtist(name) {
+    await expect(this.utilityProblematicFilesTab.musicBrainzManualStatus).toHaveText(`Verified: ${name}`, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignButton).toBeEnabled();
+    await expect(this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton).toBeEnabled();
+  }
+
+  async openEnteredMusicBrainzArtist(expectedUrl) {
+    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
+    await this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton.click();
+    const popup = await opened;
+    await popup.waitForURL(expectedUrl, { timeout: 60000 });
+    await popup.close();
+  }
+
+  async openMusicBrainzManualSearch(expectedUrl) {
+    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
+    await this.utilityProblematicFilesTab.musicBrainzFindManuallyButton.click();
+    const popup = await opened;
+    await popup.waitForURL(expectedUrl, { timeout: 60000 });
+    await popup.close();
+  }
+
+  async selectMusicBrainzCandidate(name) {
+    await this.utilityProblematicFilesTab.musicBrainzIdentityChoice(name).check();
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignButton).toBeEnabled();
+  }
+
+  async expectMusicBrainzAssignmentDisabled() {
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignButton).toBeDisabled();
+  }
+
+  async readMusicBrainzIdentityTable() {
+    const table = this.utilityProblematicFilesTab.musicBrainzIdentityTable;
+    return {
+      frame: await table.getAttribute('data-cdt-frame'),
+      headers: (await table.getByRole('columnheader').allTextContents()).map((value) => value.trim()).filter(Boolean),
+      rows: (await this.utilityProblematicFilesTab.musicBrainzIdentityRows.allTextContents()).map((value) => value.trim()),
+    };
+  }
+
+  async readMusicBrainzRetryStatus() {
+    return String(await this.utilityProblematicFilesTab.musicBrainzRetryStatus.innerText() || '')
+      .replace(/\s+/g, ' ').trim();
+  }
+
+  async retryMusicBrainzIdentity(artistName) {
+    await this.utilityProblematicFilesTab.musicBrainzRetryButton.click();
+    await expect(this.utilityProblematicFilesTab.listItemByTitle(artistName)).toBeHidden({ timeout: 60000 });
+  }
+
+  async readMusicBrainzIdentityPresentation() {
+    return this.utilityProblematicFilesTab.readMusicBrainzIdentityPresentation();
+  }
+
+  async openMusicBrainzCandidate(name, expectedUrl) {
+    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
+    await this.utilityProblematicFilesTab.musicBrainzArtistLink(name).click();
+    const popup = await opened;
+    await popup.waitForURL(expectedUrl, { timeout: 60000 });
+    await popup.close();
+  }
+
+  async assignSelectedMusicBrainzIdentity(artistName) {
+    await this.utilityProblematicFilesTab.musicBrainzAssignButton.click();
+    await expect(this.utilityProblematicFilesTab.musicBrainzAssignedToast).toBeVisible({ timeout: 60000 });
+    await this.utilityProblematicFilesTab.listItemByTitle(artistName).waitFor({ state: 'detached', timeout: 60000 });
+  }
+
+  async keepCurrentMusicBrainzIdentity(artistName) {
+    await this.utilityProblematicFilesTab.musicBrainzKeepCurrentButton.click();
+    await expect(this.utilityProblematicFilesTab.musicBrainzKeptToast).toBeVisible({ timeout: 60000 });
+    await this.utilityProblematicFilesTab.listItemByTitle(artistName).waitFor({ state: 'detached', timeout: 60000 });
+  }
+
   async selectListItemByIndex(index) {
     const target = this.utilityProblematicFilesTab.listItems.nth(index);
     const key = (await target.getAttribute('data-problematic-album-key')) || '';
@@ -369,8 +533,13 @@ export class UtilityProblematicFilesActions {
       if (expected.key && String(selectedAlbum?.key || '') !== expected.key) {
         return false;
       }
-      if (selectedAlbum && selectedAlbum.detail_loaded === false) {
+      if (selectedAlbum?.entity_kind !== 'artist' && selectedAlbum?.detail_loaded === false) {
         return false;
+      }
+      if (selectedAlbum?.entity_kind === 'artist') {
+        const artistDetail = document.querySelector(expected.artistDetailSelector);
+        if (String(artistDetail?.getAttribute('data-musicbrainz-artist-problem') || '')
+            !== String(selectedAlbum.local_artist_id || '')) return false;
       }
       const detailTitle = (document.querySelector(expected.detailTitleSelector)?.textContent || '').trim();
       if (!detailTitle) {
@@ -383,6 +552,7 @@ export class UtilityProblematicFilesActions {
       key: expectedKey,
       title: expectedTitle,
       activeListItemSelector: this.utilityProblematicFilesTab.activeListItemSelector,
+      artistDetailSelector: this.utilityProblematicFilesTab.artistDetailSelector,
       detailTitleSelector: this.utilityProblematicFilesTab.detailTitleSelector,
     });
   }

@@ -238,6 +238,26 @@ def test_disabled_runtime_does_not_construct_a_worker(monkeypatch):
     assert api.start_musicbrainz_enrichment_worker(app) is None
 
 
+def test_runtime_worker_can_be_disabled_without_disabling_management_api(monkeypatch):
+    api = worker_api()
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config={
+                "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://owned-test",
+                "MUSICBRAINZ_ENRICHMENT_ENABLED": True,
+                "MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED": False,
+            }
+        )
+    )
+    monkeypatch.setattr(
+        api,
+        "build_musicbrainz_enrichment_worker",
+        lambda **_kwargs: pytest.fail("disabled worker was constructed"),
+    )
+
+    assert api.start_musicbrainz_enrichment_worker(app) is None
+
+
 def test_lifespan_source_starts_and_stops_the_musicbrainz_worker():
     music_app = import_module("music_app")
     source = inspect.getsource(music_app.create_asgi_app)

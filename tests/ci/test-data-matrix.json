@@ -10088,5 +10088,92 @@
     },
     "globalMutationReason": "The case changes the server-wide generated-preview policy and files only in its isolated database, app process, and owned media copy, then verifies reverse relocation and cleans that owned state during teardown.",
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+    "case": "FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres and links",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "musicbrainz:matched-and-credited-artist",
+      "musicbrainz:native-ddt-and-aria",
+      "musicbrainz:held-header-hydration",
+      "musicbrainz:shamaani-duo-korpiklaani"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mbid-header-pills",
+      "mbid-panel-links",
+      "mbid-credited-name",
+      "mbid-native-name-surfaces",
+      "mbid-native-latin-storage",
+      "mbd1-04-header-info-hydration-race",
+      "mbd1-40-shamaani-duo-korpiklaani"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:musicbrainz-matched-artist"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+    "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "musicbrainz:split-and-person-with-band"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mbid-split-identities",
+      "mbid-album-details-identity",
+      "mbid-person-with-band"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:musicbrainz-split-artist"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+    "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "musicbrainz:unconfirmed-match",
+      "musicbrainz:not-found-manual-assignment",
+      "musicbrainz:multiple-match-assignment",
+      "musicbrainz:metadata-conflict-keep-current",
+      "musicbrainz:provider-outage-retry",
+      "problematic-files:file-rating-mismatch"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mbid-filter-first-page",
+      "mbid-suggested-artist",
+      "mbid-not-found-manual-assignment",
+      "mbid-multiple-candidate-table",
+      "mbid-conflict-keep-current",
+      "mbid-gallery-after-manual-assignment",
+      "mbd1-14-provider-outage-retry-timing",
+      "mbd1-39-resolved-row-disappears",
+      "mbd1-43-file-rating-mismatch-no-mutation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
+    },
+    "ownerApproval": "approved"
   }
 ]

@@ -30,6 +30,7 @@ $targetNames = @('first', 'second')
 $failedTargets = [System.Collections.Generic.List[string]]::new()
 $targetIndex = 0
 $stateRoot = $foundationRoot = $profileSessionRoot = [IO.Path]::GetTempPath()
+$verifiedBaseFixtureRoot = [IO.Path]::GetTempPath()
 $ShardName = 'unit'
 $bootstrap = 'Invoke-TestBootstrap'
 $nodePath = 'Invoke-TestNode'
@@ -275,6 +276,14 @@ test('performance shard prepares and owns the preloaded artwork derivative befor
     source,
     /Process cleanup is unproven;[^"]*\$derivedRoot[^"]*\$artworkDiversityProvenancePath/i,
     'cleanup failure must report and retain exact derivative evidence paths',
+  );
+});
+
+test('performance shard restores verified preloaded release roots after clearing runtime selectors', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(
+    source,
+    /Set-ClearedRuntimeSelectors[\s\S]*?if\s*\(\$FixtureMode\s+-eq\s+['"]preloaded-release['"]\)\s*\{[\s\S]*?Env:ALBUM_HAVEN_FIXTURE_ROOT['"]\s+-Value\s+\$verifiedBaseFixtureRoot[\s\S]*?Env:ALBUM_HAVEN_MEDIA_ROOT['"]\s+-Value\s+\(Join-Path\s+\$verifiedBaseFixtureRoot\s+['"]media['"]\)/i,
   );
 });
 

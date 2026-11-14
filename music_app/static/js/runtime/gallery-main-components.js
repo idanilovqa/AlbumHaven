@@ -117,7 +117,26 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
       const shown = typeof getGalleryMainGroups === 'function' ? getGalleryMainGroups() : [];
       if (changed.size && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
           && shown.some((group) => changed.has(galleryArtistMusicBrainzStatusKey(group?.artist)))) {
-        void refreshCurrentViewAfterBackgroundCompletion().catch(() => {});
+        const openArtistInfo = typeof captureOpenGalleryArtistInfo === 'function'
+          ? captureOpenGalleryArtistInfo()
+          : null;
+        void refreshCurrentViewAfterBackgroundCompletion()
+          .then((applied) => {
+            if (!applied) return;
+            const restoreArtistInfo = () => {
+              if (openArtistInfo && typeof restoreOpenGalleryArtistInfo === 'function') {
+                restoreOpenGalleryArtistInfo(openArtistInfo);
+              } else if (typeof refreshOpenGalleryArtistInfo === 'function') {
+                refreshOpenGalleryArtistInfo();
+              }
+            };
+            if (typeof scheduleBrowserAnimationFrame === 'function') {
+              scheduleBrowserAnimationFrame(restoreArtistInfo);
+            } else {
+              restoreArtistInfo();
+            }
+          })
+          .catch(() => {});
       }
       return true;
     })

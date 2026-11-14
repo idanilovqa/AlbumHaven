@@ -2103,3 +2103,38 @@ test('generated preview storage timings start at search submission', () => {
   assert.match(relocation, /firstDecodedCoverMs = performance\.now\(\) - searchSubmittedAt/);
   assert.doesNotMatch(relocation, /searchStartedAt/);
 });
+
+test('generated preview storage fails closed on a dirty prior relocation', () => {
+  const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
+  const helper = spec.slice(
+    spec.indexOf('async function openIdleStorageSettings'),
+    spec.indexOf('async function selectStorage'),
+  );
+
+  assert.match(helper, /const activeStates = \['queued', 'running', 'cancel_requested'\]/);
+  assert.match(helper, /const cleanStates = \['idle', 'completed'\]/);
+  assert.match(helper, /!cleanStates\.includes\(state\.operation_state\)/);
+  assert.match(helper, /state\.requested_mode !== null/);
+  assert.match(helper, /state\.failed_count !== 0/);
+  assert.match(helper, /Preview storage baseline is not clean: \$\{JSON\.stringify\(state\)\}/);
+  assert.doesNotMatch(helper, /authenticatedPagePost|\/retry|retryableStates/);
+});
+
+test('loop expiry E2E releases playback ownership before long clock advances', () => {
+  const spec = readRepoFile('tests/e2e/specs/loop-edit-expiry.functional.spec.js');
+  const savedLoopStart = spec.indexOf('await utilityLoopsActions.playLoopByName(SAVED_LOOP_NAME)');
+  const savedLoopEnd = spec.indexOf('await globalPlayerActions.installLoopEditExpiryClock()');
+  const renewalStart = spec.indexOf('await globalPlayerActions.pauseLoopEditExpiryClockBeforeRenewal()');
+  const renewalEnd = spec.indexOf('await globalPlayerActions.resumeLoopEditExpiryClock()');
+
+  assert.ok(savedLoopStart >= 0 && savedLoopEnd > savedLoopStart);
+  assert.ok(renewalStart >= 0 && renewalEnd > renewalStart);
+  const savedLoopStep = spec.slice(savedLoopStart, savedLoopEnd);
+  const renewalStep = spec.slice(renewalStart, renewalEnd);
+
+  assert.doesNotMatch(savedLoopStep, /globalPlayerActions\.resumeIfPaused\(\)/);
+  assert.match(
+    renewalStep,
+    /dragLoopBoundary\('end', 0\.8\)[\s\S]*?pauseToReleasePlaybackClaim\(\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)[\s\S]*?dragLoopBoundary\('end', 0\.75\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)/,
+  );
+});

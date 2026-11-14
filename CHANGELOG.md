@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.5 - 2026-11-13
+
+- Expanded real-browser regression coverage for MusicBrainz artist identities, info links, country and genre labels, split identities, and first-page repair filters.
+- Refreshed accepted MusicBrainz matches with the complete current artist projection, including Discogs links, aliases, names, type, disambiguation, country and genres, without replacing owner decisions or album identities.
+- Kept an open artist information panel visible while Gallery position restoration settles after a MusicBrainz refresh.
+
 ## 0.11.4 - 2026-11-12
 
 - Kept known appearance settings when a newer client stored fields this build does not recognize.

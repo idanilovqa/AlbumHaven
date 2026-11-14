@@ -226,7 +226,13 @@ def test_review_report_and_problem_detail_return_only_safe_current_library_field
 
     assert review_status == detail_status == 200
     assert review == {"artists": [SAFE_ARTIST]}
-    assert detail == {"artist": {**SAFE_ARTIST, "candidates": [SAFE_CANDIDATE]}}
+    assert detail == {
+        "artist": {
+            **SAFE_ARTIST,
+            "candidates": [SAFE_CANDIDATE],
+            "actions_available": True,
+        }
+    }
     serialized = json.dumps({"review": review, "detail": detail})
     for forbidden in (
         "private_path",
@@ -237,6 +243,28 @@ def test_review_report_and_problem_detail_return_only_safe_current_library_field
         "credential",
     ):
         assert forbidden not in serialized
+
+
+def test_problem_detail_reads_persisted_row_when_background_service_is_disabled(monkeypatch):
+    service = Service()
+    monkeypatch.setattr(
+        route_api(),
+        "MusicBrainzEnrichmentPostgresRepository",
+        lambda config: service,
+    )
+    app = app_for(actor_with("library.problems.read"), None)
+
+    status, detail = request(app, "GET", "/api/musicbrainz/artists/41")
+
+    assert status == 200
+    assert detail == {
+        "artist": {
+            **SAFE_ARTIST,
+            "candidates": [SAFE_CANDIDATE],
+            "actions_available": False,
+        }
+    }
+    assert service.calls == [("detail", {"local_artist_id": 41})]
 
 
 def test_sync_and_retry_derive_scope_server_side_and_reject_client_library_scope():

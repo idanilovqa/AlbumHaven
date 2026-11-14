@@ -199,3 +199,166 @@ test('PF first-visible predicate rejects hidden, covered, inactive and temporary
   assert.equal(scenario({ populated: false, loading: true }), false);
   assert.equal(scenario({ populated: false, loading: false }), true);
 });
+
+test('PF bounded-page evidence captures the first response and survives later completion', async () => {
+  const { UtilityProblematicFilesActions } = await importFile('actions/utilityProblematicFilesActions.js');
+  let predicate;
+  let expected;
+  let boundedPredicate;
+  let boundedExpected;
+  let boundedRequests = 0;
+  const visibleWaits = [];
+  const visibleLocator = (label) => ({
+    waitFor: async (options) => visibleWaits.push([label, options]),
+  });
+  const action = new UtilityProblematicFilesActions({
+    page: {
+      waitForResponse: async (matches) => {
+        const response = {
+          url: () => 'http://localhost/utilities/problematic-files?limit=50',
+          request: () => ({ method: () => 'GET' }),
+          ok: () => true,
+          json: async () => ({
+            complete: false,
+            items: [{ name: 'Album Rating Contract', problem_reasons: ['MBID: Unconfirmed match'] }],
+          }),
+        };
+        assert.equal(matches(response), true);
+        boundedRequests += 1;
+        return response;
+      },
+    },
+    modalSelector: '#utility-modal',
+    activeTabSelector: '[data-utility-tab][aria-selected="true"]',
+    listItemSelector: '[data-problematic-album-key]',
+    activeListItemSelector: '[data-problematic-album-key].is-active',
+    listItemTitleSelector: '.utility-list-item-title',
+    detailTitleSelector: '#utility-problematic-detail-title',
+    listEmptyStateSelector: '#utility-problematic-list .utility-empty-state',
+    detailEmptyStateSelector: '#utility-problematic-detail .utility-empty-state',
+    searchSection: {
+      problemFilterOptionSelector: '[data-problem-filter-value]',
+      filterOptionByValue(problemType) {
+        assert.equal(problemType, 'MBID: Unconfirmed match');
+        return visibleLocator('filter');
+      },
+    },
+    listItemByTitle(albumTitle) {
+      assert.equal(albumTitle, 'Album Rating Contract');
+      return visibleLocator('artist');
+    },
+    waitForPageCondition: async (callback, _options, argument) => {
+      if (!argument.modalSelector) {
+        boundedPredicate = callback;
+        boundedExpected = argument;
+      } else {
+        predicate = callback;
+        expected = argument;
+      }
+    },
+  });
+  await action.waitForBoundedPageEvidence('MBID: Unconfirmed match', 'Album Rating Contract');
+  assert.equal(boundedRequests, 1, 'bounded-page evidence must include the actual first response');
+  const boundedRow = {
+    getClientRects: () => [{}],
+    querySelector: () => ({ textContent: boundedExpected.albumTitle }),
+  };
+  const boundedOption = {
+    getAttribute: (name) => name === 'data-problem-filter-value' ? boundedExpected.problemType : null,
+  };
+  const boundedVisible = (complete = false) => vm.runInNewContext(
+    `(${boundedPredicate.toString()})(expected)`,
+    {
+      expected: boundedExpected,
+      state: { utility: { problematicFilesComplete: complete } },
+      document: {
+        querySelectorAll: (selector) => selector === boundedExpected.filterOptionSelector
+          ? [boundedOption] : [boundedRow],
+      },
+    },
+  );
+  assert.equal(boundedVisible(false), true, 'bounded response must be rendered while incomplete');
+  assert.equal(boundedVisible(true), false, 'later complete rendering is not bounded-page evidence');
+  assert.deepEqual(visibleWaits, [
+    ['filter', { state: 'visible', timeout: 60000 }],
+    ['artist', { state: 'visible', timeout: 60000 }],
+  ]);
+  await action.waitForFirstVisible({
+    problemType: 'MBID: Unconfirmed match',
+    albumTitle: 'Album Rating Contract',
+  });
+
+  const evaluate = ({
+    complete = false,
+    filter = true,
+    filterVisible = true,
+    album = true,
+    albumVisible = true,
+    covered = false,
+    hiddenAncestor = false,
+    outsideSurface = false,
+  } = {}) => vm.runInNewContext(
+    `(${predicate.toString()})(expected)`,
+    (() => {
+      const node = (left, text = '', visible = true) => ({
+        textContent: text,
+        hidden: !visible,
+        parentElement: null,
+        style: { display: 'block', visibility: 'visible', opacity: '1' },
+        getBoundingClientRect: () => ({
+          left, top: 20, right: left + (visible ? 100 : 0), bottom: 60,
+          width: visible ? 100 : 0, height: visible ? 40 : 0,
+        }),
+        getAttribute: () => null,
+        contains(other) {
+          for (let current = other; current; current = current.parentElement) if (current === this) return true;
+          return false;
+        },
+      });
+      const modal = node(0);
+      const activeTab = node(120);
+      activeTab.getAttribute = (name) => name === 'data-utility-tab' ? 'problematic-files' : null;
+      const filterParent = node(240);
+      filterParent.hidden = hiddenAncestor;
+      const option = node(260, expected.problemType, filterVisible);
+      option.getAttribute = (name) => name === 'data-problem-filter-value' ? expected.problemType : null;
+      const row = node(400, expected.albumTitle, albumVisible);
+      row.querySelector = () => ({ textContent: expected.albumTitle });
+      activeTab.parentElement = filterParent.parentElement = modal;
+      option.parentElement = outsideSurface ? null : filterParent;
+      row.parentElement = outsideSurface ? null : modal;
+      modal.querySelector = (selector) => selector === expected.activeTabSelector ? activeTab : null;
+      modal.querySelectorAll = (selector) => selector === expected.filterOptionSelector
+        ? (filter ? [option] : [])
+        : (album ? [row] : []);
+      const visibleNodes = [modal, activeTab, filterParent, option, row];
+      return {
+        expected,
+        state: { utility: { problematicFilesComplete: complete } },
+        document: {
+          querySelector: (selector) => selector === expected.modalSelector ? modal : null,
+          elementFromPoint: (x) => {
+            if (covered) return {};
+            return [...visibleNodes].reverse().find((element) => {
+              const bounds = element.getBoundingClientRect();
+              return x >= bounds.left && x < bounds.right;
+            }) || null;
+          },
+        },
+        getComputedStyle: (element) => element.style,
+        innerWidth: 1000,
+        innerHeight: 800,
+      };
+    })(),
+  );
+
+  assert.equal(evaluate(), true);
+  assert.equal(evaluate({ complete: true }), true, 'later completion cannot erase captured first-page evidence');
+  assert.equal(evaluate({ filter: false }), false);
+  assert.equal(evaluate({ filterVisible: false }), false);
+  assert.equal(evaluate({ album: false }), false);
+  assert.equal(evaluate({ albumVisible: false }), false);
+  assert.equal(evaluate({ covered: true }), false);
+  assert.equal(evaluate({ hiddenAncestor: true }), false);
+  assert.equal(evaluate({ outsideSurface: true }), false);
+});

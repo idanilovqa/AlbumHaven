@@ -3363,6 +3363,8 @@ async function openMusicBrainzArtistProblem(occurrenceId) {
 
 const MUSICBRAINZ_ARTIST_MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MUSICBRAINZ_MANUAL_VALIDATION_DELAY_MS = 350;
+const MUSICBRAINZ_RETRY_POLL_DELAY_MS = 500;
+const MUSICBRAINZ_RETRY_POLL_LIMIT = 90;
 
 function isMusicBrainzArtistProblem(item) {
   return item?.entity_kind === 'artist';
@@ -3468,7 +3470,9 @@ function buildMusicBrainzIdentityTableHtml(detail, ui) {
 function buildMusicBrainzManualResolutionHtml(detail, ui) {
   const mbid = readMusicBrainzArtistMbid(ui.manualValue);
   const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
-  const helper = ui.validating ? 'Verifying with MusicBrainz…'
+  const actionsAvailable = detail.actions_available !== false;
+  const helper = !actionsAvailable ? 'MusicBrainz matching actions are unavailable in this read-only session.'
+    : ui.validating ? 'Verifying with MusicBrainz…'
     : ui.validationError ? ui.validationError
       : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
         : 'Paste the selected artist page URL or MBID to verify it before assignment.';
@@ -3477,7 +3481,7 @@ function buildMusicBrainzManualResolutionHtml(detail, ui) {
       <p class="utility-detail-meta">Find the correct artist on MusicBrainz, then paste the artist page URL or bare artist MBID here. Album Haven verifies the entity before assignment.</p>
       <label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">MusicBrainz artist URL or MBID</label>
       <div class="musicbrainz-manual-field-row">
-        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1">
+        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1"${actionsAvailable ? '' : ' disabled'}>
         ${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid })}
         ${ButtonComponent.renderButton({ label: 'Find manually', attributes: { 'data-open-musicbrainz-url': searchUrl } })}
       </div>
@@ -3511,6 +3515,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
   }
   if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
   const ui = item.musicbrainz_ui || {};
+  const actionsAvailable = detail.actions_available !== false;
   const view = getMusicBrainzArtistProblemView(detail);
   const label = String(detail.unresolved_reason || item.problem_reasons?.[0] || '');
   const albumCount = Number(detail.local_album_count || item.local_album_count || 0);
@@ -3520,16 +3525,16 @@ function buildMusicBrainzArtistProblemDetail(item) {
   let actions = '';
   if (view === 'not-found') {
     body = buildMusicBrainzManualResolutionHtml(detail, ui);
-    actions = ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !ui.validated || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } });
+    actions = ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !actionsAvailable || !ui.validated || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } });
   } else if (view === 'multiple' || view === 'conflict') {
     body = `<h4 class="utility-detail-section-title">${view === 'conflict' ? 'Identity comparison' : 'Candidate artists'}</h4>
       <div class="utility-detected-table">${buildMusicBrainzIdentityTableHtml(detail, ui)}</div>`;
     const canAssign = Boolean(ui.selectedMbid) && ui.selectedMbid !== (view === 'conflict' ? detail.artist_mbid : null);
-    actions = `${view === 'conflict' && detail.artist_mbid ? ButtonComponent.renderButton({ label: 'Keep current MBID', disabled: ui.busy, attributes: { 'data-musicbrainz-keep-current': '1' } }) : ''}
-      ${ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !canAssign || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } })}`;
+    actions = `${view === 'conflict' && detail.artist_mbid ? ButtonComponent.renderButton({ label: 'Keep current MBID', disabled: !actionsAvailable || ui.busy, attributes: { 'data-musicbrainz-keep-current': '1' } }) : ''}
+      ${ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !actionsAvailable || !canAssign || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } })}`;
   } else {
     body = buildMusicBrainzProviderStatusHtml(detail, view);
-    actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
+    actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: !actionsAvailable || ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
   }
   const pendingDots = view === 'pending'
     ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
@@ -3595,16 +3600,44 @@ async function postMusicBrainzArtistAction(item, path, body, method = 'POST') {
   return payload;
 }
 
-async function runMusicBrainzArtistMutation(item, perform, successMessage) {
+async function runMusicBrainzArtistMutation(item, perform, successMessage, { refreshSurvivingDetail = false } = {}) {
   const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
   if (ui.busy) return;
   ui.busy = true;
   ui.error = '';
   renderProblematicFiles({ preserveProblematicTree: true });
   try {
-    await perform();
+    const result = await perform();
     if (typeof showToast === 'function') showToast(successMessage, 'info', 2600);
-    await loadProblematicFiles(true);
+    if (result?.enqueued === true) {
+      const occurrenceId = (problem) => String(problem?.musicbrainz_occurrence_id
+        ?? problem?.occurrence_id ?? problem?.problem_occurrence_id
+        ?? problem?.musicbrainz_detail?.problem_occurrence_id ?? '');
+      const previousOccurrenceId = occurrenceId(item);
+      const previousLastAttemptAt = String(item.musicbrainz_detail?.last_attempt_at || '');
+      for (let attempt = 0; attempt < MUSICBRAINZ_RETRY_POLL_LIMIT; attempt += 1) {
+        if (attempt > 0) await waitForBrowserTimeout(MUSICBRAINZ_RETRY_POLL_DELAY_MS);
+        try {
+          const response = await fetch(`/api/musicbrainz/artists/${encodeURIComponent(item.local_artist_id)}`, { headers: { Accept: 'application/json' } });
+          const payload = await response.json().catch(() => ({}));
+          if (response.status === 404) break;
+          if (!response.ok || !payload?.artist) continue;
+          const currentLastAttemptAt = String(payload.artist.last_attempt_at || '');
+          if (occurrenceId(payload.artist) !== previousOccurrenceId
+              || (currentLastAttemptAt && currentLastAttemptAt !== previousLastAttemptAt)) break;
+        } catch {
+          // The bounded poll can recover from a transient status request failure.
+        }
+      }
+      const refreshedProblems = await loadProblematicFiles(true, { preserveSelectedDetail: true });
+      const refreshedItem = Array.isArray(refreshedProblems)
+        ? refreshedProblems.find((problem) => problem.key === item.key) : null;
+      if (refreshedItem && refreshSurvivingDetail) {
+        await loadMusicBrainzArtistProblemDetail(refreshedItem, { force: true, render: false });
+      }
+    } else {
+      await loadProblematicFiles(true);
+    }
     void refreshGalleryArtistMusicBrainzStatus({ force: true });
   } catch (error) {
     ui.error = error?.message || 'MusicBrainz action failed.';
@@ -3687,7 +3720,12 @@ function handleMusicBrainzArtistProblemEvent(event) {
   const detail = item.musicbrainz_detail || {};
   if (target?.closest?.('[data-musicbrainz-retry]')) {
     event.preventDefault();
-    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}), 'MusicBrainz retry queued.');
+    void runMusicBrainzArtistMutation(
+      item,
+      () => postMusicBrainzArtistAction(item, 'retry', {}),
+      'MusicBrainz retry queued.',
+      { refreshSurvivingDetail: true },
+    );
     return true;
   }
   if (target?.closest?.('[data-musicbrainz-keep-current]')) {

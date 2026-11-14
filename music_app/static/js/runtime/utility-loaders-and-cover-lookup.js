@@ -84,7 +84,8 @@ async function loadProblematicFiles(force = false, options = {}) {
         initialDetailKey = String(initialDetail?.key || '').trim();
         const selectedKey = String(state.utility.selectedProblematicKey || '');
         const selectedDetail = preserveSelectedDetail
-          ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+          ? state.utility.problematicFiles.find(item => item.key === selectedKey
+            && (item.detail_loaded === true || item.musicbrainz_detail))
           : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
@@ -108,7 +109,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
-        previousSummaryItems = summaryItems;
+        previousSummaryItems = summaryItems.map(item => ({ ...item }));
       state.utility.loaded = true;
       state.utility.problematicLoadError = '';
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);

@@ -309,6 +309,85 @@ export class GalleryActions {
     await this.galleryPage.goto(pathname);
   }
 
+  async waitForContextName(name, options = {}) {
+    await expect(this.galleryPage.galleryContextName).toHaveText(name, {
+      timeout: options.timeout || 60000,
+    });
+  }
+
+  async readArtistContextMetadata() {
+    return {
+      countries: await this.galleryPage.galleryContextCountryPills.allInnerTexts(),
+      genres: await this.galleryPage.galleryContextGenrePills.allInnerTexts(),
+    };
+  }
+
+  async readArtistContextLayout() {
+    const {
+      artistInfoTrigger, galleryContext, galleryContextInlineTotal,
+      galleryContextMetadata, galleryContextName, page,
+    } = this.galleryPage;
+    const box = async (locator) => (await locator.isVisible() ? locator.boundingBox() : null);
+    const [context, name, info, total, metadata] = await Promise.all([
+      box(galleryContext), box(galleryContextName), box(artistInfoTrigger),
+      box(galleryContextInlineTotal), box(galleryContextMetadata),
+    ]);
+    const titleBoxes = [name, info, total];
+    const viewport = page.viewportSize();
+    const within = (outer, inner) => Boolean(outer && inner
+      && inner.x >= outer.x - 1 && inner.y >= outer.y - 1
+      && inner.x + inner.width <= outer.x + outer.width + 1
+      && inner.y + inner.height <= outer.y + outer.height + 1);
+    const overlapsNameLine = (candidate) => Boolean(name && candidate
+      && candidate.y < name.y + name.height && candidate.y + candidate.height > name.y);
+    return {
+      name: String(await galleryContextName.textContent() || '').trim(),
+      infoLabel: await artistInfoTrigger.getAttribute('aria-label'),
+      // parity-check: allow-read-only-measurement-evaluate -- read rendered divider content
+      divider: (await galleryContextInlineTotal.evaluate((element) => (
+        getComputedStyle(element, '::before').content
+      ))).replace(/^['"]|['"]$/gu, ''),
+      albumCount: String(await galleryContextInlineTotal.textContent() || '').trim(),
+      titleLineAligned: titleBoxes.every(overlapsNameLine),
+      metadataBelowTitle: Boolean(metadata
+        && metadata.y >= Math.max(...titleBoxes.filter(Boolean).map((item) => item.y + item.height)) - 1),
+      unclipped: [name, info, total, metadata].every((item) => within(context, item))
+        && Boolean(context && viewport && context.y >= -1
+          && context.y + context.height <= viewport.height + 1),
+    };
+  }
+
+  async openArtistInfoPanel(artist = null) {
+    const trigger = artist
+      ? this.galleryPage.familyArtistInfoTrigger(artist)
+      : this.galleryPage.artistInfoTrigger;
+    await trigger.click();
+    await expect(this.galleryPage.artistInfoPanel).toBeVisible();
+  }
+
+  async readArtistInfoSnapshot() {
+    const links = await this.galleryPage.artistInfoLinks.all();
+    const identities = await this.galleryPage.artistInfoIdentities.count()
+      ? String(await this.galleryPage.artistInfoIdentities.textContent() || '').trim()
+      : '';
+    return {
+      heading: String(await this.galleryPage.artistInfoHeading.textContent() || '').trim(),
+      credit: (await this.galleryPage.artistInfoCredit.allTextContents()).map((value) => value.trim()),
+      countries: (await this.galleryPage.artistInfoCountryPills.allTextContents()).map((value) => value.trim()),
+      genres: (await this.galleryPage.artistInfoGenrePills.allTextContents()).map((value) => value.trim()),
+      identities,
+      identityRows: (await this.galleryPage.artistInfoIdentityRows.allTextContents()).map((value) => value.trim()),
+      links: (await Promise.all(links.map(async (link) => (
+        await link.isVisible() ? link.getAttribute('href') : null
+      )))).filter(Boolean),
+    };
+  }
+
+  async closeArtistInfoPanel() {
+    await this.galleryPage.page.keyboard.press('Escape');
+    await expect(this.galleryPage.artistInfoPanel).toBeHidden();
+  }
+
   async clickFirstAlbumDetails() {
     await this.galleryPage.albumDetailsButtons.first().click();
   }
@@ -1631,11 +1710,6 @@ export class GalleryActions {
   async readAlbumRatingSurface(artistName, albumName) {
     const albumCard = this.galleryPage.albumCard;
     const row = albumCard.ratingRowByArtistAndAlbum(artistName, albumName);
-    const stars = albumCard.ratingStarsByArtistAndAlbum(artistName, albumName);
-    const text = albumCard.ratingTextByArtistAndAlbum(artistName, albumName);
-    const starPositions = albumCard.ratingStarPositionsByArtistAndAlbum(artistName, albumName);
-    const filledStars = albumCard.ratingFilledStarsByArtistAndAlbum(artistName, albumName);
-    const emptyStars = albumCard.ratingEmptyStarsByArtistAndAlbum(artistName, albumName);
     const rowCount = await row.count();
     if (rowCount === 0) {
       return {
@@ -1651,31 +1725,30 @@ export class GalleryActions {
         emptyColor: '',
       };
     }
-    const [starCount, filledStarCount, emptyStarCount] = await Promise.all([
-      starPositions.count(),
-      filledStars.count(),
-      emptyStars.count(),
-    ]);
-    // parity-check: allow-read-only-measurement-evaluate -- inspect production star colors only
-    const filledColor = filledStarCount > 0
-      ? await filledStars.first().evaluate((star) => getComputedStyle(star).color)
-      : '';
-    // parity-check: allow-read-only-measurement-evaluate -- inspect production star colors only
-    const emptyColor = emptyStarCount > 0
-      ? await emptyStars.first().evaluate((star) => getComputedStyle(star).color)
-      : '';
-    return {
-      rowCount,
-      starCount,
-      filledStarCount,
-      emptyStarCount,
-      role: String(await stars.getAttribute('role') || '').trim(),
-      ariaLabel: String(await stars.getAttribute('aria-label') || '').trim(),
-      text: await text.count() > 0 ? String(await text.textContent() || '').trim() : '',
-      glyphs: (await starPositions.allTextContents()).map((glyph) => glyph.trim()),
-      filledColor,
-      emptyColor,
-    };
+    // parity-check: allow-read-only-measurement-evaluate -- read one connected production rating row atomically
+    return row.evaluate((ratingRow, selectors) => {
+      const stars = ratingRow.querySelector(selectors.stars);
+      const starPositions = Array.from(ratingRow.querySelectorAll(selectors.starPositions));
+      const filledStars = starPositions.filter((star) => star.classList.contains('filled'));
+      const emptyStars = starPositions.filter((star) => !star.classList.contains('filled'));
+      const text = ratingRow.querySelector(selectors.text);
+      return {
+        rowCount: 1,
+        starCount: starPositions.length,
+        filledStarCount: filledStars.length,
+        emptyStarCount: emptyStars.length,
+        role: String(stars?.getAttribute('role') || '').trim(),
+        ariaLabel: String(stars?.getAttribute('aria-label') || '').trim(),
+        text: String(text?.textContent || '').trim(),
+        glyphs: starPositions.map((star) => String(star.textContent || '').trim()),
+        filledColor: filledStars.length > 0 ? getComputedStyle(filledStars[0]).color : '',
+        emptyColor: emptyStars.length > 0 ? getComputedStyle(emptyStars[0]).color : '',
+      };
+    }, {
+      stars: albumCard.ratingStarsWithinRowSelector,
+      starPositions: albumCard.ratingStarWithinRowSelector,
+      text: albumCard.ratingTextWithinRowSelector,
+    });
   }
 
   async readAlbumRatingLayout(artistName, albumName) {

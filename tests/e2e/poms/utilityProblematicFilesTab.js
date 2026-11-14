@@ -29,12 +29,17 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.listEmptyState = page.locator(this.listEmptyStateSelector).first();
     this.detailEmptyState = page.locator('#utility-problematic-detail .utility-empty-state').first();
     this.detailTitle = page.locator(this.detailTitleSelector).first();
+    this.artistDetailSelector = '#utility-problematic-detail [data-musicbrainz-artist-problem]';
     this.detailScroller = page.locator(this.detailScrollerSelector).first();
     this.detailArtist = page.locator('#utility-problematic-detail .utility-detail-meta').first();
+    this.detailLinks = this.mainBody.detail.locator(
+      'a[href], [data-open-musicbrainz-url]',
+    );
     this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
       '#utility-problematic-detail .alert-label[data-problem-exclusion-reason], '
-      + '#utility-problematic-detail .utility-album-problem-content .alert-label',
+      + '#utility-problematic-detail .utility-album-problem-content .alert-label, '
+      + '#utility-problematic-detail .musicbrainz-artist-problem .utility-album-problem-labels .alert-label',
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');
@@ -66,6 +71,62 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.mutationOverlay = page.locator('#utility-problematic-detail .problematic-mutation-overlay');
     this.mutationSpinners = this.mutationOverlay.locator(this.mutationSpinnerSelector);
     this.errorToasts = page.locator('#toast-layer .toast.is-error');
+    this.musicBrainzManualArtistInput = this.mainBody.detail.getByLabel('MusicBrainz artist URL or MBID', { exact: true });
+    this.musicBrainzManualStatus = this.mainBody.detail.locator('.musicbrainz-manual-helper');
+    this.musicBrainzOpenEnteredArtistButton = this.mainBody.detail.getByRole('button', {
+      name: 'Open entered artist on MusicBrainz', exact: true,
+    });
+    this.musicBrainzFindManuallyButton = this.mainBody.detail.getByRole('button', { name: 'Find manually', exact: true });
+    this.musicBrainzAssignButton = this.mainBody.detail.getByRole('button', { name: 'Assign MBID', exact: true });
+    this.musicBrainzKeepCurrentButton = this.mainBody.detail.getByRole('button', { name: 'Keep current MBID', exact: true });
+    this.musicBrainzRetryButton = this.mainBody.detail.getByRole('button', { name: 'Retry now', exact: true });
+    this.musicBrainzRetryStatus = this.mainBody.detail.locator('.musicbrainz-retry-status');
+    this.musicBrainzIdentityTable = this.mainBody.detail.locator('#musicbrainz-artist-identities');
+    this.musicBrainzIdentityRows = this.musicBrainzIdentityTable.locator('.compact-data-table-row');
+    this.musicBrainzAssignedToast = page.locator('#toast-layer .toast').filter({ hasText: 'MBID assigned.' });
+    this.musicBrainzKeptToast = page.locator('#toast-layer .toast').filter({ hasText: 'Current MBID kept.' });
+  }
+
+  musicBrainzIdentityChoice(name) {
+    return this.mainBody.detail.getByRole('radio', { name, exact: true });
+  }
+
+  musicBrainzArtistLink(name) {
+    return this.mainBody.detail.getByRole('button', { name: `Open ${name} on MusicBrainz`, exact: true });
+  }
+
+  async readMusicBrainzIdentityPresentation() {
+    const tableBox = await this.musicBrainzIdentityTable.boundingBox();
+    const assignBox = await this.musicBrainzAssignButton.boundingBox();
+    return {
+      selection: await this.musicBrainzIdentityTable.getAttribute('data-cdt-selection'),
+      mobile: await this.musicBrainzIdentityTable.getAttribute('data-cdt-mobile'),
+      // parity-check: allow-read-only-measurement-evaluate -- measure rendered table structure and cell geometry
+      rows: await this.musicBrainzIdentityRows.evaluateAll((elements) => elements.map((row) => {
+        const cells = [...row.querySelectorAll(':scope > [role="cell"]')];
+        const action = cells[2];
+        const rowBox = row.getBoundingClientRect();
+        const actionBox = action?.getBoundingClientRect();
+        return {
+          cellCount: cells.length,
+          cellLines: cells.slice(1).every((cell) => parseFloat(getComputedStyle(cell).borderLeftWidth) > 0),
+          radioInIdentity: Boolean(cells[0]?.querySelector('input[type="radio"]')),
+          iconOnlyAction: Boolean(action?.querySelector('.action-button')) && !(action?.textContent || '').trim(),
+          fullHeightAction: Boolean(actionBox)
+            && Math.abs(actionBox.top - rowBox.top) <= 1
+            && Math.abs(actionBox.bottom - rowBox.bottom) <= 1,
+        };
+      })),
+      assignBelowTable: Boolean(tableBox && assignBox && assignBox.y >= tableBox.y + tableBox.height),
+      // parity-check: allow-read-only-measurement-evaluate -- read the shared Button presentation class
+      assignPrimary: await this.musicBrainzAssignButton.evaluate(
+        (button) => button.classList.contains('ui-button--primary'),
+      ),
+      keepCurrentHollow: await this.musicBrainzKeepCurrentButton.count()
+        // parity-check: allow-read-only-measurement-evaluate -- read the shared hollow Button presentation class
+        ? await this.musicBrainzKeepCurrentButton.evaluate((button) => button.classList.contains('ui-button--secondary'))
+        : null,
+    };
   }
 
   titleForListItem(item) {

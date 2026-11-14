@@ -44,7 +44,7 @@ class MusicBrainzEnrichmentApiService:
         return self._with_gallery_artist(self._repository.list_present_artist_review())
 
     def list_artist_attention(self, *, include_gallery_artist: bool = True) -> list[dict[str, object]]:
-        """Only artists with an active problem or a queued first lookup."""
+        """Only artists with an active problem or active enrichment job."""
         rows = self._repository.list_artist_attention()
         return self._with_gallery_artist(rows) if include_gallery_artist else rows
 

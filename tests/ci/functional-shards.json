@@ -1225,6 +1225,27 @@
               "test": "tests/e2e/specs/generatedPreviewStorage.functional.spec.js",
               "case": "FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access",
               "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+              "case": "FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres and links",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
+              "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
+              "area": "problematic-files"
             }
           ]
         },

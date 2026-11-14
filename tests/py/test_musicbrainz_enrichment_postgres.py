@@ -8,6 +8,7 @@ import pytest
 from music_app.services.musicbrainz_enrichment_postgres import (
     MATCHER_VERSION,
     MusicBrainzEnrichmentPostgresRepository,
+    _artist_attention_sql,
 )
 
 
@@ -15,6 +16,13 @@ DATABASE_URL = "postgresql://album_haven_app@localhost/album_haven_test"
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
 ARTIST_MBID = "7456103f-3c42-42d2-a2bb-5618b5db6f1b"
 OTHER_MBID = "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d"
+
+
+def test_artist_attention_keeps_matched_artists_visible_while_enrichment_job_is_active():
+    sql = " ".join(_artist_attention_sql().lower().split())
+
+    assert "jobs.state in ('queued', 'leased', 'retry_wait')" in sql
+    assert "matches.id is null" not in sql
 
 
 class FakeCursor:
@@ -403,6 +411,7 @@ def test_manual_assignment_commits_canonical_projection_decision_assertion_and_a
             FakeCursor(),
             FakeCursor(),
             FakeCursor(),
+            FakeCursor(),
             FakeCursor(row={"assigned": True}),
         ]
     )
@@ -425,39 +434,61 @@ def test_manual_assignment_commits_canonical_projection_decision_assertion_and_a
     assert "integration.musicbrainz_artist_countries" in combined_sql
     assert "integration.musicbrainz_artist_tags" in combined_sql
     assert "local_artist_musicbrainz_matches" in combined_sql
+    assert "update ops.metadata_enrichment_jobs" in combined_sql
     assert "decision_source" in combined_sql and "manual" in combined_sql
     assert "library.local_artist_mbid_assertions" in combined_sql
     assert "app.security_audit_events" in combined_sql
     assert connection.calls[-1][1]["actor_account_id"] == 9
 
 
-def test_projection_replacement_retains_every_normalized_tag_including_zero_and_negative_votes():
-    tags = [
-        {
-            "name": "Heavy Metal",
-            "normalized": "heavy metal",
-            "count": 18,
-            "is_genre": True,
-        },
-        {"name": "Epic", "normalized": "epic", "count": 0, "is_genre": False},
-        {"name": "Noise", "normalized": "noise", "count": -2, "is_genre": True},
-    ]
-    connection = FakeConnection(
-        [FakeCursor(), FakeCursor(), FakeCursor(row={"stored_tag_count": 3})]
-    )
+def test_projection_refresh_is_complete_guarded_atomic_and_preserves_match_ownership():
+    artist = {
+        "mbid": ARTIST_MBID,
+        "canonical_name": "Änglagård",
+        "sort_name": "Anglagard",
+        "preferred_native_name": "Änglagård",
+        "artist_type": "Group",
+        "disambiguation": "Swedish progressive rock band",
+        "country_code": "SE",
+        "source_url": f"https://musicbrainz.org/artist/{ARTIST_MBID}",
+        "aliases": [{"name": "Anglagard", "normalized_name": "anglagard"}],
+        "tags": [
+            {"name": "Epic", "normalized_name": "epic", "vote_count": 0},
+            {"name": "Noise", "normalized_name": "noise", "vote_count": -2},
+        ],
+        "genres": [
+            {"name": "Progressive Rock", "normalized_name": "progressive rock", "vote_count": 18},
+        ],
+        "discogs_artist_id": 218108,
+    }
+    connection = FakeConnection([
+        FakeCursor(row={"refreshed": True}),
+        FakeCursor(),
+        FakeCursor(),
+        FakeCursor(),
+    ])
 
-    count = repository_for(connection).replace_artist_tags(
-        artist_mbid=ARTIST_MBID,
-        tags=tags,
+    refreshed = repository_for(connection).refresh_artist_projection(
+        local_artist_id=41,
+        artist=artist,
         observed_at=NOW,
     )
 
-    assert count == 3
+    assert refreshed is True
     assert connection.transaction_count == 1
-    insert_sql, insert_params = connection.calls[1]
-    assert "insert into integration.musicbrainz_artist_tags" in insert_sql.lower()
-    assert insert_params["tags"] == tags
-    assert [tag["count"] for tag in insert_params["tags"]] == [18, 0, -2]
+    assert connection.artist_locks == [(0, 41)]
+    combined_sql = " ".join(sql.lower() for sql, _params in connection.calls)
+    assert "insert into integration.musicbrainz_artists" in combined_sql
+    assert "integration.musicbrainz_artist_aliases" in combined_sql
+    assert "integration.musicbrainz_artist_countries" in combined_sql
+    assert "integration.musicbrainz_artist_tags" in combined_sql
+    assert "matches.local_artist_id = %(local_artist_id)s" in combined_sql
+    assert "matches.artist_mbid = %(artist_mbid)s::uuid" in combined_sql
+    assert "insert into library.local_artist_musicbrainz_matches" not in combined_sql
+    assert "update library.local_artist_musicbrainz_matches" in combined_sql
+    assert all(params["local_artist_id"] == 41 for _sql, params in connection.calls)
+    assert all(params["artist_mbid"] == ARTIST_MBID for _sql, params in connection.calls)
+    assert connection.calls[-1][1]["tag_counts"] == [0, -2, 18]
 
 
 def test_complete_present_artist_review_is_library_scoped_bounded_and_safe():

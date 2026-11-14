@@ -282,6 +282,10 @@ try {
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
     $env:ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = $null
     Set-ClearedRuntimeSelectors
+    if ($FixtureMode -eq 'preloaded-release') {
+        Set-Item -LiteralPath 'Env:ALBUM_HAVEN_FIXTURE_ROOT' -Value $verifiedBaseFixtureRoot
+        Set-Item -LiteralPath 'Env:ALBUM_HAVEN_MEDIA_ROOT' -Value (Join-Path $verifiedBaseFixtureRoot 'media')
+    }
     if ($FixtureMode -eq 'generated-isolated') {
         Set-Item -LiteralPath 'Env:ALBUM_HAVEN_FIXTURE_ROOT' -Value ' '
         Set-Item -LiteralPath 'Env:ALBUM_HAVEN_MEDIA_ROOT' -Value ' '

@@ -5838,7 +5838,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
   assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
-  assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
+  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseToReleasePlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'end', 0\.75\)/);
@@ -6071,6 +6071,7 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
   const originalDocument = global.document;
   const originalGetSelected = global.getSelectedProblematicAlbum;
   try {
+    let artistDetailVisible = false;
     global.state = { utility: { selectedProblematicKey: 'neal morse::?' } };
     global.document = {
       querySelector(selector) {
@@ -6080,12 +6081,18 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
         if (selector === '#utility-problematic-detail .utility-detail-title') {
           return { textContent: '?' };
         }
+        if (selector === '#utility-problematic-detail [data-musicbrainz-artist-problem]') {
+          return artistDetailVisible
+            ? { getAttribute: () => '7' }
+            : null;
+        }
         return null;
       },
     };
     global.getSelectedProblematicAlbum = () => ({ key: 'neal morse::?', detail_loaded: true });
     const actions = new UtilityProblematicFilesActions({
       activeListItemSelector: '[data-problematic-album-key].is-active',
+      artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
       detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
       async waitForPageCondition(callback, options, argument) {
         assert.equal(options.timeout, 4321);
@@ -6093,9 +6100,23 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
           key: 'neal morse::?',
           title: '?',
           activeListItemSelector: '[data-problematic-album-key].is-active',
+          artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
           detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
         });
         assert.equal(callback(argument), true);
+        global.getSelectedProblematicAlbum = () => ({
+          key: 'neal morse::?',
+          entity_kind: 'artist',
+          local_artist_id: 7,
+          detail_loaded: false,
+        });
+        assert.equal(callback(argument), false, 'stale detail cannot satisfy artist selection');
+        artistDetailVisible = true;
+        assert.equal(
+          callback(argument),
+          true,
+          'matching visible artist detail is authoritative even though its summary row remains unloaded',
+        );
       },
     });
 
@@ -6739,6 +6760,27 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
       },
     }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
   }
+});
+
+test('MusicBrainz identity E2E covers native names and every manual resolution path through owned actions', () => {
+  const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
+
+  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings[\s\S]*readArtistInfoSnapshot/);
+  assert.match(spec, /MBD1-11:[\s\S]*enterManualArtistReference/);
+  assert.match(spec, /MBD1-12:[\s\S]*readMusicBrainzIdentityTable[\s\S]*expectMusicBrainzAssignmentDisabled[\s\S]*openMusicBrainzCandidate[\s\S]*selectMusicBrainzCandidate/);
+  assert.match(spec, /MBD1-13:[\s\S]*readMusicBrainzIdentityTable[\s\S]*keepCurrentMusicBrainzIdentity/);
+  assert.match(spec, /MBD1-20:[\s\S]*assignSelectedMusicBrainzIdentity/);
+  assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
+});
+
+test('MusicBrainz retry status reads rendered label and value boundaries', () => {
+  const actions = read('tests/e2e/actions/utilityProblematicFilesActions.js');
+  const start = actions.indexOf('async readMusicBrainzRetryStatus()');
+  const method = actions.slice(start, actions.indexOf('async retryMusicBrainzIdentity', start));
+
+  assert.ok(start >= 0);
+  assert.match(method, /musicBrainzRetryStatus\.innerText\(\)/);
+  assert.doesNotMatch(method, /musicBrainzRetryStatus\.textContent\(\)/);
 });
 
 test('Edit Tags duration gates use the shared timing-budget helper', () => {

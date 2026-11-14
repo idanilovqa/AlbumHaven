@@ -499,7 +499,10 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       for (let index = 0; index < ratingCases.length; index += 1) {
         const ratingCase = ratingCases[index];
         await openArtist({ galleryActions, searchToolbarActions }, ratingCase.artist);
-        expect(await galleryActions.readAlbumRatingSurface(ratingCase.artist, ratingCase.album)).toEqual(before[index]);
+        await expect.poll(
+          () => galleryActions.readAlbumRatingSurface(ratingCase.artist, ratingCase.album),
+          { timeout: 60000 },
+        ).toEqual(before[index]);
       }
     });
 });

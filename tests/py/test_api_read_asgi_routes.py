@@ -619,7 +619,6 @@ def test_asgi_view_data_uses_generation_owned_preview_during_active_scan(
         return {"album_count": len(kwargs["library_state"]["albums"])}
 
     monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FailPostgresBrowseRepository)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fake_build_view_payload)
 
@@ -708,7 +707,6 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
 
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -786,11 +784,6 @@ def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
     monkeypatch.setattr(
         asgi_read_routes,
         "hydrate_library_state_for_config",
-        fail_file_backed_path,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "refresh_relation_views_for_state",
         fail_file_backed_path,
     )
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_file_backed_path)
@@ -1093,7 +1086,6 @@ def test_asgi_view_data_scan_guard_preserves_postgres_root_sidebar_routing(
         type("FakePsycopg", (), {"connect": lambda self, *args, **kwargs: None})(),
     )
     monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
 

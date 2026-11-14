@@ -26,7 +26,6 @@ from music_app.services.loops import load_loops
 from music_app.services.state import (
     format_timestamp,
     hydrate_library_state_for_config,
-    refresh_relation_views_for_state,
 )
 from music_app.services.opinion_read_seams import build_crowd_opinion_modal_payload
 from music_app.services.page_resource_seams import (
@@ -305,20 +304,18 @@ def _request_flag_value(value: object) -> bool:
     }
 
 
-def _hydrate_cached_library_for_asgi(request: Request, *, ensure_relations: bool = False) -> None:
+def _hydrate_cached_library_for_asgi(request: Request) -> None:
+    # Requests hydrate the cached inventory only; relation views are published
+    # by the scan/publication owners, never rebuilt on the request path.
     library_state = _library_state(request)
-    if library_state.get("scan_in_progress"):
-        return
-    if library_state.get("albums") and not ensure_relations:
+    if library_state.get("scan_in_progress") or library_state.get("albums"):
         return
     hydrate_library_state_for_config(
         library_state,
         _app_config(request),
-        ensure_relations=ensure_relations,
+        ensure_relations=False,
         validate_cache=False,
     )
-    if ensure_relations and not (_library_state(request).get("relation_views") or {}).get("artists"):
-        refresh_relation_views_for_state(library_state, _app_config(request))
 
 
 def _postgres_browse_library_state(request: Request) -> Mapping[str, object] | None:

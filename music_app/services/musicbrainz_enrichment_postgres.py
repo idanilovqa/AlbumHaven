@@ -650,6 +650,7 @@ class MusicBrainzEnrichmentPostgresRepository:
             _manual_country_sql(),
             _manual_tags_sql(),
             _manual_match_sql(),
+            _manual_job_completion_sql(),
             _manual_assertion_sql(),
             _manual_audit_sql(),
         )
@@ -2006,6 +2007,25 @@ def _manual_match_sql() -> str:
             provider_observed_at = excluded.provider_observed_at,
             last_observed_at = excluded.last_observed_at,
             updated_at = excluded.updated_at;
+    """
+
+
+def _manual_job_completion_sql() -> str:
+    return _authorized_artist_cte() + """
+        update ops.metadata_enrichment_jobs jobs
+        set state = 'succeeded',
+            lease_owner = null,
+            lease_expires_at = null,
+            provider_classification = 'manual',
+            provider_observed_at = %(observed_at)s,
+            last_error = null,
+            completed_at = %(observed_at)s,
+            updated_at = %(observed_at)s
+        from authorized_artist
+        where jobs.library_id = authorized_artist.library_id
+          and jobs.local_artist_id = authorized_artist.local_artist_id
+          and jobs.target_kind = 'artist'
+          and jobs.state in ('queued', 'leased', 'retry_wait');
     """
 
 

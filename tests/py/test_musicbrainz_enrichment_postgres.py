@@ -411,6 +411,7 @@ def test_manual_assignment_commits_canonical_projection_decision_assertion_and_a
             FakeCursor(),
             FakeCursor(),
             FakeCursor(),
+            FakeCursor(),
             FakeCursor(row={"assigned": True}),
         ]
     )
@@ -433,6 +434,7 @@ def test_manual_assignment_commits_canonical_projection_decision_assertion_and_a
     assert "integration.musicbrainz_artist_countries" in combined_sql
     assert "integration.musicbrainz_artist_tags" in combined_sql
     assert "local_artist_musicbrainz_matches" in combined_sql
+    assert "update ops.metadata_enrichment_jobs" in combined_sql
     assert "decision_source" in combined_sql and "manual" in combined_sql
     assert "library.local_artist_mbid_assertions" in combined_sql
     assert "app.security_audit_events" in combined_sql

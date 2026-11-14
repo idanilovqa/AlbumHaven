@@ -4012,7 +4012,7 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval",
-      "action": "fetch/fetchAndRender requests installed by confirmMissingAlbumRemoval",
+      "action": "Confirm, conflict on, or cancel removing a missing album from Home and from an artist view",
       "entrypoints": [
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval:request:fetch",
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval:request:fetchAndRender"
@@ -4025,15 +4025,34 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/",
           "/*",
-          "/api/library/albums/*/confirm-removal"
+          "/api/library/albums/*/confirm-removal",
+          "/home-data",
+          "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 2000
+      },
+      "budgets": {
+        "requests": 6
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/tag-editor-and-optimistic-updates.test.js",
+      "testIdentity": "request capture: missing album removal posts once and refreshes its own view once",
+      "performanceTargets": [
+        "selected-artist"
+      ],
+      "rollback": "Test-only request-capture contract; missing album removal is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#confirmProblemSuggestions",

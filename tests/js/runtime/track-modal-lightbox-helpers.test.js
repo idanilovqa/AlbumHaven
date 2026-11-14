@@ -582,13 +582,23 @@ test('stale album hydration sends its id and renders current split choices', asy
   );
 });
 
-test('this session opens the release it split without asking which one it meant', async () => {
+test('this session keeps its recovered split release rendered during inventory refresh', async () => {
   const choices = [
     { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
     { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
   ];
-  const { context } = loadHelper({
-    onFetchAlbumDetails: () => ({
+  const selected = {
+    album_id: 93,
+    key: 'artist::album::year::2004',
+    request_key: 'artist::album::year::2004',
+    name: 'Album',
+    year: 2004,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Recovered track' }],
+  };
+  let resolveRefresh = null;
+  const responses = [
+    {
       ok: false,
       status: 409,
       json: () => Promise.resolve({
@@ -596,10 +606,26 @@ test('this session opens the release it split without asking which one it meant'
         resolution_kind: 'album_split',
         current_releases: choices,
       }),
+    },
+    {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true, album: selected }),
+    },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => responses.shift() || new Promise((resolve) => {
+      resolveRefresh = resolve;
     }),
   });
-  const card = { album_id: 17, key: 'artist::album', name: 'Album', year: 2004, preview_only: true };
 
+  const card = {
+    album_id: 17,
+    key: 'artist::album',
+    name: 'Album',
+    year: 2004,
+    preview_only: true,
+  };
   context.rememberLocallyEditedAlbum(card);
   context.openTrackModal(card);
   await flushMicrotasks();
@@ -608,6 +634,19 @@ test('this session opens the release it split without asking which one it meant'
     context.fetchCalls[1].url,
     '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
   );
+
+  const elements = context.getTrackModalElements();
+  const renderedRows = elements.list.innerHTML;
+  context.refreshOpenTrackModalVersionState = () => {};
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+  assert.equal(elements.list.innerHTML, renderedRows);
+  assert.doesNotMatch(context.fetchCalls[2].url, /resolve_lineage=1/);
+  resolveRefresh({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: selected }),
+  });
+  assert.equal(await refresh, true);
 });
 
 test('a card rendered before an inventory mutation resolves lineage before current identity', () => {

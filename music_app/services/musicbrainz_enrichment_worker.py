@@ -152,6 +152,7 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
             repository=MusicBrainzReleaseIdentityPostgresRepository(config),
             client=client,
         ),
+        _discogs_fallback_processor(config, client),
     )
     return MusicBrainzEnrichmentWorker(
         processor=processor,
@@ -164,6 +165,23 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
             cooldown_seconds=seconds,
         ),
     )
+
+
+def _discogs_fallback_processor(config: Mapping[str, object], client: MusicBrainzClient):
+    """Only with the operator's Discogs key: Discogs is asked only about what MusicBrainz lacks."""
+    if not (str(config.get("DISCOGS_CONSUMER_KEY") or "").strip()
+            and str(config.get("DISCOGS_CONSUMER_SECRET") or "").strip()):
+        return None
+    from music_app.services.cover_provider_discogs import discogs_api_get_json
+    from music_app.services.discogs_metadata import DiscogsMetadataClient
+    from music_app.services.musicbrainz_discogs_fallback import DiscogsFallbackProcessor
+    from music_app.services.musicbrainz_discogs_fallback_postgres import DiscogsFallbackPostgresRepository
+
+    user_agent = str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven")
+    discogs = DiscogsMetadataClient(
+        lambda path, params: discogs_api_get_json(path, user_agent, params=params, context="musicbrainz_fallback"))
+    return DiscogsFallbackProcessor(repository=DiscogsFallbackPostgresRepository(config), discogs=discogs,
+                                    musicbrainz=client)
 
 
 def start_musicbrainz_enrichment_worker(app):

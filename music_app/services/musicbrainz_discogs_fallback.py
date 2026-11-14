@@ -128,6 +128,7 @@ def _match_albums(candidate, albums, local_name, discogs, budget) -> list[dict[s
             if album_level(agreement, signals) == "strong" and _CERTAIN <= signals:
                 matched.append({"local_album_id": album.get("id"), "local_title": album["title"],
                                 "discogs_release_id": release["id"], "discogs_master_id": release.get("master_id"),
+                                "discogs_title": release["title"],
                                 "barcodes": release["barcodes"], "signals": sorted(signals),
                                 "tracks": release["tracks"]})
                 break
@@ -165,3 +166,50 @@ def _musicbrainz_hints(artist, matched, musicbrainz) -> list[dict[str, object]]:
                     and candidate_name_keys(candidate) & name_keys(name):
                 hints[mbid] = {"artist_mbid": mbid, "via": "name", "name": name}
     return list(hints.values())
+
+
+class DiscogsFallbackProcessor:
+    """Runs one fallback job: the leased artist MusicBrainz did not find, against Discogs."""
+
+    def __init__(self, *, repository, discogs: DiscogsMetadataClient, musicbrainz, now=None, sweep_interval=None,
+                 max_attempts: int = 6) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        self._repository = repository
+        self._discogs = discogs
+        self._musicbrainz = musicbrainz
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._lease = timedelta(minutes=10)
+        self._sweep_interval = sweep_interval or timedelta(minutes=30)
+        self._max_attempts = max_attempts
+        self._last_sweep = None
+
+    def process_next(self, *, worker_id: str) -> dict[str, object]:
+        from music_app.services.musicbrainz_enrichment import retry_delay
+
+        observed_at = self._now()
+        job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at, lease_duration=self._lease)
+        if not job and (self._last_sweep is None or observed_at - self._last_sweep >= self._sweep_interval):
+            self._last_sweep = observed_at
+            if self._repository.enqueue(reason="discogs_fallback_sweep", observed_at=observed_at):
+                job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at, lease_duration=self._lease)
+        if not job:
+            return {"processed": False, "state": "idle"}
+        job_id, attempts = int(job["id"]), int(job.get("attempt_count") or 0)
+        context = self._repository.load_context(job_id=job_id, worker_id=worker_id) or {}
+        outcome = resolve_with_discogs(context, discogs=self._discogs, musicbrainz=self._musicbrainz)
+        classification = str(outcome.get("classification") or "provider_unavailable")
+        if classification not in {"found", "not_found"}:
+            # Discogs' rate limit and outages are transient: retry with backoff.
+            delay = retry_delay("provider_unavailable" if classification != "rate_limited" else classification,
+                                attempt_count=attempts)
+            exhausted = delay is None or attempts >= self._max_attempts
+            self._repository.finish(job_id=job_id, worker_id=worker_id, state="exhausted" if exhausted else "retry_wait",
+                                    classification=classification, observed_at=observed_at,
+                                    retry_at=None if exhausted else observed_at + delay)
+            return {"processed": True, "state": "exhausted" if exhausted else "retry_wait",
+                    "classification": classification, "job_id": job_id}
+        self._repository.record(job_id=job_id, worker_id=worker_id, outcome=outcome, observed_at=observed_at)
+        self._repository.finish(job_id=job_id, worker_id=worker_id, state="succeeded", classification=classification,
+                                observed_at=observed_at)
+        return {"processed": True, "state": "succeeded", "job_id": job_id}

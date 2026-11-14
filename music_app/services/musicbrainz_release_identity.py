@@ -309,11 +309,13 @@ class MusicBrainzAlbumReleaseProcessor:
 
 
 class ArtistThenAlbumProcessor:
-    """Artists first (Delivery 1), then their albums (Delivery 2), in one enrichment queue."""
+    """Artists first (Delivery 1), then their albums (Delivery 2), then the Discogs fallback
+    for artists MusicBrainz lacks, in one enrichment queue."""
 
-    def __init__(self, artist_processor, album_processor) -> None:
+    def __init__(self, artist_processor, album_processor, fallback_processor=None) -> None:
         self._artists = artist_processor
         self._albums = album_processor
+        self._fallback = fallback_processor
 
     def process_next(self, *, worker_id: str) -> dict[str, object]:
         result = self._artists.process_next(worker_id=worker_id)
@@ -321,4 +323,7 @@ class ArtistThenAlbumProcessor:
             if result.get("state") == "succeeded" and result.get("local_artist_id"):
                 self._albums.queue_artist(int(result["local_artist_id"]))
             return result
-        return self._albums.process_next(worker_id=worker_id)
+        result = self._albums.process_next(worker_id=worker_id)
+        if result.get("processed") or self._fallback is None:
+            return result
+        return self._fallback.process_next(worker_id=worker_id)

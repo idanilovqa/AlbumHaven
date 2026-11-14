@@ -42,12 +42,68 @@ _ARTIST_WITH_IDENTITY_SQL = """
 """
 
 
-class MusicBrainzReleaseIdentityPostgresRepository:
+class EnrichmentJobQueue:
+    """Claim and finish one kind of per-artist enrichment job in the shared queue."""
+
+    job_kind = ""
+
     def __init__(self, config: Mapping[str, object], *, connect: Callable[[str], Any] | None = None) -> None:
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         if not self._database_url:
-            raise RuntimeError("Database configuration is required for MusicBrainz release identity.")
+            raise RuntimeError("Database configuration is required for MusicBrainz enrichment.")
         self._connect = connect or _connect
+
+    def claim_due_job(self, *, worker_id: str, now: datetime, lease_duration: timedelta) -> dict[str, object] | None:
+        claimed_at = _aware_utc(now)
+        params = {"worker_id": _bounded_text(worker_id, 128, required=True), "now": claimed_at,
+                  "lease_expires_at": claimed_at + lease_duration, "job_kind": self.job_kind}
+        sql = _active_library_cte() + """
+            , due_job as (
+              select jobs.id from ops.metadata_enrichment_jobs jobs
+              join active_library on active_library.library_id = jobs.library_id
+              where jobs.job_kind = %(job_kind)s
+                and ((jobs.state in ('queued', 'retry_wait') and jobs.next_attempt_at <= %(now)s)
+                     or (jobs.state = 'leased' and jobs.lease_expires_at <= %(now)s))
+              order by jobs.priority desc, jobs.next_attempt_at, jobs.id
+              for update skip locked
+              limit 1
+            )
+            update ops.metadata_enrichment_jobs jobs
+            set state = 'leased', lease_owner = %(worker_id)s, lease_expires_at = %(lease_expires_at)s,
+                attempt_count = jobs.attempt_count + 1, updated_at = %(now)s
+            from due_job where jobs.id = due_job.id
+            returning jobs.*;
+        """
+        return self._one(sql, params) or None
+
+    def finish(self, *, job_id: int, worker_id: str, state: str, classification: str, observed_at: datetime,
+               retry_at: datetime | None = None, safe_error: str | None = None) -> bool:
+        if state not in {"succeeded", "retry_wait", "exhausted"}:
+            raise ValueError("Enrichment job state is invalid.")
+        params = {"job_id": _positive_id(job_id), "worker_id": _bounded_text(worker_id, 128, required=True),
+                  "job_kind": self.job_kind, "state": state,
+                  "classification": _bounded_text(classification, 64, required=True),
+                  "observed_at": _aware_utc(observed_at), "retry_at": _aware_utc(retry_at) if retry_at else None,
+                  "safe_error": _bounded_text(safe_error, 1024) or None}
+        sql = """
+            update ops.metadata_enrichment_jobs
+            set state = %(state)s, lease_owner = null, lease_expires_at = null,
+                next_attempt_at = coalesce(%(retry_at)s, next_attempt_at),
+                provider_classification = %(classification)s, provider_observed_at = %(observed_at)s,
+                last_error = %(safe_error)s, updated_at = %(observed_at)s,
+                completed_at = case when %(state)s = 'retry_wait' then null else %(observed_at)s end
+            where id = %(job_id)s and job_kind = %(job_kind)s and state = 'leased' and lease_owner = %(worker_id)s
+            returning true as updated;
+        """
+        return bool(self._one(sql, params).get("updated"))
+
+    def _one(self, sql: str, params: dict[str, object]) -> dict[str, object]:
+        with self._connect(self._database_url) as connection:
+            return _row_mapping(connection.execute(sql, params).fetchone())
+
+
+class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
+    job_kind = JOB_KIND
 
     def enqueue(self, *, reason: str, observed_at: datetime, local_artist_id: int | None = None,
                 force: bool = False) -> int:
@@ -95,29 +151,6 @@ class MusicBrainzReleaseIdentityPostgresRepository:
             select count(*)::integer as enqueued from inserted;
         """
         return int(self._one(sql, params).get("enqueued") or 0)
-
-    def claim_due_job(self, *, worker_id: str, now: datetime, lease_duration: timedelta) -> dict[str, object] | None:
-        claimed_at = _aware_utc(now)
-        params = {"worker_id": _bounded_text(worker_id, 128, required=True), "now": claimed_at,
-                  "lease_expires_at": claimed_at + lease_duration, "job_kind": JOB_KIND}
-        sql = _active_library_cte() + """
-            , due_job as (
-              select jobs.id from ops.metadata_enrichment_jobs jobs
-              join active_library on active_library.library_id = jobs.library_id
-              where jobs.job_kind = %(job_kind)s
-                and ((jobs.state in ('queued', 'retry_wait') and jobs.next_attempt_at <= %(now)s)
-                     or (jobs.state = 'leased' and jobs.lease_expires_at <= %(now)s))
-              order by jobs.priority desc, jobs.next_attempt_at, jobs.id
-              for update skip locked
-              limit 1
-            )
-            update ops.metadata_enrichment_jobs jobs
-            set state = 'leased', lease_owner = %(worker_id)s, lease_expires_at = %(lease_expires_at)s,
-                attempt_count = jobs.attempt_count + 1, updated_at = %(now)s
-            from due_job where jobs.id = due_job.id
-            returning jobs.*;
-        """
-        return self._one(sql, params) or None
 
     def load_context(self, *, job_id: int, worker_id: str) -> list[dict[str, object]]:
         """The leased artist's albums with tracks, grouped by the MusicBrainz artist each
@@ -187,30 +220,6 @@ class MusicBrainzReleaseIdentityPostgresRepository:
                     "rows": json.dumps([_album_row(album, releases) for album in albums]),
                 }).fetchone()
         return int(_row_mapping(row).get("stored") or 0)
-
-    def finish(self, *, job_id: int, worker_id: str, state: str, classification: str, observed_at: datetime,
-               retry_at: datetime | None = None, safe_error: str | None = None) -> bool:
-        params = {"job_id": _positive_id(job_id), "worker_id": _bounded_text(worker_id, 128, required=True),
-                  "job_kind": JOB_KIND, "state": state, "classification": _bounded_text(classification, 64, required=True),
-                  "observed_at": _aware_utc(observed_at), "retry_at": _aware_utc(retry_at) if retry_at else None,
-                  "safe_error": _bounded_text(safe_error, 1024) or None}
-        if state not in {"succeeded", "retry_wait", "exhausted"}:
-            raise ValueError("Album release job state is invalid.")
-        sql = """
-            update ops.metadata_enrichment_jobs
-            set state = %(state)s, lease_owner = null, lease_expires_at = null,
-                next_attempt_at = coalesce(%(retry_at)s, next_attempt_at),
-                provider_classification = %(classification)s, provider_observed_at = %(observed_at)s,
-                last_error = %(safe_error)s, updated_at = %(observed_at)s,
-                completed_at = case when %(state)s = 'retry_wait' then null else %(observed_at)s end
-            where id = %(job_id)s and job_kind = %(job_kind)s and state = 'leased' and lease_owner = %(worker_id)s
-            returning true as updated;
-        """
-        return bool(self._one(sql, params).get("updated"))
-
-    def _one(self, sql: str, params: dict[str, object]) -> dict[str, object]:
-        with self._connect(self._database_url) as connection:
-            return _row_mapping(connection.execute(sql, params).fetchone())
 
 
 def _date(value: object) -> str | None:

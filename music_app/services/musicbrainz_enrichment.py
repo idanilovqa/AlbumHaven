@@ -326,6 +326,8 @@ class MusicBrainzArtistEnrichmentProcessor:
 # request counts, and evidence gathering stops once the budget is spent.
 _MAX_REQUESTS_PER_ARTIST = 80
 _MAX_CANDIDATES = 15
+# Hinted MBIDs: a Last.fm identifier and the MusicBrainz artists a Discogs fallback led to.
+_MAX_HINTS = 3
 # Same-named artists with no album link: at most this many are scored, with
 # fewer browse pages, and requests stay reserved for the album searches.
 _MAX_NAME_ONLY_CANDIDATES = 5
@@ -549,11 +551,12 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
                 add(candidate, "named")
         if pool:
             break
-    # The stored Last.fm artist MBID is only a hint candidate.
-    hint = next((str(mbid).strip().lower() for mbid in context.get("hinted_artist_mbids") or []
-                 if str(mbid or "").strip()), "")
-    if hint and hint not in pool:
-        add({"mbid": hint, "canonical_name": "", "score": 0}, "hinted")
+    # The stored Last.fm artist MBID and the artists Discogs led to are only hint candidates.
+    hints = list(dict.fromkeys(str(mbid).strip().lower() for mbid in context.get("hinted_artist_mbids") or []
+                               if str(mbid or "").strip()))
+    for hint in hints[:_MAX_HINTS]:
+        if hint not in pool:
+            add({"mbid": hint, "canonical_name": "", "score": 0}, "hinted")
     # A local artist already matched under another spelling of this name.
     for sibling in context.get("sibling_matches") or []:
         if isinstance(sibling, dict) and name_keys(sibling.get("name")) & local_keys:

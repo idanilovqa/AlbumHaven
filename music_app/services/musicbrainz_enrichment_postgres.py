@@ -398,9 +398,17 @@ class MusicBrainzEnrichmentPostgresRepository:
               ) sibling_rows
             ) siblings on true
             left join lateral (
-              -- A stored local artist MBID (Last.fm) is a search hint, not embedded evidence.
-              select array[artists.mbid::text] as hinted_artist_mbids
-              where artists.mbid is not null
+              -- A stored local artist MBID (Last.fm) and the MusicBrainz artists the Discogs
+              -- fallback led to (barcodes first) are search hints, not embedded evidence.
+              select array_agg(hint order by rank) as hinted_artist_mbids
+              from (
+                select artists.mbid::text as hint, 0 as rank where artists.mbid is not null
+                union all
+                select item->>'artist_mbid', case when item->>'via' = 'barcode' then 1 else 2 end
+                from library.local_artist_discogs_identities discogs
+                cross join jsonb_array_elements(discogs.musicbrainz_hints) item
+                where discogs.library_id = artists.library_id and discogs.local_artist_id = artists.id
+              ) hints
             ) identifiers on true
             left join lateral (
               select assertions.mbid::text as artist_mbid, assertions.confidence

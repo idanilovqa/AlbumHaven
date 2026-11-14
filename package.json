@@ -37,6 +37,7 @@
   },
   "homepage": "https://github.com/idanilovqa/AlbumHaven#readme",
   "devDependencies": {
-    "@playwright/test": "1.61.1"
+    "@playwright/test": "1.61.1",
+    "acorn": "8.15.0"
   }
 }

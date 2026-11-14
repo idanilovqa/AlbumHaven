@@ -44,7 +44,7 @@ _STRING_OR_NULL = r'("(?:[^"\\]|\\.)*"|null)'
 _OUTBOUND_JSON = re.compile(r'"(%s)"(\s*:\s*)%s' % ("|".join(map(re.escape, OUTBOUND_FIELDS)), _STRING_OR_NULL))
 _INBOUND_JSON = re.compile(r'"(%s)"(\s*:\s*)%s' % ("|".join(map(re.escape, INBOUND_FIELDS)), _STRING_OR_NULL))
 _HTML_ATTRIBUTE = re.compile(r'data-cover-path="([^"]*)"')
-# Paths in these URLs are percent-encoded; the next parameter follows as `&`, `&amp;` or `&`.
+# Paths in these URLs are percent-encoded; the next parameter follows as `&`, `&amp;` (HTML) or `\u0026` (tojson).
 _LEGACY_URL = re.compile(r'/cover\?path=([^"\'\s<>&\\]*)(&amp;|&|\\u0026)?')
 _MARKERS = tuple(f'"{field}"' for field in OUTBOUND_FIELDS) + ("data-cover-path=", "/cover?path=")
 _INBOUND_MARKERS = tuple(f'"{field}"' for field in INBOUND_FIELDS)

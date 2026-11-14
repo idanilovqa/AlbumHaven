@@ -117,6 +117,8 @@ def test_no_cover_surface_names_a_library_path(library_app, viewer):
         text = body.decode("utf-8")
         if headers.get("content-type", "").startswith("text/html"):
             found[route] = page_leaks(text, root)
+            # Startup cards and their inline handlers read the name the page receives.
+            assert "data-cover-path" not in text and "data-cover-ref=" in text, route
         else:
             found[f"{route}?{query}"] = leaks(json.loads(text), root)
         assert "music_dir" not in text and "cover_path" not in text and "/cover?path=" not in text, route

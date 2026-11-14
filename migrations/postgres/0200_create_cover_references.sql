@@ -19,6 +19,8 @@ create unique index if not exists cover_references_library_path_idx
 
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
+    -- Schema default privileges grant table-wide UPDATE; a reference may only widen its kind.
+    revoke update, delete, truncate on library.cover_references from album_haven_app;
     grant select, insert, update (kind) on library.cover_references to album_haven_app;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then

@@ -201,7 +201,8 @@ def test_the_owner_opens_covers_and_candidates_by_reference_with_private_caching
     asgi_app, fixture, cover_reference, candidate_reference, cover = cover_app
     as_actor(asgi_app, fixture.actor)
 
-    status, headers, body = run_asgi_request(asgi_app, "GET", f"/cover/{cover_reference}", query={"v": "r1"})
+    revision = "a" * 64  # a cover revision is a SHA-256
+    status, headers, body = run_asgi_request(asgi_app, "GET", f"/cover/{cover_reference}", query={"v": revision})
     assert status == 200 and body == cover.read_bytes()
     assert headers["cache-control"] == "private, max-age=31536000, immutable"
     status, headers, _body = run_asgi_request(asgi_app, "GET", f"/cover/{cover_reference}")
@@ -225,9 +226,11 @@ def test_a_listener_sees_covers_but_not_lookup_candidates_and_a_viewer_gets_only
 
 def test_unknown_foreign_and_unnamed_requests_are_the_same_pathless_404(cover_app, tmp_path):
     asgi_app, fixture, cover_reference, _candidate, _cover = cover_app
-    stranger = replace(member(fixture, "library.artwork.read", "library.media.read"),
-                       current_library_id=library_id(fixture) + 100_000,
-                       library_relationships=(LibraryRelationship(library_id(fixture) + 100_000, "member", False),))
+    other_library = library_id(fixture) + 100_000
+    stranger = replace(member(fixture), current_library_id=other_library,
+                       library_relationships=(LibraryRelationship(other_library, "member", False),),
+                       capability_grants=tuple(CapabilityGrant(action, "library", other_library)
+                                               for action in ("library.artwork.read", "library.media.read")))
     audio = fixture.paths[0]
 
     responses = []

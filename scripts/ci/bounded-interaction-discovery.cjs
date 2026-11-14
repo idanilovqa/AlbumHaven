@@ -17,8 +17,7 @@ const HIGH_FREQUENCY_EVENTS = new Set(['pointermove', 'mousemove', 'scroll', 'wh
 const TIMER_CALLS = new Set(['setInterval', 'setTimeout', 'requestAnimationFrame']);
 const DEFERRED_CALLBACK_CALLS = new Set(['setTimeout', 'requestAnimationFrame', 'queueMicrotask', 'requestIdleCallback']);
 const OBSERVERS = new Set(['MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'PerformanceObserver']);
-// fetch plus the runtime helpers whose first argument is the request URL.
-const REQUEST_CALLS = new Set(['fetch', 'fetchAndRender', 'fetchGalleryViewResponse', 'fetchPage', 'requestJson']);
+const MAX_RESOLUTION_DEPTH = 8;
 const GLOBAL_OBJECTS = new Set(['window', 'globalThis', 'global', 'self']);
 const ITERATION_METHODS = new Set(['forEach', 'map', 'filter', 'reduce', 'sort', 'find', 'findIndex', 'some', 'every', 'flatMap']);
 const DOM_COLLECTION_QUERIES = new Set(['querySelectorAll', 'getElementsByClassName', 'getElementsByTagName', 'getElementsByName']);
@@ -32,6 +31,11 @@ const MAX_CALL_DEPTH = 6;
 
 function normalizePath(value) {
   return String(value || '').replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
+// Request path without query; template holes become one-segment wildcards.
+function normalizeEndpoint(target) {
+  return String(target || '').split('?')[0].replaceAll('${}', '*').replace(/\/+$/, '') || '/';
 }
 
 function parseSource(source, filePath) {
@@ -94,7 +98,7 @@ function stringValue(node) {
 // anonymous callbacks nested inside it.
 function annotateOwners(ast) {
   const owners = new Map();
-  const visit = (node, owner, className) => {
+  const visit = (node, owner, className, scope) => {
     if (!node || typeof node.type !== 'string') return;
     let nextOwner = owner;
     let nextClass = className;
@@ -110,15 +114,18 @@ function annotateOwners(ast) {
         nextOwner = `${className || '<class>'}.${propertyName(node.key)}`;
       }
     }
-    owners.set(node, { owner: nextOwner, className: nextClass });
+    // `scope` is the enclosing function of the node; a function's own scope is
+    // its parent, and its children are scoped to it.
+    owners.set(node, { owner: nextOwner, className: nextClass, scope });
+    const childScope = isFunction(node) ? node : scope;
     for (const key of Object.keys(node)) {
       if (key === 'loc') continue;
       const child = node[key];
-      if (Array.isArray(child)) child.forEach(item => visit(item, nextOwner, nextClass));
-      else if (child && typeof child.type === 'string') visit(child, nextOwner, nextClass);
+      if (Array.isArray(child)) child.forEach(item => visit(item, nextOwner, nextClass, childScope));
+      else if (child && typeof child.type === 'string') visit(child, nextOwner, nextClass, childScope);
     }
   };
-  visit(ast, '<top-level>', '');
+  visit(ast, '<top-level>', '', null);
   return owners;
 }
 
@@ -128,7 +135,7 @@ function parseFile(source, filePath) {
 }
 
 function ownerOf(file, node) {
-  return file.owners.get(node) || { owner: '<top-level>', className: '' };
+  return file.owners.get(node) || { owner: '<top-level>', className: '', scope: null };
 }
 
 // Global function and class-method definitions. Runtime scripts share one
@@ -262,7 +269,7 @@ function computeFunctionHazards(fnNode, file) {
         hazards.push(hazardAt('BI-01', `Object.${name}`, at, file));
       } else if ((name === 'stringify' || name === 'parse') && callee.object?.name === 'JSON') {
         hazards.push(hazardAt('BI-13', `JSON.${name}`, at, file));
-      } else if (REQUEST_CALLS.has(name) && callee.type === 'Identifier') {
+      } else if (name === 'fetch' && callee.type === 'Identifier') {
         hazards.push(hazardAt('BI-03', name, at, file));
       } else if (callee.type === 'MemberExpression' && STORAGE_OBJECTS.has(callee.object?.name)) {
         hazards.push(hazardAt('BI-01', `${callee.object.name}.${name}`, at, file));
@@ -311,6 +318,123 @@ function reachableHazards(handler, context, index) {
   return { direct, indirect };
 }
 
+
+// ---------------------------------------------------------------------------
+// Request target resolution. A request target is resolved to literal paths when
+// it is a string, a local or module constant, `new URL(...)`/`.href`, a
+// conditional, or a call to a function whose returns resolve (URL builders).
+// A target that is the enclosing function's own parameter makes that function
+// a request helper: its callers become request entrypoints and its own call is
+// delegated. Anything else stays dynamic and needs a request-capture contract.
+
+function functionParamIndex(fnNode, name) {
+  return fnNode.params.findIndex(param => (
+    (param.type === 'Identifier' && param.name === name)
+    || (param.type === 'AssignmentPattern' && param.left.type === 'Identifier' && param.left.name === name)
+  ));
+}
+
+function findDeclaration(file, scope, name) {
+  let found = null;
+  walkAst(scope ? scope.body : file.ast, (node) => {
+    if (found) return false;
+    if (isFunction(node) && node !== scope) return false;
+    if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier' && node.id.name === name) {
+      found = node;
+      return false;
+    }
+    return undefined;
+  });
+  return found;
+}
+
+function bindingOf(file, scope, name) {
+  for (let current = scope; ; current = ownerOf(file, current).scope) {
+    if (current) {
+      const index = functionParamIndex(current, name);
+      if (index >= 0) return { param: index, fn: current };
+    }
+    const declaration = findDeclaration(file, current, name);
+    if (declaration) return { declaration, scope: current };
+    if (!current) return null;
+  }
+}
+
+function functionDefinitions(name, file, index) {
+  const defs = index.functions.get(name) || [];
+  const local = defs.filter(def => def.file === file);
+  return local.length ? local : defs;
+}
+
+function returnExpressions(fnNode) {
+  if (fnNode.body?.type !== 'BlockStatement') return [fnNode.body];
+  const returns = [];
+  walkAst(fnNode.body, (node) => {
+    if (isFunction(node)) return false;
+    if (node.type === 'ReturnStatement' && node.argument) returns.push(node.argument);
+    return undefined;
+  });
+  return returns;
+}
+
+function resolveTargets(node, file, scope, index, depth = 0) {
+  const recurse = (child, childFile = file, childScope = scope) => resolveTargets(child, childFile, childScope, index, depth + 1);
+  if (!node || depth > MAX_RESOLUTION_DEPTH) return [{ target: null }];
+  const text = stringValue(node);
+  if (text !== null) return [{ target: text.startsWith('/') ? text : null }];
+  if (node.type === 'ConditionalExpression') return [...recurse(node.consequent), ...recurse(node.alternate)];
+  if (node.type === 'LogicalExpression') return [...recurse(node.left), ...recurse(node.right)];
+  if (node.type === 'AwaitExpression' || node.type === 'ChainExpression') return recurse(node.argument || node.expression);
+  if (node.type === 'NewExpression' && ['URL', 'Request'].includes(node.callee?.name)) return recurse(node.arguments[0]);
+  if (node.type === 'MemberExpression' && ['href', 'pathname'].includes(memberProperty(node))) {
+    // A parameter's `.href` is an element or URL object, not a forwarded URL.
+    return recurse(node.object).map(resolved => (resolved.param === undefined ? resolved : { target: null }));
+  }
+  if (node.type === 'Identifier') {
+    const binding = bindingOf(file, scope, node.name);
+    if (binding?.param !== undefined) return [{ target: null, param: binding.param, fn: binding.fn }];
+    if (binding?.declaration?.init) return recurse(binding.declaration.init, file, binding.scope);
+    return [{ target: null }];
+  }
+  if (node.type === 'CallExpression') {
+    if (node.callee.type === 'Identifier' && node.callee.name === 'String') return recurse(node.arguments[0]);
+    const defs = node.callee.type === 'Identifier' ? functionDefinitions(node.callee.name, file, index) : [];
+    if (defs.length) {
+      return defs.flatMap(def => returnExpressions(def.node).flatMap(expression => recurse(expression, def.file, def.node)))
+        .map(({ param, fn, ...rest }) => (param === undefined ? rest : { target: null }));
+    }
+  }
+  return [{ target: null }];
+}
+
+// Functions that pass one of their own parameters to a request become request
+// helpers, to a fixpoint (helpers of helpers).
+function requestHelpers(files, index) {
+  const helpers = new Map([['fetch', null]]);
+  const helperNodes = new Map();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const file of files) {
+      walkAst(file.ast, (node) => {
+        if (node.type !== 'CallExpression' || node.callee.type !== 'Identifier') return;
+        const helper = helpers.get(node.callee.name);
+        if (helper === undefined) return;
+        const argumentIndex = helper ?? 0;
+        const { scope } = ownerOf(file, node);
+        for (const resolved of resolveTargets(node.arguments[argumentIndex], file, scope, index)) {
+          if (resolved.param === undefined) continue;
+          const def = [...index.functions.values()].flat().find(candidate => candidate.node === resolved.fn);
+          if (!def || helpers.has(def.name)) continue;
+          helpers.set(def.name, resolved.param);
+          helperNodes.set(def.node, def.name);
+          changed = true;
+        }
+      });
+    }
+  }
+  return helpers;
+}
+
 function entry(file, node, kind, trigger) {
   const { owner } = ownerOf(file, node);
   return {
@@ -325,7 +449,7 @@ function entry(file, node, kind, trigger) {
 }
 
 // Entry points plus the handler node for high-frequency events.
-function fileEntrypoints(file) {
+function fileEntrypoints(file, index, helpers) {
   const found = [];
   walkAst(file.ast, (node) => {
     if (node.type === 'CallExpression') {
@@ -335,12 +459,12 @@ function fileEntrypoints(file) {
         if (trigger) found.push({ ...entry(file, node, 'event', trigger), handler: node.arguments[1] });
       } else if (TIMER_CALLS.has(name) && (node.callee.type === 'Identifier' || GLOBAL_OBJECTS.has(node.callee.object?.name))) {
         found.push(entry(file, node, 'timer', name));
-      } else if (REQUEST_CALLS.has(name) && node.callee.type === 'Identifier') {
-        // Only a target with a literal leading path is statically owned; the rest
-        // need a deterministic request-capture contract.
-        const target = stringValue(node.arguments[0]);
+      } else if (node.callee.type === 'Identifier' && helpers.has(name)) {
         const call = entry(file, node, 'request', name);
-        found.push({ ...call, targets: [{ target: target?.startsWith('/') ? target : null, line: call.line }] });
+        const { scope } = ownerOf(file, node);
+        const targets = resolveTargets(node.arguments[helpers.get(name) ?? 0], file, scope, index)
+          .map(({ target, param }) => ({ target, line: call.line, ...(param === undefined ? {} : { delegated: true }) }));
+        found.push({ ...call, targets });
       }
     } else if (node.type === 'NewExpression') {
       const name = node.callee?.name;
@@ -415,6 +539,16 @@ function dedupeEntrypoints(entries) {
     if (!existing) byKey.set(item.key, item.targets ? { ...item, targets: [...item.targets] } : item);
     else if (item.targets) existing.targets.push(...item.targets);
   }
+  for (const item of byKey.values()) {
+    if (!item.targets) continue;
+    const seen = new Set();
+    item.targets = item.targets.filter(({ target, delegated }) => {
+      const id = `${target}|${Boolean(delegated)}`;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
   return [...byKey.values()];
 }
 
@@ -423,15 +557,16 @@ function publicEntry({ handler, ...rest }) {
 }
 
 function discoverJavaScriptSource(source, filePath) {
-  return dedupeEntrypoints(fileEntrypoints(parseFile(source, filePath)).map(publicEntry));
+  return analyzeFiles([parseFile(source, filePath)]).entrypoints;
 }
 
 function analyzeFiles(files) {
   const index = indexDefinitions(files);
+  const helpers = requestHelpers(files, index);
   const entrypoints = [];
   const hazards = [];
   for (const file of files) {
-    for (const found of fileEntrypoints(file)) {
+    for (const found of fileEntrypoints(file, index, helpers)) {
       entrypoints.push(publicEntry(found));
       if (found.kind !== 'event' || !HIGH_FREQUENCY_EVENTS.has(found.trigger) || !found.handler) continue;
       const context = { file, className: ownerOf(file, found.handler).className };
@@ -492,6 +627,7 @@ function discoverJavaScriptEntrypoints(root) {
 
 module.exports = {
   HIGH_FREQUENCY_EVENTS,
+  normalizeEndpoint,
   analyzeJavaScriptRepository,
   analyzeJavaScriptSources,
   discoverJavaScriptEntrypoints,

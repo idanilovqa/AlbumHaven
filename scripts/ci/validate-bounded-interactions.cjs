@@ -16,7 +16,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { analyzeJavaScriptRepository } = require('./bounded-interaction-discovery.cjs');
+const { analyzeJavaScriptRepository, normalizeEndpoint } = require('./bounded-interaction-discovery.cjs');
+const { syncRegistry } = require('./bounded-interaction-registry-sync.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const REGISTRY_PATH = 'tests/ci/bounded-interactions.json';
@@ -33,10 +34,6 @@ const RULE_PATTERN = /^BI-(0[1-9]|1[0-4])$/;
 
 function normalizePath(value) {
   return String(value || '').replaceAll('\\', '/').replace(/^\.\//, '');
-}
-
-function normalizeEndpoint(target) {
-  return String(target || '').split('?')[0].replaceAll('${}', '*').replace(/\/+$/, '') || '/';
 }
 
 function endpointMatches(endpoint, pattern) {
@@ -256,6 +253,15 @@ function interactionsForPaths(registry, changedPaths) {
 
 async function main(argv = process.argv.slice(2)) {
   const registry = loadRegistry();
+  if (argv.includes('--sync')) {
+    const discovery = await discoverRepository({ registry });
+    const synced = syncRegistry(registry, discovery.entrypoints);
+    fs.writeFileSync(path.join(REPO_ROOT, REGISTRY_PATH), `${JSON.stringify(synced.registry, null, 2)}\n`);
+    for (const key of synced.added) process.stdout.write(`registered ${key}\n`);
+    for (const key of synced.removed) process.stdout.write(`removed stale ${key}\n`);
+    process.stdout.write('review the registered entries, then validate without --sync\n');
+    return 0;
+  }
   if (argv.includes('--changed-paths')) {
     const file = argv[argv.indexOf('--changed-paths') + 1];
     const changed = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
@@ -277,8 +283,7 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) {
   main().then(code => { process.exitCode = code; }, (error) => {
-    process.stderr.write(`${error.stack || error}
-`);
+    process.stderr.write(`${error.stack || error}\n`);
     process.exitCode = 1;
   });
 }

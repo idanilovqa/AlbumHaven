@@ -133,3 +133,47 @@ def test_cli_emits_one_sorted_json_entry_per_line(tmp_path: Path, capsys: pytest
     assert discovery.main(["--root", str(tmp_path)]) == 0
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [line["trigger"] for line in lines] == ["GET /a", "GET /b"]
+
+
+def test_deferred_lambdas_are_not_followed_but_synchronous_ones_are(tmp_path: Path):
+    _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
+    _write(tmp_path, "music_app/routes/read.py", """
+from fastapi.concurrency import run_in_threadpool
+from music_app.services.relations import build_relation_views
+
+@router.post("/queued")
+def queued(state, executor):
+    executor.submit(lambda: build_relation_views(state))
+
+@router.get("/inline")
+async def inline(state):
+    return await run_in_threadpool(lambda: build_relation_views(state))
+""")
+    analysis = discovery.analyze_python_repository(
+        tmp_path,
+        library_scale_operations=["py:music_app/services/relations.py#build_relation_views"],
+    )
+    rejected = [item["entrypoint"] for item in analysis["hazards"] if item["reject"]]
+    assert rejected == ["py:music_app/routes/read.py#inline:route:GET /inline"]
+
+
+def test_single_file_probes_are_bounded_but_per_item_probes_are_reported(tmp_path: Path):
+    _write(tmp_path, "music_app/services/files.py", """
+def size(path):
+    return path.stat().st_size
+""")
+    _write(tmp_path, "music_app/routes/read.py", """
+from music_app.services.files import size
+
+@router.get("/track")
+def track(path):
+    return size(path)
+
+@router.get("/album")
+def album(paths):
+    return [size(path) for path in paths]
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert [(item["entrypoint"].split("#")[1], item["operation"]) for item in hazards] == [
+        ("album:route:GET /album", "Path.stat"),
+    ]

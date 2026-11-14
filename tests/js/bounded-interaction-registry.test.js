@@ -152,3 +152,22 @@ test('the checked-in registry satisfies the schema', () => {
   });
   assert.deepEqual(errors, []);
 });
+
+test('sync registers new entrypoints, drops stale ones, and keeps reviewed fields', () => {
+  const { syncRegistry } = require('../../scripts/ci/bounded-interaction-registry-sync.cjs');
+  const reviewed = contractEntry({ id: 'js:runtime/album-track-table.js#install', requestOwnership: { allowed: ['/home-data'], forbidden: ['/view-data'] } });
+  reviewed.entrypoints = [KEY, `js:${OWNER}#install:event:stale`];
+  const discovered = [
+    { key: KEY, language: 'javascript', path: OWNER, owner: 'install', kind: 'event', trigger: 'pointermove' },
+    { key: `js:${OWNER}#install:request:fetch`, language: 'javascript', path: OWNER, owner: 'install', kind: 'request', trigger: 'fetch', targets: [{ target: '/view-data', line: 9 }] },
+    { key: `js:${OWNER}#openMenu:event:click`, language: 'javascript', path: OWNER, owner: 'openMenu', kind: 'event', trigger: 'click' },
+  ];
+  const { registry: synced, added, removed } = syncRegistry(registry([reviewed]), discovered);
+  assert.deepEqual(removed, [`js:${OWNER}#install:event:stale`]);
+  assert.deepEqual(added, [`js:${OWNER}#install:request:fetch`, `js:${OWNER}#openMenu:event:click`]);
+  const [install, openMenu] = synced.interactions;
+  assert.deepEqual(install.entrypoints, [KEY, `js:${OWNER}#install:request:fetch`]);
+  assert.deepEqual(install.requestOwnership, { allowed: ['/home-data'], forbidden: ['/view-data'] });
+  assert.equal(install.proof, 'contract');
+  assert.deepEqual([openMenu.id, openMenu.proof, openMenu.workClass], ['js:runtime/album-track-table.js#openMenu', 'static', 'constant']);
+});

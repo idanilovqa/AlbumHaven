@@ -82,6 +82,28 @@
       "proof": "static"
     },
     {
+      "id": "js:admin-members.js#copyInvitation",
+      "action": "rosterRequest requests installed by copyInvitation",
+      "entrypoints": [
+        "js:music_app/static/js/admin-members.js#copyInvitation:request:rosterRequest"
+      ],
+      "owners": [
+        "music_app/static/js/admin-members.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/admin/accounts/*/invitation/copy"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:admin-members.js#mount",
       "action": "album-haven:surface-opening/change/click/resize/scroll/submit/wheel listeners, requestJson requests installed by mount",
       "entrypoints": [
@@ -145,6 +167,28 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:admin-members.js#sendInvitation",
+      "action": "rosterRequest requests installed by sendInvitation",
+      "entrypoints": [
+        "js:music_app/static/js/admin-members.js#sendInvitation:request:rosterRequest"
+      ],
+      "owners": [
+        "music_app/static/js/admin-members.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/admin/accounts/*/invitation/send"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:admin-server.js#<top-level>",
@@ -246,38 +290,6 @@
       "proof": "static"
     },
     {
-      "id": "js:app-copy-worker.js#message",
-      "action": "fetchPage requests installed by message",
-      "entrypoints": [
-        "js:music_app/static/js/app-copy-worker.js#message:request:fetchPage"
-      ],
-      "owners": [
-        "music_app/static/js/app-copy-worker.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:app-copy-worker.js#navigate",
-      "action": "fetchPage requests installed by navigate",
-      "entrypoints": [
-        "js:music_app/static/js/app-copy-worker.js#navigate:request:fetchPage"
-      ],
-      "owners": [
-        "music_app/static/js/app-copy-worker.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "js:app-copy-worker.js#versionedAsset",
       "action": "fetch requests installed by versionedAsset",
       "entrypoints": [
@@ -323,7 +335,13 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/app-copy/account"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:app-copy.js#createAppCopyClient",
@@ -747,7 +765,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick",
@@ -763,7 +788,16 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/",
+          "/*",
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState",
@@ -779,7 +813,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleSidebarArtistSelectionClick",
@@ -795,7 +836,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#reconcile",
@@ -811,7 +859,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#scrollRootGalleryToArtist",
@@ -827,7 +882,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#tryRenderOptimisticSidebarArtistSelection",
@@ -843,7 +905,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#tryRestoreClearedSearchView",
@@ -859,7 +928,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/bootstrap-init.js#<top-level>",
@@ -1898,7 +1974,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot",
@@ -1914,7 +1997,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#cancelLibraryScan",
@@ -1956,10 +2046,11 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
-      "action": "fetch/fetchAndRender requests installed by fetchAndRender",
+      "action": "fetch/fetchAndRender/retryPendingGalleryViewResponse requests installed by fetchAndRender",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetch",
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetchAndRender"
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetchAndRender",
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:retryPendingGalleryViewResponse"
       ],
       "owners": [
         "music_app/static/js/runtime/gallery-refresh-and-status.js"
@@ -1969,7 +2060,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchArtist",
@@ -1989,9 +2087,10 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse",
-      "action": "fetch requests installed by fetchGalleryViewResponse",
+      "action": "fetch/retryPendingGalleryViewResponse requests installed by fetchGalleryViewResponse",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:fetch"
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:fetch",
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:retryPendingGalleryViewResponse"
       ],
       "owners": [
         "music_app/static/js/runtime/gallery-refresh-and-status.js"
@@ -2087,7 +2186,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse",
@@ -2194,7 +2300,9 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/library-settings/import-album-ratings"
+          "/home-data",
+          "/library-settings/import-album-ratings",
+          "/view-data*"
         ],
         "forbidden": []
       }
@@ -2705,6 +2813,50 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#deletePlaybackClaim",
+      "action": "playbackOwnershipRequest requests installed by deletePlaybackClaim",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#deletePlaybackClaim:request:playbackOwnershipRequest"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#handlePlaybackOwnershipEvent",
+      "action": "playbackOwnershipRequest requests installed by handlePlaybackOwnershipEvent",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#handlePlaybackOwnershipEvent:request:playbackOwnershipRequest"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#initPlaybackOwnershipCoordinator",
       "action": "message listeners installed by initPlaybackOwnershipCoordinator",
       "entrypoints": [
@@ -2737,6 +2889,50 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipTrack",
+      "action": "playbackOwnershipRequest requests installed by playbackOwnershipTrack",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#playbackOwnershipTrack:request:playbackOwnershipRequest"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/refs"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/playback-ownership-helpers.js#requestPlaybackClaim",
+      "action": "playbackOwnershipRequest requests installed by requestPlaybackClaim",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/playback-ownership-helpers.js#requestPlaybackClaim:request:playbackOwnershipRequest"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/playback-ownership-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/state"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/playback-ownership-helpers.js#startPlaybackOwnershipHeartbeat",
       "action": "setInterval timers installed by startPlaybackOwnershipHeartbeat",
       "entrypoints": [
@@ -2765,6 +2961,94 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/player-listen-session-helpers.js#finalizeListenSession",
+      "action": "postPlaybackSession requests installed by finalizeListenSession",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-listen-session-helpers.js#finalizeListenSession:request:postPlaybackSession"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-listen-session-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/session/complete"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/player-listen-session-helpers.js#maybeScrobbleListenSession",
+      "action": "postPlaybackSession requests installed by maybeScrobbleListenSession",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-listen-session-helpers.js#maybeScrobbleListenSession:request:postPlaybackSession"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-listen-session-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/session/scrobble"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/player-listen-session-helpers.js#maybeSendNowPlaying",
+      "action": "postPlaybackSession requests installed by maybeSendNowPlaying",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-listen-session-helpers.js#maybeSendNowPlaying:request:postPlaybackSession"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-listen-session-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/session/now-playing"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/player-listen-session-helpers.js#persistPausedListenSession",
+      "action": "postPlaybackSession requests installed by persistPausedListenSession",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-listen-session-helpers.js#persistPausedListenSession:request:postPlaybackSession"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-listen-session-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/session/complete"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/player-listen-session-helpers.js#postPlaybackSession",
@@ -3263,6 +3547,8 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
+          "/",
+          "/*",
           "/api/library/albums/*/confirm-removal"
         ],
         "forbidden": []
@@ -3345,7 +3631,9 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/versions/ignore"
+          "/home-data",
+          "/versions/ignore",
+          "/view-data*"
         ],
         "forbidden": []
       }
@@ -3390,7 +3678,9 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/utilities/rules/version-exceptions/revert"
+          "/home-data",
+          "/utilities/rules/version-exceptions/revert",
+          "/view-data*"
         ],
         "forbidden": []
       }
@@ -3409,7 +3699,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#unmarkAlbumVersion",
@@ -3591,7 +3888,13 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/album-details"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/track-modal-lightbox-helpers.js#preloadTrackModalArtwork",
@@ -3744,7 +4047,14 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/utility-list-builders.js#runMusicBrainzArtistMutation",
@@ -3819,7 +4129,9 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/utilities/save-task/*"
+          "/home-data",
+          "/utilities/save-task/*",
+          "/view-data*"
         ],
         "forbidden": []
       }
@@ -3973,6 +4285,28 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles",
+      "action": "fetchSummary requests installed by loadProblematicFiles",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:request:fetchSummary"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadTagEditorFolderFiles",
       "action": "fetch requests installed by loadTagEditorFolderFiles",
       "entrypoints": [
@@ -4095,7 +4429,9 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/utilities/move-album"
+          "/home-data",
+          "/utilities/move-album",
+          "/view-data*"
         ],
         "forbidden": []
       }
@@ -4152,7 +4488,13 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/imports/local-playlists/analyze"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#saveLastfmIntegration",
@@ -4219,38 +4561,6 @@
         ],
         "forbidden": []
       }
-    },
-    {
-      "id": "js:runtime/utility-log-history-query.js#capture",
-      "action": "fetchPage requests installed by capture",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/utility-log-history-query.js#capture:request:fetchPage"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/utility-log-history-query.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:runtime/utility-log-history-query.js#createUtilityLogHistoryQueryController",
-      "action": "fetchPage requests installed by createUtilityLogHistoryQueryController",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/utility-log-history-query.js#createUtilityLogHistoryQueryController:request:fetchPage"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/utility-log-history-query.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
     },
     {
       "id": "js:runtime/utility-log-history-ui.js#getUtilityLogHistoryController",
@@ -4536,7 +4846,13 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/account/appearance/selection-accent"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:selection-accent.js#mount",
@@ -4570,7 +4886,13 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/api/account/appearance/selection-accent"
+        ],
+        "forbidden": []
+      }
     },
     {
       "id": "js:settings-navigation.js#create",
@@ -4790,7 +5112,9 @@
       "proof": "static",
       "requestOwnership": {
         "allowed": [
-          "/utilities/fetch-covers-unsuccessful"
+          "/home-data",
+          "/utilities/fetch-covers-unsuccessful",
+          "/view-data*"
         ],
         "forbidden": []
       }

@@ -174,11 +174,16 @@ class Index:
 
 
 NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+LOOP_NODES = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+# Callables that run a lambda argument before returning; per-item consumers run
+# it once per element. Any other lambda argument may be deferred (executors,
+# queues, threads) and is not followed.
+ITERATING_LAMBDA_CONSUMERS = {"sorted", "sort", "min", "max", "map", "filter", "any", "all", "sum"}
 
 
 @dataclass
 class BodyFacts:
-    calls: list[ast.Call]
+    calls: list[tuple[ast.Call, bool]]
     nested: dict[str, Definition]
     has_while: bool
 
@@ -187,18 +192,31 @@ _FACTS: dict[int, BodyFacts] = {}
 
 
 def _facts(definition: Definition) -> BodyFacts:
-    """Calls that execute when the definition runs; nested defs run only when called."""
+    """Calls that execute when the definition runs, each marked when it runs in a loop.
+
+    Nested defs and deferred lambdas run only when something calls them.
+    """
     cached = _FACTS.get(id(definition.node))
     if cached is not None:
         return cached
-    calls: list[ast.Call] = []
+    calls: list[tuple[ast.Call, bool]] = []
     nested: dict[str, Definition] = {}
     has_while = False
-    stack = list(ast.iter_child_nodes(definition.node))
+    lambda_loops: dict[int, bool] = {}
+    stack = [(child, False) for child in ast.iter_child_nodes(definition.node)]
     while stack:
-        node = stack.pop()
+        node, in_loop = stack.pop()
+        if isinstance(node, ast.Lambda):
+            if id(node) not in lambda_loops:
+                continue
+            in_loop = in_loop or lambda_loops[id(node)]
         if isinstance(node, ast.Call):
-            calls.append(node)
+            calls.append((node, in_loop))
+            consumer = _call_name(node)[1]
+            if consumer in ITERATING_LAMBDA_CONSUMERS or consumer in SYNCHRONOUS_DISPATCH:
+                for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+                    if isinstance(argument, ast.Lambda):
+                        lambda_loops[id(argument)] = consumer in ITERATING_LAMBDA_CONSUMERS
         elif isinstance(node, ast.While):
             has_while = True
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -211,13 +229,14 @@ def _facts(definition: Definition) -> BodyFacts:
             )
         if isinstance(node, NESTED_SCOPES):
             continue
+        child_in_loop = in_loop or isinstance(node, LOOP_NODES)
         for name in node._fields:
             value = getattr(node, name, None)
             if isinstance(value, list):
-                stack.extend(item for item in value if isinstance(item, ast.AST))
+                stack.extend((item, child_in_loop) for item in value if isinstance(item, ast.AST))
             elif isinstance(value, ast.AST):
-                stack.append(value)
-    calls.sort(key=lambda call: (call.lineno, call.col_offset))
+                stack.append((value, child_in_loop))
+    calls.sort(key=lambda item: (item[0].lineno, item[0].col_offset))
     facts = BodyFacts(calls, nested, has_while)
     _FACTS[id(definition.node)] = facts
     return facts
@@ -233,35 +252,50 @@ def _call_name(node: ast.Call) -> tuple[str, str]:
     return "", ""
 
 
-def _direct_hazards(definition: Definition) -> list[dict[str, object]]:
+ENUMERATIONS = frozenset({*ENUMERATION_CALLS.values(), *ENUMERATION_METHODS.values()})
+
+
+def _filesystem_operation(node: ast.Call) -> str | None:
+    base, name = _call_name(node)
+    attribute = isinstance(node.func, ast.Attribute)
+    if (base, name) in ENUMERATION_CALLS:
+        return ENUMERATION_CALLS[(base, name)]
+    if attribute and name in ENUMERATION_METHODS and base not in {"glob", "fnmatch", "re"}:
+        return ENUMERATION_METHODS[name]
+    if (base, name) == ("os", "stat"):
+        return "os.stat"
+    if attribute and name in PROBE_METHODS and base != "os":
+        return PROBE_METHODS[name]
+    if isinstance(node.func, ast.Name) and name == "open":
+        return "open"
+    if (base, name) == ("mutagen", "File") or name in MEDIA_CALLS:
+        return "mutagen.File"
+    return None
+
+
+def _direct_hazards(definition: Definition, looped: bool) -> list[dict[str, object]]:
+    """Directory enumeration always counts. A single stat/open/media parse of a
+    selected file is bounded; the same probe repeated per item is not."""
     hazards = []
-    for node in _facts(definition).calls:
-        base, name = _call_name(node)
-        operation = None
-        rule = "BI-06"
-        if (base, name) in ENUMERATION_CALLS:
-            operation = ENUMERATION_CALLS[(base, name)]
-        elif isinstance(node.func, ast.Attribute) and name in ENUMERATION_METHODS and base not in {"glob", "fnmatch", "re"}:
-            operation = ENUMERATION_METHODS[name]
-        elif (base, name) == ("os", "stat") or (isinstance(node.func, ast.Attribute) and name in PROBE_METHODS and base != "os"):
-            operation = PROBE_METHODS.get(name, "os.stat")
-        elif isinstance(node.func, ast.Name) and name == "open":
-            operation = "open"
-        elif (base, name) == ("mutagen", "File") or name in MEDIA_CALLS:
-            operation = "mutagen.File"
-        if operation:
-            hazards.append({
-                "rule": rule,
-                "operation": operation,
-                "path": definition.path,
-                "function": definition.qualname,
-                "line": node.lineno,
-                "enumeration": operation in set(ENUMERATION_CALLS.values()) | set(ENUMERATION_METHODS.values()),
-            })
+    for node, in_loop in _facts(definition).calls:
+        operation = _filesystem_operation(node)
+        if operation is None:
+            continue
+        enumeration = operation in ENUMERATIONS
+        if not (enumeration or in_loop or looped):
+            continue
+        hazards.append({
+            "rule": "BI-06",
+            "operation": operation,
+            "path": definition.path,
+            "function": definition.qualname,
+            "line": node.lineno,
+            "enumeration": enumeration,
+        })
     return hazards
 
 
-def _callees(definition: Definition, index: Index) -> list[Definition]:
+def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool]]:
     found = []
     facts = _facts(definition)
 
@@ -270,15 +304,15 @@ def _callees(definition: Definition, index: Index) -> list[Definition]:
             return facts.nested[target.id]
         return index.resolve(target, definition)
 
-    for node in facts.calls:
+    for node, in_loop in facts.calls:
         target = resolve(node.func)
         if target is not None:
-            found.append(target)
+            found.append((target, in_loop))
         _, name = _call_name(node)
         if name in SYNCHRONOUS_DISPATCH and node.args:
             dispatched = resolve(node.args[0])
             if dispatched is not None:
-                found.append(dispatched)
+                found.append((dispatched, in_loop))
     return found
 
 
@@ -363,21 +397,21 @@ def analyze_python_repository(
     library_scale = set(library_scale_operations)
     entrypoints: list[dict[str, object]] = []
     hazards: list[dict[str, object]] = []
-    hazard_cache: dict[int, list[dict[str, object]]] = {}
-    callee_cache: dict[int, list[Definition]] = {}
+    hazard_cache: dict[tuple[int, bool], list[dict[str, object]]] = {}
+    callee_cache: dict[int, list[tuple[Definition, bool]]] = {}
     for module in modules:
         if not module.path.startswith(ENTRYPOINT_ROOTS):
             continue
         for entry, definition in _entrypoints(module):
             entrypoints.append(entry)
             interactive = entry["kind"] == "route"
-            queue = deque([(definition, [])])
+            queue = deque([(definition, [], False)])
             seen = set()
             while queue:
-                current, via = queue.popleft()
-                if id(current.node) in seen or len(via) > MAX_CALL_DEPTH:
+                current, via, looped = queue.popleft()
+                if (id(current.node), looped) in seen or len(via) > MAX_CALL_DEPTH:
                     continue
-                seen.add(id(current.node))
+                seen.add((id(current.node), looped))
                 depth = "direct" if not via else "indirect"
                 if interactive and current.key in library_scale:
                     hazards.append({
@@ -392,9 +426,10 @@ def analyze_python_repository(
                         "reject": True,
                     })
                     continue
-                if id(current.node) not in hazard_cache:
-                    hazard_cache[id(current.node)] = _direct_hazards(current)
-                for hazard in hazard_cache[id(current.node)]:
+                cache_key = (id(current.node), looped)
+                if cache_key not in hazard_cache:
+                    hazard_cache[cache_key] = _direct_hazards(current, looped)
+                for hazard in hazard_cache[cache_key]:
                     record = {key: value for key, value in hazard.items() if key != "enumeration"}
                     hazards.append({
                         **record,
@@ -405,8 +440,8 @@ def analyze_python_repository(
                     })
                 if id(current.node) not in callee_cache:
                     callee_cache[id(current.node)] = _callees(current, index)
-                for callee in callee_cache[id(current.node)]:
-                    queue.append((callee, [*via, callee.qualname]))
+                for callee, call_in_loop in callee_cache[id(current.node)]:
+                    queue.append((callee, [*via, callee.qualname], looped or call_in_loop))
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
         hazard["key"] = f"{hazard['entrypoint']}:{hazard['rule']}:{hazard['operation']}@{hazard['path']}#{hazard['function']}"
@@ -431,7 +466,7 @@ def find_python_hazards(path: Path) -> list[dict[str, object]]:
     hazards = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            hazards.extend(_direct_hazards(Definition(relative, node.name, node, "")))
+            hazards.extend(_direct_hazards(Definition(relative, node.name, node, ""), looped=True))
     return sorted(hazards, key=lambda item: item["line"])
 
 

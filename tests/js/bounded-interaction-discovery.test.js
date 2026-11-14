@@ -183,3 +183,35 @@ test('flags a generic Home URL that is only returned for a later fetch', () => {
   `, FILE);
   assert.deepEqual(operations(hazards)[0], ['BI-04', 'route-owner:/view-data?surface=home']);
 });
+
+test('resolves request targets through constants, URL objects, and URL builders', () => {
+  const requests = discoverJavaScriptSource(`
+    const STATUS_URL = '/status';
+    function buildApiUrl(view) {
+      if (view.surface === 'home') return view.compact ? '/home-data?omit_sidebar=1' : '/home-data';
+      return \`/view-data?surface=\${view.surface}\`;
+    }
+    async function load(view) {
+      const settings = new URL('/library-settings', location.origin);
+      await fetch(STATUS_URL);
+      await fetch(settings.href);
+      await fetch(buildApiUrl(view));
+    }
+  `, FILE);
+  assert.deepEqual(requests[0].targets.map(item => item.target), [
+    '/status', '/library-settings', '/home-data?omit_sidebar=1', '/home-data', '/view-data?surface=${}',
+  ]);
+});
+
+test('a function that passes its own parameter to fetch becomes a request helper', () => {
+  const requests = discoverJavaScriptSource(`
+    async function requestJson(url, options) { return (await fetch(url, options)).json(); }
+    function openAccount() { return requestJson('/account'); }
+    function openUnknown(link) { return requestJson(link.href); }
+  `, FILE);
+  assert.deepEqual(requests.map(item => [item.key.split('#')[1], item.targets.map(({ target, delegated }) => (delegated ? 'delegated' : target))]), [
+    ['openAccount:request:requestJson', ['/account']],
+    ['openUnknown:request:requestJson', [null]],
+    ['requestJson:request:fetch', ['delegated']],
+  ]);
+});

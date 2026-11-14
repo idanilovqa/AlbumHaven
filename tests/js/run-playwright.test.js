@@ -3308,15 +3308,15 @@ test('functional fixture startup waits for a stable idle production status befor
   );
 });
 
+const FIXTURE_COVER_REF = 'fixtureCoverRef0000000';
+
 for (const pendingCode of ['search_projection_pending', 'gallery_projection_pending']) {
   test(`functional fixture warmup retries ${pendingCode} until the gallery projection is ready`, async () => {
-    const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
-    const coverPath = path.join(mediaRoot, 'fixture-cover.jpg');
+    const coverRef = FIXTURE_COVER_REF;
     const viewRequests = [];
     let now = 0;
 
     const warmed = await _private.prewarmFunctionalFixture(4324, {
-      mediaRoot,
       nowFn: () => now,
       sleepFn: async (milliseconds) => { now += milliseconds; },
       pollIntervalMs: 10,
@@ -3336,7 +3336,7 @@ for (const pendingCode of ['search_projection_pending', 'gallery_projection_pend
         return {
           ok: true,
           statusCode: 200,
-          body: JSON.stringify({ albums: [{ cover_path: coverPath }] }),
+          body: JSON.stringify({ albums: [{ cover_ref: coverRef }] }),
         };
       },
     });
@@ -3348,13 +3348,11 @@ for (const pendingCode of ['search_projection_pending', 'gallery_projection_pend
 }
 
 test('functional fixture warmup bounds each projection retry to the original deadline', async () => {
-  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
   const requestTimeouts = [];
   let now = 0;
   let viewAttempts = 0;
 
   const warmed = await _private.prewarmFunctionalFixture(4324, {
-    mediaRoot,
     nowFn: () => now,
     sleepFn: async (milliseconds) => { now += milliseconds; },
     pollIntervalMs: 10,
@@ -3377,7 +3375,7 @@ test('functional fixture warmup bounds each projection retry to the original dea
         ok: true,
         statusCode: 200,
         body: JSON.stringify({
-          albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+          albums: [{ cover_ref: FIXTURE_COVER_REF }],
         }),
       };
     },
@@ -3388,11 +3386,9 @@ test('functional fixture warmup bounds each projection retry to the original dea
 });
 
 test('functional fixture warmup rereads when the library changes during its gallery read', async () => {
-  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
   let viewAttempts = 0;
 
   const warmed = await _private.prewarmFunctionalFixture(4324, {
-    mediaRoot,
     sleepFn: async () => {},
     pollIntervalMs: 1,
     timeoutMs: 1000,
@@ -3411,7 +3407,7 @@ test('functional fixture warmup rereads when the library changes during its gall
           ok: true,
           statusCode: 200,
           body: JSON.stringify({
-            albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+            albums: [{ cover_ref: FIXTURE_COVER_REF }],
           }),
         };
     },
@@ -3421,13 +3417,11 @@ test('functional fixture warmup rereads when the library changes during its gall
   assert.equal(viewAttempts, 2);
 });
 
-test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
+test('functional fixture warmup derives each named cover preview once from the real gallery payload', async () => {
   const requests = [];
-  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
-  const firstCover = path.join(mediaRoot, 'covers', 'fixture-one.jpg');
-  const secondCover = path.join(mediaRoot, 'covers', 'fixture-two.jpg');
+  const firstCover = 'fixtureCoverOne0000000';
+  const secondCover = 'fixtureCoverTwo0000000';
   const warmed = await _private.prewarmFunctionalFixture(4324, {
-    mediaRoot,
     requestHeaders: { Cookie: 'session=test' },
     fetchHttpResponseCompleteFn: async (url, options) => {
       requests.push({ url, options });
@@ -3439,10 +3433,10 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
           ok: true,
           body: JSON.stringify({
             albums: [
-              { cover_path: firstCover },
-              { cover_path: firstCover },
-              { cover_path: secondCover },
-              { cover_path: path.join(os.tmpdir(), 'owner-music', 'cover.jpg') },
+              { cover_ref: firstCover },
+              { cover_ref: firstCover },
+              { cover_ref: secondCover, cover_preview_url: `/cover/${secondCover}?size=480` },
+              { cover_ref: null },
             ],
           }),
         };
@@ -3452,17 +3446,13 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
   });
 
   assert.equal(warmed, true);
-  const firstUrl = new URL('/cover', 'http://127.0.0.1:4324');
-  firstUrl.searchParams.set('path', firstCover);
-  firstUrl.searchParams.set('size', '480');
-  const secondUrl = new URL('/cover', 'http://127.0.0.1:4324');
-  secondUrl.searchParams.set('path', secondCover);
-  secondUrl.searchParams.set('size', '480');
+  const firstUrl = `http://127.0.0.1:4324/cover/${firstCover}?size=480`;
+  const secondUrl = `http://127.0.0.1:4324/cover/${secondCover}?size=480`;
   assert.deepEqual(requests.map((request) => request.url), [
     'http://127.0.0.1:4324/?surface=albums',
     'http://127.0.0.1:4324/view-data?surface=albums&omit_sidebar=1',
-    firstUrl.toString(),
-    secondUrl.toString(),
+    firstUrl,
+    secondUrl,
     'http://127.0.0.1:4324/utilities/problematic-files',
     'http://127.0.0.1:4324/utilities/rules',
   ]);
@@ -3474,7 +3464,6 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
 test('functional fixture warmup reports only the failed stage and HTTP status', async () => {
   const diagnostics = [];
   const warmed = await _private.prewarmFunctionalFixture(4324, {
-    mediaRoot: path.join(os.tmpdir(), 'album-haven-functional-media'),
     diagnosticWriteFn: (line) => diagnostics.push(line),
     fetchHttpResponseCompleteFn: async (url) => {
       if (url.includes('/view-data?')) {
@@ -3482,18 +3471,11 @@ test('functional fixture warmup reports only the failed stage and HTTP status', 
           ok: true,
           statusCode: 200,
           body: JSON.stringify({
-            albums: [{
-              cover_path: path.join(
-                os.tmpdir(),
-                'album-haven-functional-media',
-                'deleted-fixture',
-                'cover.jpg',
-              ),
-            }],
+            albums: [{ cover_ref: FIXTURE_COVER_REF }],
           }),
         };
       }
-      if (url.includes('/cover?')) return { ok: false, statusCode: 404, body: 'private path' };
+      if (url.includes('/cover/')) return { ok: false, statusCode: 404, body: '' };
       return { ok: true, statusCode: 200, body: '' };
     },
   });

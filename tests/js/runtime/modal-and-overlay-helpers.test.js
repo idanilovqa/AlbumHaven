@@ -850,7 +850,7 @@ function createAlbumCard(viewport, options = {}) {
   const imageElement = new FakeElement('cover-image');
   imageElement.dataset = {};
   imageElement.attributes = {
-    'data-cover-path': 'C:/covers/local-primary-1.jpg',
+    'data-cover-ref': 'C:/covers/local-primary-1.jpg',
     'data-remote-cover-url': 'https://images.example/primary-1-thumb.jpg',
   };
   imageElement.getAttribute = (name) => imageElement.attributes[name] || '';
@@ -868,7 +868,7 @@ function createAlbumCard(viewport, options = {}) {
   const imageElement = new FakeElement('cover-image');
   imageElement.dataset = {};
   imageElement.attributes = {
-    'data-cover-path': 'C:/covers/local-primary-1.jpg',
+    'data-cover-ref': 'C:/covers/local-primary-1.jpg',
   };
   imageElement.getAttribute = (name) => imageElement.attributes[name] || '';
   imageElement.closest = (selector) => (selector === '.album-card' ? new FakeElement('album-card') : null);
@@ -889,11 +889,11 @@ function createAlbumCard(viewport, options = {}) {
 test('revoked gallery object URL requeues its production cover without blacklisting the local path', () => {
   const { context } = loadHelper();
   const imageElement = new FakeElement('cover-image');
-  const productionUrl = '/cover?path=C%3A%2Fcovers%2Flocal-primary-1.jpg&size=480&v=fixture';
+  const productionUrl = '/cover/C%3A%2Fcovers%2Flocal-primary-1.jpg?size=480&v=fixture';
   imageElement.src = 'blob:http://127.0.0.1/revoked-cover';
   imageElement.currentSrc = imageElement.src;
   imageElement.attributes = {
-    'data-cover-path': 'C:/covers/local-primary-1.jpg',
+    'data-cover-ref': 'C:/covers/local-primary-1.jpg',
     'data-production-cover-src': productionUrl,
     'data-gallery-cover-priority': 'visible',
   };
@@ -952,35 +952,35 @@ async function flushLightboxPromises() {
 
 test('a successful gallery cover load clears a stale local cover failure', () => {
   const { context } = loadHelper();
-  const coverPath = 'C:/covers/reconnected-drive-cover.jpg';
+  const coverRef = 'C:/covers/reconnected-drive-cover.jpg';
   const imageElement = new FakeElement('reconnected-drive-cover');
   imageElement.complete = true;
   imageElement.naturalWidth = 480;
-  imageElement.setAttribute('data-cover-path', coverPath);
-  imageElement.currentSrc = `/cover?path=${encodeURIComponent(coverPath)}&size=480`;
+  imageElement.setAttribute('data-cover-ref', coverRef);
+  imageElement.currentSrc = `/cover/${encodeURIComponent(coverRef)}?size=480`;
   imageElement.src = imageElement.currentSrc;
-  context.rememberFailedLocalDisplayCoverPath(coverPath);
+  context.rememberFailedLocalDisplayCoverRef(coverRef);
 
   assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
   assert.match(
-    context.buildAlbumDisplayCoverUrl({ cover_path: coverPath }),
-    /^\/cover\?path=C%3A%2Fcovers%2Freconnected-drive-cover\.jpg&size=480&v=/,
+    context.buildAlbumDisplayCoverUrl({ cover_ref: coverRef }),
+    /^\/cover\/C%3A%2Fcovers%2Freconnected-drive-cover\.jpg\?size=480&v=/,
   );
 });
 
 test('a successful remote fallback does not clear the failed local cover path', () => {
   const { context } = loadHelper();
-  const coverPath = 'C:/covers/still-unavailable.jpg';
+  const coverRef = 'C:/covers/still-unavailable.jpg';
   const imageElement = new FakeElement('remote-cover-fallback');
   imageElement.complete = true;
   imageElement.naturalWidth = 480;
-  imageElement.setAttribute('data-cover-path', coverPath);
+  imageElement.setAttribute('data-cover-ref', coverRef);
   imageElement.currentSrc = 'https://images.example/fallback.jpg';
   imageElement.src = imageElement.currentSrc;
-  context.rememberFailedLocalDisplayCoverPath(coverPath);
+  context.rememberFailedLocalDisplayCoverRef(coverRef);
 
   assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
-  assert.equal(context.buildAlbumDisplayCoverUrl({ cover_path: coverPath }), '');
+  assert.equal(context.buildAlbumDisplayCoverUrl({ cover_ref: coverRef }), '');
 });
 
 test('album cover load records native decode readiness and clears the prior source timestamp', async () => {
@@ -994,7 +994,7 @@ test('album cover load records native decode readiness and clears the prior sour
   const imageElement = new FakeElement('timed-album-cover-image');
   imageElement.complete = true;
   imageElement.naturalWidth = 480;
-  imageElement.currentSrc = '/cover?path=current&size=480';
+  imageElement.currentSrc = '/cover/current?size=480';
   imageElement.src = imageElement.currentSrc;
   imageElement.decode = () => new Promise((resolve) => {
     resolveDecode = resolve;
@@ -1020,14 +1020,14 @@ test('album cover decode readiness ignores a stale source completion', async () 
   const imageElement = new FakeElement('stale-timed-album-cover-image');
   imageElement.complete = true;
   imageElement.naturalWidth = 480;
-  imageElement.currentSrc = '/cover?path=first&size=480';
+  imageElement.currentSrc = '/cover/first?size=480';
   imageElement.src = imageElement.currentSrc;
   imageElement.decode = () => new Promise((resolve) => {
     resolveDecode = resolve;
   });
 
   assert.equal(context.handleAlbumDisplayCoverImageLoad(imageElement), true);
-  imageElement.currentSrc = '/cover?path=second&size=480';
+  imageElement.currentSrc = '/cover/second?size=480';
   imageElement.src = imageElement.currentSrc;
   resolveDecode();
   await flushLightboxPromises();
@@ -1042,8 +1042,8 @@ test('album cover decode readiness ignores a stale source completion', async () 
   lightboxTrigger.disabled = false;
   lightboxTrigger.attributes = {
     'data-open-lightbox': '1',
-    'data-cover-src': '/cover?path=missing',
-    'data-cover-preview-src': '/cover?path=missing&size=480',
+    'data-cover-src': '/cover/missing',
+    'data-cover-preview-src': '/cover/missing?size=480',
     'data-cover-alt': 'Album cover',
     'data-lightbox-gallery': 'visible',
   };
@@ -1092,8 +1092,8 @@ test('lightbox stays pending through decode and falls back when full-source deco
   };
 
   assert.equal(context.showStandaloneLightboxItem({
-    src: '/cover?path=joseph&full=1',
-    previewSrc: '/cover?path=joseph&size=480',
+    src: '/cover/joseph?full=1',
+    previewSrc: '/cover/joseph?size=480',
     remoteSrc: '/remote-cover?album=joseph',
     alt: 'Album cover for Joseph: Part One - The Dreamer',
   }), true);
@@ -1102,7 +1102,7 @@ test('lightbox stays pending through decode and falls back when full-source deco
   assert.equal(image.alt, '');
   assert.equal(image.getAttribute('aria-hidden'), 'true');
   assert.equal(loading.hidden, false, 'the accessible loading indicator should replace the hidden image');
-  assert.equal(context.__preloaders[0].src, '/cover?path=joseph&full=1');
+  assert.equal(context.__preloaders[0].src, '/cover/joseph?full=1');
 
   context.__preloaders[0].onload();
   assert.equal(image.src, '', 'preloader load must not reveal the image before decode completes');
@@ -1110,14 +1110,14 @@ test('lightbox stays pending through decode and falls back when full-source deco
   assert.equal(loading.hidden, false);
   context.__preloaders[0].rejectDecode(new Error('full source decode failed'));
   await flushLightboxPromises();
-  assert.match(context.__preloaders[1].src, /^\/cover\?path=joseph&full=1&_album_haven_retry=/);
+  assert.match(context.__preloaders[1].src, /^\/cover\/joseph\?full=1&_album_haven_retry=/);
   context.__preloaders[1].onerror();
-  assert.equal(context.__preloaders[2].src, '/cover?path=joseph&size=480', 'a failed full source should preload the proven preview source');
+  assert.equal(context.__preloaders[2].src, '/cover/joseph?size=480', 'a failed full source should preload the proven preview source');
   context.__preloaders[2].onload();
   assert.equal(image.hidden, true, 'preview must also remain pending through decode');
   context.__preloaders[2].resolveDecode();
   await flushLightboxPromises();
-  assert.equal(image.src, '/cover?path=joseph&size=480');
+  assert.equal(image.src, '/cover/joseph?size=480');
   assert.equal(image.hidden, false);
   assert.equal(image.alt, 'Album cover for Joseph: Part One - The Dreamer');
   assert.equal(image.getAttribute('aria-hidden'), '');
@@ -1139,8 +1139,8 @@ test('lightbox exhausts broken sources without a native broken image and retries
   context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
 
   context.showStandaloneLightboxItem({
-    src: '/cover?path=joseph&full=1',
-    previewSrc: '/cover?path=joseph&size=480',
+    src: '/cover/joseph?full=1',
+    previewSrc: '/cover/joseph?size=480',
     remoteSrc: '/remote-cover?album=joseph',
   });
   context.__preloaders[0].onerror();
@@ -1153,20 +1153,20 @@ test('lightbox exhausts broken sources without a native broken image and retries
   assert.equal(loading.hidden, true, 'terminal exhaustion must not leave a false loading status');
 
   assert.equal(context.showStandaloneLightboxItem({
-    src: '/cover?path=joseph&full=1',
-    previewSrc: '/cover?path=joseph&size=480',
+    src: '/cover/joseph?full=1',
+    previewSrc: '/cover/joseph?size=480',
     remoteSrc: '/remote-cover?album=joseph',
   }), true);
   assert.equal(
     context.__preloaders[4].src,
-    '/cover?path=joseph&full=1',
+    '/cover/joseph?full=1',
     'each explicit reopen should retry the full source after a transient failure',
   );
   context.__preloaders[4].onload();
   assert.equal(image.hidden, true);
   context.__preloaders[4].resolveDecode();
   await flushLightboxPromises();
-  assert.equal(image.src, '/cover?path=joseph&full=1');
+  assert.equal(image.src, '/cover/joseph?full=1');
   assert.equal(image.hidden, false);
   assert.equal(image.alt, 'Full-size album cover');
   assert.equal(image.getAttribute('aria-hidden'), '');
@@ -1217,8 +1217,8 @@ test('lightbox bounds stalled sources and exposes an explicit retry after exhaus
   };
 
   assert.equal(context.showStandaloneLightboxItem({
-    src: '/cover?path=iliad&full=1',
-    previewSrc: '/cover?path=iliad&size=480',
+    src: '/cover/iliad?full=1',
+    previewSrc: '/cover/iliad?size=480',
     remoteSrc: '/remote-cover?album=iliad',
     alt: 'Album cover for A Grand Piano Extravaganza',
   }), true);
@@ -1228,7 +1228,7 @@ test('lightbox bounds stalled sources and exposes an explicit retry after exhaus
   assert.equal(retry.hidden, true);
 
   runNextTimer();
-  assert.equal(context.__preloaders[1].src, '/cover?path=iliad&size=480');
+  assert.equal(context.__preloaders[1].src, '/cover/iliad?size=480');
   runNextTimer();
   assert.equal(context.__preloaders[2].src, '/remote-cover?album=iliad');
   runNextTimer();
@@ -1241,7 +1241,7 @@ test('lightbox bounds stalled sources and exposes an explicit retry after exhaus
   assert.ok(delays.every((delay) => delay === 8000), 'every source attempt must use the fixed bound');
 
   assert.equal(context.retryActiveLightboxImage(), true);
-  assert.match(context.__preloaders[3].src, /^\/cover\?path=iliad&full=1&_album_haven_retry=/);
+  assert.match(context.__preloaders[3].src, /^\/cover\/iliad\?full=1&_album_haven_retry=/);
   assert.equal(error.hidden, true);
   assert.equal(loading.hidden, false);
   assert.equal(retry.hidden, true);
@@ -1280,7 +1280,7 @@ test('local full-size failure retries once then keeps the preview visible with m
   context.clearBrowserTimeout = (timerId) => timers.delete(timerId);
   context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
 
-  const fullSource = '/cover?path=C%3A%2FMusic%2FIliad%2FA%20Grand%20Piano%20Extravaganza%2Fcover.jpg&v=cov-008';
+  const fullSource = '/cover/C%3A%2FMusic%2FIliad%2FA%20Grand%20Piano%20Extravaganza%2Fcover.jpg?v=cov-008';
   const previewSource = `${fullSource}&size=480`;
   context.showStandaloneLightboxItem({
     src: fullSource,
@@ -1327,11 +1327,11 @@ test('stale navigation and close-like invalidation during decode cannot reveal a
   context.setLightboxZoom = () => {};
   context.state.lightbox = { items: [], currentIndex: -1, loadToken: 0 };
 
-  context.showStandaloneLightboxItem({ src: '/cover?path=old', previewSrc: '/cover?path=old&size=480' });
+  context.showStandaloneLightboxItem({ src: '/cover/old', previewSrc: '/cover/old?size=480' });
   const staleLoader = context.__preloaders[0];
   staleLoader.onload();
   assert.equal(image.hidden, true);
-  context.showStandaloneLightboxItem({ src: '/cover?path=new', previewSrc: '/cover?path=new&size=480' });
+  context.showStandaloneLightboxItem({ src: '/cover/new', previewSrc: '/cover/new?size=480' });
   staleLoader.resolveDecode();
   await flushLightboxPromises();
   assert.equal(image.src, '', 'a queued event from the previous item must not commit after navigation');
@@ -1339,9 +1339,9 @@ test('stale navigation and close-like invalidation during decode cannot reveal a
   context.__preloaders[1].onload();
   context.__preloaders[1].resolveDecode();
   await flushLightboxPromises();
-  assert.equal(image.src, '/cover?path=new');
+  assert.equal(image.src, '/cover/new');
 
-  context.showStandaloneLightboxItem({ src: '/cover?path=closing' });
+  context.showStandaloneLightboxItem({ src: '/cover/closing' });
   const closingLoader = context.__preloaders[2];
   closingLoader.onload();
   context.state.lightbox.loadToken += 1;
@@ -1410,7 +1410,7 @@ test('stale navigation and close-like invalidation during decode cannot reveal a
   const url = context.buildCoverUrl('C:/covers/primary-1.jpg', { size: 320 });
   assert.equal(
     url,
-    '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&size=320&v=epoch-6',
+    '/cover/C%3A%2Fcovers%2Fprimary-1.jpg?size=320&v=epoch-6',
   );
   context.__now += 300000;
   assert.equal(
@@ -1444,13 +1444,13 @@ test('buildCoverUrl keeps one server process cover identity stable across browse
 
 test('album display cover rejects a canonical preview URL for a different local cover path', () => {
   const { context } = loadHelper();
-  const stalePreviewUrl = '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg&size=480&v=old-revision';
+  const stalePreviewUrl = '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg?size=480&v=old-revision';
 
   const url = context.buildAlbumDisplayCoverUrl({
     key: 'kaipa::kaipa::1975',
     name: 'Kaipa',
     album_artist: 'Kaipa',
-    cover_path: 'C:/music/Kaipa/cover.jpg',
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
     cover_preview_url: stalePreviewUrl,
   });
   const parsed = new URL(url, 'http://127.0.0.1');
@@ -1462,13 +1462,13 @@ test('album display cover rejects a canonical preview URL for a different local 
 
 test('album display cover rejects an older preview revision for the current local cover path', () => {
   const { context } = loadHelper();
-  const stalePreviewUrl = '/cover?path=C%3A%2Fmusic%2FKaipa%2Fcover.jpg&size=480&v=old-revision';
+  const stalePreviewUrl = '/cover/C%3A%2Fmusic%2FKaipa%2Fcover.jpg?size=480&v=old-revision';
 
   const url = context.buildAlbumDisplayCoverUrl({
     key: 'kaipa::kaipa::1975',
     name: 'Kaipa',
     album_artist: 'Kaipa',
-    cover_path: 'C:/music/Kaipa/cover.jpg',
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
     cover_preview_url: stalePreviewUrl,
     cover_revision: 'selected-front-revision',
   });
@@ -1481,7 +1481,7 @@ test('album display cover rejects an older preview revision for the current loca
 
 test('album display cover uses a server preview when a compact payload omits the private path', () => {
   const { context } = loadHelper();
-  const canonicalPreviewUrl = '/cover?path=opaque-preview&size=480&v=preview-revision';
+  const canonicalPreviewUrl = '/cover/opaque-preview?size=480&v=preview-revision';
 
   assert.equal(
     context.buildAlbumDisplayCoverUrl({
@@ -1494,28 +1494,28 @@ test('album display cover uses a server preview when a compact payload omits the
   );
 });
 
-test('markAlbumCoverPathsFresh preserves authoritative album and track cover revisions', () => {
+test('markAlbumCoverRefsFresh preserves authoritative album and track cover revisions', () => {
   const { context } = loadHelper();
   const album = {
     key: 'kaipa::kaipa::1975',
     name: 'Kaipa',
     album_artist: 'Kaipa',
-    cover_path: 'C:/music/Kaipa/cover.jpg',
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
     cover_revision: 'authoritative-album-revision',
     tracks: [{
-      cover_path: 'C:/music/Kaipa/track-cover.jpg',
+      cover_ref: 'C:/music/Kaipa/track-cover.jpg',
       cover_revision: 'authoritative-track-revision',
     }],
   };
 
-  context.markAlbumCoverPathsFresh([album]);
+  context.markAlbumCoverRefsFresh([album]);
 
   assert.equal(
-    context.state.coverRefreshTokens[album.cover_path],
+    context.state.coverRefreshTokens[album.cover_ref],
     'authoritative-album-revision',
   );
   assert.equal(
-    context.state.coverRefreshTokens[album.tracks[0].cover_path],
+    context.state.coverRefreshTokens[album.tracks[0].cover_ref],
     'authoritative-track-revision',
   );
   assert.equal(
@@ -1528,17 +1528,17 @@ test('markAlbumCoverPathsFresh preserves authoritative album and track cover rev
   );
 });
 
-test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are absent', () => {
+test('markAlbumCoverRefsFresh keeps transient refresh tokens when revisions are absent', () => {
   const { context } = loadHelper();
   const album = {
-    cover_path: 'C:/music/Kaipa/cover.jpg',
-    tracks: [{ cover_path: 'C:/music/Kaipa/track-cover.jpg' }],
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
+    tracks: [{ cover_ref: 'C:/music/Kaipa/track-cover.jpg' }],
   };
 
-  context.markAlbumCoverPathsFresh([album]);
+  context.markAlbumCoverRefsFresh([album]);
 
-  assert.equal(context.state.coverRefreshTokens[album.cover_path], context.__now);
-  assert.equal(context.state.coverRefreshTokens[album.tracks[0].cover_path], context.__now);
+  assert.equal(context.state.coverRefreshTokens[album.cover_ref], context.__now);
+  assert.equal(context.state.coverRefreshTokens[album.tracks[0].cover_ref], context.__now);
 });
 
 {
@@ -1547,22 +1547,22 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/primary-1.jpg',
+    cover_ref: 'C:/covers/primary-1.jpg',
   });
   assert.equal(
     url,
-    '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&size=480&v=epoch-6',
+    '/cover/C%3A%2Fcovers%2Fprimary-1.jpg?size=480&v=epoch-6',
   );
 }
 
 {
   const { context } = loadHelper();
-  const canonicalPreviewUrl = '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&size=480&v=epoch-6';
+  const canonicalPreviewUrl = '/cover/C%3A%2Fcovers%2Fprimary-1.jpg?size=480&v=epoch-6';
   const url = context.buildAlbumDisplayCoverUrl({
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/primary-1.jpg',
+    cover_ref: 'C:/covers/primary-1.jpg',
     cover_preview_url: canonicalPreviewUrl,
   });
   assert.equal(
@@ -1575,13 +1575,13 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
       key: 'primary-1',
       name: 'Primary One',
       album_artist: 'Howard Shore',
-      cover_path: 'C:/covers/primary-1.jpg',
+      cover_ref: 'C:/covers/primary-1.jpg',
     }),
     canonicalPreviewUrl,
     'full hydration must retain the preview identity after replacing the album object',
   );
-  context.markAlbumCoverPathsFresh([{
-    cover_path: 'C:/covers/primary-1.jpg',
+  context.markAlbumCoverRefsFresh([{
+    cover_ref: 'C:/covers/primary-1.jpg',
     tracks: [],
   }]);
   assert.notEqual(
@@ -1589,7 +1589,7 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
       key: 'primary-1',
       name: 'Primary One',
       album_artist: 'Howard Shore',
-      cover_path: 'C:/covers/primary-1.jpg',
+      cover_ref: 'C:/covers/primary-1.jpg',
       cover_preview_url: canonicalPreviewUrl,
     }),
     canonicalPreviewUrl,
@@ -1603,12 +1603,12 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/primary-1.jpg',
+    cover_ref: 'C:/covers/primary-1.jpg',
     preview_only: true,
   });
   assert.equal(
     url,
-    '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&size=480&v=epoch-6',
+    '/cover/C%3A%2Fcovers%2Fprimary-1.jpg?size=480&v=epoch-6',
   );
 }
 
@@ -1618,24 +1618,24 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/local-primary-1.jpg',
+    cover_ref: 'C:/covers/local-primary-1.jpg',
     remote_cover_url: 'https://images.example/primary-1.jpg',
     remote_cover_thumbnail_url: 'https://images.example/primary-1-thumb.jpg',
   });
   assert.equal(
     url,
-    '/cover?path=C%3A%2Fcovers%2Flocal-primary-1.jpg&size=480&v=epoch-6',
+    '/cover/C%3A%2Fcovers%2Flocal-primary-1.jpg?size=480&v=epoch-6',
   );
 }
 
 {
   const { context } = loadHelper();
-  context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
+  context.rememberFailedLocalDisplayCoverRef('C:/covers/local-primary-1.jpg');
   const url = context.buildAlbumDisplayCoverUrl({
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/local-primary-1.jpg',
+    cover_ref: 'C:/covers/local-primary-1.jpg',
   });
   assert.equal(url, '');
 }
@@ -1643,12 +1643,12 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
 {
   const { context } = loadHelper();
   context.buildRemoteCoverLookupImageUrl = (url) => `remote:${url}`;
-  context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
+  context.rememberFailedLocalDisplayCoverRef('C:/covers/local-primary-1.jpg');
   const url = context.buildAlbumDisplayCoverUrl({
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/local-primary-1.jpg',
+    cover_ref: 'C:/covers/local-primary-1.jpg',
     remote_cover_url: 'https://images.example/primary-1.jpg',
     remote_cover_thumbnail_url: 'https://images.example/primary-1-thumb.jpg',
   });
@@ -1658,12 +1658,12 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
 {
   const { context } = loadHelper();
   context.buildRemoteCoverLookupImageUrl = (url) => `remote:${url}`;
-  context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
+  context.rememberFailedLocalDisplayCoverRef('C:/covers/local-primary-1.jpg');
   const url = context.buildAlbumDisplayCoverUrl({
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/local-primary-1.jpg',
+    cover_ref: 'C:/covers/local-primary-1.jpg',
     remote_cover_thumbnail_url: 'https://images.example/primary-1-thumb.jpg',
   });
   assert.equal(url, 'remote:https://images.example/primary-1-thumb.jpg');
@@ -1671,13 +1671,13 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
 
 {
   const { context } = loadHelper();
-  context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
+  context.rememberFailedLocalDisplayCoverRef('C:/covers/local-primary-1.jpg');
   assert.equal(
     context.albumHasDisplayCover({
       key: 'primary-1',
       name: 'Primary One',
       album_artist: 'Howard Shore',
-      cover_path: 'C:/covers/local-primary-1.jpg',
+      cover_ref: 'C:/covers/local-primary-1.jpg',
       remote_cover_url: 'https://images.example/primary-1.jpg',
     }),
     true,
@@ -1691,7 +1691,7 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
       key: 'preview-only',
       name: 'Preview Only',
       album_artist: 'Howard Shore',
-      cover_preview_url: '/cover?path=opaque&size=480&v=revision',
+      cover_preview_url: '/cover/opaque?size=480&v=revision',
     }),
     true,
   );
@@ -1699,13 +1699,13 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
 
 {
   const { context } = loadHelper();
-  context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
+  context.rememberFailedLocalDisplayCoverRef('C:/covers/local-primary-1.jpg');
   assert.equal(
     context.albumHasDisplayCover({
       key: 'primary-1',
       name: 'Primary One',
       album_artist: 'Howard Shore',
-      cover_path: 'C:/covers/local-primary-1.jpg',
+      cover_ref: 'C:/covers/local-primary-1.jpg',
       remote_cover_thumbnail_url: 'https://images.example/primary-1-thumb.jpg',
     }),
     true,
@@ -1714,10 +1714,10 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
 
 {
   const { context } = loadHelper();
-  context.rememberFailedLocalDisplayCoverPath('C:/covers/local-primary-1.jpg');
-  context.markAlbumCoverPathsFresh([
+  context.rememberFailedLocalDisplayCoverRef('C:/covers/local-primary-1.jpg');
+  context.markAlbumCoverRefsFresh([
     {
-      cover_path: 'C:/covers/local-primary-1.jpg',
+      cover_ref: 'C:/covers/local-primary-1.jpg',
       tracks: [],
     },
   ]);
@@ -1725,11 +1725,11 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/local-primary-1.jpg',
+    cover_ref: 'C:/covers/local-primary-1.jpg',
   });
   assert.match(
     url,
-    /^\/cover\?path=C%3A%2Fcovers%2Flocal-primary-1\.jpg&size=480(?:&v=\d+)?$/,
+    /^\/cover\/C%3A%2Fcovers%2Flocal-primary-1\.jpg\?size=480(?:&v=\d+)?$/,
   );
 }
 
@@ -1739,13 +1739,13 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     key: 'primary-1',
     name: 'Primary One',
     album_artist: 'Howard Shore',
-    cover_path: 'C:/covers/local-primary-1.jpg',
+    cover_ref: 'C:/covers/local-primary-1.jpg',
     remote_cover_url: 'https://images.example/primary-1.jpg',
     remote_cover_thumbnail_url: 'https://images.example/primary-1-thumb.jpg',
   });
   assert.equal(
     url,
-    '/cover?path=C%3A%2Fcovers%2Flocal-primary-1.jpg&v=epoch-6',
+    '/cover/C%3A%2Fcovers%2Flocal-primary-1.jpg?v=epoch-6',
   );
 }
 
@@ -1755,7 +1755,7 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     {
       artist: 'Howard Shore',
       albums: [
-        { key: 'primary-1', name: 'Primary One', album_artist: 'Howard Shore', cover_path: 'C:/covers/primary-1.jpg' },
+        { key: 'primary-1', name: 'Primary One', album_artist: 'Howard Shore', cover_ref: 'C:/covers/primary-1.jpg' },
       ],
     },
   ];
@@ -1763,7 +1763,7 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     {
       artist: 'Annie Lennox',
       albums: [
-        { key: 'family-1', name: 'Family One', album_artist: 'Annie Lennox', cover_path: 'C:/covers/family-1.jpg' },
+        { key: 'family-1', name: 'Family One', album_artist: 'Annie Lennox', cover_ref: 'C:/covers/family-1.jpg' },
       ],
     },
   ];
@@ -1771,19 +1771,19 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     {
       artist: 'Howard Shore',
       albums: [
-        { key: 'primary-1', name: 'Primary One', album_artist: 'Howard Shore', cover_path: 'C:/covers/primary-1.jpg' },
+        { key: 'primary-1', name: 'Primary One', album_artist: 'Howard Shore', cover_ref: 'C:/covers/primary-1.jpg' },
       ],
     },
     {
       artist: 'Annie Lennox',
       albums: [
-        { key: 'family-1', name: 'Family One', album_artist: 'Annie Lennox', cover_path: 'C:/covers/family-1.jpg' },
+        { key: 'family-1', name: 'Family One', album_artist: 'Annie Lennox', cover_ref: 'C:/covers/family-1.jpg' },
       ],
     },
     {
       artist: 'Unrelated Match',
       albums: [
-        { key: 'other-1', name: 'Other One', album_artist: 'Unrelated Match', cover_path: 'C:/covers/other-1.jpg' },
+        { key: 'other-1', name: 'Other One', album_artist: 'Unrelated Match', cover_ref: 'C:/covers/other-1.jpg' },
       ],
     },
   ];
@@ -1793,7 +1793,7 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
     Array.from(items, (item) => item.key).join('|'),
     'primary-1::Primary One::Howard Shore|family-1::Family One::Annie Lennox',
   );
-  assert.equal(items[0].src, '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&v=epoch-6');
+  assert.equal(items[0].src, '/cover/C%3A%2Fcovers%2Fprimary-1.jpg?v=epoch-6');
 }
 
 test('legacy Gallery options no longer owns source switches or New Arrivals navigation', () => {

@@ -119,12 +119,12 @@ for (const mode of ['docked', 'floating']) {
     await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/compact-player-controller.js') });
     await page.evaluate(value => { compactPlayerStyle = value; }, mode);
     const cover = page.locator('[data-compact-player-cover]');
-    for (const coverPath of ['Album/Previous cover.jpg', 'Artist/It\'s a "live" album (2026)/cover.jpg']) {
+    for (const coverRef of ['Album/Previous cover.jpg', 'Artist/It\'s a "live" album (2026)/cover.jpg']) {
       await page.evaluate(value => {
-        syncCompactPlayerUi({ playback: { paused: true }, displayTrack: { coverPath: value, src: '/audio' }, lockedByAnotherTab: false });
-      }, coverPath);
-      await expect(cover).toHaveCSS('background-image', `url("${new URL(`/cover?path=${encodeURIComponent(coverPath)}`, componentUrl).href}")`);
-      await expect.poll(() => requestedPaths).toContain(coverPath);
+        syncCompactPlayerUi({ playback: { paused: true }, displayTrack: { coverRef: value, src: '/audio' }, lockedByAnotherTab: false });
+      }, coverRef);
+      await expect(cover).toHaveCSS('background-image', `url("${new URL(`/cover/${encodeURIComponent(coverRef)}`, componentUrl).href}")`);
+      await expect.poll(() => requestedPaths).toContain(coverRef);
     }
     await page.evaluate(() => { state.player.current = null; syncCompactPlayerUi({ playback: { paused: true }, lockedByAnotherTab: false }); });
     await expect(cover).toHaveCSS('background-image', 'none');

@@ -1409,8 +1409,8 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   const state = {
     view: {
       selected_artist: 'Neal Morse',
-      primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one', cover_url: '/cover?path=neal' }] }],
-      family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'deep-water', cover_url: '/cover?path=cosmic' }] }],
+      primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one', cover_url: '/cover/neal' }] }],
+      family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'deep-water', cover_url: '/cover/cosmic' }] }],
     },
     gallery: {
       mainState: {
@@ -1434,8 +1434,8 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   assert.match(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*min\(390px, 92vw\)/);
   assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*max-content/);
   assert.match(markup, /ui-filter-pill__artwork artist-family-panel__artwork/);
-  assert.match(markup, /data-gallery-cover-src="\/cover\?path=neal"/);
-  assert.match(markup, /data-production-cover-src="\/cover\?path=cosmic"/);
+  assert.match(markup, /data-gallery-cover-src="\/cover\/neal"/);
+  assert.match(markup, /data-production-cover-src="\/cover\/cosmic"/);
   assert.doesNotMatch(markup, /<img[^>]+\ssrc=/);
   assert.match(markup, /ui-filter-pill__marker artist-family-panel__marker/);
   assert.match(markup, /ui-filter-pill__count artist-family-panel__count/);

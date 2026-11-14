@@ -69,7 +69,7 @@ test('FTC-COVERS-034 watcher prefers front-named local art over a larger booklet
           WATCHER_LOCAL_COVER_TARGET,
           60000,
         );
-        expect(opened.album.cover_path).toMatch(/[\\/]front-scan\.jpg$/i);
+        expect(opened.album.cover_ref).toMatch(/[\\/]front-scan\.jpg$/i);
       }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
 
       await trackModalActions.waitForLoadedSummary();
@@ -1142,7 +1142,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
           { timeout: 60000 },
         );
         expect(opened.album.cover_selection_origin).toBe('automatic');
-        expect(opened.album.cover_path).toMatch(/[\\/]cover\.jpg$/i);
+        expect(opened.album.cover_ref).toMatch(/[\\/]cover\.jpg$/i);
       }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
 
       await trackModalActions.waitForLoadedSummary();
@@ -1150,7 +1150,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
       const coverFiles = fs.readdirSync(fixture.albumDirectory)
         .filter((name) => /^cover\.(?:jpe?g|png|webp)$/i.test(name));
       expect(coverFiles).toEqual(['cover.jpg']);
-      fixture.coverPath = opened.album.cover_path;
+      fixture.coverRef = opened.album.cover_ref;
       fixture.coverRevision = opened.album.cover_revision;
       await trackModalActions.close();
     });
@@ -1166,7 +1166,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
         { timeout: 60000 },
       );
       expect(reopened.album.cover_selection_origin).toBe('automatic');
-      expect(reopened.album.cover_path).toBe(fixture.coverPath);
+      expect(reopened.album.cover_ref).toBe(fixture.coverRef);
       expect(reopened.album.cover_revision).toBe(fixture.coverRevision);
       await trackModalActions.waitForLoadedSummary();
       await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();

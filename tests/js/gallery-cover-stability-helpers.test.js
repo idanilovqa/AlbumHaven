@@ -23,7 +23,7 @@ test('Joseph outage helper renames and restores only its runner-owned fixture', 
   fs.writeFileSync(sourcePath, 'fixture');
   try {
     const outage = helper.temporarilyMakeJosephCoverUnavailable(
-      `/cover?path=${encodeURIComponent(sourcePath)}`,
+      `/cover/${encodeURIComponent(sourcePath)}`,
       'http://127.0.0.1:4173/albums',
       { mediaRoot },
     );
@@ -39,7 +39,7 @@ test('Joseph outage helper rejects the owner library drive before touching the f
   const helper = await import(helperUrl);
   assert.throws(
     () => helper.temporarilyMakeJosephCoverUnavailable(
-      'http://127.0.0.1:4173/cover?path=N%3A%5CMusic%5CNeal%20Morse%20-%20The%20Dreamer%20-%20Joseph%2C%20Pt.%20One.png',
+      'http://127.0.0.1:4173/cover/N%3A%5CMusic%5CNeal%20Morse%20-%20The%20Dreamer%20-%20Joseph%2C%20Pt.%20One.png',
       '',
       { mediaRoot: path.join(os.tmpdir(), 'album-haven-e2e-owned', 'media') },
     ),
@@ -57,7 +57,7 @@ test('exact cover traffic resolves only the requested 200 response with body evi
   const helper = await import(helperUrl);
   const page = createTrafficPage();
   const traffic = helper.observeExactCoverTraffic(page);
-  const url = 'http://127.0.0.1:4173/cover?path=Neal%20Morse%20-%20The%20Dreamer%20-%20Joseph%2C%20Pt.%20One.png';
+  const url = 'http://127.0.0.1:4173/cover/Neal%20Morse%20-%20The%20Dreamer%20-%20Joseph%2C%20Pt.%20One.png';
   const pending = traffic.waitForResponse(url, { timeout: 1000 });
   page.emit('response', {
     url: () => url,
@@ -78,7 +78,7 @@ test('exact cover traffic counts unrelated covers without reading every response
   const helper = await import(helperUrl);
   const page = createTrafficPage();
   const traffic = helper.observeExactCoverTraffic(page);
-  const url = 'http://127.0.0.1:4173/cover?path=Unrelated.png&size=480';
+  const url = 'http://127.0.0.1:4173/cover/Unrelated.png?size=480';
   let bodyReads = 0;
   page.emit('response', {
     url: () => url,
@@ -99,7 +99,7 @@ test('exact cover traffic rejects a requestfailed event for the unsized full URL
   const helper = await import(helperUrl);
   const page = createTrafficPage();
   const traffic = helper.observeExactCoverTraffic(page);
-  const url = 'http://127.0.0.1:4173/cover?path=Joseph%2C%20Pt.%20One.png';
+  const url = 'http://127.0.0.1:4173/cover/Joseph%2C%20Pt.%20One.png';
   const pending = traffic.waitForResponse(url, { timeout: 1000 });
   page.emit('requestfailed', {
     url: () => url,

@@ -159,7 +159,7 @@ class GalleryCoverPreviewCache {
     try {
       const url = new URL(raw, this.locationOrigin || globalThis.location?.href || undefined);
       if (this.locationOrigin && url.origin !== this.locationOrigin) return '';
-      const isGalleryCover = url.pathname === '/cover';
+      const isGalleryCover = url.pathname.startsWith('/cover/');
       const isRemoteCoverProxy = url.pathname === '/utilities/cover-lookup/remote-image';
       if (isRemoteCoverProxy && (!this.locationOrigin || url.origin !== this.locationOrigin)) return '';
       if (!isGalleryCover && !isRemoteCoverProxy) return '';

@@ -204,7 +204,7 @@ export async function createMusicBrainzIdentityFixture() {
       const accountId = await sql(`select owner_account_id from library.libraries
         where id = ${album.library}`);
       await sql(`begin;
-        update library.local_albums set cover_path = 'fixture-cover.jpg', metadata = metadata
+        update library.local_albums set cover_ref = 'fixture-cover.jpg', metadata = metadata
           || jsonb_build_object('local_cover_width', 1200, 'local_cover_height', 1200, 'tag_album_rating', ${Number(fileRating)})
           where library_id = ${album.library} and album_key = ${literal(album.key)};
         insert into app.album_ratings (account_id, library_id, album_key, rating, provenance)

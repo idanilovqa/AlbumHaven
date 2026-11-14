@@ -179,7 +179,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
   const pickerPath = path.resolve('music_app', 'static', 'images', pickerName);
   const expectedCover = findFixtureCoverBySubtitle(Object.values(MANUAL_PROVIDER_COVER).join(' - '));
   expect(expectedCover).not.toBeNull();
-  let savedCoverPath = '';
+  let savedCoverRef = '';
   let savedCoverRevision = '';
   let savedPreviewHash = '';
 
@@ -225,11 +225,11 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(payload.ok).toBe(true);
     expect(Array.isArray(payload.notification_action_taken_task_ids)).toBe(true);
     expect(payload.notification_action_taken_task_ids.length).toBeGreaterThan(0);
-    savedCoverPath = String(payload.selected_cover_path || '').trim();
+    savedCoverRef = String(payload.selected_cover_ref || '').trim();
     savedCoverRevision = String(payload.cover_revision || '').trim();
-    expect(savedCoverPath).toMatch(/[\\/]cover\.jpg$/i);
+    expect(savedCoverRef).toMatch(/[\\/]cover\.jpg$/i);
     expect(savedCoverRevision).toMatch(/^[a-f0-9]{64}$/i);
-    expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
+    expect(payload.updated_album?.cover_ref).toBe(savedCoverRef);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
     await expect(lookup.modal).toBeHidden();
     await trackModalActions.close();
@@ -250,13 +250,13 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       trackModalActions.trackModal.detailedCoverImage,
       'pasted Album Details cover',
       {
-        expectedCoverPath: savedCoverPath,
+        expectedCoverRef: savedCoverRef,
         expectedCoverRevision: savedCoverRevision,
       },
     );
     savedPreviewHash = detailCover.sha256;
     const fullSizeCover = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: savedCoverPath,
+      coverRef: savedCoverRef,
       coverRevision: savedCoverRevision,
       label: 'pasted authoritative cover',
     });
@@ -269,7 +269,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       trackModalActions.trackModal.detailedCoverImage,
       'mobile pasted Album Details cover',
       {
-        expectedCoverPath: savedCoverPath,
+        expectedCoverRef: savedCoverRef,
         expectedCoverRevision: savedCoverRevision,
       },
     );
@@ -288,7 +288,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       galleryActions.albumCoverByName(USER_OWNED_IMPROVEMENT_TARGET.album),
       'mobile pasted gallery cover',
       {
-        expectedCoverPath: savedCoverPath,
+        expectedCoverRef: savedCoverRef,
         expectedCoverRevision: savedCoverRevision,
       },
     );
@@ -306,7 +306,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       galleryActions.albumCoverByName(USER_OWNED_IMPROVEMENT_TARGET.album),
       'reloaded mobile pasted gallery cover',
       {
-        expectedCoverPath: savedCoverPath,
+        expectedCoverRef: savedCoverRef,
         expectedCoverRevision: savedCoverRevision,
       },
     );
@@ -919,7 +919,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
   let partialCandidateIds = [];
   let selectedRemoteCandidateId = '';
   let selectedRemoteCover = null;
-  let selectedCoverPath = '';
+  let selectedCoverRef = '';
 
   await stepLogger.step('Open the exact manifest-backed album and then open the full cover lookup gallery', async () => {
     await galleryActions.goto();
@@ -973,9 +973,9 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     });
     selectedRemoteCandidateId = selection.candidateId;
     selectedRemoteCover = selection.candidate;
-    selectedCoverPath = String(selection.payload?.optimistic_cover_path || '').trim();
+    selectedCoverRef = String(selection.payload?.optimistic_cover_ref || '').trim();
     expect(selectedRemoteCover.sha256).toBeTruthy();
-    expect(selectedCoverPath).toBeTruthy();
+    expect(selectedCoverRef).toBeTruthy();
     expect(selection.immediateCoverState).not.toBeNull();
     await trackModalActions.close();
     await coverLookupActions.openDrawer();
@@ -1039,7 +1039,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(yandexChip?.href || '').toContain('yandex.com/images/search?text=');
 
     expect(modal.activeLocalCover.sha256).toBeTruthy();
-    expect(modal.activeLocalCover.coverPath).toBe(selectedCoverPath);
+    expect(modal.activeLocalCover.coverRef).toBe(selectedCoverRef);
     expect(persistedSelectedRemoteCover.sha256).toBe(selectedRemoteCover.sha256);
     expect(persistedCandidateSummary?.selected).toBe(false);
     expect((await coverLookupActions.readLocalCoverNames())
@@ -1207,7 +1207,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
 
   await stepLogger.step('Save Spotify and retain it as the selected linked remote cover', async () => {
     const payload = await coverLookupActions.selectRemoteCandidateByIdAndSave(spotifyCandidate.id);
-    expect(payload.optimistic_cover_path).toBe('');
+    expect(payload.optimistic_cover_ref).toBe('');
     expect(payload.optimistic_remote_source).toBe('spotify');
     const reopened = await coverLookupActions.reopenUntilSavedRemoteCoverIsActive(
       () => trackModalActions.openCoverLookup(),
@@ -1222,7 +1222,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
 
   await stepLogger.step('Save Apple and reopen canonical local art with no selected remote card', async () => {
     const payload = await coverLookupActions.selectRemoteCandidateByIdAndSave(appleCandidate.id);
-    expect(payload.optimistic_cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    expect(payload.optimistic_cover_ref).toMatch(/[\\/]cover\.jpg$/i);
     expect(payload.optimistic_remote_source).toBe('apple');
     const reopened = await coverLookupActions.reopenUntilLocalCoverIsActive(
       () => trackModalActions.openCoverLookup(),
@@ -1451,7 +1451,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
   let originalActiveCover = null;
   let selectedLocalCover = null;
   let initialUnusedCandidatePaths = [];
-  let selectedCoverPath = '';
+  let selectedCoverRef = '';
   let originalPreviewHash = '';
   let originalPreviewRevision = '';
   let selectedPreviewHash = '';
@@ -1492,7 +1492,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       galleryActions.albumCoverByName(COVER_LOOKUP_TARGET.album),
       'initial gallery card canonical cover',
     );
-    expect(originalCardCover.coverPath).toMatch(/[\\/]cover\.jpg$/i);
+    expect(originalCardCover.coverRef).toMatch(/[\\/]cover\.jpg$/i);
     originalPreviewHash = originalCardCover.sha256;
     originalPreviewRevision = originalCardCover.coverRevision;
     expect(originalPreviewHash).not.toBe('');
@@ -1505,7 +1505,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       trackModalActions.trackModal.detailedCoverImage,
       'initial detail canonical cover',
     );
-    expect(originalDetailCover.coverPath).toMatch(/[\\/]cover\.jpg$/i);
+    expect(originalDetailCover.coverRef).toMatch(/[\\/]cover\.jpg$/i);
     expect(originalDetailCover.sha256).toBe(originalPreviewHash);
     expect(originalDetailCover.coverRevision).toBe(originalPreviewRevision);
     await trackModalActions.openCoverLookup();
@@ -1571,23 +1571,23 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     expect(saved.immediateCoverState).not.toBeNull();
     expect(saved.candidate.sourcePath).toBe(selectedLocalCover.sourcePath);
     expect(saved.candidate.image.sha256).toBe(selectedLocalCover.image.sha256);
-    expect(saved.candidateFullSize.coverPath).toBe(selectedLocalCover.sourcePath);
+    expect(saved.candidateFullSize.coverRef).toBe(selectedLocalCover.sourcePath);
     expect(saved.candidateFullSize.sha256).toMatch(/^[A-F0-9]{64}$/);
     selectedSourceFullSizeHash = saved.candidateFullSize.sha256;
-    selectedCoverPath = saved.selectedCoverPath;
-    expect(selectedCoverPath).toMatch(/[\\/]cover\.jpg$/i);
-    expect(String(saved.updatedAlbum?.cover_path || '')).toBe(selectedCoverPath);
+    selectedCoverRef = saved.selectedCoverRef;
+    expect(selectedCoverRef).toMatch(/[\\/]cover\.jpg$/i);
+    expect(String(saved.updatedAlbum?.cover_ref || '')).toBe(selectedCoverRef);
     selectedPreviewRevision = String(saved.updatedAlbum?.cover_revision || '').trim();
     expect(selectedPreviewRevision).not.toBe('');
     expect(selectedPreviewRevision).not.toBe(originalPreviewRevision);
     expect(selectedPreviewRevision).toMatch(/^[a-f0-9]{64}$/i);
     expect(selectedPreviewRevision.toUpperCase()).toBe(selectedSourceFullSizeHash);
     const persistedCanonicalCover = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: selectedCoverPath,
+      coverRef: selectedCoverRef,
       coverRevision: selectedPreviewRevision,
       label: 'persisted canonical cover after local selection',
     });
-    expect(persistedCanonicalCover.coverPath).toBe(selectedCoverPath);
+    expect(persistedCanonicalCover.coverRef).toBe(selectedCoverRef);
     expect(persistedCanonicalCover.coverRevision).toBe(selectedPreviewRevision);
     expect(persistedCanonicalCover.sha256).toBe(selectedSourceFullSizeHash);
     await trackModalActions.waitForLoadedSummary();
@@ -1595,7 +1595,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       trackModalActions.trackModal.detailedCoverImage,
       'detail cover after local selection',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1613,7 +1613,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       galleryActions.albumCoverByName(COVER_LOOKUP_TARGET.album),
       'gallery card cover after local selection',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1664,7 +1664,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       galleryActions.albumCoverByName(COVER_LOOKUP_TARGET.album),
       'gallery card cover after immediate page reload',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1677,7 +1677,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       trackModalActions.trackModal.detailedCoverImage,
       'detail cover after immediate page reload',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1698,7 +1698,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       galleryActions.albumCoverByName(COVER_LOOKUP_TARGET.album),
       'gallery card cover after rescan',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1710,7 +1710,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       trackModalActions.trackModal.detailedCoverImage,
       'detail cover after rescan',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1733,7 +1733,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       restartedSession.galleryActions.albumCoverByName(COVER_LOOKUP_TARGET.album),
       'gallery card cover after app restart in a fresh browser session',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -1745,7 +1745,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
       restartedSession.trackModalActions.trackModal.detailedCoverImage,
       'detail cover after app restart in a fresh browser session',
       {
-        expectedCoverPath: selectedCoverPath,
+        expectedCoverRef: selectedCoverRef,
         expectedCoverRevision: selectedPreviewRevision,
       },
     );
@@ -2064,7 +2064,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
       snapshot_generation: generationATaskId,
     });
     expect(saved.requestPayload.task_id).not.toBe(generationBTaskId);
-    expect(saved.payload.optimistic_cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    expect(saved.payload.optimistic_cover_ref).toMatch(/[\\/]cover\.jpg$/i);
     await trackModalActions.close();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
@@ -2076,7 +2076,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     expect(savedTask?.selected_candidate_id).toBe(generationAChoice.id);
     await coverLookupActions.closeDrawer();
     const persistedGenerationA = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: saved.payload.optimistic_cover_path,
+      coverRef: saved.payload.optimistic_cover_ref,
       label: 'persisted generation-A cover before generation-B completion',
     });
     savedCoverRevision = persistedGenerationA.sha256.toLowerCase();
@@ -2095,12 +2095,12 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     const reopened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
       PROGRESSIVE_CANDIDATE_TARGET,
     );
-    expect(reopened.album.cover_path).toBe(saved.payload.optimistic_cover_path);
+    expect(reopened.album.cover_ref).toBe(saved.payload.optimistic_cover_ref);
     expect(reopened.album.cover_selection_origin).toBe('user');
     expect(reopened.album.cover_revision).toBe(savedCoverRevision);
     await trackModalActions.waitForLoadedSummary();
     const persisted = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: reopened.album.cover_path,
+      coverRef: reopened.album.cover_ref,
       coverRevision: reopened.album.cover_revision,
       label: 'persisted generation-A cover after generation-B completion',
     });
@@ -2109,7 +2109,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     const active = await coverLookupActions.readActiveLocalCoverEvidence();
-    expect(active.sourcePath).toBe(reopened.album.cover_path);
+    expect(active.sourcePath).toBe(reopened.album.cover_ref);
     expect(active.image.coverRevision).toBe(savedCoverRevision);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
@@ -2200,7 +2200,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
       AUTOMATIC_CANDIDATE_TARGET,
     );
     expect(opened.selected).toEqual(AUTOMATIC_CANDIDATE_TARGET);
-    expect(opened.album.cover_path).toBeNull();
+    expect(opened.album.cover_ref).toBeNull();
     expect((await trackModalActions.waitForLoadedSummary()).coverPlaceholderVisible).toBe(true);
     await trackModalActions.close();
   });
@@ -2216,7 +2216,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     expect(USER_COVER_LINKED_FIELDS.every((field) => neutralBaselineAlbum[field] !== null)).toBe(true);
     await trackModalActions.waitForLoadedSummary();
     neutralBaselineFullSizeCover = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: neutralBaselineAlbum.cover_path,
+      coverRef: neutralBaselineAlbum.cover_ref,
       coverRevision: neutralBaselineAlbum.cover_revision,
       label: 'neutral user-owned cover before automatic lookup',
     });
@@ -2243,7 +2243,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
       AUTOMATIC_CANDIDATE_TARGET,
     );
     expect(opened.album.cover_selection_origin).toBe('automatic');
-    expect(opened.album.cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    expect(opened.album.cover_ref).toMatch(/[\\/]cover\.jpg$/i);
     expect(opened.album.remote_cover_url).toBeNull();
     expect(opened.album.remote_cover_thumbnail_url).toBeNull();
     await trackModalActions.waitForLoadedSummary();
@@ -2251,7 +2251,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
       trackModalActions.trackModal.detailedCoverImage,
       'automatically applied album cover',
       {
-        expectedCoverPath: opened.album.cover_path,
+        expectedCoverRef: opened.album.cover_ref,
         expectedCoverRevision: opened.album.cover_revision,
       },
     );
@@ -2268,7 +2268,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     );
     const neutralPreservedAlbum = opened.album;
     expect(neutralPreservedAlbum.cover_selection_origin).toBe(neutralBaselineAlbum.cover_selection_origin);
-    expect(neutralPreservedAlbum.cover_path).toBe(neutralBaselineAlbum.cover_path);
+    expect(neutralPreservedAlbum.cover_ref).toBe(neutralBaselineAlbum.cover_ref);
     expect(neutralPreservedAlbum.cover_revision).toBe(neutralBaselineAlbum.cover_revision);
     for (const field of USER_COVER_LINKED_FIELDS) {
       expect(neutralPreservedAlbum[field]).toBe(neutralBaselineAlbum[field]);
@@ -2357,7 +2357,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
-    const artwork = await createSameAlbumArtwork(opened.album.cover_path, randomUUID().replaceAll('-', ''));
+    const artwork = await createSameAlbumArtwork(opened.album.cover_ref, randomUUID().replaceAll('-', ''));
     try {
       await trackModalActions.waitForLoadedSummary();
       await trackModalActions.openCoverLookup();
@@ -2390,7 +2390,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
       trackModalActions.trackModal.detailedCoverImage,
       'user-owned cover before automatic lookup',
       {
-        expectedCoverPath: baselineAlbum.cover_path,
+        expectedCoverRef: baselineAlbum.cover_ref,
         expectedCoverRevision: baselineAlbum.cover_revision,
       },
     );
@@ -2407,12 +2407,12 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
-    expect(opened.album.cover_path).toBe(baselineAlbum.cover_path);
+    expect(opened.album.cover_ref).toBe(baselineAlbum.cover_ref);
     expect(opened.album.cover_revision).toBe(baselineAlbum.cover_revision);
     expect(opened.album.cover_selection_origin).toBe('user');
     await trackModalActions.waitForLoadedSummary();
     const retained = await coverLookupActions.readDisplayedImageEvidence(trackModalActions.trackModal.detailedCoverImage,
-      'undersized selection after different-art lookup', { expectedCoverPath: baselineAlbum.cover_path, expectedCoverRevision: baselineAlbum.cover_revision });
+      'undersized selection after different-art lookup', { expectedCoverRef: baselineAlbum.cover_ref, expectedCoverRevision: baselineAlbum.cover_revision });
     expect(retained.sha256).toBe(baselineCover.sha256);
     await trackModalActions.waitForCoverLookupImprovementIndicator(true);
     await trackModalActions.openCoverLookup();
@@ -2424,7 +2424,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await coverLookupActions.closeModal();
     const retainedAfterView = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage, 'explicit selection after viewing a different-art suggestion',
-      { expectedCoverPath: baselineAlbum.cover_path, expectedCoverRevision: baselineAlbum.cover_revision },
+      { expectedCoverRef: baselineAlbum.cover_ref, expectedCoverRevision: baselineAlbum.cover_revision },
     );
     expect(retainedAfterView.sha256).toBe(baselineCover.sha256);
     await trackModalActions.close();
@@ -2442,7 +2442,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     );
     upgradedAlbum = opened.album;
     expect(upgradedAlbum.cover_selection_origin).toBe('user');
-    expect(upgradedAlbum.cover_path).toBe(baselineAlbum.cover_path);
+    expect(upgradedAlbum.cover_ref).toBe(baselineAlbum.cover_ref);
     expect(upgradedAlbum.cover_revision).not.toBe(baselineAlbum.cover_revision);
     for (const field of USER_COVER_LINKED_FIELDS) {
       expect(upgradedAlbum[field]).toBeNull();
@@ -2452,7 +2452,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
       trackModalActions.trackModal.detailedCoverImage,
       'user-owned cover after same-art automatic upgrade',
       {
-        expectedCoverPath: upgradedAlbum.cover_path,
+        expectedCoverRef: upgradedAlbum.cover_ref,
         expectedCoverRevision: upgradedAlbum.cover_revision,
       },
     );
@@ -2461,7 +2461,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     const reopenedUpgrade = await coverLookupActions.inspectModalComponents();
-    expect(reopenedUpgrade.activeLocalCover.coverPath).toBe(upgradedAlbum.cover_path);
+    expect(reopenedUpgrade.activeLocalCover.coverRef).toBe(upgradedAlbum.cover_ref);
     expect((await coverLookupActions.readLocalCoverNames())
       .some((name) => /^cover-existing-/i.test(name))).toBe(false);
     expect((await coverLookupActions.readRemoteCandidateSummaries())
@@ -2481,7 +2481,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
     expect(opened.album.cover_selection_origin).toBe('user');
-    expect(opened.album.cover_path).toBe(upgradedAlbum.cover_path);
+    expect(opened.album.cover_ref).toBe(upgradedAlbum.cover_ref);
     expect(opened.album.cover_revision).toBe(upgradedAlbum.cover_revision);
     expect(opened.album.local_cover_width).toBeGreaterThanOrEqual(1200);
     expect(opened.album.local_cover_height).toBeGreaterThanOrEqual(1200);
@@ -2505,7 +2505,7 @@ test('FTC-COVERS-019 later automatic improvement restores the unseen indicator',
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(USER_OWNED_IMPROVEMENT_TARGET);
-    const artwork = await createUndersizedAlbumArtwork(opened.album.cover_path, randomUUID().replaceAll('-', ''));
+    const artwork = await createUndersizedAlbumArtwork(opened.album.cover_ref, randomUUID().replaceAll('-', ''));
     try {
       await trackModalActions.waitForLoadedSummary();
       await trackModalActions.openCoverLookup();
@@ -2536,7 +2536,7 @@ test('FTC-COVERS-019 later automatic improvement restores the unseen indicator',
       USER_OWNED_IMPROVEMENT_TARGET,
     );
     expect(opened.album.cover_selection_origin).toBe('user');
-    expect(opened.album.cover_path).toMatch(/[\\/]cover\.jpg$/i);
+    expect(opened.album.cover_ref).toMatch(/[\\/]cover\.jpg$/i);
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.waitForCoverLookupImprovementIndicator(true);
     await trackModalActions.openCoverLookup();
@@ -2574,15 +2574,15 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
       trackModalActions.trackModal.detailedCoverImage,
       'user-owned cover before manual candidate search',
       {
-        expectedCoverPath: baselineAlbum.cover_path,
+        expectedCoverRef: baselineAlbum.cover_ref,
         expectedCoverRevision: baselineAlbum.cover_revision,
       },
     );
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     expect((await coverLookupActions.selectLocalCoverBySourcePath(
-      baselineAlbum.cover_path,
-    )).sourcePath).toBe(baselineAlbum.cover_path);
+      baselineAlbum.cover_ref,
+    )).sourcePath).toBe(baselineAlbum.cover_ref);
   });
 
   await stepLogger.step('Complete a manual all-provider lookup without changing the active cover before Save', async () => {
@@ -2591,7 +2591,7 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
     await coverLookupActions.waitForRemoteCandidateCountAtLeast(1);
     expect(await coverLookupActions.readSelectedRemoteCandidateId()).toBe('');
     expect((await coverLookupActions.readActiveLocalCoverEvidence()).sourcePath)
-      .toBe(baselineAlbum.cover_path);
+      .toBe(baselineAlbum.cover_ref);
     await coverLookupActions.waitForModalSearchCompleted();
     expect(await coverLookupActions.readSelectedRemoteCandidateId()).toBe('');
     await coverLookupActions.waitForDrawerBadgeCountAtLeast(1);
@@ -2608,7 +2608,7 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
       USER_OWNED_IMPROVEMENT_TARGET,
     );
     expect(opened.album.cover_selection_origin).toBe('user');
-    expect(opened.album.cover_path).toBe(baselineAlbum.cover_path);
+    expect(opened.album.cover_ref).toBe(baselineAlbum.cover_ref);
     expect(opened.album.cover_revision).toBe(baselineAlbum.cover_revision);
     for (const field of USER_COVER_LINKED_FIELDS) {
       expect(opened.album[field]).toBe(baselineAlbum[field]);
@@ -2618,7 +2618,7 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
       trackModalActions.trackModal.detailedCoverImage,
       'user-owned cover after manual candidate search',
       {
-        expectedCoverPath: baselineAlbum.cover_path,
+        expectedCoverRef: baselineAlbum.cover_ref,
         expectedCoverRevision: baselineAlbum.cover_revision,
       },
     );

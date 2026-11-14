@@ -75,10 +75,10 @@ export async function removeAlbumSourceOwnershipFixture(fixture) {
   await fs.rm(resolved, { recursive: true });
 }
 
-export async function createUndersizedAlbumArtwork(coverPath, token) {
+export async function createUndersizedAlbumArtwork(coverRef, token) {
   if (!/^[a-z0-9]+$/u.test(token)) throw new Error('Invalid artwork ownership token');
   const root = path.resolve(resolveWritableFixtureMediaRoot());
-  const folder = path.dirname(path.resolve(coverPath));
+  const folder = path.dirname(path.resolve(coverRef));
   const relative = path.relative(root, folder);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Artwork must belong to generated fixture media');
   const artworkPath = path.join(folder, `e2e-undersized-${token}.png`);
@@ -88,10 +88,10 @@ export async function createUndersizedAlbumArtwork(coverPath, token) {
   return { artworkPath, cleanup: () => fs.unlink(artworkPath) };
 }
 
-export async function createSameAlbumArtwork(coverPath, token) {
+export async function createSameAlbumArtwork(coverRef, token) {
   if (!/^[a-z0-9]+$/u.test(token)) throw new Error('Invalid artwork ownership token');
   const root = path.resolve(resolveWritableFixtureMediaRoot());
-  const source = path.resolve(coverPath);
+  const source = path.resolve(coverRef);
   const folder = path.dirname(source);
   const relative = path.relative(root, folder);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Artwork must belong to generated fixture media');
@@ -131,11 +131,11 @@ with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as c
         from PIL import Image
         with Image.open(wrong) as image:
             width, height = image.size
-        metadata = {"cover_path": str(wrong), "cover_revision": revision,
+        metadata = {"cover_ref": str(wrong), "cover_revision": revision,
                 "cover_selection_origin": "automatic" if sys.argv[2] == "stage-in-folder-automatic" else "user", "local_cover_width": width,
                     "local_cover_height": height}
         connection.execute("""
-            update library.local_albums set cover_path = %s,
+            update library.local_albums set cover_ref = %s,
               metadata = (metadata - 'cover_selection_provenance' - 'cover_selection_repair_previous') || %s
             where id = %s
         """, (str(wrong), Jsonb(metadata), album_id))
@@ -146,13 +146,13 @@ with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as c
                 - 'cover_selection_provenance' - 'cover_selection_repair_previous') || %s, true)
             where starts_with(private_path, %s) and not starts_with(private_path, %s)
         """, (Jsonb(metadata), str(owner) + os.sep, str(owner / "Deluxe") + os.sep))
-    cover_path, metadata = connection.execute(
-        "select cover_path, metadata from library.local_albums where id = %s", (album_id,)
+    cover_ref, metadata = connection.execute(
+        "select cover_ref, metadata from library.local_albums where id = %s", (album_id,)
     ).fetchone()
-    result = {"coverPath": cover_path, "origin": metadata.get("cover_selection_origin"),
+    result = {"coverRef": cover_ref, "origin": metadata.get("cover_selection_origin"),
               "provenance": metadata.get("cover_selection_provenance"),
               "repairPrevious": metadata.get("cover_selection_repair_previous"),
-              "wrongCoverPath": str(wrong), "wrongRevision": revision}
+              "wrongCoverRef": str(wrong), "wrongRevision": revision}
 print(json.dumps(result))
 `;
 

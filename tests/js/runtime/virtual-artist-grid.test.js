@@ -31,7 +31,7 @@ function createRuntimeContext() {
       this.isConnected = true;
       this.loading = 'eager';
       this.attributes = {
-        src: '/cover?path=old',
+        src: '/cover/old',
         srcset: '/cover?path=old 1x',
         loading: 'eager',
         fetchpriority: 'high',
@@ -57,7 +57,7 @@ function createRuntimeContext() {
       this.attributes = {
         'data-deferred-cover-src': `/covers/deferred-${index}`,
         'data-deferred-cover-alt': `Deferred cover ${index}`,
-        'data-cover-path': `covers/deferred-${index}.jpg`,
+        'data-cover-ref': `covers/deferred-${index}.jpg`,
         'data-remote-cover-url': '',
       };
       this.replacement = null;
@@ -522,7 +522,7 @@ test('visible cover priming promotes scheduler work discovered after transient l
   context.state.view.selected_artist = 'Neal Morse';
   const images = Array.from({ length: 5 }, (_value, index) => {
     const image = new context.HTMLImageElement();
-    image.setAttribute('data-production-cover-src', `/cover?path=visible-after-layout-${index}`);
+    image.setAttribute('data-production-cover-src', `/cover/visible-after-layout-${index}`);
     image.setAttribute('data-gallery-cover-priority', 'near');
     image.setAttribute('fetchpriority', 'low');
     image.getBoundingClientRect = () => ({ top: 20, bottom: 260, width: 240, height: 240 });
@@ -534,7 +534,7 @@ test('visible cover priming promotes scheduler work discovered after transient l
 
   assert.equal(images.every((image) => image.getAttribute('data-gallery-cover-priority') === 'visible'), true);
   assert.deepEqual(context.galleryCoverSchedulerPromotions, images.map((_image, index) => ({
-    productionUrl: `/cover?path=visible-after-layout-${index}`,
+    productionUrl: `/cover/visible-after-layout-${index}`,
     priority: 'visible',
   })));
   assert.equal(images.slice(0, 4).every((image) => image.getAttribute('fetchpriority') === 'high'), true);
@@ -612,8 +612,8 @@ test('render adopts same-cover in-flight work before pruning removed cover consu
   vm.runInContext(schedulerSource, context, { filename: schedulerPath });
   const scheduler = vm.runInContext('galleryCoverLoadScheduler', context);
   const virtualGrid = vm.runInContext('virtualGrid', context);
-  const sameCoverUrl = '/cover?path=retained';
-  const removedCoverUrl = '/cover?path=removed';
+  const sameCoverUrl = '/cover/retained';
+  const removedCoverUrl = '/cover/removed';
   const oldSameCoverImage = new context.HTMLImageElement();
   const oldRemovedCoverImage = new context.HTMLImageElement();
   const generationOne = scheduler.startGeneration();
@@ -4220,15 +4220,15 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   const { context } = createRuntimeContext();
   vm.runInContext('albumHasDisplayCover = () => true;', context);
   const visibleCoverHtml = vm.runInContext(
-    'buildAlbumCardCoverHtml({ key: "bi2-1", name: "Иномарки", album_artist: "БИ-2", cover_path: "covers/1.jpg", tracks: [] }, { coverPriority: "visible" })',
+    'buildAlbumCardCoverHtml({ key: "bi2-1", name: "Иномарки", album_artist: "БИ-2", cover_ref: "covers/1.jpg", tracks: [] }, { coverPriority: "visible" })',
     context,
   );
   const nearCoverHtml = vm.runInContext(
-    'buildAlbumCardCoverHtml({ key: "bi2-2", name: "Горизонт событий", album_artist: "БИ-2", cover_path: "covers/2.jpg", tracks: [] }, { coverPriority: "near" })',
+    'buildAlbumCardCoverHtml({ key: "bi2-2", name: "Горизонт событий", album_artist: "БИ-2", cover_ref: "covers/2.jpg", tracks: [] }, { coverPriority: "near" })',
     context,
   );
   const backgroundCoverHtml = vm.runInContext(
-    'buildAlbumCardCoverHtml({ key: "bi2-3", name: "Луна-парк", album_artist: "БИ-2", cover_path: "covers/3.jpg", tracks: [] }, { coverPriority: "background" })',
+    'buildAlbumCardCoverHtml({ key: "bi2-3", name: "Луна-парк", album_artist: "БИ-2", cover_ref: "covers/3.jpg", tracks: [] }, { coverPriority: "background" })',
     context,
   );
 
@@ -4254,8 +4254,8 @@ test('switching Cards to No info invalidates mounted card markup without replaci
     blockOffsets: [0, 800],
     blockHeights: [300, 300],
     blocksData: [
-      { kind: 'albums', albums: [{ key: 'visible', name: 'Visible', album_artist: 'БИ-2', cover_path: 'covers/visible.jpg', tracks: [] }] },
-      { kind: 'albums', albums: [{ key: 'offscreen', name: 'Offscreen', album_artist: 'БИ-2', cover_path: 'covers/offscreen.jpg', tracks: [] }] },
+      { kind: 'albums', albums: [{ key: 'visible', name: 'Visible', album_artist: 'БИ-2', cover_ref: 'covers/visible.jpg', tracks: [] }] },
+      { kind: 'albums', albums: [{ key: 'offscreen', name: 'Offscreen', album_artist: 'БИ-2', cover_ref: 'covers/offscreen.jpg', tracks: [] }] },
     ],
     group: { artist: 'БИ-2', artist_display: 'БИ-2', albums: [] },
   };
@@ -4411,7 +4411,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
     },
   });
 
-  assert.equal(activeImage.getAttribute('src'), '/cover?path=old');
+  assert.equal(activeImage.getAttribute('src'), '/cover/old');
   assert.equal(activeImage.getAttribute('srcset'), '/cover?path=old 1x');
   assert.equal(activeImage.getAttribute('loading'), 'eager');
   assert.equal(activeImage.getAttribute('fetchpriority'), 'high');
@@ -4669,7 +4669,7 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const buildAlbums = (artist, prefix) => Array.from({ length: 120 }, (_value, index) => ({
     album_artist: artist,
-    cover_path: `covers/${prefix}-${index}.jpg`,
+    cover_ref: `covers/${prefix}-${index}.jpg`,
     hasCover: true,
     key: `${prefix}-${index}`,
     name: `${prefix} Album ${index + 1}`,
@@ -4796,12 +4796,12 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
   retainedImage.naturalWidth = 480;
   retainedImage.setAttribute(
     'data-production-cover-src',
-    'http://127.0.0.1:4173/cover?path=joseph&size=480&v=initial',
+    'http://127.0.0.1:4173/cover/joseph?size=480&v=initial',
   );
   retainedImage.setAttribute('src', 'blob:http://127.0.0.1/revoked-joseph');
   context.galleryCoverPreviewCache = {
     hasActive(productionUrl) {
-      assert.match(productionUrl, /\/cover\?path=joseph/);
+      assert.match(productionUrl, /\/cover\/joseph/);
       return false;
     },
   };
@@ -4921,7 +4921,7 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
   inFlightImage.naturalWidth = 0;
   inFlightImage.setAttribute('data-cover-visual-state', 'pending');
   inFlightImage.setAttribute('data-gallery-cover-loading', '1');
-  inFlightImage.setAttribute('data-production-cover-src', '/cover?path=in-flight');
+  inFlightImage.setAttribute('data-production-cover-src', '/cover/in-flight');
   const inFlightCard = {
     getAttribute(name) { return name === 'data-gallery-card-key' ? 'in-flight' : 'same-render'; },
     querySelector(selector) {
@@ -4952,7 +4952,7 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
     },
   });
   assert.equal(pendingReplacement, inFlightCard);
-  assert.equal(inFlightImage.getAttribute('data-gallery-cover-src'), '/cover?path=in-flight');
+  assert.equal(inFlightImage.getAttribute('data-gallery-cover-src'), '/cover/in-flight');
   assert.equal(inFlightImage.getAttribute('data-gallery-cover-loading'), '');
 
   const enqueueCountBeforeActivation = context.galleryCoverSchedulerEnqueues.length;
@@ -4966,7 +4966,7 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
   virtualGrid.activateGalleryCoverImages(retainedRoot);
   const retainedEnqueues = context.galleryCoverSchedulerEnqueues.slice(enqueueCountBeforeActivation);
   assert.equal(retainedEnqueues.length, 1, 'activation must attach one fresh request token, not loop reenqueue');
-  assert.equal(retainedEnqueues[0].productionUrl, '/cover?path=in-flight');
+  assert.equal(retainedEnqueues[0].productionUrl, '/cover/in-flight');
   assert.equal(retainedEnqueues[0].generation, virtualGrid._coverLoadGeneration);
   assert.equal(retainedEnqueues[0].image, inFlightImage);
   assert.equal(inFlightImage.getAttribute('data-gallery-cover-src'), '');
@@ -5001,7 +5001,7 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
     key: 'stable-album-key',
     name: 'Joseph: Part One - The Dreamer',
     album_artist: 'Neal Morse',
-    cover_path: 'X:/SyntheticMusic/Synthetic Artist/Synthetic Album/cover-original.jpg',
+    cover_ref: 'X:/SyntheticMusic/Synthetic Artist/Synthetic Album/cover-original.jpg',
     hasCover: true,
     tracks: [],
   };
@@ -5024,11 +5024,11 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
   );
   const persistedLocalPathChangedKey = context.getAlbumCardRenderKey({
     ...baseAlbum,
-    cover_path: 'X:/SyntheticMusic/Synthetic Artist/Synthetic Album/cover-persisted-replacement.jpg',
+    cover_ref: 'X:/SyntheticMusic/Synthetic Artist/Synthetic Album/cover-persisted-replacement.jpg',
   });
   assert.equal(
     context.buildAlbumDisplayCoverUrl(baseAlbum),
-    context.buildAlbumDisplayCoverUrl({ ...baseAlbum, cover_path: 'X:/SyntheticMusic/Synthetic Artist/Synthetic Album/cover-persisted-replacement.jpg' }),
+    context.buildAlbumDisplayCoverUrl({ ...baseAlbum, cover_ref: 'X:/SyntheticMusic/Synthetic Artist/Synthetic Album/cover-persisted-replacement.jpg' }),
     'the optimistic display URL fixture intentionally stays unchanged',
   );
   assert.notEqual(
@@ -5062,9 +5062,9 @@ test('row measurement waits to restore its anchor until the pointer-deferred ren
 
   assert.equal(containerEl.children.includes(retainedNode), true);
   assert.equal(containerEl.children.includes(removedNode), false);
-  assert.equal(retainedImage.getAttribute('src'), '/cover?path=old');
+  assert.equal(retainedImage.getAttribute('src'), '/cover/old');
   assert.equal(retainedImage.getAttribute('srcset'), '/cover?path=old 1x');
-  assert.equal(removedImage.getAttribute('src'), '/cover?path=old');
+  assert.equal(removedImage.getAttribute('src'), '/cover/old');
   assert.equal(removedImage.getAttribute('srcset'), '/cover?path=old 1x');
   assert.equal(removedImage.getAttribute('loading'), 'eager');
   assert.equal(removedImage.getAttribute('fetchpriority'), 'high');
@@ -6022,7 +6022,7 @@ test('gallery cover activation schedules visible images before overscan images',
   const image = (id, priority) => {
     const element = new context.HTMLImageElement();
     element.id = id;
-    element.setAttribute('data-gallery-cover-src', `/cover?path=${id}`);
+    element.setAttribute('data-gallery-cover-src', `/cover/${id}`);
     element.setAttribute('data-gallery-cover-priority', priority);
     return element;
   };
@@ -6043,10 +6043,10 @@ test('gallery cover activation schedules visible images before overscan images',
   assert.deepEqual(
     context.galleryCoverSchedulerEnqueues.map(({ productionUrl }) => productionUrl),
     [
-      '/cover?path=visible-first',
-      '/cover?path=visible-second',
-      '/cover?path=near-above',
-      '/cover?path=near-below',
+      '/cover/visible-first',
+      '/cover/visible-second',
+      '/cover/near-above',
+      '/cover/near-below',
     ],
   );
 });

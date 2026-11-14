@@ -43,8 +43,8 @@ function harness() {
     renderUtilityModalContent() {}, loadProblematicFiles() {}, loadUtilityRules() {}, loadUtilityLibrarySettings() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {},
     openMobileUtilityDetail() {},
     getAvailableAlbumMoveActions: () => [],
-    buildAlbumDisplayCoverUrl: (album) => album.cover_path ? `/cover?path=${encodeURIComponent(album.cover_path)}` : '',
-    buildAlbumLightboxCoverUrl: (album) => album.cover_path ? `/cover?path=${encodeURIComponent(album.cover_path)}&size=original` : (album.remote_cover_url || album.remote_cover_thumbnail_url || ''),
+    buildAlbumDisplayCoverUrl: (album) => album.cover_ref ? `/cover/${encodeURIComponent(album.cover_ref)}` : '',
+    buildAlbumLightboxCoverUrl: (album) => album.cover_ref ? `/cover/${encodeURIComponent(album.cover_ref)}?size=original` : (album.remote_cover_url || album.remote_cover_thumbnail_url || ''),
     formatLoopTime: (value) => String(value),
   };
   context.window = context;
@@ -232,15 +232,15 @@ for (const kind of ['problematic', 'loops']) {
   for (const available of [true, false]) {
     test(`S05 ${kind} header ${available ? 'available' : 'missing'} artwork has the shared Artbox activation contract`, () => {
       const { context } = harness();
-      const cover_path = available ? 'test-cover.jpg' : '';
-      const item = { ...loop, cover_path };
+      const cover_ref = available ? 'test-cover.jpg' : '';
+      const item = { ...loop, cover_ref };
       const html = kind === 'problematic'
-        ? context.buildProblematicAlbumDetail({ ...album, cover_path })
+        ? context.buildProblematicAlbumDetail({ ...album, cover_ref })
         : context.buildUtilityLoopDetail({ key: 'song', loops: [item], representativeLoop: item });
       assert.match(html, new RegExp(`data-album-artbox-state="${available ? 'ready' : 'missing'}"`));
       if (available) {
         assert.match(html, /<button\b[^>]*data-open-lightbox="1"[^>]*>/);
-        assert.match(html, /data-cover-src="\/cover\?path=test-cover.jpg(?:&amp;size=original)?"/);
+        assert.match(html, /data-cover-src="\/cover\/test-cover.jpg(?:&amp;size=original)?"/);
       } else {
         assert.match(html, /album-artbox__missing-slash/);
         assert.doesNotMatch(html, /data-open-lightbox="1"/);
@@ -282,8 +282,8 @@ for (const kind of ['problematic', 'loops']) {
   test(`S04 ${kind} tree row shows shared artwork and real title artist and year`, () => {
     const { context } = harness();
     const html = kind === 'problematic'
-      ? context.buildProblematicAlbumListItem({ ...album, cover_path: 'test-cover.jpg' }, true)
-      : context.buildUtilityLoopTree({ key: 'song', loops: [loop], representativeLoop: { ...loop, cover_path: 'test-cover.jpg' } }, 'song', '');
+      ? context.buildProblematicAlbumListItem({ ...album, cover_ref: 'test-cover.jpg' }, true)
+      : context.buildUtilityLoopTree({ key: 'song', loops: [loop], representativeLoop: { ...loop, cover_ref: 'test-cover.jpg' } }, 'song', '');
     assert.match(html, /data-album-artbox-state="ready"/);
     assert.match(html, kind === 'problematic' ? /Test album/ : /Test song/);
     assert.match(html, /Test artist/);
@@ -325,25 +325,25 @@ test('S05 remote thumbnail keeps the original remote artwork as its enlargement 
 
 test('S04 tree artwork uses native lazy loading and asynchronous image decoding', () => {
   const { context } = harness();
-  const html = context.buildUtilityAlbumArtbox({ cover_path: 'test-cover.jpg' });
+  const html = context.buildUtilityAlbumArtbox({ cover_ref: 'test-cover.jpg' });
   assert.match(html, /<img\b[^>]*loading="lazy"/);
   assert.match(html, /<img\b[^>]*decoding="async"/);
 });
 
 test('S05 selected header artwork loads eagerly with asynchronous image decoding', () => {
   const { context } = harness();
-  const html = context.buildUtilityAlbumArtbox({ cover_path: 'test-cover.jpg' }, { interactive: true });
+  const html = context.buildUtilityAlbumArtbox({ cover_ref: 'test-cover.jpg' }, { interactive: true });
   assert.match(html, /<img\b[^>]*loading="eager"/);
   assert.match(html, /<img\b[^>]*decoding="async"/);
 });
 
 function failedArtwork({ remote = '', interactive = true } = {}) {
-  const trigger = interactive ? element({ 'data-cover-src': '/cover?path=local.jpg' }) : null;
+  const trigger = interactive ? element({ 'data-cover-src': '/cover/local.jpg' }) : null;
   const artbox = element({ 'aria-label': 'Test album artwork' });
   artbox.closest = () => trigger;
   const image = element({ 'data-remote-cover-url': remote });
   image.dataset = {};
-  image.src = '/cover?path=local.jpg';
+  image.src = '/cover/local.jpg';
   image.closest = (selector) => selector === '.album-artbox' ? artbox : trigger;
   return { image, artbox, trigger };
 }
@@ -468,7 +468,7 @@ function problematicSelectionHarness({ detailLoaded = true } = {}) {
   const { context, els } = harness();
   const albums = ['alpha', 'beta'].map(key => ({
     key, name: key, album: key, album_artist: 'Artist', tracks: [], repair_preview_rows: [],
-    track_problem_rows: [], problematic_track_paths: [], cover_path: `${key}.jpg`, detail_loaded: key === 'alpha' || detailLoaded,
+    track_problem_rows: [], problematic_track_paths: [], cover_ref: `${key}.jpg`, detail_loaded: key === 'alpha' || detailLoaded,
   }));
   Object.assign(context.state.utility, { problematicFiles: albums, selectedProblematicKey: 'alpha', detailLoadPromises: {} });
   els.overlay = { hidden: false, setAttribute() {} };
@@ -517,7 +517,7 @@ function problematicSelectionHarness({ detailLoaded = true } = {}) {
         }
         const count = { textContent: String(album.track_count ?? album.tracks.length) };
         let artworkHtml = context.buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name}` });
-        let image = element({ src: `/cover?path=${album.cover_path}` });
+        let image = element({ src: `/cover/${album.cover_ref}` });
         image.src = image.getAttribute('src');
         const artwork = {
           get innerHTML() { return artworkHtml; },

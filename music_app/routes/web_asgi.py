@@ -42,13 +42,14 @@ from music_app.services.gallery_scope import normalize_gallery_scope, normalize_
 from music_app.services.library_browse_postgres import GalleryProjectionPending, PostgresLibraryBrowseRepository
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
-    get_primary_music_root,
     resolve_album_open_directories,
     resolve_configured_media_path,
 )
 from music_app.services.loops import resolve_loop_media_path, resolve_loop_preview_path
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.capability_artwork import render_browse_artwork
+from music_app.services.cover_references import CANDIDATE as CANDIDATE_COVER
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
 from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
@@ -66,6 +67,7 @@ from music_app.services import state as state_service
 from music_app.services.view_payloads import build_news_payload
 from version import RELEASE_VERSION
 
+_IMMUTABLE_COVER_MAX_AGE = 31536000
 _COVER_RESPONSE_EXECUTOR = create_daemon_executor(
     max_workers=8,
     thread_name_prefix="albumhaven-cover-response",
@@ -320,7 +322,6 @@ def _build_empty_initial_view(
         "gallery_display_mode": normalize_gallery_display_mode(gallery_display_mode),
         "gallery_scale_percent": normalize_gallery_scale_percent(gallery_scale_percent),
         "visible_library_categories": list(visible_library_categories or ["main_library", "hoard", "new_arrivals"]),
-        "music_dir": str(get_primary_music_root(config)),
         "app_name": config.get("APP_NAME", "Album Haven"),
         "app_version": config.get("APP_VERSION", RELEASE_VERSION),
         "ignored_version_keys": [],
@@ -974,14 +975,17 @@ def _conditional_file_response(
     content: bytes | None = None,
 ) -> Response:
     resolved_stat = stat_result or path.stat()
+    # Covers (the only max_age responses) are private artwork named by reference, not by file.
     file_response = FileResponse(
         path,
         stat_result=resolved_stat,
-        filename=path.name,
+        filename=None if max_age is not None else path.name,
         content_disposition_type="inline",
     )
     if max_age is not None:
-        file_response.headers["Cache-Control"] = f"public, max-age={max_age}"
+        file_response.headers["Cache-Control"] = f"private, max-age={max_age}" + (
+            ", immutable" if max_age >= _IMMUTABLE_COVER_MAX_AGE else ""
+        )
     elif no_cache:
         file_response.headers["Cache-Control"] = "no-cache"
 
@@ -1075,7 +1079,6 @@ async def index(request: Request) -> Response:
             "effective_selected_artist": resolve_effective_selected_artist(
                 bootstrap_payload.get("initial_view")
             ),
-            "music_dir": config["MUSIC_DIR"],
             "last_error": library_state.get("last_error"),
             "app_name": config.get("APP_NAME", "Album Haven"),
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
@@ -1183,7 +1186,6 @@ async def news_center(request: Request) -> Response:
             "query": "",
             "selected_artist": "",
             "effective_selected_artist": "",
-            "music_dir": config["MUSIC_DIR"],
             "last_error": library_state.get("last_error"),
             "app_name": config.get("APP_NAME", "Album Haven"),
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
@@ -1418,7 +1420,7 @@ def _cover_response(
             candidate,
             cache_roots,
             max_size=requested_size,
-            max_age=31536000,
+            max_age=_IMMUTABLE_COVER_MAX_AGE,
             revision=normalized_revision,
         )
         if cached_response is not None:
@@ -1454,7 +1456,7 @@ def _cover_response(
                 resolved,
                 cache_roots,
                 max_size=requested_size,
-                max_age=31536000 if normalized_revision else 300,
+                max_age=_IMMUTABLE_COVER_MAX_AGE if normalized_revision else 300,
                 revision=normalized_revision,
             )
             if cached_response is not None:
@@ -1485,7 +1487,7 @@ def _cover_response(
                         return _conditional_file_response(
                             request,
                             resolved,
-                            max_age=31536000 if normalized_revision else 300,
+                            max_age=_IMMUTABLE_COVER_MAX_AGE if normalized_revision else 300,
                             stat_result=stat_result,
                             content=content,
                         )
@@ -1496,7 +1498,65 @@ def _cover_response(
     return _conditional_file_response(
         request,
         resolved,
-        max_age=31536000 if normalized_revision else 300,
+        max_age=_IMMUTABLE_COVER_MAX_AGE if normalized_revision else 300,
+    )
+
+
+def _actor_library_id(request: Request) -> int | None:
+    actor = getattr(request.state, "current_actor", None)
+    library_id = getattr(actor, "current_library_id", None)
+    if not getattr(actor, "is_authenticated", False) or library_id is None:
+        return None
+    if not any(member.library_id == library_id for member in actor.library_relationships):
+        return None
+    return library_id
+
+
+def _referenced_cover_path(request: Request, reference: str) -> str | None:
+    """The file a reference names, if this actor may see it (design: opaque cover references)."""
+    store = getattr(request.app.state, "cover_reference_store", None)
+    library_id = _actor_library_id(request)
+    if store is None or library_id is None:
+        return None
+    named = store.resolve(library_id, reference)
+    if named is not None and named[1] == CANDIDATE_COVER:
+        if not allowed_actions_for_request(request, ("library.covers.lookup",)).as_payload().get("library.covers.lookup"):
+            # Another process may have made this candidate the album's cover since it was cached.
+            named = store.resolve(library_id, reference, refresh=True)
+            if named is None or named[1] == CANDIDATE_COVER:
+                return None
+    return named[0] if named is not None else None
+
+
+def legacy_cover_path_is_named(request: Request, path: str) -> bool:
+    """`/cover?path=` serves only files this library names as covers, until it is retired."""
+    store = getattr(request.app.state, "cover_reference_store", None)
+    library_id = _actor_library_id(request)
+    return bool(path) and store is not None and library_id is not None and store.is_named_cover(library_id, path)
+
+
+@router.get("/cover/{reference}")
+async def cover_by_reference(
+    request: Request,
+    reference: str,
+    size: str | None = None,
+    v: str = "",
+) -> Response:
+    path = await run_in_threadpool(_referenced_cover_path, request, reference)
+    if path is None:
+        return _not_found()
+    if not allowed_actions_for_request(request, ("library.media.read",)).as_payload().get("library.media.read"):
+        resolved = await run_in_threadpool(resolve_configured_media_path, _app_config(request), path)
+        if resolved is None:
+            return _not_found()
+        return await run_in_threadpool(render_browse_artwork, resolved)
+    return await asyncio.get_running_loop().run_in_executor(
+        _COVER_RESPONSE_EXECUTOR,
+        _cover_response,
+        request,
+        path,
+        size,
+        v,
     )
 
 
@@ -1517,6 +1577,11 @@ async def cover(
         if item is None or not item.get("cover_path"):
             return _not_found()
         path = str(item["cover_path"])
+    elif not await run_in_threadpool(legacy_cover_path_is_named, request, path):
+        _app_logger(request).info("cover: refused an unnamed legacy path request")
+        return _not_found()
+    else:
+        _app_logger(request).info("cover: served a legacy path request")
     return await asyncio.get_running_loop().run_in_executor(
         _COVER_RESPONSE_EXECUTOR,
         _cover_response,

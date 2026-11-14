@@ -332,7 +332,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
   stepLogger,
   trackModalActions,
 }) => {
-  let expectedCoverPath = '';
+  let expectedCoverRef = '';
   let track;
 
   await stepLogger.step('Open the known Joseph release and start playback through its real track control', async () => {
@@ -345,8 +345,8 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     const summary = await trackModalActions.waitForLoadedSummary();
     expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
     const modalCover = await trackModalActions.waitForDetailedCoverImageCheckpoint();
-    expectedCoverPath = new URL(modalCover.productionSrc, page.url()).searchParams.get('path') || '';
-    expect(expectedCoverPath).not.toEqual('');
+    expectedCoverRef = new URL(modalCover.productionSrc, page.url()).searchParams.get('path') || '';
+    expect(expectedCoverRef).not.toEqual('');
     const playbackMark = await playbackEvidence.playbackMark();
     track = await trackModalActions.playTrackAt(0);
     await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: track.title });
@@ -368,7 +368,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     expect(playerCover.naturalHeight).toBeGreaterThan(0);
     const playerCoverUrl = new URL(playerCover.sourceUrl);
     expect(playerCoverUrl.pathname).toBe('/cover');
-    expect(playerCoverUrl.searchParams.get('path')).toBe(expectedCoverPath);
+    expect(playerCoverUrl.searchParams.get('path')).toBe(expectedCoverRef);
   });
 
   await stepLogger.step('Restore the multi-album artist gallery before opening the player artwork', async () => {
@@ -403,7 +403,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     await trackModalActions.openCoverLightbox();
     const fullscreenCover = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
     expectJosephFixtureCheckpoint(expect, fullscreenCover, { fullscreen: true });
-    expect(new URL(fullscreenCover.src, page.url()).searchParams.get('path')).toBe(expectedCoverPath);
+    expect(new URL(fullscreenCover.src, page.url()).searchParams.get('path')).toBe(expectedCoverRef);
     await trackModalActions.expectCoverLightboxNavigationUnavailable();
     await trackModalActions.closeCoverLightbox();
     await trackModalActions.close();

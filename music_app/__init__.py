@@ -277,6 +277,8 @@ def _configure_asgi_app(app, runtime) -> None:
         PostgresSavedLoopWaveformPeakCacheRepository,
     )
     from music_app.services.waveform_peaks import WaveformPeaksRegistry
+    from music_app.services.cover_reference_boundary import CoverReferenceBoundary
+    from music_app.services.cover_references import CoverReferenceStore
     from music_app.services.private_route_boundary import install_private_route_boundary
     from music_app.services.library_watch_health import (
         LibraryWatchHealthService,
@@ -319,6 +321,13 @@ def _configure_asgi_app(app, runtime) -> None:
     app.state.auth_service_lock = threading.Lock()
     app.state.database_identity_status = None
     app.state.database_identity_status_lock = threading.Lock()
+    app.state.cover_reference_store = (
+        CoverReferenceStore(runtime.config)
+        if str(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        else None
+    )
+    # Added before the private boundary so it runs inside it, where the actor is resolved.
+    app.add_middleware(CoverReferenceBoundary)
     install_private_route_boundary(app)
     immutable_nested_javascript_paths = {
         "/static/js/audio-worklets/gapless-playback-processor.js",

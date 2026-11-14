@@ -247,7 +247,7 @@ test('version tabs are the sole edition indicator while standalone editions reta
     year: 1998,
     release_type: 'ALBUM',
     tabLabel: 'Original - 1998',
-    cover_path: 'C:\\Music\\Shared Artist\\Shared Album\\cover.png',
+    cover_ref: 'C:\\Music\\Shared Artist\\Shared Album\\cover.png',
     tracks: [],
   };
   const specialEdition = {
@@ -439,7 +439,7 @@ test('track modal cover transition hides pending image chrome over a blank place
   });
   const markup = context.buildTrackModalCoverVisualHtml({
     albumName: 'Kaipa',
-    localCoverPath: '',
+    localCoverRef: '',
     remoteCoverUrl: 'https://images.example/kaipa.jpg',
   });
 
@@ -3299,7 +3299,7 @@ function createTrackModalCoverContext(options = {}) {
     name: 'Album Alpha',
     album_artist: 'Artist Alpha',
     year: 2001,
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
     tracks: [],
   }];
   const cover = new TrackModalTestElement('div');
@@ -3373,10 +3373,10 @@ function createTrackModalCoverContext(options = {}) {
       return true;
     },
     buildAlbumDisplayCoverUrl(album) {
-      return `/cover?path=${encodeURIComponent(album.cover_path)}&size=480&v=fixture`;
+      return `/cover/${encodeURIComponent(album.cover_ref)}?size=480&v=fixture`;
     },
     buildAlbumLightboxCoverUrl(album) {
-      return `/cover?path=${encodeURIComponent(album.cover_path)}&v=fixture`;
+      return `/cover/${encodeURIComponent(album.cover_ref)}?v=fixture`;
     },
     async loadGalleryCoverPreviewImage(image, productionUrl, loaderOptions = {}) {
       loaderCalls.push({ image, productionUrl, options: loaderOptions });
@@ -3903,7 +3903,7 @@ test('track-modal cover gallery icon exposes only unseen automatic improvements'
     key: 'automatic-improvement-album',
     name: 'Automatic Improvement Album',
     album_artist: 'Candidate Artist',
-    cover_path: 'C:\\Music\\Candidate Artist\\Automatic Improvement Album\\cover.jpg',
+    cover_ref: 'C:\\Music\\Candidate Artist\\Automatic Improvement Album\\cover.jpg',
     tracks: [],
     cover_candidate_snapshot: {
       search_kind: 'automatic',
@@ -4010,14 +4010,14 @@ test('a stale track-modal cover completion cannot reveal an earlier album over t
     key: 'alpha',
     name: 'Album Alpha',
     album_artist: 'Artist Alpha',
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
     tracks: [],
   };
   const beta = {
     key: 'beta',
     name: 'Album Beta',
     album_artist: 'Artist Beta',
-    cover_path: 'C:\\Music\\Artist Beta\\Album Beta\\cover.png',
+    cover_ref: 'C:\\Music\\Artist Beta\\Album Beta\\cover.png',
     tracks: [],
   };
   const pending = new Map([
@@ -4229,7 +4229,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
       artist: 'Artist Alpha',
       albumArtist: 'Artist Alpha',
       album: 'Album Beta',
-      coverPath: '',
+      coverRef: '',
       durationSeconds: 0,
       year: '2002',
     },

@@ -71,7 +71,7 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
                 "artist": artist, "album_artist": artist, "album": album, "title": title,
                 "year": year, "track_number": track_index, "disc_number": 1, "disc_number_raw": "1",
                 "duration_seconds": duration, "duration_display": f"{duration // 60}:{duration % 60:02d}",
-                "cover_path": str(cover.resolve()), "library_root_id": "isolated-e2e-root",
+                "cover_ref": str(cover.resolve()), "library_root_id": "isolated-e2e-root",
                 "library_root_category": "main_library", "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
             }
     if extended:
@@ -194,11 +194,11 @@ def restore_mobile_demo_covers(inventory: dict, selections: dict[str, str]) -> N
     """Restore selected generated artwork by its saved content hash after a restart."""
     import hashlib
     import shutil
-    for cover_path, revision in selections.items():
-        entries = [entry for entry in inventory.values() if entry.get('cover_path') == cover_path]
+    for cover_ref, revision in selections.items():
+        entries = [entry for entry in inventory.values() if entry.get('cover_ref') == cover_ref]
         if not entries:
             raise ValueError('Saved demo cover is outside the generated inventory.')
-        cover = Path(cover_path)
+        cover = Path(cover_ref)
         candidates = [cover, cover.with_name('cover-alternate.jpg')]
         match = next((candidate for candidate in candidates if candidate.is_file()
                       and hashlib.sha256(candidate.read_bytes()).hexdigest() == revision), None)

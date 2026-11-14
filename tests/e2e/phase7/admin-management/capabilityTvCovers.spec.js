@@ -33,7 +33,7 @@ test('FTC-CAP-AUDIT-014 TV selects real provider artwork while hiding retained m
   const selected = await decodedArtworkEvidence(page, selectedImage.src);
   const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(desktop.providerId);
   expect(saved.ok).toBe(true);
-  expect(saved.optimistic_cover_path).toBeTruthy();
+  expect(saved.optimistic_cover_ref).toBeTruthy();
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForTaskStatus(desktop.taskTitle, 'Art chosen');
   await coverLookupActions.closeDrawer();
@@ -42,7 +42,7 @@ test('FTC-CAP-AUDIT-014 TV selects real provider artwork while hiding retained m
   await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
   const artwork = await coverLookupActions.readDisplayedImageEvidence(
     trackModalActions.trackModal.detailedCoverImage, 'TV-selected provider artwork',
-    { expectedCoverPath: saved.optimistic_cover_path },
+    { expectedCoverRef: saved.optimistic_cover_ref },
   );
   const persisted = await decodedArtworkEvidence(page, artwork.src);
   expect(persisted).toEqual(selected);

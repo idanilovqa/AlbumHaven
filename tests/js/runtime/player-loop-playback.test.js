@@ -2284,7 +2284,7 @@ test('shared player click awaits accepted streaming-start command before current
     title: 'Song 1',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const nextTrack = {
     src: '/track?path=song2.flac',
@@ -2292,7 +2292,7 @@ test('shared player click awaits accepted streaming-start command before current
     title: 'Song 2',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const finalTrack = {
     src: '/track?path=song3.flac',
@@ -2300,7 +2300,7 @@ test('shared player click awaits accepted streaming-start command before current
     title: 'Song 3',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const audio = new FakeAudioElement({
     currentTime: 41,
@@ -2397,7 +2397,7 @@ test('queued album track click dispatches streaming start without touching nativ
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 245,
   };
   const queuedTrack = {
@@ -2407,7 +2407,7 @@ test('queued album track click dispatches streaming start without touching nativ
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const playTrackButton = new FakeElement({
     tagName: 'BUTTON',
@@ -2418,7 +2418,7 @@ test('queued album track click dispatches streaming start without touching nativ
       'data-track-artist': selectedTrack.artist,
       'data-track-album-artist': selectedTrack.albumArtist,
       'data-track-album': selectedTrack.album,
-      'data-track-cover': selectedTrack.coverPath,
+      'data-track-cover': selectedTrack.coverRef,
       'data-track-duration-seconds': String(selectedTrack.durationSeconds),
     },
   });
@@ -2503,7 +2503,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 60,
   };
   const queuedTrack = {
@@ -2513,7 +2513,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 60,
   };
   const album = { title: 'Album' };
@@ -2530,7 +2530,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
       'data-track-artist': selectedTrack.artist,
       'data-track-album-artist': selectedTrack.albumArtist,
       'data-track-album': selectedTrack.album,
-      'data-track-cover': selectedTrack.coverPath,
+      'data-track-cover': selectedTrack.coverRef,
       'data-track-duration-seconds': String(selectedTrack.durationSeconds),
     },
   });
@@ -3181,7 +3181,7 @@ async function verifySaveCurrentLoopUsesAppDialog() {
             title: 'Song',
             artist: 'Artist',
             album: 'Album',
-            coverPath: '',
+            coverRef: '',
           },
           loopActive: true,
           loopStart: 10,

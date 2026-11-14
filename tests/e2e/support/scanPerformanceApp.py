@@ -405,7 +405,7 @@ def load_real_cover_manifest() -> dict[str, Any]:
         return json.load(handle)
 
 
-def resolve_manifest_cover_path(cover: dict[str, Any]) -> Path:
+def resolve_manifest_cover_ref(cover: dict[str, Any]) -> Path:
     expected_hash = str(cover.get("sha256") or "").strip()
     if not expected_hash:
         raise RuntimeError("Approved cover metadata requires sha256.")
@@ -489,7 +489,7 @@ def stage_real_cover_pool(staging_root: Path) -> list[dict[str, Any]]:
     staged_dir.mkdir(parents=True, exist_ok=True)
     cover_specs: list[dict[str, Any]] = []
     for cover in list(manifest.get("covers") or [])[:_REAL_COVER_POOL_SIZE]:
-        source_path = resolve_manifest_cover_path(cover)
+        source_path = resolve_manifest_cover_ref(cover)
         destination_path = staged_dir / f"{str(cover.get('assetId') or '').strip()}{source_path.suffix.lower()}"
         shutil.copy2(source_path, destination_path)
         cover_specs.append({
@@ -562,7 +562,7 @@ def build_album_fixture(
         "year": year,
         "album_dir": str(album_dir),
         "track_paths": track_paths,
-        "cover_path": str(cover_destination),
+        "cover_ref": str(cover_destination),
     }
 
 
@@ -812,12 +812,12 @@ def prepare_scan_scenario(
             artist_index=next_index // _ALBUMS_PER_ARTIST,
             album_index=next_index,
         )
-        added_cover_path = Path(str(added_album.get("cover_path") or "")).resolve(strict=False)
+        added_cover_ref = Path(str(added_album.get("cover_ref") or "")).resolve(strict=False)
         if (
-            added_cover_path.is_file()
-            and added_cover_path.is_relative_to(music_dir.resolve(strict=False))
+            added_cover_ref.is_file()
+            and added_cover_ref.is_relative_to(music_dir.resolve(strict=False))
         ):
-            added_cover_path.unlink()
+            added_cover_ref.unlink()
         library_manifest.append(added_album)
     elif normalized_scenario == "metadata":
         update_album_tags(library_manifest[0], new_album_name="Album 001 Metadata Updated", new_year=2031)

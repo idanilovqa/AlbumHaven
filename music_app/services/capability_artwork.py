@@ -1,7 +1,7 @@
 """Image-only artwork projection for an actor without raw-media permission.
 
-The existing /cover endpoint also accepts arbitrary configured media paths.
-A browse grant must never make that endpoint an alternate audio download route.
+The legacy /cover?path= endpoint accepts only paths the library names as covers, and
+/cover/{reference} only references; a browse grant must never make either an audio route.
 Re-encode decoded pixels, discarding metadata and appended/non-image payloads.
 The established full-media path is unchanged for already-authorized users.
 """
@@ -80,6 +80,11 @@ async def browse_artwork_response(request) -> Response | None:
             raise HTTPException(status_code=404, detail="Artwork not found.")
         # Ignore a supplied path: only this owned loop's stored cover is eligible.
         raw_path = str(item["cover_path"])
+    else:
+        from music_app.routes.web_asgi import legacy_cover_path_is_named
+
+        if not await run_in_threadpool(legacy_cover_path_is_named, request, raw_path):
+            raise HTTPException(status_code=404, detail="Artwork not found.")
     resolved = await run_in_threadpool(resolve_configured_media_path, config, raw_path)
     if resolved is None:
         raise HTTPException(status_code=404, detail="Artwork not found.")

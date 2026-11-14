@@ -1329,13 +1329,13 @@ export class CoverLookupActions {
       }
       const src = normalizeResponseUrl(displayedSource, this.coverLookup.page.url());
       const coverUrl = new URL(src);
-      const coverPath = coverUrl.pathname === '/cover'
+      const coverRef = coverUrl.pathname === '/cover'
         ? String(coverUrl.searchParams.get('path') || '')
         : '';
       const coverRevision = coverUrl.pathname === '/cover'
         ? String(coverUrl.searchParams.get('v') || '')
         : '';
-      if (options.expectedCoverPath && coverPath !== String(options.expectedCoverPath)) {
+      if (options.expectedCoverRef && coverRef !== String(options.expectedCoverRef)) {
         return false;
       }
       if (options.expectedCoverRevision && coverRevision !== String(options.expectedCoverRevision)) {
@@ -1358,7 +1358,7 @@ export class CoverLookupActions {
       }
       resolvedEvidence = {
         ...byteEvidence,
-        coverPath,
+        coverRef,
         coverRevision,
         currentSrc: displayedState.currentSrc,
         naturalWidth: displayedState.naturalWidth,
@@ -1376,12 +1376,12 @@ export class CoverLookupActions {
     const label = String(options.label || 'cover').trim();
     let source = String(options.source || '').trim();
     if (!source) {
-      const coverPath = String(options.coverPath || '').trim();
-      if (!coverPath) {
+      const coverRef = String(options.coverRef || '').trim();
+      if (!coverRef) {
         throw new Error(`Cannot measure full-size ${label} bytes without a cover path.`);
       }
       const coverUrl = new URL('/cover', this.coverLookup.page.url());
-      coverUrl.searchParams.set('path', coverPath);
+      coverUrl.searchParams.set('path', coverRef);
       const coverRevision = String(options.coverRevision || '').trim();
       if (coverRevision) coverUrl.searchParams.set('v', coverRevision);
       source = coverUrl.toString();
@@ -1408,7 +1408,7 @@ export class CoverLookupActions {
     const body = await response.body();
     return {
       src,
-      coverPath: String(coverUrl.searchParams.get('path') || ''),
+      coverRef: String(coverUrl.searchParams.get('path') || ''),
       coverRevision: String(coverUrl.searchParams.get('v') || ''),
       sha256: createHash('sha256').update(body).digest('hex').toUpperCase(),
     };
@@ -1599,14 +1599,14 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
-    const selectedCoverPath = String(payload.selected_cover_path || '').trim();
-    if (!selectedCoverPath) {
+    const selectedCoverRef = String(payload.selected_cover_ref || '').trim();
+    if (!selectedCoverRef) {
       throw new Error('Local cover selection did not return an authoritative cover path.');
     }
     return {
       candidate,
       candidateFullSize,
-      selectedCoverPath,
+      selectedCoverRef,
       updatedAlbum: payload.updated_album || null,
       immediateCoverState,
     };

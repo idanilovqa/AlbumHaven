@@ -17,12 +17,19 @@ from __future__ import annotations
 
 import re
 
-from music_app.services.musicbrainz_evidence import album_signals, fold
+from music_app.services.musicbrainz_evidence import (
+    _compact,
+    _starts_remote_title,
+    _track_title_forms,
+    album_signals,
+    fold,
+)
 from music_app.services.musicbrainz_enrichment import (
     _MAX_BROWSE_PAGES,
     _Mirror,
     _ProviderFailure,
     _compare_tracks,
+    _fetch_tracks,
     _gather_album_evidence,
     _match_box_set_discs,
     _match_release_titles,
@@ -70,6 +77,12 @@ def _resolve(context: dict[str, object], albums: list[dict[str, object]], mirror
     _compare_tracks(candidate, albums, mirror)
     _match_tracks_alone(candidate, albums, mirror)
     _match_box_set_discs(candidate, albums, local_name, mirror)
+    # The artist matcher stops comparing an album once its year and track count agree; a
+    # release is certain only on its tracks, so every titled album gets its tracklist.
+    for album, evidence in zip(albums, candidate["albums"]):
+        if evidence.get("title") and evidence.get("level") and not (evidence.get("remote") or {}).get("tracks") \
+                and _fetch_tracks(evidence, album, mirror) is None:
+            break
 
     results, release_groups, releases = [], {}, {}
     for album, evidence in zip(albums, candidate["albums"]):
@@ -198,6 +211,12 @@ def credit_text(credit: list[dict[str, object]]) -> str:
                    for part in credit or []).strip()
 
 
+def _same_track_title(local: object, remote: object) -> bool:
+    """The matcher's own track-title agreement: brackets, spacing and ID3v1 truncation aside."""
+    return bool(_track_title_forms(local) & _track_title_forms(remote)) or _starts_remote_title(
+        local, {_compact(fold(remote))} - {""})
+
+
 def display_track_artists(local_tracks: list[dict[str, object]], release: dict[str, object]) -> list[dict[str, object]]:
     """Track artists to show instead of unreadable tags, from the certainly matched release.
 
@@ -211,7 +230,7 @@ def display_track_artists(local_tracks: list[dict[str, object]], release: dict[s
         if not _LOST_TEXT.match(str(track.get("artist") or "")):
             continue
         remote = by_position.get((int(track.get("disc_number") or 1), int(track.get("track_number") or 0)))
-        if not remote or not fold(remote.get("title")) or fold(remote.get("title")) != fold(track.get("title")):
+        if not remote or not _same_track_title(track.get("title"), remote.get("title")):
             continue
         text = credit_text(remote.get("artist_credit") or [])
         if text:

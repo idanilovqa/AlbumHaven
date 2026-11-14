@@ -240,6 +240,22 @@ def _transport_classification(metadata: JsonDict, *, discovered_by_search: bool 
     return "invalid_response"
 
 
+# MusicBrainz's special-purpose "[data]" artist credits a mixed-mode CD's data track.
+_DATA_ARTIST_MBID = "33cf029c-63b0-41a0-9855-be2a3665fb3b"
+
+
+def _audio_tracks(medium: JsonDict) -> list[JsonDict]:
+    """A medium's tracks without its data tracks ("[data track]" on a mixed-mode CD),
+    which a local rip never has."""
+    return [
+        track for track in medium.get("tracks") or [] if isinstance(track, dict)
+        and _text(track.get("title")).casefold() != "[data track]"
+        and not any(isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
+                    and _valid_mbid(credit["artist"].get("id")) == _DATA_ARTIST_MBID
+                    for credit in track.get("artist-credit") or [])
+    ]
+
+
 def _artist_credit(value: object) -> list[JsonDict]:
     """An artist credit as MusicBrainz orders it: each credited name, its artist and the
     join phrase after it ("Alan Menken" " & " "Howard Ashman")."""
@@ -462,7 +478,7 @@ class MusicBrainzClient:
         tracks = [
             {"title": _text(track.get("title")), "length": _integer(track.get("length"))}
             for medium in payload.get("media") or [] if isinstance(medium, dict)
-            for track in medium.get("tracks") or [] if isinstance(track, dict)
+            for track in _audio_tracks(medium)
         ]
         return {"classification": "complete", "tracks": tracks, "release_id": release_id, "other_releases": others}
 
@@ -578,13 +594,14 @@ class MusicBrainzClient:
         for medium in payload.get("media") or []:
             if not isinstance(medium, dict):
                 continue
+            # Positions count audio tracks only, as a local rip numbers them.
+            tracks = [{"position": index, "title": _text(track.get("title")),
+                       "length": _integer(track.get("length")) or None,
+                       "artist_credit": _artist_credit(track.get("artist-credit"))}
+                      for index, track in enumerate(_audio_tracks(medium), start=1)]
             media.append({
                 "position": _integer(medium.get("position")), "title": _text(medium.get("title")) or None,
-                "format": _text(medium.get("format")) or None, "track_count": _integer(medium.get("track-count")),
-                "tracks": [{"position": _integer(track.get("position")), "title": _text(track.get("title")),
-                            "length": _integer(track.get("length")) or None,
-                            "artist_credit": _artist_credit(track.get("artist-credit"))}
-                           for track in medium.get("tracks") or [] if isinstance(track, dict)],
+                "format": _text(medium.get("format")) or None, "track_count": len(tracks), "tracks": tracks,
             })
         return {"classification": "complete", "release": {
             "id": normalized, "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,

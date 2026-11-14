@@ -202,3 +202,79 @@ def test_a_spent_budget_is_retried_never_stored_as_absent(budget_spent, monkeypa
     monkeypatch.setattr(module, "_REQUESTS_PER_ALBUM", 0)
     outcome = _resolve(_album("Angels Cry"))
     assert [album["diagnostic"] for album in outcome["albums"]] == ["budget_exhausted"]
+
+
+def test_an_album_the_artist_matcher_left_without_tracks_still_gets_them_compared(monkeypatch):
+    # Matcher 5 stops at "strong" (year and count) without fetching tracks; a release
+    # needs them, so the release pass fetches them itself.
+    from music_app.services import musicbrainz_release_identity as module
+    monkeypatch.setattr(module, "_compare_tracks", lambda *args, **kwargs: None)
+    [album] = _resolve(_album("Angels Cry"))["albums"]
+    assert (album["state"], album["release_mbid"]) == ("release", RELEASE_ID)
+
+
+def test_without_a_tracklist_to_compare_an_album_is_only_a_release_group():
+    # MusicBrainz lists the release but not its tracks: the title and year agree, nothing
+    # proves which release it is.
+    [album] = _resolve(_album("Angels Cry"), remote_tracks=[])["albums"]
+    assert (album["state"], album["release_mbid"], album["diagnostic"]) == ("release_group", None, None)
+
+
+# Owner example (2026-11-05): 天門 "She and Her Cat", replayed from recorded mirror answers.
+# MusicBrainz lists a data track first, the tags are cut at ID3v1's 30 characters and
+# write "Main Theme" where MusicBrainz writes "MainTheme".
+
+import json as _json
+from pathlib import Path as _Path
+
+_FIXTURE = _json.loads((_Path(__file__).resolve().parents[1] / "fixtures" / "musicbrainz"
+                        / "delivery-2-release-identity-mirror.json").read_text(encoding="utf-8"))
+
+
+def _replay_client():
+    def get_json(url, _agent, **_kwargs):
+        parsed = urlparse(url)
+        key = parsed.path.replace("/ws/2", "") + "?" + parsed.query
+        assert key in _FIXTURE["responses"], f"unrecorded mirror request {key}"
+        return _FIXTURE["responses"][key], OK
+
+    return MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2", user_agent="Test", get_json=get_json)
+
+
+def test_she_and_her_cat_is_its_mixed_mode_release_with_its_track_artists():
+    [case] = _FIXTURE["cases"]
+    outcome = resolve_album_releases(case["context"], client=_replay_client())
+    [album] = outcome["albums"]
+    assert (album["state"], album["release_mbid"]) == ("release", "dc94c5b7-640a-4344-a5b2-a7041f31034e")
+    release = outcome["releases"][album["release_mbid"]]
+    assert [track["title"] for track in release["media"][0]["tracks"]][:1] == ["MainTheme"]  # no data track
+    assert [item["track_number"] for item in album["track_artists"]] == [1, 2, 3, 4, 5]
+    assert {item["artist"] for item in album["track_artists"]} == {"天門"}
+
+
+def test_spacing_differences_in_track_titles_agree_and_other_words_do_not():
+    from music_app.services.musicbrainz_evidence import album_signals
+    local = {"tracks": [{"title": "Main Theme", "duration_seconds": 0}, {"title": "Ending Theme", "duration_seconds": 0}]}
+    assert "track_list" in album_signals(local, {"tracks": [{"title": "MainTheme"}, {"title": "EndingTheme"}]})
+    assert "track_list" not in album_signals(local, {"tracks": [{"title": "Maintenance"}, {"title": "Endings"}]})
+
+
+def test_a_tag_cut_at_thirty_characters_agrees_with_the_title_it_starts_and_a_short_one_does_not():
+    from music_app.services.musicbrainz_evidence import _starts_remote_title
+    assert _starts_remote_title("Main Theme (Memory of Prize ve", {"mainthemememoryofprizeversion"})
+    assert not _starts_remote_title("Main Theme", {"mainthemememoryofprizeversion"})
+    assert not _starts_remote_title("Main Theme (Memory of Prize ve", {"mainthemememoryofprizeve"})
+
+
+def test_data_tracks_are_dropped_and_audio_tracks_kept():
+    from music_app.services.musicbrainz_client import _audio_tracks
+    data = {"title": "[data track]", "artist-credit": [
+        {"artist": {"id": "33cf029c-63b0-41a0-9855-be2a3665fb3b", "name": "[data]"}}]}
+    assert _audio_tracks({"tracks": [data, {"title": "Data"}, {"title": "Song"}]}) == [{"title": "Data"}, {"title": "Song"}]
+
+
+def test_only_a_mixed_mode_disc_may_hold_one_more_track_than_the_rip():
+    from music_app.services.musicbrainz_enrichment import _audio_track_count_may_be
+    assert _audio_track_count_may_be({"discs": [{"track_count": 7, "format": "Mixed Mode CD"}]}, 6)
+    assert _audio_track_count_may_be({"discs": [{"track_count": 7, "format": "Mixed Mode CD"}]}, 7)
+    assert not _audio_track_count_may_be({"discs": [{"track_count": 7, "format": "CD"}]}, 6)

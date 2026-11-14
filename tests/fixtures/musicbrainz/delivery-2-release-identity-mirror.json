@@ -1,0 +1,3490 @@
+{
+"cases": [
+{
+"case": "天門 She and Her Cat",
+"context": {
+"albums": [
+{
+"id": 1,
+"title": "She and Her Cat - Their Standi",
+"tracks": [
+{
+"artist": "??",
+"disc_number": 1,
+"duration_seconds": 87,
+"title": "Main Theme",
+"track_number": 1
+},
+{
+"artist": "??",
+"disc_number": 1,
+"duration_seconds": 39,
+"title": "Title (unused)",
+"track_number": 2
+},
+{
+"artist": "??",
+"disc_number": 1,
+"duration_seconds": 34,
+"title": "Crying",
+"track_number": 3
+},
+{
+"artist": "??",
+"disc_number": 1,
+"duration_seconds": 86,
+"title": "Ending Theme",
+"track_number": 4
+},
+{
+"artist": "??",
+"disc_number": 1,
+"duration_seconds": 280,
+"title": "Main Theme (Memory of Prize ve",
+"track_number": 5
+},
+{
+"artist": "??",
+"disc_number": 1,
+"duration_seconds": 69,
+"title": "The Voice of Distant Star PRE",
+"track_number": 6
+}
+],
+"year": 2002
+}
+],
+"artist_mbid": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"canonical_name": "天門",
+"local_name": "天門"
+}
+}
+],
+"responses": {
+"/release-group/76ed743a-fd4b-4db9-ab63-94996135cd12?inc=genres&fmt=json": {
+"disambiguation": "",
+"first-release-date": "2001-03-21",
+"genres": [],
+"id": "76ed743a-fd4b-4db9-ab63-94996135cd12",
+"primary-type": "Other",
+"primary-type-id": "4fc3be2b-de1e-396b-a933-beb8f1607a22",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+"/release-group?artist=30b485e2-3317-4dc5-8d4c-a35f17a8e547&fmt=json&limit=100&offset=0": {
+"release-group-count": 25,
+"release-group-offset": 0,
+"release-groups": [
+{
+"disambiguation": "",
+"first-release-date": "2008-02-08",
+"id": "0a945180-ef9f-3f6b-80b5-32a73b2633fc",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 〜espressivo〜"
+},
+{
+"disambiguation": "",
+"first-release-date": "2005-02-03",
+"id": "1a597d26-f8c6-33d6-afdd-073a1ff5a814",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "雲のむこう、約束の場所"
+},
+{
+"disambiguation": "",
+"first-release-date": "2012",
+"id": "2162a0ac-ecd3-4379-bd1e-2ba87415c10e",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "電界紀行"
+},
+{
+"disambiguation": "",
+"first-release-date": "2002-08-09",
+"id": "2f94d8cc-f7bb-4897-8c1a-671ead27f1d7",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "みずのかけら -once summer of islet- SOUND DISC"
+},
+{
+"disambiguation": "",
+"first-release-date": "2003-10-03",
+"id": "34599c43-201e-4087-9dff-e587a6b31c5b",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "てんしのかけら ～the last article of memory～ Sound Disk"
+},
+{
+"disambiguation": "",
+"first-release-date": "2005-12-30",
+"id": "392c6f85-e664-3d35-8785-8090d9ddf25c",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "悠久の老木 - Lost Empire Saga"
+},
+{
+"disambiguation": "",
+"first-release-date": "2008-12-26",
+"id": "454169d9-1be9-4999-ac43-8888d0f84711",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+{
+"disambiguation": "",
+"first-release-date": "2011-05-08",
+"id": "4b739cc1-ecac-424d-83e5-6a4d95d63a98",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "組曲Flandre"
+},
+{
+"disambiguation": "",
+"first-release-date": "2002-05-24",
+"id": "4c4297a9-0110-39a1-aa82-8472cc190264",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ほしのこえ"
+},
+{
+"disambiguation": "",
+"first-release-date": "2019-01-25",
+"id": "542412d9-652a-443a-afdf-f696516bc3ab",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "その日の獣には、 Rose & Classical"
+},
+{
+"disambiguation": "",
+"first-release-date": "2012-12-21",
+"id": "56e212c1-6884-45fc-a543-a8ebcfa1ae98",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "夏空のペルセウス オリジナルサウンドトラック"
+},
+{
+"disambiguation": "",
+"first-release-date": "2014-01-31",
+"id": "64eefc9e-d511-48f7-a433-e29763006f94",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "12の月のイヴ オリジナルサウンドトラック"
+},
+{
+"disambiguation": "",
+"first-release-date": "2011-05-07",
+"id": "65e2bfb3-2359-4e50-9bf8-4c2e7a7eac00",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "劇場アニメーション 『星を追う子ども』Original SoundTrack"
+},
+{
+"disambiguation": "",
+"first-release-date": "2001-03-21",
+"id": "76ed743a-fd4b-4db9-ab63-94996135cd12",
+"primary-type": "Other",
+"primary-type-id": "4fc3be2b-de1e-396b-a933-beb8f1607a22",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+{
+"disambiguation": "",
+"first-release-date": "2009-02-27",
+"id": "a05ce56b-415d-4d6c-8f9e-6d0e101353cd",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 2 〜felice〜"
+},
+{
+"disambiguation": "",
+"first-release-date": "2008-04-02",
+"id": "a4bc4101-c1be-32fc-8435-a0837fe3f134",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 2 〜fortissimo〜"
+},
+{
+"disambiguation": "",
+"first-release-date": "2012-08-11",
+"id": "a6b0f212-7cf6-4ea7-9d91-1705c285b4bb",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "クロニクル"
+},
+{
+"disambiguation": "",
+"first-release-date": "2017-03-31",
+"id": "a6d9169c-a2e1-4b77-9ce9-aedc858e34ee",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Trinoline Original Soundtrack ~feathered~"
+},
+{
+"disambiguation": "",
+"first-release-date": "2015-02-27",
+"id": "a8ff8e66-6799-4676-8084-8b73db8f4fba",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ソレヨリノ前奏詩 豪華版 「Remembrance」"
+},
+{
+"disambiguation": "",
+"first-release-date": "2010-01-29",
+"id": "adb203b0-fc9b-4594-838f-e0434e762860",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "Asterisk \"eden*\" ORIGINAL SOUNDTRACK"
+},
+{
+"disambiguation": "",
+"first-release-date": "",
+"id": "b964db1f-88f7-3c0a-83ad-d753daa3c58d",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "Solstice an original sound track of \"Feel coming spring\""
+},
+{
+"disambiguation": "",
+"first-release-date": "2007-03-03",
+"id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "秒速5センチメートル"
+},
+{
+"disambiguation": "",
+"first-release-date": "2010-03-07",
+"id": "e3045538-39cd-4f88-8f1c-947941abebf2",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "幻想禄"
+},
+{
+"disambiguation": "",
+"first-release-date": "2017-03-31",
+"id": "e8ec3011-cd49-4558-9d11-01f7fe9b552f",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Trinoline Original Soundtrack ~LINES~"
+},
+{
+"disambiguation": "",
+"first-release-date": "2008-12-28",
+"id": "f5292f9e-d2b2-4ec8-b8de-be8713b6ea7c",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "Alato: \"ef - a fairy tale of the two.\" ORIGINAL SOUNDTRACK"
+}
+]
+},
+"/release/dc94c5b7-640a-4344-a5b2-a7041f31034e?inc=recordings&fmt=json": {
+"asin": null,
+"barcode": "4518992403151",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2001-03-21",
+"disambiguation": "",
+"id": "dc94c5b7-640a-4344-a5b2-a7041f31034e",
+"media": [
+{
+"format": "Mixed Mode CD",
+"format-id": "184c65db-2619-4577-be0c-5dcc1d630c5d",
+"id": "1699ada7-7c24-3d02-b9b4-f2e63cecf8cc",
+"position": 1,
+"title": "",
+"track-count": 7,
+"track-offset": 0,
+"tracks": [
+{
+"id": "f7227eea-af51-493c-b422-7cb8c559bed0",
+"length": null,
+"number": "",
+"position": 1,
+"recording": {
+"disambiguation": "",
+"id": "c28e239d-9fb4-444e-8d77-96ba346447a7",
+"length": null,
+"title": "[data track]",
+"video": false
+},
+"title": "[data track]"
+},
+{
+"id": "0494f549-5255-4c21-97f6-82bca8a4d350",
+"length": 88000,
+"number": "1",
+"position": 2,
+"recording": {
+"disambiguation": "",
+"id": "772a4f32-5ec5-43ec-afd3-d0d7b0741b28",
+"length": 88000,
+"title": "MainTheme",
+"video": false
+},
+"title": "MainTheme"
+},
+{
+"id": "180797a0-7f9c-483c-9410-9b05f53e2cf6",
+"length": 39000,
+"number": "2",
+"position": 3,
+"recording": {
+"disambiguation": "",
+"id": "8f20b411-1ba4-40ac-9249-548f3ab6697d",
+"length": 39000,
+"title": "Title (unused)",
+"video": false
+},
+"title": "Title (unused)"
+},
+{
+"id": "b6f3335e-496d-4f7e-8ce4-cf6625377c4d",
+"length": 35000,
+"number": "3",
+"position": 4,
+"recording": {
+"disambiguation": "",
+"id": "169a753c-399f-4a28-af74-9a9cacb25157",
+"length": 35000,
+"title": "Crying",
+"video": false
+},
+"title": "Crying"
+},
+{
+"id": "5771f4f0-c408-40cc-bc55-df74d5c59b93",
+"length": 87000,
+"number": "4",
+"position": 5,
+"recording": {
+"disambiguation": "",
+"id": "05fbab4e-485b-42b7-957f-fb8610a3a10f",
+"length": 87000,
+"title": "EndingTheme",
+"video": false
+},
+"title": "EndingTheme"
+},
+{
+"id": "f1abd65b-65f5-49a4-9eea-14f1dab08234",
+"length": 280000,
+"number": "5",
+"position": 6,
+"recording": {
+"disambiguation": "",
+"id": "7c3143f7-f7a0-4974-8671-8de6b1ff56bd",
+"length": 280000,
+"title": "MainTheme ～Memory of Prize version～",
+"video": false
+},
+"title": "MainTheme ～Memory of Prize version～"
+},
+{
+"id": "26ece156-a2c0-4a86-9d7b-4a5792b00bab",
+"length": 70000,
+"number": "6",
+"position": 7,
+"recording": {
+"disambiguation": "",
+"id": "23d0f84f-2d09-4583-96ea-c31dc3fe733b",
+"length": 70000,
+"title": "The voices of distant star ～PREVIEW～",
+"video": false
+},
+"title": "The voices of distant star ～PREVIEW～"
+}
+]
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2001-03-21"
+}
+],
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+"/release/dc94c5b7-640a-4344-a5b2-a7041f31034e?inc=recordings+artist-credits+release-groups&fmt=json": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"asin": null,
+"barcode": "4518992403151",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2001-03-21",
+"disambiguation": "",
+"id": "dc94c5b7-640a-4344-a5b2-a7041f31034e",
+"media": [
+{
+"format": "Mixed Mode CD",
+"format-id": "184c65db-2619-4577-be0c-5dcc1d630c5d",
+"id": "1699ada7-7c24-3d02-b9b4-f2e63cecf8cc",
+"position": 1,
+"title": "",
+"track-count": 7,
+"track-offset": 0,
+"tracks": [
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "Special Purpose Artist",
+"id": "33cf029c-63b0-41a0-9855-be2a3665fb3b",
+"name": "[data]",
+"sort-name": "[data]",
+"type": "Other",
+"type-id": "ac897045-5043-3294-969b-187360e45d86"
+},
+"joinphrase": "",
+"name": "[data]"
+}
+],
+"id": "f7227eea-af51-493c-b422-7cb8c559bed0",
+"length": null,
+"number": "",
+"position": 1,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "Special Purpose Artist",
+"id": "33cf029c-63b0-41a0-9855-be2a3665fb3b",
+"name": "[data]",
+"sort-name": "[data]",
+"type": "Other",
+"type-id": "ac897045-5043-3294-969b-187360e45d86"
+},
+"joinphrase": "",
+"name": "[data]"
+}
+],
+"disambiguation": "",
+"id": "c28e239d-9fb4-444e-8d77-96ba346447a7",
+"length": null,
+"title": "[data track]",
+"video": false
+},
+"title": "[data track]"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"id": "0494f549-5255-4c21-97f6-82bca8a4d350",
+"length": 88000,
+"number": "1",
+"position": 2,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"id": "772a4f32-5ec5-43ec-afd3-d0d7b0741b28",
+"length": 88000,
+"title": "MainTheme",
+"video": false
+},
+"title": "MainTheme"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"id": "180797a0-7f9c-483c-9410-9b05f53e2cf6",
+"length": 39000,
+"number": "2",
+"position": 3,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"id": "8f20b411-1ba4-40ac-9249-548f3ab6697d",
+"length": 39000,
+"title": "Title (unused)",
+"video": false
+},
+"title": "Title (unused)"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"id": "b6f3335e-496d-4f7e-8ce4-cf6625377c4d",
+"length": 35000,
+"number": "3",
+"position": 4,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"id": "169a753c-399f-4a28-af74-9a9cacb25157",
+"length": 35000,
+"title": "Crying",
+"video": false
+},
+"title": "Crying"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"id": "5771f4f0-c408-40cc-bc55-df74d5c59b93",
+"length": 87000,
+"number": "4",
+"position": 5,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"id": "05fbab4e-485b-42b7-957f-fb8610a3a10f",
+"length": 87000,
+"title": "EndingTheme",
+"video": false
+},
+"title": "EndingTheme"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"id": "f1abd65b-65f5-49a4-9eea-14f1dab08234",
+"length": 280000,
+"number": "5",
+"position": 6,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"id": "7c3143f7-f7a0-4974-8671-8de6b1ff56bd",
+"length": 280000,
+"title": "MainTheme ～Memory of Prize version～",
+"video": false
+},
+"title": "MainTheme ～Memory of Prize version～"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"id": "26ece156-a2c0-4a86-9d7b-4a5792b00bab",
+"length": 70000,
+"number": "6",
+"position": 7,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"id": "23d0f84f-2d09-4583-96ea-c31dc3fe733b",
+"length": 70000,
+"title": "The voices of distant star ～PREVIEW～",
+"video": false
+},
+"title": "The voices of distant star ～PREVIEW～"
+}
+]
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2001-03-21"
+}
+],
+"release-group": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+"name": "天門",
+"sort-name": "Tenmon",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "天門"
+}
+],
+"disambiguation": "",
+"first-release-date": "2001-03-21",
+"id": "76ed743a-fd4b-4db9-ab63-94996135cd12",
+"primary-type": "Other",
+"primary-type-id": "4fc3be2b-de1e-396b-a933-beb8f1607a22",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+"/release?artist=30b485e2-3317-4dc5-8d4c-a35f17a8e547&inc=media+release-groups&fmt=json&limit=100&offset=0": {
+"release-count": 41,
+"release-offset": 0,
+"releases": [
+{
+"asin": "B001Q3LB44",
+"barcode": "4560194010149",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 21,
+"darkened": false,
+"front": true
+},
+"date": "2008-12-28",
+"disambiguation": "",
+"id": "01a0bd2c-de10-4855-9c78-f796712f2797",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "fef5d6d4-12af-3e31-a41f-a9bc42cac6da",
+"position": 1,
+"title": "",
+"track-count": 29
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "8a6526d6-686f-3a56-a4e2-6d4fcb5ac047",
+"position": 2,
+"title": "",
+"track-count": 25
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "7e51338f-68b9-3dcd-b8db-2b3cb43559e4",
+"position": 3,
+"title": "",
+"track-count": 21
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2008-12-28"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-12-28",
+"id": "f5292f9e-d2b2-4ec8-b8de-be8713b6ea7c",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "Alato: \"ef - a fairy tale of the two.\" ORIGINAL SOUNDTRACK"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "Alato: \"ef - a fairy tale of the two.\" ORIGINAL SOUNDTRACK"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"disambiguation": "",
+"id": "09a197ed-be4f-455a-abb9-0493aa532312",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "4c514c85-2ba9-331f-834a-9aa86e009fd9",
+"position": 1,
+"title": "",
+"track-count": 43
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2011-05-07",
+"id": "65e2bfb3-2359-4e50-9bf8-4c2e7a7eac00",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "劇場アニメーション 『星を追う子ども』Original SoundTrack"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "Children Who Chase Lost Voices From Deep Below Original Soundtrack"
+},
+{
+"asin": null,
+"barcode": null,
+"country": null,
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2017-03-31",
+"disambiguation": "",
+"id": "0bd78089-b4e1-4098-89c1-a3db92d7c610",
+"media": [
+{
+"format": "DVD",
+"format-id": "2875c583-4580-3a90-b723-ba1b39921e23",
+"id": "46f5e5d5-8bf7-3f34-bd8a-f3210169dbed",
+"position": 1,
+"title": "",
+"track-count": 50
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": null,
+"date": "2017-03-31"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2017-03-31",
+"id": "a6d9169c-a2e1-4b77-9ce9-aedc858e34ee",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Trinoline Original Soundtrack ~feathered~"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": null,
+"script": null
+},
+"title": "Trinoline Original Soundtrack ~feathered~"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "",
+"id": "13b3d0dc-d216-4033-840e-9d209484b384",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "c9afaa18-e454-3db2-91d1-76fe16dc1f8d",
+"position": 1,
+"title": "",
+"track-count": 15
+},
+{
+"format": null,
+"format-id": null,
+"id": "fd732956-23c5-39fa-b545-1aa16402c798",
+"position": 2,
+"title": "",
+"track-count": 15
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "",
+"id": "b964db1f-88f7-3c0a-83ad-d753daa3c58d",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "Solstice an original sound track of \"Feel coming spring\""
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "Solstice an original sound track of \"Feel coming spring\""
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "",
+"id": "16e69eb4-c60d-431b-ae80-a63bd47fedcf",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "097f442e-b695-30b4-af01-c9bd74a95ce4",
+"position": 1,
+"title": "",
+"track-count": 31
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-02-08",
+"id": "0a945180-ef9f-3f6b-80b5-32a73b2633fc",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 〜espressivo〜"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "ef - a tale of memories Original Soundtrack ~espressivo~"
+},
+{
+"asin": "B0013E149I",
+"barcode": "4988102533526",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": true,
+"count": 13,
+"darkened": false,
+"front": true
+},
+"date": "2008-04-02",
+"disambiguation": "",
+"id": "18aed116-5f17-4a0d-9c13-e829311fac17",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "30ccec91-dbce-3224-89e8-b07a89573c40",
+"position": 1,
+"title": "",
+"track-count": 28
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2008-04-02"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-04-02",
+"id": "a4bc4101-c1be-32fc-8435-a0837fe3f134",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 2 〜fortissimo〜"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 2 〜fortissimo〜"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"disambiguation": "English translation",
+"id": "24a66e8a-e8fc-4abd-9419-cf4510b40138",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "59b69cc4-c99a-353d-b277-bcb9cf1e706f",
+"position": 1,
+"title": "",
+"track-count": 11
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2007-03-03",
+"id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "秒速5センチメートル"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "5 Centimeters Per Second"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": false
+},
+"date": "2017-03-31",
+"disambiguation": "",
+"id": "2659e6f6-ce21-4198-92e5-4878f5e7e3c0",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "6842a158-6898-3d10-a027-df1680e3db35",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2017-03-31"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2017-03-31",
+"id": "e8ec3011-cd49-4558-9d11-01f7fe9b552f",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Trinoline Original Soundtrack ~LINES~"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": null,
+"script": null
+},
+"title": "Trinoline Original Soundtrack ~LINES~"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "romaji",
+"id": "2afc54c1-9945-437e-8b17-8dad28bfaae6",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "a6774aaf-7535-42bc-9da4-a7e8d30a9cde",
+"position": 1,
+"title": "",
+"track-count": 31
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-02-08",
+"id": "0a945180-ef9f-3f6b-80b5-32a73b2633fc",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 〜espressivo〜"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 〜espressivo〜"
+},
+{
+"asin": "B004TTLZRU",
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2011-05-07",
+"disambiguation": "",
+"id": "305bce02-88a9-494b-8ca4-da40866acf17",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "ba3892c6-1245-31e2-bf43-d2644b40a7f4",
+"position": 1,
+"title": "",
+"track-count": 43
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2011-05-07"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2011-05-07",
+"id": "65e2bfb3-2359-4e50-9bf8-4c2e7a7eac00",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "劇場アニメーション 『星を追う子ども』Original SoundTrack"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "劇場アニメーション 『星を追う子ども』Original SoundTrack"
+},
+{
+"asin": "B0000V4758",
+"barcode": "702727072727",
+"country": "US",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2003-12-09",
+"disambiguation": "",
+"id": "30984862-2fb9-3f21-bec0-08ed57aac35f",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "9794103f-770b-3386-b64c-8df55cdf693c",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "489ce91b-6658-3307-9877-795b68554c98",
+"iso-3166-1-codes": [
+"US"
+],
+"name": "United States",
+"sort-name": "United States",
+"type": null,
+"type-id": null
+},
+"date": "2003-12-09"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2002-05-24",
+"id": "4c4297a9-0110-39a1-aa82-8472cc190264",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ほしのこえ"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "Voices of a Distant Star"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "romaji",
+"id": "32c7f4d2-9465-42ee-b33b-1be2d25ad6f1",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "a257f293-5908-3c46-98d8-e2915e362b6e",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2002-05-24",
+"id": "4c4297a9-0110-39a1-aa82-8472cc190264",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ほしのこえ"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "Hoshi no Koe"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2002-08-09",
+"disambiguation": "",
+"id": "36193fd2-95b7-4d38-ac3c-19e4a7720c60",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "1289f59f-5b26-4fea-bb02-01b84fd7afd9",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2002-08-09"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2002-08-09",
+"id": "2f94d8cc-f7bb-4897-8c1a-671ead27f1d7",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "みずのかけら -once summer of islet- SOUND DISC"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "みずのかけら -once summer of islet- SOUND DISC"
+},
+{
+"asin": "B0032UX674",
+"barcode": "4560194010187",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": true,
+"count": 3,
+"darkened": false,
+"front": true
+},
+"date": "2010-01-29",
+"disambiguation": "eden*",
+"id": "41d8915b-85cf-4bee-966d-22355a318a82",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "cd0b0598-1ab4-3f0e-9e4c-41d7d89d79ce",
+"position": 1,
+"title": "",
+"track-count": 17
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "3927065b-4b1f-3f7c-8f97-66be47eaede5",
+"position": 2,
+"title": "",
+"track-count": 21
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2010-01-29"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2010-01-29",
+"id": "adb203b0-fc9b-4594-838f-e0434e762860",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "Asterisk \"eden*\" ORIGINAL SOUNDTRACK"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "Asterisk \"eden*\" ORIGINAL SOUNDTRACK"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2003-10-03",
+"disambiguation": "",
+"id": "4bec9a11-348c-4e66-b1d4-b5c4a8b7e1a5",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "8331761c-625d-4fea-96d6-e970a1c3cb9b",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2003-10-03"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2003-10-03",
+"id": "34599c43-201e-4087-9dff-e587a6b31c5b",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "てんしのかけら ～the last article of memory～ Sound Disk"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "てんしのかけら ～the last article of memory～ Sound Disk"
+},
+{
+"asin": null,
+"barcode": "4560194010255",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 8,
+"darkened": false,
+"front": false
+},
+"date": "2014-01-31",
+"disambiguation": "",
+"id": "59f079e3-af70-4608-b5fc-f888ef4f8ce2",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "e3e84be2-58c1-47da-8004-1e9b52797d7e",
+"position": 1,
+"title": "12の月のイヴ ヴォーカルトラック集 eve",
+"track-count": 4
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "d9d38601-231c-4132-9533-5de77c4c75f5",
+"position": 2,
+"title": "12の月の7並べドラマCD",
+"track-count": 4
+},
+{
+"format": "DVD",
+"format-id": "2875c583-4580-3a90-b723-ba1b39921e23",
+"id": "8cafafe6-8f5b-4fe6-9167-d8799f95ba09",
+"position": 3,
+"title": "12の月のイヴ サウンドトラック snowy",
+"track-count": 47
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2014-01-31"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2014-01-31",
+"id": "64eefc9e-d511-48f7-a433-e29763006f94",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "12の月のイヴ オリジナルサウンドトラック"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "12の月のイヴ オリジナルサウンドトラック"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "romaji",
+"id": "5a15f8b9-5d59-47c7-a4d5-66ce28e503c8",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "8c162273-097a-4058-951a-70e15ea1cdb0",
+"position": 1,
+"title": "",
+"track-count": 28
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-04-02",
+"id": "a4bc4101-c1be-32fc-8435-a0837fe3f134",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 2 〜fortissimo〜"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 2 〜fortissimo〜"
+},
+{
+"asin": null,
+"barcode": "5037899082256",
+"country": "GB",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2020",
+"disambiguation": "UK bluray steelbook",
+"id": "65095097-4ff3-458d-85f2-6479d275f4d7",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "4e966b16-2661-3611-bae9-51021d0bd472",
+"position": 1,
+"title": "Original soundtrack",
+"track-count": 11
+},
+{
+"format": "Blu-ray",
+"format-id": "c693c05b-3316-3d69-afc2-5e2bc455bffc",
+"id": "63c14d90-b8d1-3b3e-a951-d851b9949d5a",
+"position": 2,
+"title": "Film",
+"track-count": 1
+}
+],
+"packaging": "Other",
+"packaging-id": "815b7785-8284-3926-8f04-e48bc6c4d102",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "8a754a16-0027-3a29-b6d7-2b40ea0481ed",
+"iso-3166-1-codes": [
+"GB"
+],
+"name": "United Kingdom",
+"sort-name": "United Kingdom",
+"type": null,
+"type-id": null
+},
+"date": "2020"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2007-03-03",
+"id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "秒速5センチメートル"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "5 Centimeters Per Second"
+},
+{
+"asin": null,
+"barcode": "4538182893531",
+"country": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2007-03-03",
+"disambiguation": "",
+"id": "678e22f8-c26f-4593-bb76-97971b593d40",
+"media": [
+{
+"format": "Digital Media",
+"format-id": "907a28d9-b3b2-3ef6-89a8-7b18d91d4794",
+"id": "24a64a81-c51b-37b5-ba58-01cfedce322b",
+"position": 1,
+"title": "",
+"track-count": 11
+}
+],
+"packaging": "None",
+"packaging-id": "119eba76-b343-3e02-a292-f0f00644bb9b",
+"quality": "normal",
+"release-events": [
+{
+"area": null,
+"date": "2007-03-03"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2007-03-03",
+"id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "秒速5センチメートル"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "劇場アニメーション 秒速5センチメートル Soundtracks"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": false
+},
+"date": "2015-02-27",
+"disambiguation": "",
+"id": "6e925b30-6739-4d2a-908b-a17449a9dbc5",
+"media": [
+{
+"format": "DVD",
+"format-id": "2875c583-4580-3a90-b723-ba1b39921e23",
+"id": "97919ffe-ef62-3d23-bb91-9731b96fdaa7",
+"position": 1,
+"title": "",
+"track-count": 48
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2015-02-27"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2015-02-27",
+"id": "a8ff8e66-6799-4676-8084-8b73db8f4fba",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ソレヨリノ前奏詩 豪華版 「Remembrance」"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "ソレヨリノ前奏詩 豪華版 「Remembrance」"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "romaji",
+"id": "72e73ec0-3f3b-499b-8f29-7d53d09b3dbe",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "99c49c31-a091-4b58-b984-29bf826bd5f1",
+"position": 1,
+"title": "",
+"track-count": 43
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2011-05-07",
+"id": "65e2bfb3-2359-4e50-9bf8-4c2e7a7eac00",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "劇場アニメーション 『星を追う子ども』Original SoundTrack"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "Hoshi wo Ou Kodomo Original SoundTrack"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2012",
+"disambiguation": "",
+"id": "80d61c49-fa43-4f6b-95ad-15109e4aa79a",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "bd76e689-c48b-3419-821c-b69d3f755a43",
+"position": 1,
+"title": "",
+"track-count": 8
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2012"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2012",
+"id": "2162a0ac-ecd3-4379-bd1e-2ba87415c10e",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "電界紀行"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "電界紀行"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2012-08-11",
+"disambiguation": "",
+"id": "8ec6533e-d7b3-4123-bfc3-1d4f60a851c1",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "c56ac1cc-b2d5-3ffa-9078-31e5691482e4",
+"position": 1,
+"title": "",
+"track-count": 9
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2012-08-11"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2012-08-11",
+"id": "a6b0f212-7cf6-4ea7-9d91-1705c285b4bb",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "クロニクル"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": null,
+"script": "Jpan"
+},
+"title": "クロニクル"
+},
+{
+"asin": "B00074C5BG",
+"barcode": "4560107150153",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2005-02-03",
+"disambiguation": "",
+"id": "9198afb4-6dcc-4100-9240-ab3f94682dcd",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "aabe44ce-1988-30be-bd19-91efa05df4a6",
+"position": 1,
+"title": "",
+"track-count": 27
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2005-02-03"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2005-02-03",
+"id": "1a597d26-f8c6-33d6-afdd-073a1ff5a814",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "雲のむこう、約束の場所"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "雲のむこう、約束の場所 Original SoundTrack"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2005-12-30",
+"disambiguation": "",
+"id": "9de1c10f-ce25-481f-876e-37523d1e410f",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "4d25d209-4a9c-34f0-99d0-2b1acfd75c8a",
+"position": 1,
+"title": "",
+"track-count": 9
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2005-12-30"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2005-12-30",
+"id": "392c6f85-e664-3d35-8785-8090d9ddf25c",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "悠久の老木 - Lost Empire Saga"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "悠久の老木 - Lost Empire Saga"
+},
+{
+"asin": "B001NOIJIW",
+"barcode": "4988102555924",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2009-02-27",
+"disambiguation": "",
+"id": "a12cd2ef-4689-4520-92ed-48181765d453",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "b32f7480-5951-36e6-b6f5-4676266d2ef5",
+"position": 1,
+"title": "",
+"track-count": 35
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2009-02-27"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2009-02-27",
+"id": "a05ce56b-415d-4d6c-8f9e-6d0e101353cd",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 2 〜felice〜"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 2 〜felice〜"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "",
+"id": "a3e22c54-98d9-4149-9c3b-dab4019f95df",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "12d87120-c9d8-3f71-a954-d3bb8bb991f6",
+"position": 1,
+"title": "",
+"track-count": 35
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2009-02-27",
+"id": "a05ce56b-415d-4d6c-8f9e-6d0e101353cd",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 2 〜felice〜"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "ef - a tale of melodies ORIGINAL SOUNDTRACK 2 ~felice~"
+},
+{
+"asin": null,
+"barcode": "",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2011-05-08",
+"disambiguation": "",
+"id": "a8b8bf61-ba70-4900-a2fc-40f6162bfbed",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "93f28bf5-8881-3283-853c-17c99714fa26",
+"position": 1,
+"title": "",
+"track-count": 5
+}
+],
+"packaging": "Super Jewel Box",
+"packaging-id": "dfb7da53-866f-4dfd-a016-80bafaeff3db",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2011-05-08"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2011-05-08",
+"id": "4b739cc1-ecac-424d-83e5-6a4d95d63a98",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "組曲Flandre"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "組曲Flandre"
+},
+{
+"asin": "B00009AV7K",
+"barcode": "4560107150054",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2002-05-24",
+"disambiguation": "",
+"id": "ace05167-4deb-4e80-a18d-eb9f8a766100",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "85d08653-f60f-3f20-8bf8-4bbeb8f14c86",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2002-05-24"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2002-05-24",
+"id": "4c4297a9-0110-39a1-aa82-8472cc190264",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ほしのこえ"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "ほしのこえ"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"disambiguation": "",
+"id": "af04962d-d2df-4e6c-8a78-d8ab66966b94",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "5fdbf122-17fc-3273-bfc5-ce2179169d96",
+"position": 1,
+"title": "",
+"track-count": 27
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2005-02-03",
+"id": "1a597d26-f8c6-33d6-afdd-073a1ff5a814",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "雲のむこう、約束の場所"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "The Place Promised in Our Early Days"
+},
+{
+"asin": "B000MQCT1U",
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2007-07-19",
+"disambiguation": "",
+"id": "b242128c-42fb-418d-afee-9f3980740fd2",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "201e8cbb-b771-33bc-b7ee-103c141d2fb5",
+"position": 1,
+"title": "",
+"track-count": 11
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2007-07-19"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2007-03-03",
+"id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "秒速5センチメートル"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "秒速5センチメートル"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "romaji",
+"id": "bc8c70b5-7d6e-41ed-8ba9-d4fb177161a8",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "23412391-e1e2-4e7f-afb2-1fedfebb025b",
+"position": 1,
+"title": "",
+"track-count": 25
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-12-26",
+"id": "454169d9-1be9-4999-ac43-8888d0f84711",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+{
+"asin": "B001IAPDSK",
+"barcode": "4988102555825",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2008-12-26",
+"disambiguation": "",
+"id": "bcb00dac-0a3a-4a07-be96-31cc6984a1d7",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "29c48cda-5446-304e-aa21-132fa579e9eb",
+"position": 1,
+"title": "",
+"track-count": 25
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2008-12-26"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-12-26",
+"id": "454169d9-1be9-4999-ac43-8888d0f84711",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+{
+"asin": null,
+"barcode": "4538182893685",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2020-07-01",
+"disambiguation": "",
+"id": "c16eed46-f602-4ee4-a365-751d6d35d273",
+"media": [
+{
+"format": "Digital Media",
+"format-id": "907a28d9-b3b2-3ef6-89a8-7b18d91d4794",
+"id": "726cba53-db8c-34cd-a21f-1a75ba0a2b62",
+"position": 1,
+"title": "",
+"track-count": 27
+}
+],
+"packaging": "None",
+"packaging-id": "119eba76-b343-3e02-a292-f0f00644bb9b",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2020-07-01"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2005-02-03",
+"id": "1a597d26-f8c6-33d6-afdd-073a1ff5a814",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "雲のむこう、約束の場所"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "劇場アニメーション 雲のむこう、約束の場所 Original Sound Track"
+},
+{
+"asin": null,
+"barcode": null,
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2010-03-07",
+"disambiguation": "",
+"id": "c96a775a-3143-4675-8088-4acc27edb608",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "cb57cec6-2413-3f24-8f01-ea5608544deb",
+"position": 1,
+"title": "",
+"track-count": 10
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2010-03-07"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2010-03-07",
+"id": "e3045538-39cd-4f88-8f1c-947941abebf2",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "幻想禄"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "幻想禄"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"disambiguation": "english",
+"id": "ca59e8a8-b699-489f-8903-5c5e3710f190",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "2e8b5dc0-0a43-3337-927b-8030f4a36648",
+"position": 1,
+"title": "",
+"track-count": 12
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2002-05-24",
+"id": "4c4297a9-0110-39a1-aa82-8472cc190264",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ほしのこえ"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "Voices of a Distant Star"
+},
+{
+"asin": "B000X431FE",
+"barcode": "4988102501426",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": true,
+"count": 13,
+"darkened": false,
+"front": true
+},
+"date": "2008-02-08",
+"disambiguation": "",
+"id": "d38b402a-ee1b-427a-b10c-b8127596d59c",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "63d3ce81-9a7c-34a4-8430-de0b75db755e",
+"position": 1,
+"title": "",
+"track-count": 31
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2008-02-08"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-02-08",
+"id": "0a945180-ef9f-3f6b-80b5-32a73b2633fc",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 〜espressivo〜"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "ef – a tale of memories. ORIGINAL SOUNDTRACK 〜espressivo〜"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"disambiguation": "english",
+"id": "d6f01c3b-9fb8-4088-9b76-f0d183ca881d",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "36cd88a4-7d27-42de-be10-fbeafd9311fc",
+"position": 1,
+"title": "",
+"track-count": 25
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2008-12-26",
+"id": "454169d9-1be9-4999-ac43-8888d0f84711",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "ef – a tale of melodies. ORIGINAL SOUNDTRACK 〜elegia〜"
+},
+{
+"asin": null,
+"barcode": "4518992403151",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2001-03-21",
+"disambiguation": "",
+"id": "dc94c5b7-640a-4344-a5b2-a7041f31034e",
+"media": [
+{
+"format": "Mixed Mode CD",
+"format-id": "184c65db-2619-4577-be0c-5dcc1d630c5d",
+"id": "1699ada7-7c24-3d02-b9b4-f2e63cecf8cc",
+"position": 1,
+"title": "",
+"track-count": 7
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2001-03-21"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2001-03-21",
+"id": "76ed743a-fd4b-4db9-ab63-94996135cd12",
+"primary-type": "Other",
+"primary-type-id": "4fc3be2b-de1e-396b-a933-beb8f1607a22",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+},
+{
+"asin": null,
+"barcode": null,
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"disambiguation": "English transliteration",
+"id": "e196b170-d906-4f6c-9a8b-76baccde71dd",
+"media": [
+{
+"format": null,
+"format-id": null,
+"id": "fe096974-3c1a-3117-bf5b-a10906b3fcd6",
+"position": 1,
+"title": "",
+"track-count": 11
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2007-03-03",
+"id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "秒速5センチメートル"
+},
+"status": "Pseudo-Release",
+"status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+"text-representation": {
+"language": "jpn",
+"script": "Latn"
+},
+"title": "Byousoku 5 Centimeter"
+},
+{
+"asin": null,
+"barcode": "4560194010231",
+"country": "JP",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 3,
+"darkened": false,
+"front": false
+},
+"date": "2012-12-21",
+"disambiguation": "",
+"id": "edbc2fc7-704b-4dcc-a20e-b9b2934d5a1f",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "0e5df8a2-30e1-40bf-a11d-e3ac4b86c2f2",
+"position": 1,
+"title": "夏空のペルセウス ヴォーカルトラック集 サマースカイ",
+"track-count": 5
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "70e1fc4e-b870-4429-bfbc-21c6835e7389",
+"position": 2,
+"title": "夏空のペルセウス 豪華特装版 ソフマップ特典ドラマCD",
+"track-count": 5
+},
+{
+"format": "DVD",
+"format-id": "2875c583-4580-3a90-b723-ba1b39921e23",
+"id": "e9779355-d284-3200-8fa7-ec1b1185e9c5",
+"position": 3,
+"title": "夏空のペルセウス インストルメンタルトラック集 サンフラワー",
+"track-count": 52
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2012-12-21"
+}
+],
+"release-group": {
+"disambiguation": "",
+"first-release-date": "2012-12-21",
+"id": "56e212c1-6884-45fc-a543-a8ebcfa1ae98",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"22a628ad-c082-3c4f-b1b6-d41665107b88"
+],
+"secondary-types": [
+"Soundtrack"
+],
+"title": "夏空のペルセウス オリジナルサウンドトラック"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "夏空のペルセウス オリジナルサウンドトラック"
+}
+]
+},
+"/release?release-group=76ed743a-fd4b-4db9-ab63-94996135cd12&inc=media&fmt=json&limit=25": {
+"release-count": 1,
+"release-offset": 0,
+"releases": [
+{
+"asin": null,
+"barcode": "4518992403151",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2001-03-21",
+"disambiguation": "",
+"id": "dc94c5b7-640a-4344-a5b2-a7041f31034e",
+"media": [
+{
+"format": "Mixed Mode CD",
+"format-id": "184c65db-2619-4577-be0c-5dcc1d630c5d",
+"id": "1699ada7-7c24-3d02-b9b4-f2e63cecf8cc",
+"position": 1,
+"title": "",
+"track-count": 7
+}
+],
+"packaging": "Jewel Case",
+"packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2001-03-21"
+}
+],
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "eng",
+"script": "Latn"
+},
+"title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
+}
+]
+}
+}
+}

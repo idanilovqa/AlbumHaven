@@ -860,8 +860,8 @@ def _match_tracks_alone(candidate, albums, mirror) -> None:
         # release, not its "Mysterious Realms").
         if not _open_to_other_releases(evidence) or not count:
             continue
-        same_length = [release for release in releases if release.get("release_group_id") and sum(
-            int(disc.get("track_count") or 0) for disc in release.get("discs") or []) == count]
+        same_length = [release for release in releases if release.get("release_group_id")
+                       and _audio_track_count_may_be(release, count)]
         seen: set[str] = set()
         for release in same_length:
             if release["release_group_id"] in seen or len(seen) >= _MAX_TRACK_ONLY_PER_ALBUM:
@@ -877,6 +877,17 @@ def _match_tracks_alone(candidate, albums, mirror) -> None:
             if trial["level"] and _better_than(trial, evidence):
                 candidate["albums"][index] = trial
                 break
+
+
+# A mixed-mode or enhanced CD may list a data track that a local rip never has.
+_DATA_TRACK_FORMAT = re.compile(r"mixed mode|enhanced", re.IGNORECASE)
+
+
+def _audio_track_count_may_be(release: dict[str, object], count: int) -> bool:
+    discs = release.get("discs") or []
+    total = sum(int(disc.get("track_count") or 0) for disc in discs)
+    data_tracks = sum(bool(_DATA_TRACK_FORMAT.search(str(disc.get("format") or ""))) for disc in discs)
+    return total - data_tracks <= count <= total
 
 
 def _fetch_tracks(evidence: dict[str, object], album: dict[str, object], mirror) -> bool | None:

@@ -329,10 +329,27 @@ def _track_title_forms(title: object) -> set[str]:
     (2020 remastered)"), and repaired when its tag was misread."""
     forms = set()
     for text in {str(title or ""), repaired(title) or ""}:
-        for form in {text, _BRACKETS.sub(" ", text)}:
+        for form in {text, _BRACKETS.sub(" ", text), _WAVE_BRACKETS.sub(" ", text)}:
             folded = fold(form)
             forms |= {folded, _EDITION_SUFFIX.sub("", folded)}
-    return forms - {""}
+    # Spacing differs between tags and MusicBrainz ("Main Theme" / "MainTheme").
+    forms |= {_SPACELESS + _compact(form) for form in forms}
+    return forms - {"", _SPACELESS}
+
+
+# A Japanese subtitle between wave dashes: "MainTheme ～Memory of Prize version～".
+_WAVE_BRACKETS = re.compile(r"[～〜]([^～〜]*)[～〜]")
+# ID3v1 keeps 30 characters; the tag ends wherever the field ran out.
+_TRUNCATED_TAG_LENGTHS = range(28, 31)
+
+
+def _starts_remote_title(title: object, remote_compacts: set[str]) -> bool:
+    """A local title cut at ID3v1's 30 characters agrees with the remote title it starts."""
+    text = str(title or "").strip()
+    if len(text) not in _TRUNCATED_TAG_LENGTHS:
+        return False
+    compact = _compact(fold(text))
+    return len(compact) >= 12 and any(remote.startswith(compact) and remote != compact for remote in remote_compacts)
 
 
 def album_signals(local_album: dict[str, object], remote: dict[str, object]) -> set[str]:
@@ -354,9 +371,11 @@ def album_signals(local_album: dict[str, object], remote: dict[str, object]) -> 
         signals.add("track_count")
     if local_tracks and remote_tracks:
         remote_by_title = {form: track for track in remote_tracks for form in _track_title_forms(track.get("title"))}
+        remote_compacts = {_compact(fold(track.get("title"))) for track in remote_tracks} - {""}
         local_forms = [_track_title_forms(track.get("title")) for track in local_tracks]
         local_titles = [forms for forms in local_forms if forms]
-        shared = [forms for forms in local_titles if forms & remote_by_title.keys()]
+        shared = [forms for forms, track in zip(local_forms, local_tracks) if forms and (
+            forms & remote_by_title.keys() or _starts_remote_title(track.get("title"), remote_compacts))]
         shorter = min(len(local_titles), len(remote_tracks))
         # Most local titles, or (MusicBrainz listing fewer tracks, Karma's cassette)
         # nearly all of the shorter list from four tracks.

@@ -1902,7 +1902,7 @@
     },
     {
       "id": "js:runtime/discovery-center-navigation.js#navigate",
-      "action": "fetch requests installed by navigate",
+      "action": "Switch Discovery Center tabs by click and history, ignoring links outside /news",
       "entrypoints": [
         "js:music_app/static/js/runtime/discovery-center-navigation.js#navigate:request:fetch"
       ],
@@ -1914,7 +1914,36 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/news"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/discovery-center-navigation.test.js",
+      "testIdentity": "request capture: Discovery Center tabs fetch only /news, once per navigation",
+      "performanceTargets": [
+        "search-browse",
+        "all-artists",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; Discovery Center navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-card-component.js#schedule",

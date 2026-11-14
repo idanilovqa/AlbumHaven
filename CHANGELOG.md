@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.8 - 2026-11-14
+
+- The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target.
+
 ## 0.11.7 - 2026-11-14
 
 - Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.

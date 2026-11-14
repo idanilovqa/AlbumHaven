@@ -220,6 +220,13 @@ function createEngineHarness(options = {}) {
       this.onclose = null;
       this.closeCalls = 0;
       sockets.push(this);
+      // A refused connection never opens: the browser reports only its close.
+      const refusal = options.refuseConnection?.(sockets.length);
+      if (refusal) {
+        this.readyState = 0;
+        queueMicrotask(() => this.unexpectedClose({ code: refusal === true ? 1006 : refusal }));
+        return;
+      }
       queueMicrotask(() => this.onopen?.({}));
     }
 
@@ -265,7 +272,9 @@ function createEngineHarness(options = {}) {
     }
   }
 
+  const windowListeners = [];
   const window = {
+    addEventListener: (type, listener) => windowListeners.push({ type, listener }),
     AudioContext: FakeAudioContext,
     WebSocket: FakeWebSocket,
     location: { protocol: 'http:', host: 'album-haven.test' },
@@ -376,6 +385,9 @@ function createEngineHarness(options = {}) {
     sockets,
     setNow(value) {
       now = value;
+    },
+    dispatchWindowEvent(type) {
+      for (const entry of windowListeners) if (entry.type === type) entry.listener({ type });
     },
     async settle() {
       await new Promise((resolve) => setImmediate(resolve));
@@ -6734,4 +6746,439 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
     type: 'promoted', generation: current.generation, streamId: continuity.streamId, role: 'current',
   });
   assert.equal(kept.length, 1, 'it is kept once');
+});
+
+// ---- Network switches: the received audio plays on and the stream is spliced back in ----
+// These tests compare roles by stream id: a failing comparison of role objects renders their whole
+// graph, decoded PCM included, which takes gigabytes.
+
+function manualTimers() {
+  const timers = [];
+  return {
+    setTimeout: (callback, delay) => {
+      timers.push({ callback, delay, cleared: false, fired: false });
+      return timers.length;
+    },
+    clearTimeout: (id) => {
+      if (timers[id - 1]) timers[id - 1].cleared = true;
+    },
+    pending: () => timers.filter(({ cleared, fired }) => !cleared && !fired),
+    fire(timer) {
+      timer.fired = true;
+      timer.callback();
+    },
+  };
+}
+
+function receiveOn(socket, open, message) {
+  socket.receive({ generation: open.generation, streamId: open.streamId, role: open.role, ...message });
+}
+
+function acceptEncodedMetadata(socket, open, changes = {}) {
+  receiveOn(socket, open, {
+    type: 'metadata', sampleRate: 48_000, channels: 2, codec: 'mp3', skipFrames: 0,
+    totalFrames: 2_000_000 - open.startFrame, initialCreditBytes: 0, provisionalTotalFrames: 2_000_000,
+    requestedStartFrame: open.startFrame, timelineStartFrame: open.startFrame, ...changes,
+  });
+}
+
+async function settleTwice(harness) {
+  await harness.settle();
+  await harness.settle();
+}
+
+test('the web splice frame answers the shared seek-table vectors exactly as the server does', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'fixtures', 'playback-seek-table-v1.json'), 'utf8'));
+  const harness = encodedHarness();
+  let checked = 0;
+  for (const section of [fixture, fixture.flac]) {
+    for (const vector of section.wholeThroughCases) {
+      const frame = harness.context.wholeThroughStreamingSeekTable(section.table, {
+        initialSkip: section.initialSkip,
+        initialTotal: section.initialTotal,
+        streamStart: section.streamStart,
+        receivedBytes: vector.receivedBytes,
+      });
+      assert.equal(frame, vector.frame, JSON.stringify(vector));
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 10);
+});
+
+test('a network change after the whole song arrived plays it on and prepares its successor on the next socket', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 173_700);
+  receiveOn(harness.sockets[0], open, { type: 'eos', emittedFrames: 2_000_000, authoritativeTotalFrames: 2_000_000 });
+  harness.engine.diagnostics.bufferedFrames.current = 48_000;
+  await harness.api.continuity(makeTrack('02.mp3'));
+  await harness.settle();
+  const next = harness.sent('open').at(-1);
+  assert.equal(next.role, 'continuity');
+  const current = harness.engine.roles.current;
+  const sentOnLostSocket = harness.sockets[0].sent.length;
+
+  harness.sockets[0].unexpectedClose();
+
+  assert.equal(harness.engine.roles.current?.streamId, current.streamId, 'the song keeps playing');
+  assert.equal(harness.contexts[0].closeCalls, 0);
+  assert.equal(harness.nodes[0].disconnectCalls, 0);
+  const detached = harness.api.snapshot();
+  assert.notEqual(detached.mode, 'error');
+  assert.equal(detached.paused, false);
+  assert.equal(detached.diagnostics.transportDetaches, 1);
+  assert.equal(detached.diagnostics.transportState, 'detached-offline');
+  assert.equal(harness.engine.roles.continuity?.streamId ?? null, null, 'the successor was streaming on the lost socket');
+  assert.equal(harness.portMessages('expect-continuity').at(-1).active, true, 'the song end waits for its successor');
+
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].sent.length, sentOnLostSocket, 'nothing is sent on the lost socket');
+  assert.equal(harness.sockets.length, 2);
+  const reopened = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+  assert.deepEqual(reopened.map(({ path: trackPath, role, startFrame }) => ({ trackPath, role, startFrame })),
+    [{ trackPath: makeTrack('02.mp3').path, role: 'continuity', startFrame: 0 }]);
+  assert.ok(harness.sockets[1].sent.every(({ streamId }) => streamId === undefined || streamId > next.streamId),
+    'no control names a stream of the lost socket');
+  assert.equal(harness.engine.roles.current?.streamId, current.streamId);
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+test('a network change mid-song plays the received audio to a whole frame and splices the rest in there', async () => {
+  const boundaries = [];
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    handleStreamingPlaybackBoundary: (event) => boundaries.push(event),
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  const current = harness.engine.roles.current;
+  const duration = harness.api.snapshot().duration;
+  const sentOnLostSocket = harness.sockets[0].sent.length;
+
+  harness.sockets[0].unexpectedClose();
+
+  // Byte 100,000 starts seek point 1,000; one full stride short of it is seek point 999.
+  const splice = 999 * 1_152;
+  const detached = harness.api.snapshot();
+  assert.equal(detached.diagnostics.lastSpliceFrame, splice);
+  assert.equal(detached.diagnostics.transportState, 'detached-splice');
+  assert.notEqual(detached.mode, 'error');
+  assert.equal(harness.engine.roles.current?.streamId, current.streamId);
+  assert.equal(current.encoded.eos.authoritativeTotalFrames, splice, 'the received stream ends at the splice frame');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(harness.portMessages('expect-continuity').at(-1))),
+    { type: 'expect-continuity', generation: open.generation, active: true, timelineStartFrame: splice },
+  );
+  assert.equal(harness.contexts[0].closeCalls, 0);
+
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].sent.length, sentOnLostSocket);
+  const spliceOpen = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.deepEqual([spliceOpen.path, spliceOpen.role, spliceOpen.startFrame, spliceOpen.seekTable],
+    [makeTrack('01.mp3').path, 'continuity', splice, true]);
+  acceptEncodedMetadata(harness.sockets[1], spliceOpen);
+  await harness.settle();
+
+  harness.nodes[0].port.dispatch({
+    type: 'boundary', generation: open.generation, outgoingStreamId: current.streamId,
+    incomingStreamId: spliceOpen.streamId, renderedFrame: 50_000, timelineFrame: splice + 128,
+    capture: { outgoing: { frames: 64 }, incoming: { frames: 64 } },
+  });
+
+  const joined = harness.api.snapshot();
+  assert.equal(harness.engine.roles.current.streamId, spliceOpen.streamId);
+  assert.equal(boundaries.length, 0, 'the player stays on the same song');
+  assert.equal(joined.currentTime, (splice + 128) / 48_000);
+  assert.equal(joined.duration, duration);
+  assert.equal(joined.diagnostics.transportState, 'connected');
+  assert.equal(joined.diagnostics.transportResumes, 1);
+  const promote = harness.sockets[1].sent.find(({ type }) => type === 'promote');
+  assert.equal(promote.streamId, spliceOpen.streamId);
+  harness.nodes[0].port.dispatch({
+    type: 'position', generation: open.generation, streamId: spliceOpen.streamId, timelineFrame: splice + 4_096,
+  });
+  assert.equal(harness.api.snapshot().currentTime, (splice + 4_096) / 48_000, 'the position keeps advancing from the splice');
+});
+
+test('the received stream cut at the splice frame delivers exactly its frames and keeps the song length', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 100_000);
+  const duration = harness.api.snapshot().duration;
+  harness.sockets[0].unexpectedClose();
+  const current = harness.engine.roles.current;
+  for (let step = 0; step < 40 && !current.eosReceived; step += 1) {
+    harness.engine.diagnostics.bufferedFrames.current = 0;
+    harness.engine.diagnostics.inFlightFrames.current = 0;
+    current.encoded.localCreditFrames += 48_000;
+    await harness.context.pumpStreamingEncodedRole(current);
+    await harness.settle();
+  }
+
+  assert.equal(current.eosReceived, true);
+  const eos = harness.portMessages('eos').at(-1);
+  assert.equal(eos.streamId, open.streamId);
+  assert.equal(eos.emittedFrames, 999 * 1_152);
+  assert.equal(eos.authoritativeTotalFrames, 999 * 1_152);
+  const enqueued = harness.portMessages('enqueue').filter(({ streamId }) => streamId === open.streamId);
+  assert.equal(enqueued.reduce((total, { frameCount }) => total + frameCount, 0), 999 * 1_152);
+  assert.equal(harness.api.snapshot().duration, duration);
+});
+
+test('a lost socket with no seek table still restarts from the heard position', async () => {
+  const harness = encodedHarness();
+  const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 2_000_000, initialCreditBytes: 4_000 });
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(1_000)));
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  const restarted = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.equal(restarted.startFrame, 96_000);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, undefined);
+});
+
+test('a refused socket is an error, not a network change', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+
+  harness.sockets[0].unexpectedClose({ code: 4401, reason: 'unauthenticated' });
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets.length, 1, 'no reconnect is attempted');
+  assert.equal(harness.api.snapshot().mode, 'error');
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, undefined);
+});
+
+test('reconnects keep trying while the received audio plays, then for 30 seconds of silence, then stop at the heard frame', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 240_000 });
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'the first attempt is immediate');
+
+  const delays = [];
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const [timer] = timers.pending();
+    delays.push(timer.delay);
+    timers.fire(timer);
+    await settleTwice(harness);
+  }
+  assert.deepEqual(delays, [500, 1_000, 2_000, 4_000, 5_000, 5_000]);
+  assert.equal(harness.sockets.length, 8);
+  assert.notEqual(harness.api.snapshot().mode, 'error', 'failures stay silent while audio plays');
+
+  harness.nodes[0].port.dispatch({
+    type: 'underrun', generation: open.generation, streamId: open.streamId, role: 'current',
+    renderedFrame: 1, missingFrames: 128,
+  });
+  assert.equal(harness.api.snapshot().mode, 'buffering');
+  const deadline = timers.pending().find(({ delay }) => delay === 30_000);
+  assert.ok(deadline, 'the silence is bounded');
+  timers.fire(deadline);
+  await settleTwice(harness);
+
+  const stopped = harness.api.snapshot();
+  assert.equal(stopped.mode, 'error');
+  assert.equal(stopped.paused, true);
+  assert.equal(stopped.currentTime, 5);
+  assert.equal(harness.engine.pendingTransportRecovery.startSeconds, 5);
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(timers.pending().length, 0, 'no attempt follows');
+});
+
+test('pausing while the network is gone stops the attempts and playing again resumes them', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(timers.pending().length, 1);
+
+  await harness.api.pause();
+  assert.equal(timers.pending().length, 0);
+
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 3, 'playing again tries at once');
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('the browser coming back online tries at once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count === 2,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const [waiting] = timers.pending();
+
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+
+  assert.equal(waiting.cleared, true);
+  assert.equal(harness.sockets.length, 3);
+  assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+});
+
+test('a socket that stays open but stopped delivering after a network change is replaced', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+
+  harness.setNow(2_000);
+  harness.dispatchWindowEvent('online');
+  assert.equal(harness.sockets[0].closeCalls, 0, 'bytes arrived a moment ago');
+
+  harness.setNow(5_000);
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1);
+  assert.equal(harness.sockets[1].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+});
+
+test('offline, a seek inside a song that fully arrived decodes it here', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 173_700);
+  receiveOn(harness.sockets[0], open, { type: 'eos', emittedFrames: 2_000_000, authoritativeTotalFrames: 2_000_000 });
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(30);
+
+  assert.equal(harness.sent('open').length, opens);
+  assert.equal(harness.engine.roles.continuity.local, true);
+  assert.equal(harness.portMessages('reserve-seek').at(-1).timelineStartFrame, 1_440_000);
+});
+
+test('offline, a seek before the splice frame decodes here and still ends at the splice frame', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 150_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const splice = 1_499 * 1_152;
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(10);
+
+  const local = harness.engine.roles.continuity;
+  assert.equal(harness.sent('open').length, opens);
+  assert.equal(local.local, true);
+  assert.equal(local.startFrame, 480_000);
+  assert.equal(local.encoded.eos.authoritativeTotalFrames, splice);
+  assert.equal(harness.api.snapshot().diagnostics.lastSpliceFrame, splice);
+});
+
+test('offline, a committed seek before the splice frame keeps the splice expected at its frame', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 150_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await harness.api.seek(10);
+  const local = harness.engine.roles.continuity;
+
+  harness.nodes[0].port.dispatch({
+    type: 'seek-boundary', generation: open.generation, outgoingStreamId: open.streamId,
+    incomingStreamId: local.streamId, renderedFrame: 128, timelineFrame: 480_000, silentFrames: 0,
+  });
+  await harness.settle();
+
+  assert.equal(harness.engine.roles.current?.streamId, local.streamId);
+  const expectation = harness.portMessages('expect-continuity').at(-1);
+  assert.deepEqual([expectation.active, expectation.timelineStartFrame], [true, 1_499 * 1_152],
+    'the seeked audio still waits for the rest of the track at the splice frame');
+});
+
+test('offline, a seek past the received audio jumps at once and plays from there once the network is back', async () => {
+  const timers = manualTimers();
+  let online = false;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  await harness.api.seek(60);
+  await settleTwice(harness);
+
+  const jumped = harness.api.snapshot();
+  assert.equal(jumped.currentTime, 60);
+  assert.equal(jumped.paused, false);
+  assert.notEqual(jumped.mode, 'error');
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation, 'the old audio stops at once');
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.sockets.filter(({ readyState }) => readyState === 1).length, 0, 'offline, no socket opened');
+
+  online = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 5_000));
+  await settleTwice(harness);
+
+  const opened = harness.sockets.filter(({ readyState }) => readyState === 1);
+  assert.equal(opened.length, 1);
+  const reopened = opened[0].sent.filter(({ type }) => type === 'open');
+  assert.deepEqual(reopened.map(({ role, startFrame }) => [role, startFrame]), [['current', 2_880_000]]);
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+test('losing the next socket before the splice joined opens the splice again on the one after', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const first = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  const sentOnSecond = harness.sockets[1].sent.length;
+
+  harness.sockets[1].unexpectedClose();
+  assert.equal(harness.engine.roles.continuity?.streamId ?? null, null);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].sent.length, sentOnSecond);
+  const again = harness.sockets[2].sent.find(({ type }) => type === 'open');
+  assert.equal(again.startFrame, first.startFrame);
+  assert.ok(again.streamId > first.streamId);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
 });

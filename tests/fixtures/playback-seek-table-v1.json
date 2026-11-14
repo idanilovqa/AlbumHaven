@@ -1,5 +1,5 @@
 {
- "description": "Seek-table lookups every client must answer exactly as music_app/services/playback_seek_table.lookup does. Generated from it; tests/py/test_playback_seek_table.py keeps them equal.",
+ "description": "Seek-table lookups and splice frames every client must answer exactly as music_app/services/playback_seek_table.lookup and whole_through do. Generated from it; tests/py/test_playback_seek_table.py keeps them equal.",
  "table": {
   "prefixBytes": 0,
   "prerollFrames": 9216,
@@ -325,6 +325,86 @@
      "totalFrames": 1
     }
    }
+  ],
+  "wholeThroughCases": [
+   {
+    "receivedBytes": 0,
+    "frame": null
+   },
+   {
+    "receivedBytes": 42,
+    "frame": null
+   },
+   {
+    "receivedBytes": 9000,
+    "frame": null
+   },
+   {
+    "receivedBytes": 17999,
+    "frame": null
+   },
+   {
+    "receivedBytes": 18000,
+    "frame": 4096
+   },
+   {
+    "receivedBytes": 27000,
+    "frame": 8192
+   },
+   {
+    "receivedBytes": 36000,
+    "frame": 12288
+   },
+   {
+    "receivedBytes": 1000000,
+    "frame": 12288
+   }
   ]
- }
+ },
+ "wholeThroughCases": [
+  {
+   "receivedBytes": 0,
+   "frame": null
+  },
+  {
+   "receivedBytes": 799,
+   "frame": null
+  },
+  {
+   "receivedBytes": 800,
+   "frame": null
+  },
+  {
+   "receivedBytes": 1599,
+   "frame": null
+  },
+  {
+   "receivedBytes": 1600,
+   "frame": 47
+  },
+  {
+   "receivedBytes": 2400,
+   "frame": 2351
+  },
+  {
+   "receivedBytes": 3200,
+   "frame": 4655
+  },
+  {
+   "receivedBytes": 24000,
+   "frame": 64559
+  },
+  {
+   "receivedBytes": 47999,
+   "frame": 131375
+  },
+  {
+   "receivedBytes": 48000,
+   "frame": 133679
+  },
+  {
+   "receivedBytes": 1000000,
+   "frame": 133679
+  }
+ ]
 }

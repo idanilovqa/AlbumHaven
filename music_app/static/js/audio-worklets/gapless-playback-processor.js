@@ -96,6 +96,7 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.continuityTimelineStartFrame = 0;
       this.port.onmessage = ({ data }) => this.handleCommand(data);
     }
 
@@ -123,6 +124,7 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.continuityTimelineStartFrame = 0;
     }
 
     handleCommand(message) {
@@ -153,6 +155,10 @@
       else if (message.type === 'reserve-buffered-seek') this.reserveBufferedSeek(message);
       else if (message.type === 'expect-continuity') {
         this.expectContinuity = message.active === true;
+        // A stream spliced into the same track continues its timeline; a new track starts at zero.
+        this.continuityTimelineStartFrame = isIntegerBetween(message.timelineStartFrame, 0, Number.MAX_SAFE_INTEGER)
+          ? message.timelineStartFrame
+          : 0;
       }
       else if (message.type === 'stop') this.stop(message);
     }
@@ -820,7 +826,8 @@
             boundaryPending = true;
             this.promoteContinuity();
             this.expectContinuity = false;
-            this.timelineFrame = 0;
+            this.timelineFrame = this.continuityTimelineStartFrame;
+            this.continuityTimelineStartFrame = 0;
             continue;
           }
           if (this.current.eos && this.loopActive && this.shortLoopActive

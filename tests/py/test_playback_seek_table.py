@@ -19,6 +19,7 @@ from music_app.services.playback_seek_table import (
     lookup,
     mp3_seek_table,
     read_flac_seek_table,
+    whole_through,
 )
 
 
@@ -147,3 +148,15 @@ def test_a_stream_open_waits_for_the_scan_already_running_instead_of_reading_the
     assert len(reads) == 1
     assert module._scans == {}
 
+
+
+def test_the_shared_splice_vectors_are_the_reference_whole_through_answers():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    for section in (fixture, fixture["flac"]):
+        raw = section["table"]
+        table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
+        assert section["wholeThroughCases"]
+        for case in section["wholeThroughCases"]:
+            frame = whole_through(table, initial_skip=section["initialSkip"], initial_total=section["initialTotal"],
+                                  stream_start=section["streamStart"], received_bytes=case["receivedBytes"])
+            assert frame == case["frame"], case

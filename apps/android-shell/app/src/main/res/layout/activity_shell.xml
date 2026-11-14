@@ -22,6 +22,69 @@
         android:scaleType="fitXY"
         android:visibility="gone" />
 
+    <!-- The one battery offer (BatteryPrompt): the sandbox warning's alert, info variant; non-blocking. -->
+    <LinearLayout
+        android:id="@+id/battery_prompt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_margin="12dp"
+        android:background="@drawable/alert_info"
+        android:baselineAligned="false"
+        android:clickable="true"
+        android:focusable="false"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/alert_icon_well"
+            android:importantForAccessibility="no"
+            android:padding="8dp"
+            android:src="@drawable/ic_alert_info" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/battery_prompt_title"
+                style="@style/RecoveryTitle"
+                android:accessibilityLiveRegion="polite"
+                android:gravity="start"
+                android:text="@string/battery_prompt_title" />
+
+            <TextView
+                android:id="@+id/battery_prompt_reason"
+                style="@style/RecoveryMessage"
+                android:layout_marginTop="4dp"
+                android:gravity="start" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/battery_prompt_allow"
+                    style="@style/RecoveryAction"
+                    android:text="@string/battery_prompt_allow" />
+
+                <Button
+                    android:id="@+id/battery_prompt_decline"
+                    style="@style/RecoveryAction"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/battery_prompt_decline" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- Non-blocking: the page stays usable around it. -->
     <LinearLayout
         android:id="@+id/sandbox_warning"

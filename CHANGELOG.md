@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.8 - 2026-11-14
+
+- Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
 ## 0.11.7 - 2026-11-14
 
 - Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.

@@ -1,0 +1,154 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  WORK_CLASSES,
+  endpointMatches,
+  interactionsForPaths,
+  loadRegistry,
+  validateInventory,
+  validateSchema,
+} = require('../../scripts/ci/validate-bounded-interactions.cjs');
+
+const OWNER = 'music_app/static/js/runtime/album-track-table.js';
+const KEY = `js:${OWNER}#install:event:pointermove`;
+const TEST_FILE = 'tests/js/runtime/bounded-interaction-contracts.test.js';
+const files = {
+  [OWNER]: '',
+  [TEST_FILE]: "test('BI-H01 adjacent drag stays delta-bounded at production scale', () => {});",
+  'music_app/services/relations.py': '',
+};
+const io = {
+  fileExists: file => Object.hasOwn(files, file),
+  readFile: file => files[file],
+};
+
+function contractEntry(overrides = {}) {
+  return {
+    id: 'BI-H01-loose-track-drag',
+    action: 'Drag across one adjacent Loose Tracks row',
+    entrypoints: [KEY],
+    owners: [OWNER],
+    rules: ['BI-01', 'BI-03'],
+    workClass: 'delta',
+    proof: 'contract',
+    cardinalities: { small: 20, production: 1000 },
+    budgets: { itemsVisited: 3, domQueries: 0, domMutations: 2, outputEmissions: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    command: `node --test --test-concurrency=1 ${TEST_FILE}`,
+    testIdentity: 'BI-H01 adjacent drag stays delta-bounded at production scale',
+    performanceTargets: [],
+    rollback: 'Revert the selection-owner change; retain this contract.',
+    ...overrides,
+  };
+}
+
+function registry(interactions, extra = {}) {
+  return { schemaVersion: 1, allowedWorkClasses: WORK_CLASSES, libraryScaleOperations: [], interactions, ...extra };
+}
+
+const entrypoint = (key = KEY, extra = {}) => ({ key, path: OWNER, kind: 'event', trigger: 'pointermove', ...extra });
+
+test('accepts a minimal contract entry', () => {
+  assert.deepEqual(validateSchema(registry([contractEntry()]), io), []);
+});
+
+test('accepts a static entry and rejects contract fields on it', () => {
+  const entry = { id: 'static', action: 'Toggle', entrypoints: [KEY], owners: [OWNER], rules: ['BI-03'], workClass: 'constant', proof: 'static' };
+  assert.deepEqual(validateSchema(registry([entry]), io), []);
+  assert.match(validateSchema(registry([{ ...entry, budgets: { requests: 1 } }]), io).join('\n'), /static proof must not declare budgets/);
+});
+
+for (const [name, mutate, expected] of [
+  ['duplicate ids', reg => reg.interactions.push(contractEntry()), /duplicate id/],
+  ['library-size work class', reg => { reg.interactions[0].workClass = 'library-size'; }, /unsupported work class library-size/],
+  ['absent owner path', reg => { reg.interactions[0].owners = ['music_app/missing.js']; }, /owner music_app\/missing\.js does not exist/],
+  ['entrypoint outside owners', reg => { reg.interactions[0].entrypoints = ['js:music_app/other.js#x:event:scroll']; }, /outside its owners/],
+  ['missing test identity', reg => { reg.interactions[0].testIdentity = 'BI-H01 not written yet'; }, /is not defined in/],
+  ['missing test file', reg => { reg.interactions[0].command = 'node --test tests/js/missing.test.js'; }, /does not exist/],
+  ['missing production cardinality', reg => { delete reg.interactions[0].cardinalities.production; }, /cardinalities/],
+  ['production not larger than small', reg => { reg.interactions[0].cardinalities.production = 20; }, /production > small/],
+  ['negative budget', reg => { reg.interactions[0].budgets.itemsVisited = -1; }, /nonnegative number/],
+  ['unbudgeted growth metric', reg => { reg.interactions[0].growth.metric = 'requests'; }, /growth metric/],
+  ['out-of-range rule', reg => { reg.interactions[0].rules = ['BI-15']; }, /BI-01\.\.BI-14/],
+  ['unknown interaction key', reg => { reg.interactions[0].notes = 'x'; }, /unknown key notes/],
+  ['unknown top-level key', reg => { reg.extra = true; }, /unknown top-level key extra/],
+  ['unknown proof', reg => { reg.interactions[0].proof = 'manual'; }, /proof must be/],
+  ['top-level allowlist', reg => { reg.allowlist = []; }, /exemption field is not allowed: \$\.allowlist/],
+  ['nested waiver', reg => { reg.interactions[0].budgets.waiverUntil = 1; }, /exemption field is not allowed/],
+  ['skipped contract', reg => { reg.interactions[0].skip = true; }, /exemption field is not allowed/],
+  ['library-scale operation without reason', reg => { reg.libraryScaleOperations = [{ operation: 'py:music_app/services/relations.py#build' }]; }, /must give a reason/],
+  ['query in endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/view-data?surface=home'], forbidden: [] }; }, /without query/],
+]) {
+  test(`rejects ${name}`, () => {
+    const candidate = registry([contractEntry()]);
+    mutate(candidate);
+    assert.match(validateSchema(candidate, io).join('\n'), expected);
+  });
+}
+
+test('rejects unregistered, stale, and doubly registered entrypoints', () => {
+  const reg = registry([contractEntry(), contractEntry({ id: 'second' })]);
+  reg.interactions[1].entrypoints = [KEY, `js:${OWNER}#install:event:scroll`];
+  const errors = validateInventory(reg, { entrypoints: [entrypoint(), entrypoint(`js:${OWNER}#install:event:wheel`)], hazards: [] }).join('\n');
+  assert.match(errors, /registered by both BI-H01-loose-track-drag and second/);
+  assert.match(errors, /stale entrypoint .*event:scroll/);
+  assert.match(errors, /unregistered entrypoint .*event:wheel/);
+});
+
+test('rejected hazards fail even for a registered contract entry', () => {
+  const errors = validateInventory(registry([contractEntry()]), {
+    entrypoints: [entrypoint()],
+    hazards: [{ entrypoint: KEY, rule: 'BI-01', operation: 'querySelectorAll', path: OWNER, line: 4, reject: true, via: [] }],
+  });
+  assert.deepEqual(errors, [`rejected BI-01 querySelectorAll at ${OWNER}:4 from ${KEY}`]);
+});
+
+test('a static proof with reachable hazards requires a runtime contract', () => {
+  const entry = contractEntry({ proof: 'static' });
+  const errors = validateInventory(registry([entry]), {
+    entrypoints: [entrypoint()],
+    hazards: [{ entrypoint: KEY, rule: 'BI-01', operation: 'forEach', path: OWNER, line: 9, reject: false, via: ['sync'] }],
+  });
+  assert.match(errors.join('\n'), /1 reachable hazard\(s\) need a runtime contract \(forEach at .*:9\)/);
+});
+
+test('a contract entry must own every file where its hazards live', () => {
+  const errors = validateInventory(registry([contractEntry()]), {
+    entrypoints: [entrypoint()],
+    hazards: [{ entrypoint: KEY, rule: 'BI-01', operation: 'forEach', path: 'music_app/static/js/runtime/helpers.js', line: 2, reject: false, via: ['scan'] }],
+  });
+  assert.match(errors.join('\n'), /hazard owner music_app\/static\/js\/runtime\/helpers\.js must be listed in owners/);
+});
+
+test('request ownership allows declared endpoints and rejects others', () => {
+  const requestKey = `js:${OWNER}#openHome:request:fetch`;
+  const entry = {
+    id: 'home', action: 'Open Home', entrypoints: [requestKey], owners: [OWNER], rules: ['BI-13'], workClass: 'page', proof: 'static',
+    requestOwnership: { allowed: ['/home-data'], forbidden: ['/view-data'] },
+  };
+  const request = target => ({ key: requestKey, path: OWNER, kind: 'request', trigger: 'fetch', line: 3, targets: [{ target, line: 3 }] });
+  assert.deepEqual(validateInventory(registry([entry]), { entrypoints: [request('/home-data?omit_sidebar=1')], hazards: [] }), []);
+  assert.match(validateInventory(registry([entry]), { entrypoints: [request('/view-data')], hazards: [] }).join('\n'), /not an allowed endpoint/);
+  assert.match(validateInventory(registry([entry]), { entrypoints: [request(null)], hazards: [] }).join('\n'), /needs a request-capture contract/);
+});
+
+test('endpoint patterns match one path segment per wildcard', () => {
+  assert.equal(endpointMatches('/utilities/save-task/${}', '/utilities/save-task/*'), true);
+  assert.equal(endpointMatches('/utilities/save-task/1/cancel', '/utilities/save-task/*'), false);
+});
+
+test('changed owners select contract interactions only', () => {
+  const reg = registry([contractEntry(), { ...contractEntry({ id: 'static', proof: 'static' }) }]);
+  assert.deepEqual(interactionsForPaths(reg, [OWNER, 'README.md']), ['BI-H01-loose-track-drag']);
+});
+
+test('the checked-in registry satisfies the schema', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.resolve(__dirname, '..', '..');
+  const errors = validateSchema(loadRegistry(root), {
+    fileExists: file => fs.existsSync(path.join(root, file)),
+    readFile: file => fs.readFileSync(path.join(root, file), 'utf8'),
+  });
+  assert.deepEqual(errors, []);
+});

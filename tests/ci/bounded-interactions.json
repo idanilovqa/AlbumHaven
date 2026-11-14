@@ -5060,7 +5060,7 @@
     },
     {
       "id": "js:settings-navigation.js#navigate",
-      "action": "fetch requests installed by navigate",
+      "action": "Navigate between Settings pages, submit an account form, and reject non-Settings routes",
       "entrypoints": [
         "js:music_app/static/js/settings-navigation.js#navigate:request:fetch"
       ],
@@ -5072,7 +5072,38 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/account",
+          "/admin/members",
+          "/admin/server",
+          "/admin/accounts/*",
+          "/account/password",
+          "/account/password-suggestion/dismiss"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/login",
+          "/logout"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 6
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/settings-navigation.test.js",
+      "testIdentity": "request capture: Settings navigation fetches only its owned pages, once per navigation",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; Settings navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:startup-progress.js#<top-level>",

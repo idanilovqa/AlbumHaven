@@ -8236,10 +8236,6 @@ def _artist_musicbrainz_projection(
     if credit_name:
         # Matched through a release credit: "credited as 3 Crows".
         projection["credited_as"] = credit_name
-    associated = _projected_identities(row.get("artist_identities"))
-    if associated:
-        # A person's same-named band, whose albums keep its own MBID (Alice Cooper).
-        projection["associated"] = associated
     discogs_artist_id = row.get("artist_discogs_artist_id")
     if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
         projection["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"

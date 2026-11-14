@@ -138,7 +138,7 @@
     },
     {
       "id": "js:admin-members.js#requestJson",
-      "action": "fetch requests installed by requestJson",
+      "action": "Create or edit an account, send reset and welcome mail, revoke sessions, and retry failed navigation",
       "entrypoints": [
         "js:music_app/static/js/admin-members.js#requestJson:request:fetch"
       ],
@@ -150,11 +150,41 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/admin/accounts",
+          "/admin/accounts/*",
+          "/admin/accounts/*/password-reset",
+          "/admin/accounts/*/welcome",
+          "/admin/accounts/*/sessions/revoke"
+        ],
+        "forbidden": [
+          "/admin/members",
+          "/view-data",
+          "/home-data",
+          "/login"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 5
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/admin-members.test.js",
+      "testIdentity": "request capture: account editor mutations reach only account endpoints, once per action",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; account management is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:admin-members.js#rosterRequest",
-      "action": "fetch requests installed by rosterRequest",
+      "action": "Copy or send a roster invitation, including duplicate clicks during a pending rotation",
       "entrypoints": [
         "js:music_app/static/js/admin-members.js#rosterRequest:request:fetch"
       ],
@@ -166,7 +196,34 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/admin/accounts/*/invitation/copy",
+          "/admin/accounts/*/invitation/send"
+        ],
+        "forbidden": [
+          "/admin/members",
+          "/view-data",
+          "/home-data",
+          "/login"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/admin-members.test.js",
+      "testIdentity": "request capture: roster invitation actions reach only invitation endpoints, once per action",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; account management is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:admin-members.js#sendInvitation",

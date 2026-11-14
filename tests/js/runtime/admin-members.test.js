@@ -711,3 +711,56 @@ for (const ok of [true, false]) {
     assert.equal(runtime.error.hidden, ok);
   });
 }
+
+// Request-capture contracts (tests/ci/bounded-interactions.json): every account mutation
+// reaches only its own account endpoint once; retries and duplicate clicks add no request.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: account editor mutations reach only account endpoints, once per action', async () => {
+  const id = 'js:admin-members.js#requestJson';
+  await measureInteractionContract(id, async (retries) => {
+    const submit = runtime => runtime.form.listeners.get('submit')({ preventDefault() {} });
+    const create = loadRuntime();
+    for (let attempt = 0; attempt <= retries; attempt += 1) await submit(create);
+    const edit = loadRuntime({ mode: 'edit' });
+    await submit(edit);
+    await edit.reset.click();
+    await edit.welcome.click();
+    for (let attempt = 0; attempt <= retries; attempt += 1) await edit.revoke.click();
+    const urls = [...create.fetches, ...edit.fetches].map(([url]) => url);
+    assert.deepEqual(urls, [
+      '/admin/accounts', '/admin/accounts/41', '/admin/accounts/41/password-reset',
+      '/admin/accounts/41/welcome', '/admin/accounts/41/sessions/revoke',
+    ]);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
+});
+
+test('request capture: roster invitation actions reach only invitation endpoints, once per action', async () => {
+  const id = 'js:admin-members.js#rosterRequest';
+  await measureInteractionContract(id, async (duplicateClicks) => {
+    let finish;
+    const pending = new Promise((resolve) => { finish = resolve; });
+    const runtime = loadRosterRuntime({
+      request: async url => (url.endsWith('/invitation/copy')
+        ? pending
+        : { ok: true, status: 200, json: async () => ({ accepted: true }) }),
+    });
+    const clicks = [runtime.row.copyInvite.click()];
+    await new Promise(resolve => setImmediate(resolve));
+    for (let click = 0; click < duplicateClicks; click += 1) {
+      clicks.push(runtime.row[click % 2 ? 'sendInvite' : 'copyInvite'].click());
+    }
+    finish({ ok: true, status: 200, json: async () => ({ invitation_url: `https://example.test/accept-invitation?purpose=account-invitation&token=${'A'.repeat(43)}` }) });
+    await Promise.all(clicks);
+    await runtime.row.sendInvite.click();
+    await runtime.row.sendOtherInvite.click();
+    const urls = runtime.fetches.map(({ url }) => url);
+    assert.deepEqual(urls, [
+      '/admin/accounts/41/invitation/copy', '/admin/accounts/41/invitation/send', '/admin/accounts/42/invitation/send',
+    ]);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
+});

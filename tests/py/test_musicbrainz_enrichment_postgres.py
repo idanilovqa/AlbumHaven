@@ -483,7 +483,7 @@ def test_projection_refresh_is_complete_guarded_atomic_and_preserves_match_owner
     assert "matches.local_artist_id = %(local_artist_id)s" in combined_sql
     assert "matches.artist_mbid = %(artist_mbid)s::uuid" in combined_sql
     assert "insert into library.local_artist_musicbrainz_matches" not in combined_sql
-    assert "update library.local_artist_musicbrainz_matches" not in combined_sql
+    assert "update library.local_artist_musicbrainz_matches" in combined_sql
     assert all(params["local_artist_id"] == 41 for _sql, params in connection.calls)
     assert all(params["artist_mbid"] == ARTIST_MBID for _sql, params in connection.calls)
     assert connection.calls[-1][1]["tag_counts"] == [0, -2, 18]

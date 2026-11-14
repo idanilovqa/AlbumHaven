@@ -255,6 +255,7 @@ test('a queued retry polls only its artist detail then reloads Problematic Files
     item,
     () => context.postMusicBrainzArtistAction(item, 'retry', {}),
     'MusicBrainz retry queued.',
+    { refreshSurvivingDetail: true },
   );
 
   assert.deepEqual(requests.map(([method, url]) => [method, url]), [
@@ -267,7 +268,7 @@ test('a queued retry polls only its artist detail then reloads Problematic Files
   assert.deepEqual(context.state.utility.problematicFiles, []);
 });
 
-test('a queued retry stops when a new failed attempt updates last_attempt_at', async () => {
+test('a queued retry refreshes the rendered status after a new failed attempt', async () => {
   const item = artistItem();
   item.musicbrainz_detail = detail({
     problem_reason_code: 'musicbrainz_provider_retry_exhausted',
@@ -275,6 +276,8 @@ test('a queued retry stops when a new failed attempt updates last_attempt_at', a
     last_attempt_at: '2026-11-04T12:00:00Z',
   });
   const { context, requests } = loadContext({ item });
+  const previousRenderedStatus = context.buildMusicBrainzArtistProblemDetail(item)
+    .match(/<dt>Last attempt<\/dt><dd>([^<]+)<\/dd>/)[1];
   let statusLoads = 0;
   let summaryLoads = 0;
   context.waitForBrowserTimeout = async () => {};
@@ -283,6 +286,13 @@ test('a queued retry stops when a new failed attempt updates last_attempt_at', a
     requests.push([method, url]);
     if (method === 'POST') return { ok: true, status: 202, json: async () => ({ enqueued: true }) };
     statusLoads += 1;
+    if (statusLoads === 3) {
+      return { ok: true, status: 200, json: async () => ({ artist: detail({
+        problem_reason_code: 'musicbrainz_provider_retry_exhausted',
+        unresolved_reason: 'MusicBrainz: Provider unavailable',
+        last_attempt_at: '2026-11-04T12:01:00Z',
+      }) }) };
+    }
     return {
       ok: true,
       status: 200,
@@ -292,20 +302,26 @@ test('a queued retry stops when a new failed attempt updates last_attempt_at', a
       } }),
     };
   };
-  context.loadProblematicFiles = async () => { summaryLoads += 1; };
+  context.loadProblematicFiles = async () => { summaryLoads += 1; return [item]; };
 
   await context.runMusicBrainzArtistMutation(
     item,
     () => context.postMusicBrainzArtistAction(item, 'retry', {}),
     'MusicBrainz retry queued.',
+    { refreshSurvivingDetail: true },
   );
 
   assert.deepEqual(requests, [
     ['POST', '/api/musicbrainz/artists/7/retry'],
     ['GET', '/api/musicbrainz/artists/7'],
     ['GET', '/api/musicbrainz/artists/7'],
+    ['GET', '/api/musicbrainz/artists/7'],
   ]);
   assert.equal(summaryLoads, 1);
+  assert.equal(item.musicbrainz_detail.last_attempt_at, '2026-11-04T12:01:00Z');
+  const refreshedRenderedStatus = context.buildMusicBrainzArtistProblemDetail(item)
+    .match(/<dt>Last attempt<\/dt><dd>([^<]+)<\/dd>/)[1];
+  assert.notEqual(refreshedRenderedStatus, previousRenderedStatus);
 });
 
 test('persisted read-only artist detail disables unavailable mutations', () => {

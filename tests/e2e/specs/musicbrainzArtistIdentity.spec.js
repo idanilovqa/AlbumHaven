@@ -357,7 +357,9 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       const originalViewport = page.viewportSize();
       await page.setViewportSize({ width: 390, height: 844 });
       await utilityProblematicFilesActions.selectAlbumByTitle(GUEST);
-      expect(await utilityProblematicFilesActions.readMusicBrainzIdentityPresentation()).toEqual(expectedPresentation);
+      await expect.poll(
+        () => utilityProblematicFilesActions.readMusicBrainzIdentityPresentation(),
+      ).toEqual(expectedPresentation);
       if (originalViewport) await page.setViewportSize(originalViewport);
       await utilityProblematicFilesActions.expectMusicBrainzAssignmentDisabled();
       await utilityProblematicFilesActions.openMusicBrainzCandidate(

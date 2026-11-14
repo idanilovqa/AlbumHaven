@@ -1710,11 +1710,6 @@ export class GalleryActions {
   async readAlbumRatingSurface(artistName, albumName) {
     const albumCard = this.galleryPage.albumCard;
     const row = albumCard.ratingRowByArtistAndAlbum(artistName, albumName);
-    const stars = albumCard.ratingStarsByArtistAndAlbum(artistName, albumName);
-    const text = albumCard.ratingTextByArtistAndAlbum(artistName, albumName);
-    const starPositions = albumCard.ratingStarPositionsByArtistAndAlbum(artistName, albumName);
-    const filledStars = albumCard.ratingFilledStarsByArtistAndAlbum(artistName, albumName);
-    const emptyStars = albumCard.ratingEmptyStarsByArtistAndAlbum(artistName, albumName);
     const rowCount = await row.count();
     if (rowCount === 0) {
       return {
@@ -1730,31 +1725,30 @@ export class GalleryActions {
         emptyColor: '',
       };
     }
-    const [starCount, filledStarCount, emptyStarCount] = await Promise.all([
-      starPositions.count(),
-      filledStars.count(),
-      emptyStars.count(),
-    ]);
-    // parity-check: allow-read-only-measurement-evaluate -- inspect production star colors only
-    const filledColor = filledStarCount > 0
-      ? await filledStars.first().evaluate((star) => getComputedStyle(star).color)
-      : '';
-    // parity-check: allow-read-only-measurement-evaluate -- inspect production star colors only
-    const emptyColor = emptyStarCount > 0
-      ? await emptyStars.first().evaluate((star) => getComputedStyle(star).color)
-      : '';
-    return {
-      rowCount,
-      starCount,
-      filledStarCount,
-      emptyStarCount,
-      role: String(await stars.getAttribute('role') || '').trim(),
-      ariaLabel: String(await stars.getAttribute('aria-label') || '').trim(),
-      text: await text.count() > 0 ? String(await text.textContent() || '').trim() : '',
-      glyphs: (await starPositions.allTextContents()).map((glyph) => glyph.trim()),
-      filledColor,
-      emptyColor,
-    };
+    // parity-check: allow-read-only-measurement-evaluate -- read one connected production rating row atomically
+    return row.evaluate((ratingRow, selectors) => {
+      const stars = ratingRow.querySelector(selectors.stars);
+      const starPositions = Array.from(ratingRow.querySelectorAll(selectors.starPositions));
+      const filledStars = starPositions.filter((star) => star.classList.contains('filled'));
+      const emptyStars = starPositions.filter((star) => !star.classList.contains('filled'));
+      const text = ratingRow.querySelector(selectors.text);
+      return {
+        rowCount: 1,
+        starCount: starPositions.length,
+        filledStarCount: filledStars.length,
+        emptyStarCount: emptyStars.length,
+        role: String(stars?.getAttribute('role') || '').trim(),
+        ariaLabel: String(stars?.getAttribute('aria-label') || '').trim(),
+        text: String(text?.textContent || '').trim(),
+        glyphs: starPositions.map((star) => String(star.textContent || '').trim()),
+        filledColor: filledStars.length > 0 ? getComputedStyle(filledStars[0]).color : '',
+        emptyColor: emptyStars.length > 0 ? getComputedStyle(emptyStars[0]).color : '',
+      };
+    }, {
+      stars: albumCard.ratingStarsWithinRowSelector,
+      starPositions: albumCard.ratingStarWithinRowSelector,
+      text: albumCard.ratingTextWithinRowSelector,
+    });
   }
 
   async readAlbumRatingLayout(artistName, albumName) {

@@ -640,9 +640,10 @@ def test_projection_refresh_replaces_remote_metadata_without_rewriting_the_accep
             (library_id,),
         ).fetchall()
 
+    refresh_observed_at = NOW + timedelta(days=31)
     assert repository.refresh_artist_projection(
         local_artist_id=artist_id,
-        observed_at=NOW + timedelta(hours=1),
+        observed_at=refresh_observed_at,
         artist={
             "mbid": GERMAN,
             "canonical_name": "New Name",
@@ -703,8 +704,16 @@ def test_projection_refresh_replaces_remote_metadata_without_rewriting_the_accep
         {"tag_name": "art rock", "vote_count": -2, "is_genre": True},
         {"tag_name": "new tag", "vote_count": 0, "is_genre": False},
     ]
-    assert match_after == match_before
+    preserved_match_fields = set(match_before) - {"last_verified_at", "updated_at"}
+    assert {key: match_after[key] for key in preserved_match_fields} == {
+        key: match_before[key] for key in preserved_match_fields
+    }
+    assert match_after["last_verified_at"] != match_before["last_verified_at"]
     assert identities_after == identities_before
+    assert repository.enqueue_eligible_artists(
+        reason="scheduled_sync",
+        observed_at=refresh_observed_at,
+    ) == {"enqueued_count": 0}
 
 
 def test_stored_artist_mbid_recheck_removes_only_automatic_matches_from_that_path(monkeypatch: pytest.MonkeyPatch):

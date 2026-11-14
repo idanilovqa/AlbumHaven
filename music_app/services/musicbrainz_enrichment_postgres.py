@@ -1837,24 +1837,35 @@ def _matched_artist_cte() -> str:
 
 def _refresh_artist_sql() -> str:
     return _matched_artist_cte() + """
-        insert into integration.musicbrainz_artists (
-          mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+        , refreshed_artist as (
+          insert into integration.musicbrainz_artists (
+            mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
+            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+          )
+          select artist_mbid, %(canonical_name)s, %(sort_name)s,
+                 %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
+                 %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+          from matched_artist
+          on conflict (mbid) do update
+          set canonical_name = excluded.canonical_name,
+              sort_name = excluded.sort_name,
+              preferred_native_name = excluded.preferred_native_name,
+              artist_kind = excluded.artist_kind,
+              disambiguation = excluded.disambiguation,
+              discogs_artist_id = excluded.discogs_artist_id,
+              refreshed_at = excluded.refreshed_at,
+              updated_at = excluded.updated_at
+          returning true as refreshed
         )
-        select artist_mbid, %(canonical_name)s, %(sort_name)s,
-               %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-               %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
-        from matched_artist
-        on conflict (mbid) do update
-        set canonical_name = excluded.canonical_name,
-            sort_name = excluded.sort_name,
-            preferred_native_name = excluded.preferred_native_name,
-            artist_kind = excluded.artist_kind,
-            disambiguation = excluded.disambiguation,
-            discogs_artist_id = excluded.discogs_artist_id,
-            refreshed_at = excluded.refreshed_at,
-            updated_at = excluded.updated_at
-        returning true as refreshed;
+        update library.local_artist_musicbrainz_matches matches
+        set last_verified_at = %(observed_at)s,
+            updated_at = %(observed_at)s
+        from active_library, refreshed_artist
+        where matches.library_id = active_library.library_id
+          and matches.local_artist_id = %(local_artist_id)s
+          and matches.state = 'matched'
+          and matches.artist_mbid = %(artist_mbid)s::uuid
+        returning refreshed_artist.refreshed;
     """
 
 

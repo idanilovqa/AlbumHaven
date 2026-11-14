@@ -3600,7 +3600,7 @@ async function postMusicBrainzArtistAction(item, path, body, method = 'POST') {
   return payload;
 }
 
-async function runMusicBrainzArtistMutation(item, perform, successMessage) {
+async function runMusicBrainzArtistMutation(item, perform, successMessage, { refreshSurvivingDetail = false } = {}) {
   const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});
   if (ui.busy) return;
   ui.busy = true;
@@ -3629,7 +3629,12 @@ async function runMusicBrainzArtistMutation(item, perform, successMessage) {
           // The bounded poll can recover from a transient status request failure.
         }
       }
-      await loadProblematicFiles(true, { preserveSelectedDetail: true });
+      const refreshedProblems = await loadProblematicFiles(true, { preserveSelectedDetail: true });
+      const refreshedItem = Array.isArray(refreshedProblems)
+        ? refreshedProblems.find((problem) => problem.key === item.key) : null;
+      if (refreshedItem && refreshSurvivingDetail) {
+        await loadMusicBrainzArtistProblemDetail(refreshedItem, { force: true, render: false });
+      }
     } else {
       await loadProblematicFiles(true);
     }
@@ -3715,7 +3720,12 @@ function handleMusicBrainzArtistProblemEvent(event) {
   const detail = item.musicbrainz_detail || {};
   if (target?.closest?.('[data-musicbrainz-retry]')) {
     event.preventDefault();
-    void runMusicBrainzArtistMutation(item, () => postMusicBrainzArtistAction(item, 'retry', {}), 'MusicBrainz retry queued.');
+    void runMusicBrainzArtistMutation(
+      item,
+      () => postMusicBrainzArtistAction(item, 'retry', {}),
+      'MusicBrainz retry queued.',
+      { refreshSurvivingDetail: true },
+    );
     return true;
   }
   if (target?.closest?.('[data-musicbrainz-keep-current]')) {

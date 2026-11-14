@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.7 - 2026-11-14
+
+- Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.
+
 ## 0.11.6 - 2026-11-14
 
 - Serialized shared MusicBrainz artist projection writes by MBID so concurrent matches for differently spelled local artists cannot collide while replacing aliases, country, and genre labels.

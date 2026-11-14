@@ -190,7 +190,7 @@ def test_processor_claims_one_lease_then_calls_provider_outside_repository_opera
 
     result = processor.process_next(worker_id="worker-a")
 
-    assert result == {"processed": True, "state": "succeeded", "job_id": 17}
+    assert result == {"processed": True, "state": "succeeded", "job_id": 17, "local_artist_id": 41}
     assert resolver.calls[0][0] == repository.contexts[17]
     assert repository.automatic_outcomes[0]["artist"]["mbid"] == ARTIST_MBID
     assert repository.completed[0]["state"] == "succeeded"

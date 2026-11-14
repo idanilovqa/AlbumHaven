@@ -319,7 +319,7 @@ class MusicBrainzArtistEnrichmentProcessor:
             observed_at=observed_at,
             preserve_existing=bool(context.get("existing_artist_mbid")),
         )
-        return {"processed": True, "state": terminal_state, "job_id": job_id}
+        return {"processed": True, "state": terminal_state, "job_id": job_id, "local_artist_id": local_artist_id}
 
 
 # Bounds per artist, so one artist can never stall the queue: every mirror

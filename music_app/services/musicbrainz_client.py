@@ -240,6 +240,17 @@ def _transport_classification(metadata: JsonDict, *, discovered_by_search: bool 
     return "invalid_response"
 
 
+def _artist_credit(value: object) -> list[JsonDict]:
+    """An artist credit as MusicBrainz orders it: each credited name, its artist and the
+    join phrase after it ("Alan Menken" " & " "Howard Ashman")."""
+    return [
+        {"name": _text(credit.get("name")), "artist_mbid": _valid_mbid(credit["artist"].get("id")),
+         "artist_name": _text(credit["artist"].get("name")), "join_phrase": _text(credit.get("joinphrase"))}
+        for credit in value or [] if isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
+        and _valid_mbid(credit["artist"].get("id"))
+    ] if isinstance(value, list) else []
+
+
 def _candidate(payload: object) -> JsonDict | None:
     if not isinstance(payload, dict) or "title" in payload:
         return None
@@ -509,6 +520,78 @@ class MusicBrainzClient:
                 if isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
                 and _valid_mbid(credit["artist"].get("id"))
             ],
+        }}
+
+    def lookup_release_group(self, release_group_mbid: object) -> JsonDict:
+        """A release group's raw types, first-release date and genres (most votes first)."""
+        normalized = _valid_mbid(release_group_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "genres", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release-group/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        genres = [
+            {"name": _text(genre.get("name")), "count": _integer(genre.get("count"))}
+            for genre in payload.get("genres") or [] if isinstance(genre, dict) and _text(genre.get("name"))
+        ]
+        return {"classification": "complete", "release_group": {
+            "id": normalized, "title": _text(payload.get("title")),
+            "primary_type": _text(payload.get("primary-type")) or None,
+            "secondary_types": [_text(kind) for kind in payload.get("secondary-types") or [] if _text(kind)],
+            "first_release_date": _text(payload.get("first-release-date")) or None,
+            "disambiguation": _text(payload.get("disambiguation")) or None,
+            "genres": sorted(genres, key=lambda genre: (-genre["count"], genre["name"].casefold())),
+        }}
+
+    def original_release_id(self, release_group_mbid: object) -> JsonDict:
+        """The release group's original release: the earliest dated official release
+        (undated and unofficial ones only when nothing else exists)."""
+        group = _valid_mbid(release_group_mbid)
+        if not group:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"release-group": group, "fmt": "json", "limit": 100})
+        payload, transport = self.get_json(f"{self.base_url}/release?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        releases = [release for release in payload.get("releases") or []
+                    if isinstance(release, dict) and _valid_mbid(release.get("id"))]
+        if not releases:
+            return {"classification": "not_found"}
+        original = min(releases, key=lambda release: (
+            _text(release.get("status")) != "Official", not _text(release.get("date")),
+            _text(release.get("date")), _valid_mbid(release.get("id"))))
+        return {"classification": "complete", "release_id": _valid_mbid(original.get("id"))}
+
+    def lookup_release_tracklist(self, release_mbid: object) -> JsonDict:
+        """One release's media with every track and its artist credit, for the main-album
+        end and the track artists shown in place of unreadable tags."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "recordings artist-credits release-groups", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        group = payload.get("release-group") if isinstance(payload.get("release-group"), dict) else {}
+        media = []
+        for medium in payload.get("media") or []:
+            if not isinstance(medium, dict):
+                continue
+            media.append({
+                "position": _integer(medium.get("position")), "title": _text(medium.get("title")) or None,
+                "format": _text(medium.get("format")) or None, "track_count": _integer(medium.get("track-count")),
+                "tracks": [{"position": _integer(track.get("position")), "title": _text(track.get("title")),
+                            "length": _integer(track.get("length")) or None,
+                            "artist_credit": _artist_credit(track.get("artist-credit"))}
+                           for track in medium.get("tracks") or [] if isinstance(track, dict)],
+            })
+        return {"classification": "complete", "release": {
+            "id": normalized, "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
+            "country": _text(payload.get("country")) or None, "barcode": _text(payload.get("barcode")) or None,
+            "status": _text(payload.get("status")) or None, "disambiguation": _text(payload.get("disambiguation")) or None,
+            "release_group_id": _valid_mbid(group.get("id")),
+            "artist_credit": _artist_credit(payload.get("artist-credit")), "media": media,
         }}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:

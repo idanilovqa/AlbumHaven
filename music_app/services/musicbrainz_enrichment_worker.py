@@ -14,6 +14,13 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     MusicBrainzEnrichmentPostgresRepository,
 )
 from music_app.services.musicbrainz_http import _set_block
+from music_app.services.musicbrainz_release_identity import (
+    ArtistThenAlbumProcessor,
+    MusicBrainzAlbumReleaseProcessor,
+)
+from music_app.services.musicbrainz_release_identity_postgres import (
+    MusicBrainzReleaseIdentityPostgresRepository,
+)
 
 
 class MusicBrainzEnrichmentWorker:
@@ -135,10 +142,16 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
         base_url=str(config.get("MUSICBRAINZ_BASE_URL") or ""),
         user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven"),
     )
-    processor = MusicBrainzArtistEnrichmentProcessor(
-        repository=repository,
-        client=client,
-        resolve_artist=resolve_artist,
+    processor = ArtistThenAlbumProcessor(
+        MusicBrainzArtistEnrichmentProcessor(
+            repository=repository,
+            client=client,
+            resolve_artist=resolve_artist,
+        ),
+        MusicBrainzAlbumReleaseProcessor(
+            repository=MusicBrainzReleaseIdentityPostgresRepository(config),
+            client=client,
+        ),
     )
     return MusicBrainzEnrichmentWorker(
         processor=processor,

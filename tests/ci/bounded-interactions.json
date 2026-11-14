@@ -1799,14 +1799,48 @@
         "js:music_app/static/js/runtime/date-range-picker.js#mountDateRangePicker:event:scroll"
       ],
       "owners": [
-        "music_app/static/js/runtime/date-range-picker.js"
+        "music_app/static/js/runtime/date-range-picker.js",
+        "music_app/static/js/runtime/trigger-anchor.js",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/admin-members.js",
+        "music_app/static/js/unfolding-action-button.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js",
+        "music_app/static/js/admin-server.js",
+        "music_app/static/js/runtime/browser-dialog-helpers.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/runtime/status-ui-helpers.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "domQueries": 0,
+        "domMutations": 70,
+        "renderCommits": 0,
+        "nodesCreated": 0,
+        "listeners": 0,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "domMutations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/date-range-picker.test.js",
+      "testIdentity": "bounded interaction: page scroll repositions the open calendar beside 1,000 log rows",
+      "performanceTargets": [],
+      "rollback": "Test-only registration; scrolling already repositions only the open calendar against its trigger, so removing the contract changes no product behavior."
     },
     {
       "id": "js:runtime/discovery-center-navigation.js#create",

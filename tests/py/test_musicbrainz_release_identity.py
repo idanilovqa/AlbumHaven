@@ -16,7 +16,6 @@ from music_app.services.musicbrainz_release_identity import (
     local_discs,
     main_disc_count,
     resolve_album_releases,
-    resulting_type,
 )
 from tests.py.musicbrainz_test_mirror import OK, group_id, release_groups_payload
 
@@ -111,16 +110,6 @@ def test_a_readable_track_artist_or_another_title_is_never_replaced():
     assert display_track_artists([{"title": "Opening", "artist": "Someone", "disc_number": 1, "track_number": 1},
                                   {"title": "Not Closing", "artist": "??", "disc_number": 1, "track_number": 2}],
                                  RELEASE) == []
-
-
-# Resulting type ---------------------------------------------------------------------------
-
-def test_the_resulting_type_joins_primary_and_secondary_types():
-    assert resulting_type("Album", ["Live", "Compilation"]) == "Album + Live + Compilation"
-
-
-def test_no_type_shows_nothing():
-    assert resulting_type(None, []) is None
 
 
 # Release decisions on album evidence ------------------------------------------------------

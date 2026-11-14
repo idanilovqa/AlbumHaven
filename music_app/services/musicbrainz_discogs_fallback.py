@@ -136,7 +136,7 @@ def _match_albums(candidate, albums, local_name, discogs, budget) -> list[dict[s
             if album_level(agreement, signals) == "strong" and _CERTAIN <= signals:
                 matched.append({"local_album_id": album.get("id"), "local_title": album["title"],
                                 "discogs_release_id": release["id"], "discogs_master_id": release.get("master_id"),
-                                "discogs_title": release["title"],
+                                "discogs_title": release["title"], "discogs_year": release.get("year"),
                                 "barcodes": release["barcodes"], "signals": sorted(signals),
                                 "tracks": release["tracks"]})
                 break

@@ -121,10 +121,15 @@ class DiscogsFallbackPostgresRepository(EnrichmentJobQueue):
                     connection.execute(_UPSERT_RELEASE, {
                         "id": int(album["discogs_release_id"]), "master_id": album.get("discogs_master_id"),
                         "title": _bounded_text(album.get("discogs_title") or album.get("local_title"), 1024) or "[untitled]",
-                        "release_year": None, "barcodes": list(album.get("barcodes") or [])[:20],
+                        "release_year": _year(album.get("discogs_year")), "barcodes": list(album.get("barcodes") or [])[:20],
                         "tracks": json.dumps(album.get("tracks") or []), "observed_at": observed})
                 row = connection.execute(_RECORD, params).fetchone()
         return bool(_row_mapping(row).get("requeued"))
+
+
+def _year(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text if len(text) == 4 and text.isdigit() and text != "0000" else None
 
 
 def _hint(hint: dict[str, object]) -> dict[str, object]:

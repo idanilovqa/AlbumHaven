@@ -42,8 +42,8 @@ RELEASE_MATCHER_VERSION = 1
 # Per artist group: the shared browses plus, per album, its tracklists and the lookups of
 # the chosen release group and release.
 _BASE_REQUESTS = 40
-_REQUESTS_PER_ALBUM = 6
-_MAX_REQUESTS = 400
+_REQUESTS_PER_ALBUM = 10
+_MAX_REQUESTS = 800
 _CERTAIN_SIGNALS = frozenset({"track_list", "track_count"})
 
 DIAGNOSTICS = {
@@ -240,14 +240,6 @@ def display_track_artists(local_tracks: list[dict[str, object]], release: dict[s
                           "track_number": int(track.get("track_number") or 0), "artist": text,
                           "artist_mbids": [part["artist_mbid"] for part in remote.get("artist_credit") or []]})
     return shown
-
-
-def resulting_type(primary_type: object, secondary_types: list[object] | None) -> str | None:
-    """The type shown for a local release: the primary type, then its secondary types
-    ("Album + Live"). Raw values are stored as MusicBrainz gives them."""
-    parts = [str(primary_type)] if primary_type else []
-    parts += [str(kind) for kind in secondary_types or [] if kind]
-    return " + ".join(parts) or None
 
 
 class MusicBrainzAlbumReleaseProcessor:

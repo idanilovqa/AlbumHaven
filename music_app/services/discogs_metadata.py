@@ -58,18 +58,6 @@ class DiscogsMetadataClient:
             {"id": int(item["id"]), "name": artist_name(item.get("title"))}
             for item in found["payload"].get("results") or [] if isinstance(item, dict) and item.get("id")]}
 
-    def search_releases(self, *, title: str | None = None, artist: str | None = None, barcode: str | None = None,
-                        limit: int = 10) -> JsonDict:
-        found = self._get("/database/search", type="release", release_title=title, artist=artist, barcode=barcode,
-                          per_page=limit)
-        if found["classification"] != "complete":
-            return found
-        return {"classification": "complete", "releases": [
-            {"id": int(item["id"]), "title": str(item.get("title") or ""), "year": str(item.get("year") or "") or None,
-             "master_id": int(item["master_id"]) if str(item.get("master_id") or "").isdigit() and
-             int(item["master_id"]) else None}
-            for item in found["payload"].get("results") or [] if isinstance(item, dict) and item.get("id")]}
-
     def artist(self, artist_id: int) -> JsonDict:
         found = self._get(f"/artists/{int(artist_id)}")
         if found["classification"] != "complete":
@@ -80,7 +68,6 @@ class DiscogsMetadataClient:
             "real_name": str(payload.get("realname") or "").strip() or None,
             "name_variations": [str(name).strip() for name in payload.get("namevariations") or [] if str(name).strip()],
             "aliases": _credits(payload.get("aliases")),
-            "urls": [str(url) for url in payload.get("urls") or [] if str(url).startswith("http")],
         }}
 
     def artist_releases(self, artist_id: int, *, max_pages: int = 2, per_page: int = 100) -> JsonDict:

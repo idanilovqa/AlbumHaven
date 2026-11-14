@@ -227,7 +227,7 @@
     },
     {
       "id": "js:app-copy-worker.js#asset",
-      "action": "fetch requests installed by asset",
+      "action": "Load one unversioned static asset with a copy holding other assets",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#asset:request:fetch"
       ],
@@ -239,11 +239,41 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/static/*",
+          "/static/*/*",
+          "/static/*/*/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: an unversioned asset request reaches only that asset",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#cover",
-      "action": "fetch requests installed by cover",
+      "action": "Load one gallery cover with a copy holding other covers",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#cover:request:fetch"
       ],
@@ -255,11 +285,39 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/cover"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: a cover request reaches only that cover, whatever the kept covers",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#fetchPage",
-      "action": "fetch requests installed by fetchPage",
+      "action": "Navigate to the app page without a fresh copy, then to it again and to unrelated pages",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#fetchPage:request:fetch"
       ],
@@ -271,11 +329,39 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 5,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: app page navigations fetch only the app page, once per missing copy",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#fillCovers",
-      "action": "fetch requests installed by fillCovers",
+      "action": "Save the current view: keep its page and fill one batch of its unseen covers",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#fillCovers:request:fetch"
       ],
@@ -286,12 +372,40 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "background-batch",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/cover"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 5,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 121
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 120
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: saving the view fetches its page once and at most one batch of unseen covers",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#versionedAsset",
-      "action": "fetch requests installed by versionedAsset",
+      "action": "Load a versioned static asset twice and an already kept one",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#versionedAsset:request:fetch"
       ],
@@ -303,7 +417,37 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/static/*",
+          "/static/*/*",
+          "/static/*/*/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: a versioned asset is fetched once and then served from the copy",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy.js#ask",

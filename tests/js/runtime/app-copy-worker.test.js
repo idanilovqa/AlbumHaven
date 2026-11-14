@@ -522,3 +522,130 @@ test('copies of a day ago show; the age check uses the time the copy was kept', 
 
   assert.equal(calls.length, 1);
 });
+
+// Request-capture contracts (tests/ci/bounded-interactions.json): the real worker routes every
+// kind of browser request; only its owned endpoints may reach the network, each at most once.
+const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
+
+const UNOWNED_REQUESTS = [
+  navigation('/account'), navigation('/admin/members'), resource('/view-data?surface=albums'), resource('/home-data'),
+  resource('/status'), resource('/utilities/edit-tags', 'POST'), { url: 'https://example.org/cover?path=x', method: 'GET', mode: 'no-cors' },
+];
+
+function coveredPage(covers) {
+  const images = Array.from({ length: covers }, (_, index) => (
+    `<img src="/cover?path=${encodeURIComponent(`/srv/music/${index}/cover.jpg`)}&amp;size=480&amp;v=process-abc">`
+  )).join('');
+  return page('acct-a', { body: images });
+}
+
+function capturedWorker(covers) {
+  const capture = createRequestCapture((url) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/') return coveredPage(covers);
+    if (pathname === '/cover') return coverResponse(4);
+    return new Response('asset', { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+  });
+  const worker = createAppCopyWorker({ caches: fakeCaches(), fetch: capture.fetch, origin: ORIGIN, now: () => 1_000_000 });
+  const handle = async (request) => {
+    const route = worker.route(request);
+    return route ? worker.handle(route, request) : null;
+  };
+  const paths = () => capture.urls().map((url) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, ORIGIN);
+    return `${parsed.pathname}${parsed.search}`;
+  });
+  return { capture, worker, handle, paths };
+}
+
+async function measureCaptured(captured, action) {
+  const before = captured.capture.requests.length;
+  const metrics = await captured.capture.counter.measure(action);
+  return { metrics, paths: captured.paths().slice(before) };
+}
+
+test('request capture: app page navigations fetch only the app page, once per missing copy', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#fetchPage', async (covers) => {
+    const captured = capturedWorker(covers);
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(navigation('/'));
+      await captured.handle(navigation('/'));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, ['/']);
+    assertInteractionRequests('js:app-copy-worker.js#fetchPage', paths);
+    return metrics;
+  });
+});
+
+test('request capture: a versioned asset is fetched once and then served from the copy', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#versionedAsset', async (keptAssets) => {
+    const captured = capturedWorker(1);
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptAssets; index += 1) {
+      await captured.handle(resource(`/static/js/runtime/kept-${index}.js?v=v1`));
+    }
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(resource('/static/js/runtime/app.js?v=v1'));
+      await captured.handle(resource('/static/js/runtime/app.js?v=v1'));
+      await captured.handle(resource('/static/js/runtime/kept-0.js?v=v1'));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, ['/static/js/runtime/app.js?v=v1']);
+    assertInteractionRequests('js:app-copy-worker.js#versionedAsset', paths);
+    return metrics;
+  });
+});
+
+test('request capture: an unversioned asset request reaches only that asset', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#asset', async (keptAssets) => {
+    const captured = capturedWorker(1);
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptAssets; index += 1) await captured.handle(resource(`/static/images/kept-${index}.svg`));
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(resource('/static/fonts/inter.woff2'));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, ['/static/fonts/inter.woff2']);
+    assertInteractionRequests('js:app-copy-worker.js#asset', paths);
+    return metrics;
+  });
+});
+
+test('request capture: a cover request reaches only that cover, whatever the kept covers', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#cover', async (keptCovers) => {
+    const captured = capturedWorker(1);
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptCovers; index += 1) {
+      await captured.handle(resource(`/cover?path=${encodeURIComponent(`/srv/music/kept-${index}.jpg`)}&size=480`));
+    }
+    const cover = `/cover?path=${encodeURIComponent('/srv/music/next.jpg')}&size=480&v=process-abc`;
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(resource(cover));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, [cover]);
+    assertInteractionRequests('js:app-copy-worker.js#cover', paths);
+    return metrics;
+  });
+});
+
+test('request capture: saving the view fetches its page once and at most one batch of unseen covers', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#fillCovers', async (covers) => {
+    const captured = capturedWorker(covers);
+    const { metrics, paths } = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
+    const [pagePath, ...coverPaths] = paths;
+    assert.equal(pagePath, '/');
+    assert.equal(coverPaths.length, Math.min(covers, 120));
+    assert.equal(new Set(coverPaths).size, coverPaths.length, 'each unseen cover is fetched once');
+    assertInteractionRequests('js:app-copy-worker.js#fetchPage', [pagePath]);
+    assertInteractionRequests('js:app-copy-worker.js#fillCovers', coverPaths);
+    // The next save continues with the next batch; a kept cover is never fetched again.
+    const repeat = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
+    assert.equal(repeat.paths[0], '/');
+    assert.equal(repeat.paths.length - 1, Math.min(Math.max(covers - 120, 0), 120));
+    assert.equal(repeat.paths.slice(1).some(path => coverPaths.includes(path)), false);
+    return metrics;
+  });
+});

@@ -15,7 +15,7 @@ def build_cover_refresh_jobs(
     cover_cache=None,
     logger=None,
 ) -> list[dict[str, object]]:
-    jobs_by_folder: dict[str, dict[str, object]] = {}
+    jobs_by_folder: dict[tuple[object, ...], dict[str, object]] = {}
     skipped_folders: list[dict[str, object]] = []
     cover_needs_fetch: dict[tuple[str, str | None, int], bool] = {}
     query_keys: dict[tuple[str, str, str | None, int | None], str] = {}
@@ -37,15 +37,30 @@ def build_cover_refresh_jobs(
             if isinstance(entry.get("album_id"), int) and entry["album_id"] > 0
             else None
         )
+        entry_artist = str(entry.get("album_artist") or entry.get("artist") or "").strip()
+        entry_album = str(entry.get("album") or "").strip()
+        entry_edition = str(entry.get("edition") or "").strip()
+        entry_year = entry.get("year") if isinstance(entry.get("year"), int) else None
+        album_identity = (
+            ("id", entry_album_id)
+            if entry_album_id is not None
+            else (
+                "tags",
+                entry_artist.casefold(),
+                entry_album.casefold(),
+                entry_edition.casefold(),
+                entry_year,
+            )
+        )
         job = jobs_by_folder.setdefault(
-            folder_key,
+            (folder_key, *album_identity),
             {
                 "folder": folder,
                 "track_paths": [],
-                "artist": "",
-                "album": "",
-                "edition": "",
-                "year": None,
+                "artist": entry_artist,
+                "album": entry_album,
+                "edition": entry_edition,
+                "year": entry_year,
                 "album_id": entry_album_id,
                 "cover_selection_origin": None,
                 "cover_selection_provenance": None,
@@ -63,14 +78,6 @@ def build_cover_refresh_jobs(
         track_paths = job.get("track_paths")
         if isinstance(track_paths, list):
             track_paths.append(raw_path)
-        if not job.get("artist"):
-            job["artist"] = str(entry.get("album_artist") or entry.get("artist") or "").strip()
-        if not job.get("album"):
-            job["album"] = str(entry.get("album") or "").strip()
-        if not job.get("edition"):
-            job["edition"] = str(entry.get("edition") or "").strip()
-        if job.get("year") is None and isinstance(entry.get("year"), int):
-            job["year"] = entry.get("year")
         if job.get("album_id") is None and entry_album_id is not None:
             for field in (
                 "selected_cover_path",

@@ -2998,6 +2998,35 @@ def test_recovered_cover_durable_batch_does_not_republish_inventory(recovered_co
                    for entry in case.state["file_cache"].values())
 
 
+def test_cover_recovery_failure_is_one_failed_job_not_a_failed_refresh(
+    recovered_cover_case,
+    monkeypatch,
+):
+    case = recovered_cover_case
+    scan_error = case.state.get("last_error")
+    broken_job = {**case.job, "album": "Broken"}
+    healthy_job = {**case.job, "album": "Healthy"}
+    recovered = []
+
+    def recover(*, job, **_kwargs):
+        if job["album"] == "Broken":
+            raise RuntimeError("album identity no longer matches")
+        recovered.append(job["album"])
+        return True, False
+
+    monkeypatch.setattr(cover_refresh_execution, "_recover_existing_cover_selection", recover)
+    case.kwargs["jobs"] = [broken_job, healthy_job]
+
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert recovered == ["Healthy"]
+    assert result["processed"] == 2
+    assert result["failed"] == 1
+    assert result["job_results"][0]["reason"] == "cover_selection_recovery_failed"
+    assert case.state["covers_in_progress"] is False
+    assert case.state.get("last_error") == scan_error
+
+
 def test_downloaded_cover_refreshes_stale_dimensions_when_path_and_revision_are_unchanged(recovered_cover_case, monkeypatch):
     case = recovered_cover_case
     revision = cover_refresh_execution.cover_revision_for_path(case.cover)

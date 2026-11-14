@@ -3112,6 +3112,43 @@ test('album context Edit Tags closes the menu before opening the full-album edit
   assert.deepEqual({ ...order[1].options }, { tracksMode: 'all' });
 });
 
+test('album context Edit Tags retains its target across post-save gallery reconciliation', () => {
+  const { context } = createContext();
+  const rightClickedAlbum = {
+    key: 'renamed-album-before-refresh',
+    allowed_actions: { 'library.files.edit_tags': true },
+  };
+  const menu = {
+    dataset: { albumKey: rightClickedAlbum.key },
+    albumContext: rightClickedAlbum,
+  };
+  const action = {
+    getAttribute(name) {
+      return name === 'data-album-card-action' ? 'edit-tags' : '';
+    },
+  };
+  const opened = [];
+  context.document.getElementById = (id) => (id === 'album-card-context-menu' ? menu : null);
+  // Save-task reconciliation can replace the gallery index after the menu is
+  // painted but before the user clicks its action.
+  context.getIndexedAlbum = () => null;
+  context.hideAlbumCardContextMenu = () => {};
+  context.openTagEditor = (album, options) => opened.push({ album, options });
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-album-card-action]' ? action : null;
+      },
+    },
+    preventDefault() {},
+  });
+
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].album, rightClickedAlbum);
+  assert.deepEqual({ ...opened[0].options }, { tracksMode: 'all' });
+});
+
 test('exact artist search immediately highlights the unique rendered sidebar artist', () => {
   const unresolvedRequest = new Promise(() => {});
   const sidebarArtists = [

@@ -322,6 +322,7 @@ test('incomplete problematic summary does not replace a missing existing selecti
       },
     },
     getUtilityModalElements() { return elements; },
+    getAllProblematicItems() { return [boundedAlbum]; },
     getFilteredProblematicAlbums() { return [boundedAlbum]; },
     renderProblemFilterControls() {},
     getSelectedProblematicAlbumFrom() { return null; },
@@ -338,6 +339,11 @@ test('incomplete problematic summary does not replace a missing existing selecti
   assert.equal(context.state.utility.selectedProblematicKey, 'edited-source');
   assert.deepEqual(loadCalls, []);
   assert.match(elements.detail.innerHTML, /Loading problematic albums/);
+
+  context.state.utility.searchQuery = 'art zoyd';
+  context.renderProblematicFiles();
+  assert.match(elements.detail.innerHTML, /Select an entry from the list to see the details/);
+  assert.doesNotMatch(elements.detail.innerHTML, /Loading/);
 });
 
 test('optimistic problematic detail shell defers the ordinary loader to its targeted hydration owner', () => {

@@ -2903,6 +2903,30 @@ test('reconcileCommittedTagEditDestination selects the committed artist and remo
   assert.equal(historyCalls[0].url, '/albums?artist=Overhead');
 });
 
+test('reconcileCommittedTagEditDestination does not turn an automatic search match into an explicit artist selection', async () => {
+  const context = loadHelpers();
+  context.state.view = {
+    ...context.state.view,
+    query: 'ремиксы',
+    selected_artist: 'ДДТ',
+    search_context: { selected_artist_source: 'auto_top_match' },
+  };
+  let refreshCount = 0;
+  context.buildApiUrl = () => '/view-data';
+  context.fetchAndRender = async () => {
+    refreshCount += 1;
+    return false;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'ДДТ',
+    destination_album_key: 'ddt::remixes',
+  }), false);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.view.search_context.selected_artist_source, 'auto_top_match');
+});
+
 test('reconcileCommittedTagEditDestination inserts a newly committed artist into a stale sidebar', async () => {
   const context = loadHelpers();
   const destinationAlbum = {
@@ -4153,11 +4177,13 @@ test('Problematic Files mutation follows the retained source album when a struct
     loaded: true,
     problematicFiles: [unrelatedAlbum, originalAlbum],
     selectedProblematicKey: originalAlbum.key,
+    pinnedProblematicKey: originalAlbum.key,
   };
   context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
   context.renderUtilityModalContent = () => {};
 
   context.claimProblematicSaveTaskMutation('structural-key-change', originalAlbum);
+  assert.equal(context.state.utility.pinnedProblematicKey, '', 'the mutation refresh must be allowed to remove the stale key');
   context.state.utility.problematicFiles = [unrelatedAlbum, retainedAlbum];
   await context.settleProblematicSaveTaskMutation('structural-key-change', { reconcileSelection: true });
 
@@ -8301,13 +8327,13 @@ test('Problematic Files keeps complete filter types while a bounded refresh is p
   const { context } = loadProblematicTrackNavigationHelpers();
   context.state.utility.problematicFilesComplete = true;
   context.state.utility.problematicFiles = [
-    { problem_reasons: ['Missing year'] },
-    { problem_reasons: ['Poor art quality'] },
+    { key: 'missing-year', problem_reasons: ['Missing year'] },
+    { key: 'poor-art', problem_reasons: ['Poor art quality'] },
   ];
   assert.deepEqual(Array.from(context.getProblemReasonTypes()), ['Missing year', 'Poor art quality']);
 
   context.state.utility.problematicFilesComplete = false;
-  context.state.utility.problematicFiles = [{ problem_reasons: ['Missing year'] }];
+  context.state.utility.problematicFiles = [{ key: 'missing-year', problem_reasons: ['Missing year'] }];
   assert.deepEqual(Array.from(context.getProblemReasonTypes()), ['Missing year', 'Poor art quality']);
   const elements = {
     problemFilterButton: { classList: { toggle() {} }, setAttribute() {} },

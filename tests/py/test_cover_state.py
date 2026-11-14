@@ -48,6 +48,27 @@ def _write_jpeg(path: Path, color: tuple[int, int, int], *, size: tuple[int, int
     path.write_bytes(buffer.getvalue())
 
 
+def test_cover_gallery_serializes_authoritative_unicode_path_sort_key(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(album_root / "z.jpg", (220, 40, 40))
+    _write_jpeg(album_root / "ß.jpg", (40, 40, 220))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert [item["relative_path"] for item in payload["local_covers"]] == ["ß.jpg", "z.jpg"]
+    assert [item["sort_relative_path"] for item in payload["local_covers"]] == ["ss.jpg", "z.jpg"]
+
+
 def test_cover_gallery_excludes_managed_preview_files(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     track_path = album_root / "song.mp3"
@@ -101,6 +122,7 @@ def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path
             "path": str(active_cover),
             "filename": active_cover.name,
             "relative_path": active_cover.name,
+            "sort_relative_path": active_cover.name,
             "width": 12,
             "height": 12,
             "resolution": "12x12",

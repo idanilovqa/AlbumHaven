@@ -3080,6 +3080,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
     apply_calls: list[dict[str, object]] = []
+    persist_calls: list[dict[str, object]] = []
     actioned_track_paths: list[set[str]] = []
 
     def fake_apply_cover_path_for_tracks(track_paths, cover_path, **kwargs):
@@ -3092,15 +3093,30 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
                 "library_state": kwargs.get("library_state"),
                 "schedule_cache_update": kwargs.get("schedule_cache_update"),
                 "include_problematic_album": kwargs.get("include_problematic_album"),
+                "selected_local_cover_source_path": kwargs.get(
+                    "selected_local_cover_source_path"
+                ),
             }
         )
         return [{"tracks": [{"path": str(track_path), "cover_path": str(cover_path) if cover_path else None}]}], None
 
     monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", fake_apply_cover_path_for_tracks)
+    def fake_persist_cover_selection_for_tracks(track_paths, cover_path, **kwargs):
+        persist_calls.append(
+            {
+                "track_paths": set(track_paths),
+                "cover_path": cover_path,
+                "selected_local_cover_source_path": kwargs.get(
+                    "selected_local_cover_source_path"
+                ),
+            }
+        )
+        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
+
     monkeypatch.setattr(
         asgi_routes,
         "persist_cover_selection_for_tracks",
-        lambda *_args, **_kwargs: {"album_rows_updated": 1, "track_file_rows_updated": 1},
+        fake_persist_cover_selection_for_tracks,
     )
     monkeypatch.setattr(
         asgi_routes,
@@ -3187,6 +3203,8 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert pasted_success_payload["ok"] is True
     assert pasted_success_payload["selected_cover_path"] == str(track_path.parent / "cover.jpg")
     assert "gallery" not in pasted_success_payload
+    assert persist_calls[-1]["selected_local_cover_source_path"] == track_path.parent / "cover.jpg"
+    assert apply_calls[-1]["selected_local_cover_source_path"] == track_path.parent / "cover.jpg"
     assert actioned_track_paths == [{str(track_path)}]
     assert apply_calls == [
         {
@@ -3197,6 +3215,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "library_state": asgi_app.state.library_state,
             "schedule_cache_update": False,
             "include_problematic_album": False,
+            "selected_local_cover_source_path": selected_image,
         },
         {
             "track_paths": {str(track_path)},
@@ -3206,6 +3225,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "library_state": asgi_app.state.library_state,
             "schedule_cache_update": False,
             "include_problematic_album": None,
+            "selected_local_cover_source_path": None,
         },
         {
             "track_paths": {str(track_path)},
@@ -3215,6 +3235,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
             "library_state": asgi_app.state.library_state,
             "schedule_cache_update": False,
             "include_problematic_album": None,
+            "selected_local_cover_source_path": track_path.parent / "cover.jpg",
         },
     ]
     assert select_status == 400
@@ -3377,6 +3398,81 @@ def test_asgi_cover_lookup_delete_final_local_cover_persistence_failure_restores
     assert cover_path.read_bytes() == cover_bytes
     assert app.library_state == runtime_state_before
     assert apply_calls == []
+
+
+def test_asgi_pasted_cover_invalidation_failure_keeps_committed_identity(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    _seed_album_state(app.library_state, track_path)
+    cover_path = track_path.parent / "cover.jpg"
+    persist_calls: list[tuple[set[str], object, object]] = []
+    apply_calls: list[tuple[set[str], object, object]] = []
+    invalidation_attempts: list[list[object]] = []
+    scheduled_retries: list[list[object]] = []
+
+    def persist(track_paths, selected_cover_path, **kwargs):
+        persist_calls.append(
+            (
+                set(track_paths),
+                selected_cover_path,
+                kwargs.get("selected_local_cover_source_path"),
+            )
+        )
+        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
+
+    def apply(track_paths, selected_cover_path, **kwargs):
+        apply_calls.append(
+            (
+                set(track_paths),
+                selected_cover_path,
+                kwargs.get("selected_local_cover_source_path"),
+            )
+        )
+        return ([{
+            "tracks": [{"path": str(track_path), "cover_path": str(selected_cover_path)}],
+            "cover_path": str(selected_cover_path),
+            "cover_revision": kwargs.get("cover_revision"),
+        }], None)
+
+    class FailingInventoryWorker:
+        def invalidate_paths(self, paths):
+            invalidation_attempts.append(list(paths))
+            raise RuntimeError("inventory database unavailable")
+
+        def schedule_invalidation_retry(self, paths):
+            scheduled_retries.append(list(paths))
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", persist)
+    monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", apply)
+    monkeypatch.setattr(
+        asgi_routes,
+        "mark_cover_lookup_notifications_action_taken_for_track_paths",
+        lambda *_args, **_kwargs: [],
+    )
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.local_cover_inventory = FailingInventoryWorker()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/pasted-image-save",
+        json_body={"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))},
+    )
+
+    payload = _decode_json(body)
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["selected_cover_path"] == str(cover_path)
+    assert payload["updated_album"]["cover_path"] == str(cover_path)
+    assert payload["updated_album"]["cover_revision"] == payload["cover_revision"]
+    assert cover_path.is_file()
+    assert persist_calls == [({str(track_path)}, cover_path, cover_path)]
+    assert apply_calls == [({str(track_path)}, cover_path, cover_path)]
+    assert invalidation_attempts == [[cover_path]]
+    assert scheduled_retries == [[cover_path]]
 
 
 def test_asgi_pasted_cover_persistence_failure_restores_prior_cover_bytes_and_state(app, monkeypatch):

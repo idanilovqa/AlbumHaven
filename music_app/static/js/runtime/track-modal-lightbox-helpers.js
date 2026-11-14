@@ -239,6 +239,12 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
   });
   liveAliases.forEach((alias) => {
     if (state?.gallery?.albumIndex instanceof Map) {
+      const indexedAlbum = state.gallery.albumIndex.get(alias);
+      if (
+        options.tagEditMutationClaim
+        && trackModalAlbumsShareLogicalRelease(indexedAlbum, resolvedAlbum)
+        && !trackModalAlbumsHaveCompatibleMembership(indexedAlbum, resolvedAlbum)
+      ) return;
       state.gallery.albumIndex.set(alias, resolvedAlbum);
     }
   });

@@ -74,6 +74,129 @@ async function mountSearchInput(page, filter = false) {
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/search-input.js') });
 }
 
+async function mountCompoundConnectedFilter(page, surfaceKind) {
+  await mountSearchInput(page, true);
+  if (surfaceKind === 'log-history') {
+    await page.locator('#utility-modal').evaluate(modal => modal.classList.add('utility-modal-dialog'));
+  }
+  await page.locator('html').evaluate((root) => {
+    root.dataset.appearanceMode = 'dark';
+    root.style.setProperty('--appearance-selected-accent', 'rgb(85, 199, 255)');
+    root.style.setProperty('--appearance-card', 'rgb(23, 23, 23)');
+    root.style.setProperty('--appearance-panel-background', 'rgb(23, 23, 23)');
+    root.style.setProperty('--appearance-control', 'rgb(35, 35, 35)');
+    root.style.setProperty('--appearance-line', 'rgb(82, 97, 115)');
+  });
+  await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/runtime/trigger-anchor.css') });
+  // Production loads search-input.css after trigger-anchor.css.
+  await page.addStyleTag({ path: searchInputCssPath });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/trigger-anchor.js') });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/utility-list-builders.js') });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/browser-dialog-helpers.js') });
+  const baseline = await page.locator('.utility-problem-filter-button').evaluate((button, kind) => {
+    button.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4h16l-6 7v7l-4 2v-9L4 4Z"></path></svg>';
+    button.setAttribute('aria-label', kind === 'problematic-files' ? 'Filters' : 'Period');
+    const icon = button.querySelector('svg').getBoundingClientRect();
+    const trigger = button.getBoundingClientRect();
+    const action = button.parentElement.getBoundingClientRect();
+    const control = button.closest('.search-field-control').getBoundingClientRect();
+    return {
+      icon: { x: icon.x, y: icon.y, width: icon.width, height: icon.height },
+      trigger: { x: trigger.x, y: trigger.y, width: trigger.width, height: trigger.height },
+      action: { x: action.x, y: action.y, width: action.width, height: action.height },
+      control: { x: control.x, y: control.y, width: control.width, height: control.height },
+      scrollY: window.scrollY,
+    };
+  }, surfaceKind);
+  await page.locator('.utility-search-row').evaluate((row, kind) => {
+    const button = row.querySelector('.utility-problem-filter-button');
+    window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+    if (kind === 'problematic-files') {
+      const surface = document.createElement('div');
+      surface.className = 'utility-problem-filter-menu';
+      row.append(surface);
+      window.state = { utility: {
+        problematicAlbums: [], problematicFilesComplete: true,
+        completeProblemReasonTypes: ['Album artist mismatch', 'Album not found', 'Missing year'],
+        selectedProblemFilters: ['Album not found'], problemDropdownOpen: true,
+      } };
+      renderProblemFilterControls({ problemFilterButton: button, problemFilterMenu: surface });
+    } else {
+      const portal = document.createElement('div');
+      portal.id = 'app-form-modal';
+      portal.hidden = true;
+      portal.innerHTML = '<div class="confirm-modal-dialog"><h2 id="app-form-title"></h2><p id="app-form-description"></p><div id="app-form-content"></div><p id="app-form-error"></p><button id="app-form-cancel">Cancel</button><button id="app-form-submit">Apply</button></div>';
+      document.body.append(portal);
+      showAppFormDialog({
+        title: 'Date range', anchor: button,
+        contentHtml: '<p>From date</p><p>To date</p>',
+      });
+    }
+  }, surfaceKind);
+  return baseline;
+}
+
+async function readCompoundAnchorPixels(page) {
+  const screenshot = await page.screenshot({ animations: 'disabled' });
+  return page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0);
+    const button = document.querySelector('.utility-problem-filter-button').getBoundingClientRect();
+    const control = document.querySelector('.search-field-control').getBoundingClientRect();
+    const panelElement = document.querySelector('.utility-problem-filter-menu, .confirm-modal-dialog');
+    const panel = panelElement.getBoundingClientRect();
+    const pixel = (x, y) => [...context.getImageData(Math.round(x), Math.round(y), 1, 1).data];
+    const accent = [85, 199, 255];
+    const isAccent = (value) => value.slice(0, 3).every((channel, index) => Math.abs(channel - accent[index]) <= 12);
+    const triggerPerimeter = [];
+    for (let x = Math.floor(button.left) - 2; x <= Math.ceil(button.right) + 1; x += 1) {
+      triggerPerimeter.push(pixel(x, button.top - 1));
+    }
+    for (let y = Math.floor(button.top); y < Math.ceil(button.bottom); y += 1) {
+      triggerPerimeter.push(pixel(button.left - 1, y), pixel(button.right + 1, y));
+    }
+    const unrelatedFieldEdge = [];
+    for (let x = Math.floor(control.left) + 3; x < Math.floor(button.left) - 4; x += 1) {
+      unrelatedFieldEdge.push(pixel(x, control.top));
+    }
+    const icon = document.querySelector('.utility-problem-filter-button svg').getBoundingClientRect();
+    const action = document.querySelector('.search-field-action').getBoundingClientRect();
+    const panelFill = (getComputedStyle(panelElement).backgroundColor.match(/[\d.]+/g) || [])
+      .slice(0, 3).map(Number);
+    const differsFromPanel = value => value.slice(0, 3)
+      .some((channel, index) => Math.abs(channel - panelFill[index]) > 10);
+    const edgeHasStroke = (x, y) => Array.from({ length: 7 }, (_, index) => pixel(x - 3 + index, y))
+      .some(differsFromPanel);
+    const connectorGaps = [];
+    for (let y = Math.ceil(button.top + 4); y <= Math.floor(panel.top + 1); y += 1) {
+      if (!edgeHasStroke(button.left, y) || !edgeHasStroke(button.right, y)) connectorGaps.push(y);
+    }
+    const panelTopGaps = [];
+    for (let x = Math.ceil(panel.left + 2); x < Math.floor(panel.right - 2); x += 1) {
+      if (x >= Math.floor(button.left - 1) && x <= Math.ceil(button.right + 1)) continue;
+      if (![pixel(x, panel.top - 1), pixel(x, panel.top), pixel(x, panel.top + 1)].some(differsFromPanel)) {
+        panelTopGaps.push(x);
+      }
+    }
+    return {
+      icon: { x: icon.x, y: icon.y, width: icon.width, height: icon.height },
+      trigger: { x: button.x, y: button.y, width: button.width, height: button.height },
+      action: { x: action.x, y: action.y, width: action.width, height: action.height },
+      control: { x: control.x, y: control.y, width: control.width, height: control.height },
+      scrollY: window.scrollY,
+      triggerAccentPixels: triggerPerimeter.filter(isAccent).length,
+      unrelatedFieldAccentPixels: unrelatedFieldEdge.filter(isAccent).length,
+      connectorGaps,
+      panelTopGaps,
+    };
+  }, screenshot.toString('base64'));
+}
 for (const filter of [false, true]) {
   const actionName = filter ? 'Filters' : 'Search';
 
@@ -237,9 +360,9 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   expect(geometry.menuLeft).toBeCloseTo(geometry.fieldLeft, 0);
   expect(geometry.menuRight).toBeCloseTo(geometry.fieldRight, 0);
   await expect(page.locator('.utility-problem-filter-menu')).toHaveAttribute('data-trigger-anchor-side', 'none');
-  await expect(page.locator('.search-field-control')).toHaveClass(/trigger-anchor-open/);
-  await expect(page.locator('.utility-problem-filter-button')).not.toHaveClass(/trigger-anchor-open/);
-  await expect(page.locator('.search-field-control')).toHaveCSS('border-bottom-right-radius', '0px');
+  await expect(page.locator('.search-field-control')).not.toHaveClass(/trigger-anchor-open/);
+  await expect(page.locator('.utility-problem-filter-button')).toHaveClass(/trigger-anchor-open/);
+  await expect(page.locator('.utility-problem-filter-button')).toHaveCSS('border-bottom-right-radius', '0px');
   const openGeometry = await page.locator('.utility-problem-filter-button svg').evaluate((icon) => {
     const bounds = icon.getBoundingClientRect();
     return { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
@@ -311,6 +434,28 @@ test('Settings filter dropdown right edge joins its anchor button', async ({ pag
   expect(closedAgainGeometry).toEqual(closedGeometry);
 });
 
+for (const surfaceKind of ['problematic-files', 'log-history']) {
+  test(`${surfaceKind} compound filter visibly outlines only the funnel and keeps its icon stationary`, async ({ page }) => {
+    const baseline = await mountCompoundConnectedFilter(page, surfaceKind);
+    const rendered = await readCompoundAnchorPixels(page);
+
+    expect(rendered.scrollY).toBe(baseline.scrollY);
+    expect(rendered.control).toEqual(baseline.control);
+    expect(rendered.action).toEqual(baseline.action);
+    expect(rendered.trigger).toEqual(baseline.trigger);
+    expect(rendered.icon).toEqual(baseline.icon);
+    expect(
+      rendered.triggerAccentPixels,
+      'the connected accent must visibly enclose the funnel trigger before joining its panel',
+    ).toBeGreaterThan(0);
+    expect(
+      rendered.unrelatedFieldAccentPixels,
+      'the connected accent must not migrate to the enclosing search-field edge',
+    ).toBe(0);
+    expect(rendered.connectorGaps, 'the trigger outline must meet the opened panel on every pixel row').toEqual([]);
+    expect(rendered.panelTopGaps, 'the opened panel top edge must not contain detached fragments').toEqual([]);
+  });
+}
 for (const [name, controlClass, stylesheet, shadow] of [
   ['calendar', 'date-range-picker__control', 'date-range-picker.css', false],
   ['library path', 'ui-path-input', 'button-component.css', false],

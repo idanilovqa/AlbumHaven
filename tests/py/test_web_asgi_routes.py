@@ -146,7 +146,7 @@ def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> 
     )
 
 
-@pytest.mark.parametrize("path", ["/", "/bootstrap-data"])
+@pytest.mark.parametrize("path", ["/albums", "/bootstrap-data"])
 @pytest.mark.parametrize("all_artists", ["1", "true", "0", ""])
 def test_asgi_search_reload_preserves_all_artists_hydration(app, monkeypatch, path, all_artists):
     from music_app.routes import web_asgi

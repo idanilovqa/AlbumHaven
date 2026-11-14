@@ -3385,6 +3385,8 @@ function buildStatusIndicatorTitleParts(data = {}) {
     const scanTotal = Number(data.scan_total || 0);
     const scanProcessed = Number(data.scan_processed || 0);
     const hasScanProgress = scanTotal > 0 || scanProcessed > 0 || Boolean(data.scan_current_path);
+    const standaloneRelationRefresh = scanPhase === 'finalizing' && !data.relations_in_progress;
+    if (standaloneRelationRefresh) parts.push('Refreshing artist relationships');
     if (scanPhase === 'discovering') {
       parts.push('Discovering music files');
       parts.push(`Found so far: ${scanTotal}`);
@@ -3406,7 +3408,7 @@ function buildStatusIndicatorTitleParts(data = {}) {
       if (data.scan_current_path) {
         parts.push(`Current file: ${data.scan_current_path}`);
       }
-    } else {
+    } else if (!standaloneRelationRefresh) {
       parts.push('Preparing library scan');
       parts.push('Discovering music files before progress is available');
     }
@@ -5083,27 +5085,26 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
 }
 
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
-  const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
-    ? artistMusicBrainz
-    : {};
-  const genres = (Array.isArray(projection.genres) ? projection.genres : [])
-    .map((genre) => String(genre || '').trim())
-    .filter(Boolean)
-    .slice(0, 1);
-  const genreHtml = genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
-      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
-  )).join('');
-  return genreHtml;
+  const country = galleryCountryName(artistMusicBrainz?.country);
+  return country
+    ? `<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span></span>`
+    : '';
 }
 
 function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
-  const country = galleryCountryName(artistMusicBrainz?.country);
-  const countryHtml = country
-    ? `<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span></span>`
-    : '';
-  return `${escapeHtml(galleryMainPlural(albumCount, 'album'))}${countryHtml}`;
+  const genres = (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean);
+  const genreHtml = genres.map((genre) => (
+    genre === 'Genre unavailable'
+      ? '<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span></span>'
+      : `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span></span>`
+  )).join('');
+  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${genreHtml}</span>`;
+}
+
+function buildGalleryArtistMobileSummaryHtml(albumCount, artistMusicBrainz = null) {
+  return `${escapeHtml(galleryMainPlural(albumCount, 'album'))}${buildGalleryArtistMetadataHtml(artistMusicBrainz)}`;
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
@@ -5293,7 +5294,10 @@ function buildGalleryBarHtml(config = {}) {
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
   const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
   const summaryHtml = isArtist ? buildGalleryArtistSummaryHtml(config.albumCount, config.artist_musicbrainz) : escapeHtml(summary);
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${summaryHtml}</span></div>
+  const mobileSummaryHtml = isArtist
+    ? buildGalleryArtistMobileSummaryHtml(config.albumCount, config.artist_musicbrainz)
+    : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__artist-mobile-summary" data-gallery-context-mobile-summary${isArtist ? '' : ' hidden'}>${mobileSummaryHtml}</span><span class="gallery-bar__summary" data-gallery-context-summary>${summaryHtml}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -5814,13 +5818,15 @@ function buildAlbumServiceLinksHtml(links = []) {
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   const missing = Boolean(config.missing);
+  const capabilities = typeof window === 'undefined' ? null : window.AlbumHavenCapabilities;
+  const canOpenFolder = !capabilities || capabilities.allows('library.files.open_location');
   const editLabel = missing ? 'Edit album tags unavailable while album is missing' : 'Edit album tags';
   const folderLabel = missing ? 'Open album folder unavailable while album is missing' : 'Open album in File Explorer';
   const editAttributes = { id: 'track-modal-edit-tags' };
   const folderAttributes = { id: 'track-modal-folder' };
   if (!missing) {
     editAttributes['data-open-track-modal-editor'] = '1';
-    folderAttributes['data-open-track-modal-folder'] = '1';
+    if (canOpenFolder) folderAttributes['data-open-track-modal-folder'] = '1';
   }
   return [
     ButtonComponent.renderActionButton({
@@ -5832,7 +5838,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
       attributes: editAttributes,
     }),
-    ButtonComponent.renderActionButton({
+    canOpenFolder ? ButtonComponent.renderActionButton({
       presentation: 'bare',
       ariaLabel: folderLabel,
       title: folderLabel,
@@ -5840,7 +5846,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       className: 'track-modal-folder album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
       attributes: folderAttributes,
-    }),
+    }) : '',
     ButtonComponent.renderActionButton({
       presentation: 'bare',
       ariaLabel: 'Close tracklist',
@@ -5860,6 +5866,12 @@ function buildLooseTracksHeaderActionsHtml() {
     iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
     attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
   });
+}
+
+function buildLooseTracksPageHeaderHtml(config = {}) {
+  const leadingHtml = String(config.leadingHtml || '');
+  const actionsHtml = String(config.actionsHtml || '');
+  return `${leadingHtml}<div class="gallery-bar__context"><h1 class="gallery-bar__title" id="non-album-modal-title">Loose Tracks</h1><p class="gallery-bar__summary" id="non-album-modal-subtitle">${escapeHtml(config.subtitle || '')}</p></div>${actionsHtml ? `<div class="gallery-bar__actions">${actionsHtml}</div>` : ''}`;
 }
 
 const MISSING_ALBUM_REASON_TEXT = {
@@ -6188,6 +6200,22 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+      problematicHasMore: false,
+      problematicNextCursor: '',
+      problematicPageLoadPromise: null,
+      problematicArtistItems: [],
+      problematicArtistHasMore: true,
+      problematicArtistNextCursor: '',
+      problematicArtistLoadPromise: null,
+      problematicServerSearchItems: [],
+      problematicServerSearchRequestToken: 0,
+      problematicServerSearchPendingQuery: '',
+      problematicServerSearchSettledQuery: '',
+      problematicServerSearchHasMore: false,
+      problematicServerSearchNextOffset: 0,
+      problematicServerSearchNextCursor: '',
+      problematicServerSearchLoadPromise: null,
+      problematicServerSearchCache: {},
     completeProblemReasonTypes: [],
     detailLoadPromises: {},
     problematicDiagnostics: {
@@ -7081,9 +7109,7 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
-  const visualAnchor = anchor.matches?.('.search-field-button')
-    ? anchor.closest?.('.search-field-control') || anchor
-    : anchor;
+  const visualAnchor = anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -7405,8 +7431,6 @@ function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   }
   const rect = anchor.getBoundingClientRect();
   surface.dataset.anchorEnvelope = align;
-  surface.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
-  surface.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
   surface.style.top = `${Math.round(rect.bottom - 1)}px`;
   if (align === 'left') {
     const galleryLeft = document.querySelector('[data-gallery-bar]')?.getBoundingClientRect().left ?? rect.left;
@@ -7491,6 +7515,8 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
     ? Math.min(window.innerHeight, Number(playerBounds.top))
     : window.innerHeight;
+  surface.style?.removeProperty?.('--artist-info-panel-max-height');
+  surface.style?.removeProperty?.('--artist-info-body-max-height');
   const requiredOffset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
   const anchorBounds = anchor?.getBoundingClientRect?.();
   const scrollBounds = scroll.getBoundingClientRect?.();
@@ -7500,7 +7526,9 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
   const offset = Math.min(requiredOffset, maximumOffset);
   if (!offset) {
     scroll.style?.removeProperty?.('--artist-info-reveal-space');
-    constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom);
+    if (Number(surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+      constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom);
+    }
     return 0;
   }
   const currentRevealSpace = parseFloat(scroll.style?.getPropertyValue?.('--artist-info-reveal-space')) || 0;
@@ -7517,7 +7545,9 @@ function revealGalleryArtistInfoSurface(surface, anchor) {
     const currentAnchor = resolveCurrentGalleryAnchor(anchor, active?.anchorSectionKey);
     if (active?.surface === surface) active.anchor = currentAnchor;
     positionGalleryAnchoredSurface(surface, currentAnchor, 'left');
-    constrainGalleryArtistInfoSurface(surface, currentAnchor, viewportBottom);
+    if (Number(surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+      constrainGalleryArtistInfoSurface(surface, currentAnchor, viewportBottom);
+    }
   });
   return offset;
 }
@@ -7529,12 +7559,7 @@ function positionArtistFamilyPanelEnvelope(panel, anchor) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const panelTop = mobile ? rect.bottom - 1 : bar?.getBoundingClientRect?.().bottom;
   if (Number.isFinite(panelTop)) panel.style.top = `${Math.round(panelTop)}px`;
-  const top = Number.isFinite(panelTop) ? panelTop : panel.getBoundingClientRect?.().top;
-  panel.style.setProperty?.('--gallery-anchor-gap', `${Math.max(0, Math.round((top || rect.bottom) - rect.bottom))}px`);
   panel.dataset.anchorEnvelope = 'right';
-  panel.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
-  panel.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
-  panel.style.setProperty?.('--gallery-anchor-right', `${Math.max(0, Math.round(window.innerWidth - rect.right))}px`);
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(panel, anchor);
   galleryFamilyPanelObserver?.refresh?.();
 }
@@ -7989,9 +8014,21 @@ function updateGalleryMainControls() {
     // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
     const libraryWide = button.dataset.libraryWide === '1';
     const selectedArtist = String(state.view?.selected_artist || '').trim();
+    const explicitArtist = Boolean(selectedArtist)
+      && String(state.view?.search_context?.selected_artist_source || '').trim() !== 'auto_top_match';
+    if (!libraryWide) {
+      button.hidden = !explicitArtist;
+      if (button.hidden) {
+        button.disabled = true;
+        button.setAttribute('aria-disabled', 'true');
+        button.dataset.searchMatch = 'false';
+        button.setAttribute('aria-description', '');
+        return;
+      }
+    }
     const pendingArtist = String(state.ui?.pendingSidebarSelectedArtist || '').trim();
     const artistSelectionPending = Boolean(pendingArtist && pendingArtist !== selectedArtist);
-    const artistFamily = !libraryWide && selectedArtist && !String(state.view?.query || '').trim();
+    const artistFamily = !libraryWide && selectedArtist;
     const familyCountReady = artistFamily
       && !artistSelectionPending
       && typeof hasHydratedArtistNonAlbumAvailability === 'function'
@@ -8004,8 +8041,9 @@ function updateGalleryMainControls() {
       : scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0);
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-    const matches = typeof hasNonAlbumSearchMatches === 'function'
-      && hasNonAlbumSearchMatches({ libraryWide: button.dataset.libraryWide === '1' });
+    const matches = !artistFamily
+      && typeof hasNonAlbumSearchMatches === 'function'
+      && hasNonAlbumSearchMatches({ libraryWide: libraryWide || !selectedArtist });
     button.dataset.searchMatch = String(Boolean(matches));
     button.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
   });
@@ -8042,10 +8080,12 @@ function hydrateDeferredNonAlbumTracksForAlbumTypes() {
   const searching = Boolean(String(state.view?.query || '').trim());
   const artistSelected = Boolean(String(state.view.selected_artist || '').trim());
   const warn = error => console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
-  if (artistSelected && !searching) {
+  if (artistSelected) {
     if (typeof hydrateArtistNonAlbumAvailability === 'function') {
       void hydrateArtistNonAlbumAvailability().catch(warn);
     }
+  }
+  if (artistSelected && !searching) {
     return;
   }
   if ((!state.view?.non_album_tracks_deferred && !searching) || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
@@ -8166,6 +8206,7 @@ function updateGalleryMainChrome() {
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
+  const mobileSummary = bar.querySelector('[data-gallery-context-mobile-summary]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
@@ -8175,6 +8216,10 @@ function updateGalleryMainChrome() {
   if (metadata) {
     metadata.hidden = true;
     metadata.innerHTML = '';
+  }
+  if (mobileSummary) {
+    mobileSummary.hidden = true;
+    mobileSummary.innerHTML = '';
   }
   if (inlineDivider) inlineDivider.hidden = true;
   if (inlineTotal) {
@@ -8197,6 +8242,10 @@ function updateGalleryMainChrome() {
     if (metadata) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+    }
+    if (mobileSummary) {
+      mobileSummary.hidden = false;
+      mobileSummary.innerHTML = buildGalleryArtistMobileSummaryHtml(context.albumCount, context.artist_musicbrainz);
     }
     if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
@@ -8423,8 +8472,11 @@ function handleGalleryMainClick(event) {
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    const libraryWide = nonAlbum.dataset.libraryWide === '1' || !String(state.view?.selected_artist || '').trim();
-    const artistScopeAvailable = libraryWide || String(state.view?.query || '').trim() || (
+    const libraryWide = nonAlbum.dataset.libraryWide === '1';
+    const explicitArtist = Boolean(String(state.view?.selected_artist || '').trim())
+      && String(state.view?.search_context?.selected_artist_source || '').trim() !== 'auto_top_match';
+    if (!libraryWide && !explicitArtist) return true;
+    const artistScopeAvailable = libraryWide || (
       typeof hasHydratedArtistNonAlbumAvailability === 'function'
       && hasHydratedArtistNonAlbumAvailability()
       && Number(state.view?.non_album_track_count) > 0
@@ -8470,21 +8522,16 @@ function initGalleryMain() {
         }
         if (String(settled.anchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
+          settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
+          settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
           positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
-          const playerBounds = player?.getBoundingClientRect?.();
-          constrainGalleryArtistInfoSurface(
-            settled.surface,
-            settled.anchor,
-            player && !player.hidden && Number(playerBounds?.height || 0) > 0
-              ? Math.min(window.innerHeight, Number(playerBounds.top))
-              : window.innerHeight,
-          );
         } else {
           closeGalleryMainSurface(false);
         }
       }
     });
   }, { passive: true });
+  window.addEventListener('album-haven:artist-tree-settled', updateGalleryMainChrome);
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();
     const active = galleryMainSurfaceController?.current?.();
@@ -8597,16 +8644,33 @@ function createGalleryFamilyPaintController(toggle) {
   };
 }
 
-// Non-artist mobile contexts may wrap long names. Artist headers stay two lines and ellipsize instead.
-// Measure only when the name, context, info button, or window width changes, never on every scroll frame.
+// Non-artist mobile contexts may wrap long names. Artist headers first move controls
+// to the metadata row, then ellipsize only when the full title row still cannot fit.
+// Measure only when visible title content or window width changes, never on every scroll frame.
 function syncGalleryBarNameFit(bar, name) {
   if (!bar?.classList || !name) return;
   const contextKind = String(bar.dataset.galleryContextKind || '');
-  const key = `${name.textContent}|${window.innerWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}|${contextKind}`;
+  const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
+  const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';
+  const key = `${name.textContent}|${metadata}|${summary}|${window.innerWidth}|${bar.clientWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}|${contextKind}`;
   if (bar.dataset.galleryNameFitKey === key) return;
   bar.dataset.galleryNameFitKey = key;
   bar.classList.remove('is-name-wrapping');
-  if (Number(window.innerWidth) > 900 || contextKind === 'artist' || contextKind === 'single-artist') return;
+  bar.classList.remove('is-controls-below');
+  if (contextKind === 'artist' || contextKind === 'single-artist') {
+    if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-controls-below');
+    const genreContainer = bar.querySelector?.('.gallery-bar__artist-genres');
+    const genrePills = Array.from(bar.querySelectorAll?.('.gallery-bar__artist-genre') || []);
+    genrePills.forEach((pill) => { pill.hidden = false; });
+    const right = genreContainer?.getBoundingClientRect?.().right;
+    if (Number.isFinite(right)) {
+      genrePills.forEach((pill) => {
+        if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
+      });
+    }
+    return;
+  }
+  if (Number(window.innerWidth) > 900) return;
   if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-name-wrapping');
 }
 
@@ -15115,6 +15179,7 @@ function hideAlbumCardContextMenu() {
   menu.hidden = true;
   menu.dataset.albumKey = '';
   menu.dataset.menuKind = '';
+  menu.albumContext = null;
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
@@ -15125,6 +15190,7 @@ function showAlbumCardContextMenu(x, y, album) {
   menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   menu.dataset.menuKind = 'album';
+  menu.albumContext = album || null;
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
     ? state.view.manual_version_links
@@ -15532,7 +15598,7 @@ async function fetchNonAlbumPayload(url) {
 function hydrateArtistNonAlbumAvailability() {
   const view = state.view || {};
   const selectedArtist = String(view.selected_artist || '').trim();
-  if (!selectedArtist || String(view.query || '').trim()) return Promise.resolve(0);
+  if (!selectedArtist) return Promise.resolve(0);
   const url = buildArtistNonAlbumRequestUrl(view, { availability: true });
   const scopeKey = getDeferredNonAlbumScopeKey(url);
   if (hasHydratedArtistNonAlbumAvailability(view)) {
@@ -15553,6 +15619,10 @@ function hydrateArtistNonAlbumAvailability() {
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
+    if (String(state.view.query || '').trim()
+        && getVisibleNonAlbumTracks().length !== state.view.non_album_track_count) {
+      state.view.non_album_tracks_deferred = true;
+    }
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_track_count;
   }).finally(() => {
@@ -15640,8 +15710,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   }
   const view = state.view || {};
   const requestedArtist = String(view.selected_artist || '');
-  const familyOnly = Boolean(String(view.selected_artist || '').trim())
-    && !String(view.query || '').trim();
+  const familyOnly = Boolean(String(view.selected_artist || '').trim());
   const requestUrl = familyOnly
     ? buildArtistNonAlbumRequestUrl(view)
     : new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
@@ -15655,8 +15724,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   request.promise = (async () => {
     const payload = await fetchNonAlbumPayload(requestUrl);
     const currentView = state.view || {};
-    const currentFamilyOnly = Boolean(String(currentView.selected_artist || '').trim())
-      && !String(currentView.query || '').trim();
+    const currentFamilyOnly = Boolean(String(currentView.selected_artist || '').trim());
     const currentScopeUrl = currentFamilyOnly
       ? buildArtistNonAlbumRequestUrl(currentView)
       : new URL(buildApiUrl(currentView, { omitSidebar: true }), 'http://localhost');
@@ -15703,9 +15771,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const yearLabel = String(item.year_label || '').trim();
     return {
       path: trackPath,
-      // Loose Tracks rows read "Artist / Title" with the year underneath.
+      // Loose Tracks rows lead with the title; artist and year share the quieter second line.
       title,
-      titlePrefix: knownArtist,
       playbackTitle: title,
       artist: String(item.artist || ''),
       albumArtist: String(item.album_artist || ''),
@@ -15715,7 +15782,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       duration,
       originalDuration: duration,
       trackNumber: rowIndex,
-      secondaryArtist: yearLabel && yearLabel !== 'Unknown' ? yearLabel : '',
+      secondaryArtist: [knownArtist, yearLabel && yearLabel !== 'Unknown' ? yearLabel : ''].filter(Boolean).join(' • '),
       displayPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
@@ -15757,7 +15824,7 @@ function closeNonAlbumPageOnTreeNavigation(event) {
 }
 
 // Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
-function setNonAlbumPagePresentation(overlay, open, navigationActive = open) {
+function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syncNavigation = true) {
   const main = document.getElementById('shell-main-surface');
   const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
     && !overlay.classList.contains('is-mobile-page');
@@ -15773,18 +15840,28 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open) {
     else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
   }
   const libraryWideOpen = Boolean(navigationActive && state.ui.nonAlbumLibraryWide);
-  syncNonAlbumNavigationPresentation(libraryWideOpen, Boolean(page));
+  if (syncNavigation) syncNonAlbumNavigationPresentation(libraryWideOpen, Boolean(page));
   return Boolean(page);
 }
 
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
-  if (page && libraryWideOpen) {
-    document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
-      button.classList.add('is-selected');
-      button.setAttribute('aria-current', 'page');
-    });
-  }
+  if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+}
+
+function syncCompactLibraryNavigation(looseTracks) {
+  const setSelected = (button, selected) => {
+    if (!button) return;
+    if (selected) button.classList.add('is-selected');
+    else button.classList.remove('is-selected');
+    button.setAttribute('aria-pressed', String(selected));
+  };
+  setSelected(document.getElementById('artist-tree-navigation-button'), !looseTracks);
+  document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
+    setSelected(button, looseTracks);
+    if (looseTracks) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
@@ -15802,11 +15879,7 @@ function syncLibraryNavigationMode(mode) {
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
   collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
-  document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
-    button.classList.toggle('is-selected', collections);
-    if (collections) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  });
+  syncCompactLibraryNavigation(collections);
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
@@ -15980,13 +16053,9 @@ function openNonAlbumModal(options = {}) {
     })
     : '';
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
-      variant: 'copy',
-      title: 'Loose Tracks',
+    els.header.innerHTML = buildLooseTracksPageHeaderHtml({
       subtitle,
       leadingHtml,
-      titleId: 'non-album-modal-title',
-      subtitleId: 'non-album-modal-subtitle',
       actionsHtml: looseTracks.length ? buildLooseTracksHeaderActionsHtml() : '',
     });
   }
@@ -16001,7 +16070,8 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true, true, options.syncNavigation !== false)
+      && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
@@ -16023,7 +16093,7 @@ function openNonAlbumModal(options = {}) {
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
-        if (!els.overlay.hidden) openNonAlbumModal(options);
+        if (!els.overlay.hidden) openNonAlbumModal({ ...options, syncNavigation: false });
       })
       .catch((error) => {
         if (!els.overlay.hidden) {
@@ -17288,6 +17358,12 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
   });
   liveAliases.forEach((alias) => {
     if (state?.gallery?.albumIndex instanceof Map) {
+      const indexedAlbum = state.gallery.albumIndex.get(alias);
+      if (
+        options.tagEditMutationClaim
+        && trackModalAlbumsShareLogicalRelease(indexedAlbum, resolvedAlbum)
+        && !trackModalAlbumsHaveCompatibleMembership(indexedAlbum, resolvedAlbum)
+      ) return;
       state.gallery.albumIndex.set(alias, resolvedAlbum);
     }
   });
@@ -20516,7 +20592,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
+    const refreshView = (
+      String(state.view?.query || '').trim()
+      && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
+    )
+      ? { ...state.view, selected_artist: '' }
+      : state.view;
+    const refreshApplied = await fetchAndRender(buildApiUrl(refreshView, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
       preserveMountedGalleryChildren: true,
@@ -24182,7 +24264,7 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return findProblematicItemByKey(state.utility.selectedProblematicKey);
 }
 
 function getAlbumTrackPaths(album) {
@@ -25499,9 +25581,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     || !selectedKey
     || (normalizedExpectedAlbumKey && selectedKey !== normalizedExpectedAlbumKey)
   ) return null;
-  const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-    String(album?.key || '').trim() === selectedKey
-  )) || null;
+  const selectedAlbum = findProblematicItemByKey(selectedKey);
   const originalKey = String(originalAlbum?.key || '').trim();
   if (!selectedAlbum || !originalAlbum || (originalKey !== selectedKey && !albumsShareTrackPath(selectedAlbum, getAlbumTrackPaths(originalAlbum)))) {
     return null;
@@ -25516,14 +25596,22 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const list = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.list
     : null;
+  const selectedOwnerItems = [
+    state.utility.problematicFiles || [],
+    state.utility.problematicArtistItems || [],
+    state.utility.problematicServerSearchItems || [],
+  ].find((items) => items.some((album) => String(album?.key || '').trim() === selectedKey)) || [];
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
     originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
-    priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
+    priorKeys: selectedOwnerItems.map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
   };
+  if (String(state.utility.pinnedProblematicKey || '') === selectedKey) {
+    state.utility.pinnedProblematicKey = '';
+  }
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   return mutation;
@@ -25537,7 +25625,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     String(state.utility.selectedProblematicKey || '') === String(mutation.albumKey || '')
   );
   if (reconcileSelection && mutationOwnsView) {
-    const items = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
+    const items = getAllProblematicItems();
     const survivingKeys = new Set(items.map((album) => String(album?.key || '')).filter(Boolean));
     const selectedKey = String(mutation.albumKey || '');
     if (survivingKeys.has(selectedKey)) {
@@ -25691,6 +25779,11 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
   ) return false;
 
   const activeQuery = String(state.view?.query || '').trim();
+  if (
+    activeQuery
+    && selectedArtistKey === destinationArtist.toLocaleLowerCase()
+    && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
+  ) return false;
   const destinationView = {
     ...state.view,
     selected_artist: destinationArtist,
@@ -26644,6 +26737,48 @@ function normalizeProblemFilterReason(reason) {
     : normalized;
 }
 
+function compareProblematicItems(left, right) {
+  for (const field of ['name', 'album_artist']) {
+    const compared = String(left?.[field] || '').toLowerCase()
+      .localeCompare(String(right?.[field] || '').toLowerCase());
+    if (compared) return compared;
+  }
+  const comparedYear = String(left?.year || '').localeCompare(String(right?.year || ''));
+  if (comparedYear) return comparedYear;
+  return String(left?.key || '').toLowerCase().localeCompare(String(right?.key || '').toLowerCase());
+}
+
+function mergeProblematicItems(...sources) {
+  const byKey = new Map();
+  for (const source of sources) {
+    for (const item of source || []) {
+      const key = String(item?.key || '');
+      if (key && !byKey.has(key)) byKey.set(key, item);
+    }
+  }
+  return Array.from(byKey.values()).sort(compareProblematicItems);
+}
+
+function getProblematicBaseItems() {
+  return mergeProblematicItems(
+    state.utility.problematicFiles,
+    state.utility.problematicArtistItems,
+  );
+}
+
+function getAllProblematicItems() {
+  return mergeProblematicItems(
+    state.utility.problematicFiles,
+    state.utility.problematicArtistItems,
+    state.utility.problematicServerSearchItems,
+  );
+}
+
+function findProblematicItemByKey(key) {
+  const normalized = String(key || '');
+  return getAllProblematicItems().find((item) => String(item?.key || '') === normalized) || null;
+}
+
 function getAlbumProblemFilterReasons(album) {
   return (Array.isArray(album?.problem_reasons) ? album.problem_reasons : [])
     .map((reason) => normalizeProblemFilterReason(reason))
@@ -26652,15 +26787,18 @@ function getAlbumProblemFilterReasons(album) {
 
 function getProblemReasonTypes() {
   const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
+  getProblematicBaseItems().forEach((album) => {
     getAlbumProblemFilterReasons(album).forEach((reason) => {
       if (reason) reasons.add(reason);
     });
   });
   const current = Array.from(reasons).sort((a, b) => a.localeCompare(b));
   if (state.utility.problematicFilesComplete === true) {
-    state.utility.completeProblemReasonTypes = current;
-    return current;
+    state.utility.completeProblemReasonTypes = Array.from(new Set([
+      ...(state.utility.completeProblemReasonTypes || []),
+      ...current,
+    ])).sort((a, b) => a.localeCompare(b));
+    return state.utility.completeProblemReasonTypes;
   }
   return Array.from(new Set([...(state.utility.completeProblemReasonTypes || []), ...current]))
     .sort((a, b) => a.localeCompare(b));
@@ -26729,8 +26867,11 @@ function renderProblemFilterControls(els) {
 }
 
 function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
+  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
+  const items = query.length >= 2 && serverQuery === query
+    ? getAllProblematicItems()
+    : getProblematicBaseItems();
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
@@ -26779,7 +26920,7 @@ function getSelectedUtilityRule() {
 
 function getProblematicAlbumForTrackPath(trackPath) {
   const normalized = String(trackPath || '');
-  return (state.utility.problematicFiles || []).find((album) =>
+  return getAllProblematicItems().find((album) =>
     (Array.isArray(album.problematic_track_paths) && album.problematic_track_paths.includes(normalized))
     || (Array.isArray(album.track_paths) && album.track_paths.includes(normalized))
   ) || null;
@@ -26790,7 +26931,7 @@ function getProblematicAlbumForTrackPath(trackPath) {
 // Matches getProblematicAlbumForTrackPath: the first album in list order wins.
 function buildProblematicAlbumTrackPathIndex() {
   const index = new Map();
-  for (const album of state.utility.problematicFiles || []) {
+  for (const album of getAllProblematicItems()) {
     for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
       if (!Array.isArray(paths)) continue;
       for (const path of paths) {
@@ -27047,7 +27188,7 @@ async function openMusicBrainzArtistProblem(occurrenceId) {
     const loadResult = await loadProblematicFiles(true, { render: false });
     if (loadResult === null) return;
   }
-  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+  const findProblem = () => getAllProblematicItems().find((item) => [
     item?.occurrence_id,
     item?.musicbrainz_occurrence_id,
     item?.key,
@@ -29155,6 +29296,7 @@ function mountAlertsAppearanceEditor(detail) {
   function create({
     list,
     renderRow,
+    onNearEnd,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
   }) {
@@ -29192,6 +29334,8 @@ function mountAlertsAppearanceEditor(detail) {
       const stride = getStride(horizontal);
       const offset = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
       const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const visibleStart = Math.floor(Math.max(0, offset) / stride);
+      const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
       const range = calculateRange({
         count: items.length,
         offset,
@@ -29244,6 +29388,8 @@ function mountAlertsAppearanceEditor(detail) {
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
       }
+      const prefetchRows = Math.max(overscan, visibleCount * 4);
+      if (items.length && visibleStart + visibleCount >= Math.max(0, items.length - prefetchRows)) onNearEnd?.();
     };
 
     const schedule = () => {
@@ -29595,13 +29741,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   };
 
   const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (mobileIndex) disposeProblematicFilesVirtualList();
-  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+  const virtualListApi = typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
-  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const albumsByKey = new Map(getAllProblematicItems().map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
@@ -29610,6 +29755,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onNearEnd: () => {
+          const query = String(state.utility.searchQuery || '').trim();
+          if (query.length >= 2) void loadNextProblematicServerSearchPage();
+          void loadNextProblematicFilesPage();
+          void loadNextProblematicArtistPage();
+        },
       });
     }
     if (problematicFilesVirtualList) {
@@ -29679,9 +29830,31 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
-  if (!items.length && state.utility.problematicFilesComplete === false) {
-    replaceListContents('<div class="utility-empty-state compact">Loading remaining albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading remaining albums...</div>';
+  const activeSearchQuery = String(state.utility.searchQuery || '').trim();
+  if (!items.length
+      && activeSearchQuery.length >= 2
+      && state.utility.problematicServerSearchPendingQuery === activeSearchQuery
+      && state.utility.problematicServerSearchSettledQuery !== activeSearchQuery) {
+    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
+    return;
+  }
+  if (!items.length && activeSearchQuery.length >= 2
+      && state.utility.problematicServerSearchHasMore) {
+    void loadNextProblematicServerSearchPage();
+    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
+    return;
+  }
+  if (!items.length
+      && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)) {
+    if (activeSearchQuery) void loadProblematicPagesUntilLocalQueryMatch(activeSearchQuery);
+    else {
+      void loadNextProblematicFilesPage();
+      void loadNextProblematicArtistPage();
+    }
+    replaceListContents('<div class="utility-empty-state compact">Loading more matching albums...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading more matching albums...</div>';
     return;
   }
   if (!items.length) {
@@ -29699,9 +29872,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
-  if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
+  if (selectedProblematicMissing && (activeSearchQuery || (state.utility.selectedProblemFilters || []).length)) {
     renderTree('');
-    els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
+    els.detail.innerHTML = '<div class="utility-empty-state">Select an entry from the list to see the details.</div>';
     return;
   }
 
@@ -31743,6 +31916,7 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
 async function loadProblematicFiles(force = false, options = {}) {
+  if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
   const renderRequested = () => (options.render === 'when-open'
     ? isUtilityModalOpen()
@@ -31789,6 +31963,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     && state.utility.problematicFilesComplete === true;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
+  state.utility.problematicArtistItems = [];
+  state.utility.problematicArtistHasMore = true;
+  state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
   if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
@@ -31830,11 +32007,17 @@ async function loadProblematicFiles(force = false, options = {}) {
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
+        if (Array.isArray(data.problem_reason_types)) {
+          state.utility.completeProblemReasonTypes = data.problem_reason_types
+            .map((reason) => String(reason || '').trim())
+            .filter(Boolean);
+        }
         initialDetailKey = String(initialDetail?.key || '').trim();
         const selectedKey = String(state.utility.selectedProblematicKey || '');
-        const selectedDetail = preserveSelectedDetail
-          ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+        const selectedAlbum = preserveSelectedDetail
+          ? (state.utility.problematicFiles || []).find(item => item.key === selectedKey)
           : null;
+        const selectedDetail = selectedAlbum?.detail_loaded === true ? selectedAlbum : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
         const previousSummary = previousSummaryItems.find(item => item.key === selectedKey);
@@ -31842,13 +32025,16 @@ async function loadProblematicFiles(force = false, options = {}) {
         // Client request ownership does not prove that the server snapshot is unchanged.
         const unchangedSelection = continuation && previousSummary && nextSummary
           && JSON.stringify(previousSummary) === JSON.stringify(nextSummary);
-        const selectedPendingDetail = unchangedSelection && selectedKey !== initialDetailKey
+        const selectedPendingDetail = preserveSelectedDetail && selectedKey !== initialDetailKey
           ? state.utility.detailLoadPromises?.[selectedKey] : null;
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
         // A track-opened album stays listed until the complete list can confirm it.
-        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedKey = String(
+          state.utility.pinnedProblematicKey
+          || (data.complete === false && selectedAlbum && !state.utility.problematicMutation ? selectedKey : ''),
+        );
         const pinnedAlbum = pinnedKey && data.complete === false
           && !summaryItems.some((item) => item.key === pinnedKey)
           ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
@@ -31876,13 +32062,18 @@ async function loadProblematicFiles(force = false, options = {}) {
 
       let data = await fetchSummary('/utilities/problematic-files?limit=50');
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      let committedSelection = commitSummary(data, options.preserveSelectedDetail === true);
+      let committedSelection = commitSummary(
+        data,
+        options.preserveSelectedDetail === true || data.complete === false,
+      );
       boundedPayloadCommitted = data.complete === false;
+      state.utility.problematicHasMore = data.has_more === true
+        || (data.has_more === undefined && data.complete === false);
+      state.utility.problematicNextCursor = String(data.next_cursor || '');
       settleInitialSummary(state.utility.problematicFiles);
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         scheduleProblematicServerSearch();
-        const completePayloadPromise = fetchSummary('/utilities/problematic-files');
         if (state.utility.loadPromise === requestPromise) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
@@ -31893,11 +32084,9 @@ async function loadProblematicFiles(force = false, options = {}) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
-        data = await completePayloadPromise;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(data, true, true);
+        scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
       }
-      state.utility.problematicFilesComplete = true;
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -31979,14 +32168,159 @@ async function loadProblematicFiles(force = false, options = {}) {
 
 let problematicServerSearchTimer = 0;
 
-// Until the complete list arrives, a search also asks the server, which searches
-// every album, so matches beyond the first page appear without waiting.
+async function loadNextProblematicArtistPage() {
+  const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const activeRequest = state.utility.problematicArtistLoadPromise;
+  if (
+    activeRequest
+    && Number(activeRequest.problematicSummaryRequestToken || 0) === summaryToken
+  ) return activeRequest;
+  if (state.utility.problematicArtistHasMore === false) return null;
+  const cursor = String(state.utility.problematicArtistNextCursor || '');
+  const request = (async () => {
+    try {
+      const response = await fetch(`/utilities/problematic-files?artists=true&limit=50&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken) return null;
+      const { summaryItems } = validateProblematicSummaryPayload(data);
+      const known = new Set((state.utility.problematicArtistItems || []).map((item) => String(item?.key || '')));
+      const additions = summaryItems.filter((item) => item?.key && !known.has(String(item.key)));
+      state.utility.problematicArtistItems = data.cursor_restarted === true
+        ? summaryItems
+        : [...(state.utility.problematicArtistItems || []), ...additions];
+      state.utility.problematicArtistNextCursor = String(data.next_cursor || '');
+      state.utility.problematicArtistHasMore = data.has_more === true && summaryItems.length > 0;
+      if ((additions.length || data.cursor_restarted === true)
+          && state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) {
+        renderUtilityModalContent();
+      }
+      return additions;
+    } catch (error) {
+      console.warn('[AlbumHaven][Utilities] Problematic Files artist page failed.', error);
+      return null;
+    } finally {
+      if (state.utility.problematicArtistLoadPromise === request) state.utility.problematicArtistLoadPromise = null;
+    }
+  })();
+  request.problematicSummaryRequestToken = summaryToken;
+  state.utility.problematicArtistLoadPromise = request;
+  return request;
+}
+
+async function loadNextProblematicFilesPage() {
+  if (state.utility.problematicPageLoadPromise || !state.utility.problematicHasMore) return state.utility.problematicPageLoadPromise;
+  const requestToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const cursor = String(state.utility.problematicNextCursor || '');
+  const request = (async () => {
+    try {
+      const response = await fetch(`/utilities/problematic-files?limit=50&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      const { summaryItems } = validateProblematicSummaryPayload(data);
+      const known = new Set((state.utility.problematicFiles || []).map((item) => String(item?.key || '')));
+      const additions = summaryItems.filter((item) => item?.key && !known.has(String(item.key)));
+      state.utility.problematicFiles = data.cursor_restarted === true
+        ? summaryItems
+        : [...(state.utility.problematicFiles || []), ...additions];
+      state.utility.problematicNextCursor = String(data.next_cursor || '');
+      state.utility.problematicHasMore = data.has_more === true && summaryItems.length > 0;
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
+      if (Array.isArray(data.problem_reason_types)) {
+        state.utility.completeProblemReasonTypes = Array.from(new Set([
+          ...(state.utility.completeProblemReasonTypes || []),
+          ...data.problem_reason_types.map((reason) => String(reason || '').trim()).filter(Boolean),
+        ]));
+      }
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      return additions;
+    } catch (error) {
+      console.warn('[AlbumHaven][Utilities] Problematic Files page failed.', error);
+      return null;
+    } finally {
+      if (state.utility.problematicPageLoadPromise === request) state.utility.problematicPageLoadPromise = null;
+    }
+  })();
+  state.utility.problematicPageLoadPromise = request;
+  return request;
+}
+
+async function loadProblematicPagesUntilLocalQueryMatch(query) {
+  const normalizedQuery = String(query || '').trim();
+  if (!normalizedQuery) return null;
+  while (
+    String(state.utility.searchQuery || '').trim() === normalizedQuery
+    && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)
+    && !(typeof getFilteredProblematicAlbums === 'function' && getFilteredProblematicAlbums().length)
+  ) {
+    const previousBaseCursor = String(state.utility.problematicNextCursor || '');
+    const previousArtistCursor = String(state.utility.problematicArtistNextCursor || '');
+    const previousBaseHasMore = state.utility.problematicHasMore === true;
+    const previousArtistHasMore = state.utility.problematicArtistHasMore === true;
+    await Promise.all([
+      previousBaseHasMore ? loadNextProblematicFilesPage() : null,
+      previousArtistHasMore ? loadNextProblematicArtistPage() : null,
+    ]);
+    const baseProgressed = String(state.utility.problematicNextCursor || '') !== previousBaseCursor
+      || (state.utility.problematicHasMore === true) !== previousBaseHasMore;
+    const artistProgressed = String(state.utility.problematicArtistNextCursor || '') !== previousArtistCursor
+      || (state.utility.problematicArtistHasMore === true) !== previousArtistHasMore;
+    if (!baseProgressed && !artistProgressed) break;
+  }
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+  return typeof getFilteredProblematicAlbums === 'function'
+    ? getFilteredProblematicAlbums()
+    : [];
+}
+
+// Search the server so every album is covered, including matches beyond the
+// bounded local inventory.
 function scheduleProblematicServerSearch() {
   if (problematicServerSearchTimer) clearBrowserTimeout(problematicServerSearchTimer);
   problematicServerSearchTimer = 0;
   const query = String(state.utility.searchQuery || '').trim();
-  // One character matches most of a library; the loaded rows answer it.
-  if (query.length < 2 || state.utility.problematicFilesComplete !== false) return;
+  const cacheKey = query.toLocaleLowerCase();
+  state.utility.problematicServerSearchRequestToken = Number(
+    state.utility.problematicServerSearchRequestToken || 0,
+  ) + 1;
+  if (!query && state.utility.problematicServerSearchSettledQuery) {
+    const selectedKey = String(state.utility.selectedProblematicKey || '');
+    const selectedSearchItem = (state.utility.problematicServerSearchItems || [])
+      .find((item) => String(item?.key || '') === selectedKey);
+    if (selectedSearchItem && !(state.utility.problematicFiles || [])
+      .some((item) => String(item?.key || '') === selectedKey)) {
+      state.utility.problematicFiles = [...(state.utility.problematicFiles || []), selectedSearchItem];
+      state.utility.pinnedProblematicKey = selectedKey;
+    }
+  }
+  if (state.utility.problematicServerSearchSettledQuery !== query) {
+    state.utility.problematicServerSearchItems = [];
+    state.utility.problematicServerSearchSettledQuery = '';
+    state.utility.problematicServerSearchHasMore = false;
+    state.utility.problematicServerSearchNextOffset = 0;
+    state.utility.problematicServerSearchNextCursor = '';
+  }
+  state.utility.problematicServerSearchPendingQuery = '';
+  if (query.length === 1 && state.utility.problematicFilesComplete === false) {
+    void loadProblematicPagesUntilLocalQueryMatch(query);
+    return;
+  }
+  if (query.length < 2) return;
+  const cached = state.utility.problematicServerSearchCache?.[cacheKey];
+  if (cached) {
+    state.utility.problematicServerSearchItems = cached.items;
+    state.utility.problematicServerSearchSettledQuery = query;
+    state.utility.problematicServerSearchHasMore = cached.hasMore;
+    state.utility.problematicServerSearchNextCursor = cached.nextCursor;
+    if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+    return;
+  }
+  state.utility.problematicServerSearchPendingQuery = query;
   problematicServerSearchTimer = scheduleBrowserTimeout(() => {
     problematicServerSearchTimer = 0;
     void searchProblematicFilesOnServer(query);
@@ -31995,9 +32329,10 @@ function scheduleProblematicServerSearch() {
 
 async function searchProblematicFilesOnServer(query) {
   const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const searchToken = Number(state.utility.problematicServerSearchRequestToken || 0);
   let data;
   try {
-    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}`, {
+    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50`, {
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) return;
@@ -32006,15 +32341,62 @@ async function searchProblematicFilesOnServer(query) {
     console.warn('[AlbumHaven][Utilities] Problematic Files search failed.', error);
     return;
   }
-  // The complete list, a newer query or a reload supersedes this answer.
+  // A newer query or reload supersedes this answer.
   if (String(state.utility.searchQuery || '').trim() !== query
-    || state.utility.problematicFilesComplete !== false
-    || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken) return;
-  const known = new Set((state.utility.problematicFiles || []).map((item) => item?.key));
-  const found = (Array.isArray(data?.items) ? data.items : []).filter((item) => item?.key && !known.has(item.key));
-  if (!found.length) return;
-  state.utility.problematicFiles = [...state.utility.problematicFiles, ...found];
+    || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
+    || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return;
+  state.utility.problematicServerSearchPendingQuery = '';
+  state.utility.problematicServerSearchSettledQuery = query;
+  state.utility.problematicServerSearchItems = Array.isArray(data?.items) ? data.items : [];
+  state.utility.problematicServerSearchHasMore = data?.has_more === true;
+  state.utility.problematicServerSearchNextOffset = Number(data?.next_offset || state.utility.problematicServerSearchItems.length);
+  state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
+  state.utility.problematicServerSearchCache = {
+    [query.toLocaleLowerCase()]: {
+      items: state.utility.problematicServerSearchItems,
+      hasMore: state.utility.problematicServerSearchHasMore,
+      nextCursor: state.utility.problematicServerSearchNextCursor,
+    },
+  };
   if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+}
+
+async function loadNextProblematicServerSearchPage() {
+  const query = String(state.utility.searchQuery || '').trim();
+  if (query.length < 2 || state.utility.problematicServerSearchSettledQuery !== query
+      || !state.utility.problematicServerSearchHasMore) return null;
+  if (state.utility.problematicServerSearchLoadPromise) return state.utility.problematicServerSearchLoadPromise;
+  const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const searchToken = Number(state.utility.problematicServerSearchRequestToken || 0);
+  const cursor = String(state.utility.problematicServerSearchNextCursor || '');
+  const request = (async () => {
+    try {
+      const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (String(state.utility.searchQuery || '').trim() !== query
+          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
+          || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return null;
+      const knownSearch = new Set(state.utility.problematicServerSearchItems.map((item) => String(item?.key || '')));
+      const additions = (Array.isArray(data?.items) ? data.items : [])
+        .filter((item) => item?.key && !knownSearch.has(String(item.key)));
+      state.utility.problematicServerSearchItems = data?.cursor_restarted === true
+        ? (Array.isArray(data?.items) ? data.items : [])
+        : [...state.utility.problematicServerSearchItems, ...additions];
+      state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
+      state.utility.problematicServerSearchHasMore = data?.has_more === true;
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      return additions;
+    } finally {
+      if (state.utility.problematicServerSearchLoadPromise === request) {
+        state.utility.problematicServerSearchLoadPromise = null;
+      }
+    }
+  })();
+  state.utility.problematicServerSearchLoadPromise = request;
+  return request;
 }
 
 async function waitForProblematicFilesComplete() {
@@ -32028,7 +32410,11 @@ async function waitForProblematicFilesComplete() {
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey) return null;
-  const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+  const currentAlbum = [
+    ...(state.utility.problematicFiles || []),
+    ...(state.utility.problematicArtistItems || []),
+    ...(state.utility.problematicServerSearchItems || []),
+  ].find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
@@ -32084,29 +32470,37 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         || String(state.utility.selectedProblematicKey || '') !== normalizedKey
       ) return null;
       const stateCommitStartedAt = getProblematicUtilityNow();
-      state.utility.problematicFiles = (state.utility.problematicFiles || []).map((item) => (
-        String(item?.key || '') === normalizedKey
-          ? {
-            ...item,
-            ...detail,
-            detail_loaded: true,
-            detail_load_failed: false,
-          }
-          : item
-      ));
+      for (const owner of ['problematicFiles', 'problematicArtistItems', 'problematicServerSearchItems']) {
+        state.utility[owner] = (state.utility[owner] || []).map((item) => (
+          String(item?.key || '') === normalizedKey
+            ? {
+              ...item,
+              ...detail,
+              detail_loaded: true,
+              detail_load_failed: false,
+            }
+            : item
+        ));
+      }
       loadSucceeded = true;
       stateCommitMs = roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
-      return (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+      return [
+        ...(state.utility.problematicFiles || []),
+        ...(state.utility.problematicArtistItems || []),
+        ...(state.utility.problematicServerSearchItems || []),
+      ].find((item) => String(item?.key || '') === normalizedKey) || null;
     } catch (error) {
       if (Number(state.utility.problematicDetailRequestToken || 0) !== requestToken) return null;
       loadError = String(error?.message || error || 'Unable to load problematic album detail.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic album detail.', error);
       if (state.utility.detailLoadPromises?.[normalizedKey] === nextPromise) {
-        state.utility.problematicFiles = (state.utility.problematicFiles || []).map((item) => (
-          String(item?.key || '') === normalizedKey
-            ? { ...item, detail_load_failed: true }
-            : item
-        ));
+        for (const owner of ['problematicFiles', 'problematicArtistItems', 'problematicServerSearchItems']) {
+          state.utility[owner] = (state.utility[owner] || []).map((item) => (
+            String(item?.key || '') === normalizedKey
+              ? { ...item, detail_load_failed: true }
+              : item
+          ));
+        }
         showToast('Unable to load the selected problematic album.', 'error', 3200);
       }
       return null;
@@ -34659,7 +35053,9 @@ function renderTagEditor(options = {}) {
     const displayValue = getTagEditorFieldDisplayValue(field, selectedPaths);
     input.disabled = selectedPaths.length === 0;
     input.value = displayValue.value;
-    input.placeholder = displayValue.mixed ? 'Mixed values' : '';
+    input.placeholder = displayValue.mixed
+      ? 'Mixed values'
+      : (field === 'exception_type' ? 'None' : '');
   });
   syncTagEditorCollectionFields(selectedPaths);
   syncTagEditorPendingChanges();
@@ -35642,6 +36038,7 @@ function hasPendingLocalCoverSelection() {
   const pendingPath = String(modal.pendingLocalPath || '');
   if (!pendingPath) return false;
   if (pendingPath !== getCoverLookupActiveLocalPath()) return true;
+  if (modal.fallbackLocalSelectionPending) return true;
   // Clicking a cover the app applied automatically confirms it as the user's own choice.
   return !modal.artboxSlot && modal.album?.cover_selection_origin === 'automatic';
 }
@@ -35694,7 +36091,10 @@ function syncCoverLookupSaveButton() {
   const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
   saveButton.hidden = false;
   const clearsArtbox = Boolean(state.coverLookup.modal.artboxSlot && state.coverLookup.modal.artboxCleared);
-  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
+  const fallbackAlreadyApplied = Boolean(
+    state.coverLookup.modal.fallbackLocalSelectionPending && hasLocalSelection,
+  );
+  ButtonComponent.setDisabled(saveButton, (mutationPending && !fallbackAlreadyApplied) || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -38051,9 +38451,43 @@ function buildCoverLookupGalleryCacheKey(album) {
   return String(requestKey || buildTrackPathSignature(album)).trim();
 }
 
+function sortCoverLookupLocalCovers(covers) {
+  const sortKey = (cover) => {
+    const coverPath = String(cover?.path || '');
+    const width = Number(cover?.width || 0);
+    const height = Number(cover?.height || 0);
+    const isSquareish = typeof cover?.is_squareish === 'boolean'
+      ? cover.is_squareish
+      : width > 0 && height > 0 && Math.abs(width - height) / Math.max(width, height) <= 0.18;
+    const explicitArea = cover?.area == null ? NaN : Number(cover.area);
+    const explicitDepth = cover?.depth == null ? NaN : Number(cover.depth);
+    return [
+      isSquareish ? 0 : 1,
+      -(Number.isFinite(explicitArea) ? explicitArea : width * height),
+      Number.isFinite(explicitDepth) ? explicitDepth : 1,
+      String(
+        cover?.sort_relative_path
+        || String(cover?.relative_path || cover?.filename || coverPath).toLowerCase(),
+      ),
+    ];
+  };
+  return Array.isArray(covers) ? covers.slice().sort((left, right) => {
+    const leftKey = sortKey(left);
+    const rightKey = sortKey(right);
+    for (let index = 0; index < leftKey.length; index += 1) {
+      if (leftKey[index] < rightKey[index]) return -1;
+      if (leftKey[index] > rightKey[index]) return 1;
+    }
+    return 0;
+  }) : [];
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
   const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
+  gallery = Array.isArray(gallery.local_covers)
+    ? { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) }
+    : gallery;
   coverLookupGalleryCache.delete(key);
   coverLookupGalleryCache.set(key, JSON.parse(JSON.stringify(gallery)));
   if (coverLookupGalleryCache.size > 50) {
@@ -38069,7 +38503,8 @@ function cachedCoverLookupGalleryPayload(album) {
 function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventory) {
   const key = buildCoverLookupGalleryCacheKey(album);
   const mutation = coverLookupLocalInventoryMutations.get(key);
-  if (!mutation || !Array.isArray(gallery?.local_covers)) return gallery;
+  if (!Array.isArray(gallery?.local_covers)) return gallery;
+  if (!mutation) return { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) };
   let localCovers = gallery.local_covers.slice();
   let otherArt = Array.isArray(gallery.other_art) ? gallery.other_art.slice() : [];
   const hasIncomingPath = path => localCovers.some((cover) => coverLookupLocalPathMatches(cover?.path, path));
@@ -38088,6 +38523,22 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   }
   mutation.addedCovers.forEach((cover, path) => {
     if (confirmLocalInventory && hasIncomingPath(path)) {
+      localCovers = localCovers.map((incoming) => {
+        if (!coverLookupLocalPathMatches(incoming?.path, path)) return incoming;
+        const width = Number(incoming?.width || 0) || Number(cover?.width || 0) || null;
+        const height = Number(incoming?.height || 0) || Number(cover?.height || 0) || null;
+        const incomingResolution = String(incoming?.resolution || '').trim();
+        return {
+          ...cover,
+          ...incoming,
+          preview_url: String(incoming?.preview_url || '').trim() || cover?.preview_url,
+          width,
+          height,
+          resolution: incomingResolution && incomingResolution !== 'Unknown'
+            ? incomingResolution
+            : String(cover?.resolution || '').trim() || (width && height ? `${width}x${height}` : 'Unknown'),
+        };
+      });
       mutation.addedCovers.delete(path);
       return;
     }
@@ -38106,7 +38557,7 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   }
   return {
     ...gallery,
-    local_covers: localCovers,
+    local_covers: sortCoverLookupLocalCovers(localCovers),
     other_art: otherArt,
     ...(optimisticSelectedPath ? {
       active_cover_path: optimisticSelectedPath,
@@ -38228,7 +38679,7 @@ function restoreCoverLookupGalleryAfterRemoteSaveFailure(album, pendingRemoteSav
 function invalidateCoverLookupGalleryCache(album) {
   coverLookupGalleryCache.delete(buildCoverLookupGalleryCacheKey(album));
 }
-const coverLookupPendingMutations = new Set();
+const coverLookupPendingMutations = new Map();
 const coverLookupPendingRemoteSaves = new Map();
 const coverLookupSeenRequests = new WeakMap();
 
@@ -38250,12 +38701,13 @@ function buildCoverLookupMutationKey(album) {
 }
 
 function isCoverLookupMutationPending(album = state.coverLookup.modal.album) {
-  return coverLookupPendingMutations.size > 0
-    && coverLookupPendingMutations.has(buildCoverLookupMutationKey(album));
+  return coverLookupPendingMutations.get(buildCoverLookupMutationKey(album)) === coverLookupModalSession;
 }
 
 async function finishCoverLookupMutation(mutationKey, session) {
-  coverLookupPendingMutations.delete(mutationKey);
+  if (coverLookupPendingMutations.get(mutationKey) === session) {
+    coverLookupPendingMutations.delete(mutationKey);
+  }
   if (buildCoverLookupMutationKey(state.coverLookup.modal.album) !== mutationKey) return;
   state.coverLookup.modal.saving = false;
   syncCoverLookupSaveButton();
@@ -38340,7 +38792,10 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
     const transition = coverLookupOptimisticIdentityByTrackSignature.get(signature)
       || Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).find((candidate) => (
         candidate?.originalAlbum
-        && findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+        && (
+          findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+          || findCoverLookupAlbumReplacement(task?.album_payload, candidate.priorReleases || [])
+        )
       ));
     if (!taskId || !transition) return task;
     if (transition.releases) {
@@ -38350,13 +38805,25 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
     if (!transition.replacement) return task;
     coverLookupSplitReleasesByTask.delete(taskId);
     coverLookupSplitChoiceByTask.delete(taskId);
-    return {
+    const optimisticTask = {
       ...task,
       artist: String(transition.replacement.album_artist || task.artist || ''),
       album: String(transition.replacement.name || task.album || ''),
       year: transition.replacement.year ?? task.year,
       album_payload: transition.replacement,
     };
+    const previousRequestKey = typeof getAlbumRequestKey === 'function'
+      ? String(getAlbumRequestKey(task?.album_payload) || '') : '';
+    const replacementRequestKey = typeof getAlbumRequestKey === 'function'
+      ? String(getAlbumRequestKey(transition.replacement) || '') : '';
+    if (
+      Array.isArray(transition.replacedTasks)
+      && !transition.replacedTasks.some((entry) => entry.taskId === taskId)
+      && (!previousRequestKey || !replacementRequestKey || previousRequestKey !== replacementRequestKey)
+    ) {
+      transition.replacedTasks.push({ taskId, previousTask: task, optimisticTask });
+    }
+    return optimisticTask;
   });
 }
 
@@ -38417,12 +38884,18 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
       [identitySignature, previousIdentity] = priorTransition;
     }
   }
+  if (mergedReplacement) {
+    mergedReplacement = { ...mergedReplacement };
+    delete mergedReplacement.identity_resolution;
+    delete mergedReplacement._identity_split_choices;
+  }
   const nextIdentity = isSplit
     ? { originalAlbum, releases, paths: new Set(originalPaths) }
     : mergedReplacement ? {
       originalAlbum: previousIdentity.originalAlbum || originalAlbum,
       replacement: mergedReplacement,
       paths: previousIdentity.paths,
+      priorReleases: previousIdentity.releases || previousIdentity.priorReleases || [],
     } : updatedSplitReleases ? {
       ...previousIdentity,
       releases: updatedSplitReleases,
@@ -38432,6 +38905,7 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const replacedTasks = [];
   const removedSplits = [];
   const removedChoices = [];
+  if (nextIdentity) nextIdentity.replacedTasks = replacedTasks;
   const nextTasks = (state.coverLookup.tasks || []).map((task) => {
     const taskPaths = getAlbumTrackPaths(task?.album_payload);
     const taskId = String(task?.id || '');
@@ -38444,7 +38918,20 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
       taskIds.push(taskId);
       return task;
     }
-    const knownSplit = coverLookupSplitReleasesByTask.get(taskId);
+    let knownSplit = coverLookupSplitReleasesByTask.get(taskId);
+    if (updatedSplitReleases && knownSplit === previousIdentity?.releases) {
+      knownSplit = updatedSplitReleases;
+      coverLookupSplitReleasesByTask.set(taskId, knownSplit);
+      const chosen = coverLookupSplitChoiceByTask.get(taskId);
+      if (chosen) {
+        coverLookupSplitChoiceByTask.set(
+          taskId,
+          findCoverLookupAlbumReplacement(chosen, knownSplit) || chosen,
+        );
+      }
+      taskIds.push(taskId);
+      return task;
+    }
     const knownSplitPaths = new Set(
       (knownSplit || []).flatMap((album) => Array.from(getAlbumTrackPaths(album))),
     );
@@ -38519,10 +39006,21 @@ function clearCoverLookupOptimisticSplit(recordedSplit) {
       if (releases !== recordedSplit.nextIdentity.releases) return;
       if (recordedSplit.previousIdentity?.releases) {
         coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+        const chosen = coverLookupSplitChoiceByTask.get(taskId);
+        if (chosen) {
+          const restoredChoice = findCoverLookupAlbumReplacement(
+            chosen,
+            recordedSplit.previousIdentity.releases,
+          ) || chosen;
+          coverLookupSplitChoiceByTask.set(taskId, {
+            ...restoredChoice,
+            identity_resolution: 'album_split_choice',
+          });
+        }
       } else {
         coverLookupSplitReleasesByTask.delete(taskId);
+        coverLookupSplitChoiceByTask.delete(taskId);
       }
-      coverLookupSplitChoiceByTask.delete(taskId);
     });
   }
   (recordedSplit?.taskIds || []).forEach((taskId) => {
@@ -38550,6 +39048,13 @@ function clearCoverLookupOptimisticSplit(recordedSplit) {
       };
     });
   });
+  if (recordedSplit?.previousIdentity?.releases) {
+    (recordedSplit?.replacedTasks || []).forEach(({ taskId }) => {
+      if (!coverLookupSplitReleasesByTask.has(taskId)) {
+        coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+      }
+    });
+  }
   (recordedSplit?.removedSplits || []).forEach(([taskId, releases]) => {
     if (!coverLookupSplitReleasesByTask.has(taskId)) {
       coverLookupSplitReleasesByTask.set(taskId, releases);
@@ -38713,6 +39218,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
@@ -38752,7 +39258,9 @@ async function openCoverLookupModal(album, options = {}) {
   if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery, { confirmLocalInventory: false });
   // UI-5 (owner, 11-09): a notification may belong to an album that was split; until its first gallery answer
   // says otherwise, the lookup stays invisible so a split goes straight to the chooser without a flash of it.
-  const awaitIdentity = Boolean(requestedTaskId) && album.identity_resolution !== 'album_split_choice';
+  const awaitIdentity = Boolean(requestedTaskId)
+    && !cachedGallery
+    && album.identity_resolution !== 'album_split_choice';
   els.overlay.toggleAttribute?.('data-awaiting-identity', awaitIdentity);
   const revealSession = coverLookupModalSession;
   const reveal = () => { if (revealSession === coverLookupModalSession) els.overlay.removeAttribute?.('data-awaiting-identity'); };
@@ -38788,6 +39296,7 @@ function closeCoverLookupModal({ immediate = false } = {}) {
   els.overlay.classList?.remove?.('is-mobile-sheet');
   els.overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.remoteCover = null;
@@ -39029,7 +39538,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     selectedPath: previousInventoryMutation.selectedPath,
   } : null;
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
-  coverLookupPendingMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   coverLookupGalleryRequest += 1;
   try {
     state.coverLookup.modal.saving = true;
@@ -39106,11 +39615,20 @@ async function deleteLocalCoverFromLookup(sourcePath) {
   const previousLocalCovers = Array.isArray(state.coverLookup.modal.localCovers)
     ? state.coverLookup.modal.localCovers.slice()
     : [];
+  const previousPendingLocalPath = String(state.coverLookup.modal.pendingLocalPath || '');
+  const previousActiveLocalSelectionPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
+  const previousFallbackLocalSelectionPending = Boolean(state.coverLookup.modal.fallbackLocalSelectionPending);
   const previousAlbum = deepCloneJson(album);
   const remainingLocalCovers = previousLocalCovers.filter((item) => String(item?.path || '') !== String(sourcePath || ''));
   const fallbackLocalCoverPath = String(remainingLocalCovers[0]?.path || '').trim();
+  const deletedPendingLocalSelection = Boolean(previousPendingLocalPath)
+    && coverLookupLocalPathMatches(previousPendingLocalPath, sourcePath);
+  const deletedActiveLocalSelection = coverLookupLocalPathMatches(
+    previousActiveLocalSelectionPath || album?.cover_path,
+    sourcePath,
+  );
   const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(album, sourcePath, fallbackLocalCoverPath);
-  coverLookupPendingMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   invalidateCoverLookupGalleryCache(album);
   coverLookupGalleryRequest += 1;
   try {
@@ -39121,6 +39639,14 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     }
     if (String(state.coverLookup.modal.activeLocalSelectionPath || '') === String(sourcePath || '')) {
       state.coverLookup.modal.activeLocalSelectionPath = '';
+    }
+    if (
+      fallbackLocalCoverPath
+      && (deletedPendingLocalSelection
+        || (deletedActiveLocalSelection && !previousPendingLocalPath))
+    ) {
+      state.coverLookup.modal.pendingLocalPath = fallbackLocalCoverPath;
+      state.coverLookup.modal.fallbackLocalSelectionPending = true;
     }
     state.coverLookup.modal.pendingPastedImageId = '';
     state.coverLookup.modal.selectedRemoteId = '';
@@ -39140,14 +39666,22 @@ async function deleteLocalCoverFromLookup(sourcePath) {
       throw new Error(data.error || 'Failed to delete local cover art');
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
-    const selectedFallbackPath = String(updatedAlbums[0]?.cover_path || '');
+    const selectedFallbackPath = String(
+      updatedAlbums[0]?.cover_path
+      || data.gallery?.selected_source_path
+      || fallbackLocalCoverPath,
+    );
     const inventoryKey = buildCoverLookupGalleryCacheKey(album);
     const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
       || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
     inventoryMutation.addedCovers.delete(String(sourcePath));
     inventoryMutation.deletedPaths.add(String(sourcePath));
-    if (String(previousAlbum?.cover_path || '') === String(sourcePath)) {
+    if (deletedActiveLocalSelection) {
       inventoryMutation.selectedPath = selectedFallbackPath;
+      if (ownsModal() && !previousPendingLocalPath) {
+        state.coverLookup.modal.pendingLocalPath = selectedFallbackPath;
+        state.coverLookup.modal.fallbackLocalSelectionPending = Boolean(selectedFallbackPath);
+      }
     }
     coverLookupLocalInventoryMutations.set(inventoryKey, inventoryMutation);
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
@@ -39164,7 +39698,12 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     }
   } catch (error) {
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
-    if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
+    if (ownsModal()) {
+      state.coverLookup.modal.localCovers = previousLocalCovers;
+      state.coverLookup.modal.pendingLocalPath = previousPendingLocalPath;
+      state.coverLookup.modal.activeLocalSelectionPath = previousActiveLocalSelectionPath;
+      state.coverLookup.modal.fallbackLocalSelectionPending = previousFallbackLocalSelectionPending;
+    }
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
@@ -39196,6 +39735,7 @@ function selectRemoteCoverFromLookup(candidateId) {
   }
   modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
@@ -39229,6 +39769,7 @@ function selectRemoteCoverFromLookup(candidateId) {
 
 function selectPastedCoverFromLookup(imageId) {
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.pendingPastedImageId = String(imageId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
@@ -39263,7 +39804,7 @@ async function saveRemoteCoverFromLookup() {
   if (!isSelectableRemoteCoverCandidate(selectedMatch)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   const mutationKey = buildCoverLookupMutationKey(album);
-  coverLookupPendingMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
   const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
@@ -39357,7 +39898,9 @@ async function saveRemoteCoverFromLookup() {
     console.error('[AlbumHaven][CoverLookup] Failed to save remote cover.', error);
     showToast(error.message || 'Failed to save selected cover art.', 'error', 2800);
   } finally {
-    coverLookupPendingMutations.delete(mutationKey);
+    if (coverLookupPendingMutations.get(mutationKey) === session) {
+      coverLookupPendingMutations.delete(mutationKey);
+    }
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) syncCoverLookupSaveButton();
   }
 }
@@ -39401,7 +39944,7 @@ async function addRemoteCoverLinksFromLookup() {
     }
     if (data.gallery && typeof data.gallery === 'object') {
       state.coverLookup.modal.remoteCover = data.gallery.remote_cover && typeof data.gallery.remote_cover === 'object' ? data.gallery.remote_cover : null;
-      state.coverLookup.modal.localCovers = Array.isArray(data.gallery.local_covers) ? data.gallery.local_covers : [];
+      state.coverLookup.modal.localCovers = sortCoverLookupLocalCovers(data.gallery.local_covers);
       state.coverLookup.modal.otherArt = Array.isArray(data.gallery.other_art) ? data.gallery.other_art : [];
     }
     if (data.task && typeof data.task === 'object') {
@@ -39473,7 +40016,20 @@ async function savePastedCoverFromLookup(imageId) {
         value: task[field],
       },
     ]))]));
-  coverLookupPendingMutations.add(mutationKey);
+  const restoreTaskNotifications = (preservedTaskIds = new Set()) => {
+    state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+      const id = String(task?.id || '');
+      const snapshot = previousTaskNotifications.get(id);
+      if (!snapshot || preservedTaskIds.has(id)) return task;
+      const restored = { ...task };
+      notificationFields.forEach((field) => {
+        if (snapshot[field].present) restored[field] = snapshot[field].value;
+        else delete restored[field];
+      });
+      return restored;
+    });
+  };
+  coverLookupPendingMutations.set(mutationKey, session);
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
   try {
@@ -39517,15 +40073,17 @@ async function savePastedCoverFromLookup(imageId) {
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
     const updatedAlbum = updatedAlbums[0];
+    const selectedCoverPath = String(data.selected_cover_path || updatedAlbum?.cover_path || '').trim();
+    const selectedCoverRevision = String(data.cover_revision || updatedAlbum?.cover_revision || '').trim();
     restorePreviousInventory();
-    if (updatedAlbum?.cover_path) {
+    if (selectedCoverPath) {
       cacheOptimisticLocalCoverGallery(album, {
-        path: updatedAlbum.cover_path,
+        path: selectedCoverPath,
         preview_url: pastedItem.data_url,
-        filename: pastedItem.filename,
+        filename: selectedCoverPath.split(/[\\/]/).pop() || pastedItem.filename,
         width: pastedItem.width,
         height: pastedItem.height,
-        cover_revision: updatedAlbum.cover_revision,
+        cover_revision: selectedCoverRevision,
       });
     }
     clearOptimisticAlbumCovers(updatedAlbums);
@@ -39536,7 +40094,11 @@ async function savePastedCoverFromLookup(imageId) {
     actionedTaskIds.forEach((actionedTaskId) => {
       markCoverLookupTaskActionTaken(actionedTaskId, updatedAlbums[0] || album, { persist: false });
     });
-    renderCoverLookupDrawer({ taskIds: actionedTaskIds });
+    const actionedTaskIdSet = new Set(actionedTaskIds.map((id) => String(id || '')));
+    restoreTaskNotifications(actionedTaskIdSet);
+    renderCoverLookupDrawer({
+      taskIds: Array.from(new Set([...previousTaskNotifications.keys(), ...actionedTaskIdSet])),
+    });
   } catch (error) {
     restorePreviousInventory();
     if (previousAlbum) {
@@ -39546,16 +40108,7 @@ async function savePastedCoverFromLookup(imageId) {
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
     if (previousTaskNotifications.size) {
-      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
-        const snapshot = previousTaskNotifications.get(String(task?.id || ''));
-        if (!snapshot) return task;
-        const restored = { ...task };
-        notificationFields.forEach((field) => {
-          if (snapshot[field].present) restored[field] = snapshot[field].value;
-          else delete restored[field];
-        });
-        return restored;
-      });
+      restoreTaskNotifications();
       renderCoverLookupDrawer({ taskIds: Array.from(previousTaskNotifications.keys()) });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
@@ -51628,7 +52181,7 @@ function handleGalleryBootstrapClick(event) {
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
     const menuAlbumKey = menu?.dataset.albumKey || '';
-    const album = getIndexedAlbum(menuAlbumKey);
+    const album = menu?.albumContext || getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
 
@@ -54265,7 +54818,7 @@ function syncMobilePageShell() {
   header.hidden = !active;
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
-  header.dataset.galleryBarLayout = active?.kind === 'cover-lookup' ? 'mobile-primary' : '';
+  header.dataset.galleryBarLayout = ['cover-lookup', 'non-album'].includes(active?.kind) ? 'mobile-primary' : '';
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {

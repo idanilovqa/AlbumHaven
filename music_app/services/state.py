@@ -532,6 +532,7 @@ def init_state(app) -> None:
         "file_cache": {},
         "last_scan": 0.0,
         "last_error": None,
+        "covers_last_error": None,
         "separate_release_keys": set(),
         "scan_in_progress": False,
         "scan_processed": 0,

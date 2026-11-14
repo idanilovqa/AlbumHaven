@@ -94,6 +94,11 @@ export class ArtistPageSettingsActions {
 
   async expectNoNonAlbumTracks() {
     await this.open();
+    const initialUrl = this.artistPageSettings.page.url();
+    await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();
+    await this.artistPageSettings.nonAlbumTracksButton.click({ force: true, noWaitAfter: true });
+    expect(this.artistPageSettings.page.url()).toBe(initialUrl);
+    await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden();
     await this.artistPageSettings.waitForNonAlbumTracksHydrated();
     await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden();

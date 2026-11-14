@@ -39,6 +39,12 @@ export class CoverLookup extends BasePage {
     this.sectionTitles = this.modalBody.locator('.cover-lookup-section-title');
     this.subsectionTitles = this.modalBody.locator('.cover-lookup-subsection-title');
     this.localCoverCards = this.modalBody.locator('[data-select-local-cover]');
+    this.localSectionCoverCards = this.modalBody
+      .locator('.cover-lookup-section')
+      .filter({ has: this.page.getByRole('heading', { name: /^LOCAL(?: · \d+ images?)?$/ }) })
+      .locator(':scope > .cover-lookup-gallery')
+      .first()
+      .locator('[data-select-local-cover]');
     this.deleteConfirm = page.locator('#cover-lookup-delete-confirm-modal');
     this.deleteConfirmDialog = this.deleteConfirm.getByRole('dialog');
     this.deleteConfirmButton = this.deleteConfirm.getByRole('button', { name: 'Delete', exact: true });

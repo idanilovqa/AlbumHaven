@@ -700,6 +700,52 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+    "case": "FTC-ARTIST-TREE-004 keeps Loose Tracks selected after cold hydration without another navigation action",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:artist-tree-side-bar"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "loose-tracks-selection-survives-cold-hydration",
+      "cold-hydration-does-not-trigger-a-second-navigation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-cold-hydration-loose-tracks",
+      "filesystemCopy": "media/cases/artist-tree-cold-hydration-loose-tracks"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+    "case": "FTC-ARTIST-TREE-005 keeps Artist Tree selected when expanded during cold Loose Tracks hydration",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "account-layout:artist-tree-side-bar"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-tree-selection-survives-cold-loose-tracks-hydration",
+      "cold-hydration-does-not-trigger-a-second-navigation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:artist-tree-cold-hydration-artist-tree",
+      "filesystemCopy": "media/cases/artist-tree-cold-hydration-artist-tree"
+    },
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
@@ -1681,6 +1727,48 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-047 split re-merge redirects unanswered split chooser notification to the survivor",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["cover-lookup:split-remerge-unanswered-notification"],
+    "filesystemScenarios": ["media-copy:split-remerge-unanswered-notification"],
+    "expectedContracts": [
+      "merged-notification-skips-obsolete-split-chooser",
+      "merged-notification-opens-surviving-release-after-terminal-reconciliation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:split-remerge-unanswered-notification",
+      "filesystemCopy": "media/cases/split-remerge-unanswered-notification"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-047 split re-merge redirects chosen split release notification to the survivor",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["cover-lookup:split-remerge-chosen-notification"],
+    "filesystemScenarios": ["media-copy:split-remerge-chosen-notification"],
+    "expectedContracts": [
+      "deleted-chosen-split-release-redirects-to-survivor",
+      "merged-notification-opens-surviving-release-after-terminal-reconciliation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:split-remerge-chosen-notification",
+      "filesystemCopy": "media/cases/split-remerge-chosen-notification"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-037 local cover deletion stays foreground, works, and persists after reopen",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -1696,7 +1784,10 @@
     "expectedContracts": [
       "foreground-local-cover-deletion",
       "confirmation-stacks-above-cover-lookup",
-      "deleted-cover-remains-absent-after-reload"
+        "deleted-cover-remains-absent-after-reload",
+        "local-cover-order-stays-stable-through-settle-and-reopen",
+        "automatic-fallback-selection-remains-saveable",
+        "deleted-local-cover-never-reappears-as-other-art"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:local-cover-deletion",
@@ -3960,7 +4051,9 @@
     ],
     "expectedContracts": [
       "populated-problem-summary",
-      "automatic-problem-detail"
+      "automatic-problem-detail",
+      "selected-problem-detail-readiness",
+      "missing-albums-readiness-and-selection-stability"
     ],
     "ownerApproval": "approved"
   },
@@ -3980,6 +4073,8 @@
     ],
     "expectedContracts": [
       "bounded-first-page-before-complete-tree",
+      "bounded-first-page-readiness",
+      "bounded-multi-filter-stays-open",
       "problematic-filter-icon-stable"
     ],
     "ownerApproval": "approved"
@@ -6792,14 +6887,14 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/galleryHeaderMobileActions.spec.js",
-    "case": "a long gallery name is printed in full above the gallery buttons on mobile",
+    "case": "artist controls move down before a fitting artist name is ellipsized on mobile",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "a long gallery name is printed in full above the gallery buttons on mobile"
+      "artist controls move down before a fitting artist name is ellipsized on mobile"
     ],
     "ownerApproval": "approved"
   },
@@ -11887,6 +11982,131 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "artist-takeover-header-alignment"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "problematic-files compound filter visibly outlines only the funnel and keeps its icon stationary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Problematic Files connected filter visibly outlines only the funnel and keeps its icon stationary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/searchInput.spec.js",
+    "case": "log-history compound filter visibly outlines only the funnel and keeps its icon stationary",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Log History connected filter visibly outlines only the funnel and keeps its icon stationary"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Gallery Header Artist Info keeps one continuous anchored outline without moving its trigger or icon",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-header-artist-info-connected-outline",
+      "gallery-header-artist-info-stable-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Gallery Artist Row Info keeps one continuous anchored outline without moving its trigger or icon",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-artist-row-info-connected-outline",
+      "gallery-artist-row-info-stable-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Gallery Album Types keeps one continuous anchored outline without moving its trigger or icon",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-album-types-connected-outline",
+      "gallery-album-types-stable-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "Gallery Artist Family keeps one continuous anchored outline without moving its trigger or icon",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "gallery-artist-family-connected-outline",
+      "gallery-artist-family-stable-trigger"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "artist info opening scrolls only enough to reveal the full panel above the player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-info-open-time-full-panel-fit"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/triggerAnchorSurface.spec.js",
+    "case": "artist info follows later gallery scrolling without being squeezed above the player",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "artist-info-post-open-scroll-follows-anchor",
+      "artist-info-post-open-scroll-may-pass-behind-player"
     ],
     "ownerApproval": "approved"
   }

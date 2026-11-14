@@ -875,6 +875,18 @@ test('rootFullPayload requests full root albums without changing other browse UR
 }
 
 {
+ const { buildStatusIndicatorTitleParts } = loadHelpers();
+ const parts = JSON.parse(JSON.stringify(buildStatusIndicatorTitleParts({
+ scan_in_progress: true,
+ scan_phase: 'finalizing',
+ scan_processed: 0,
+ scan_total: 0,
+ relations_in_progress: false,
+ })));
+ assert.equal(parts[0], 'Refreshing artist relationships');
+}
+
+{
   const { buildStatusIndicatorTitleParts } = loadHelpers();
   const parts = JSON.parse(JSON.stringify(buildStatusIndicatorTitleParts({
     scan_in_progress: true,

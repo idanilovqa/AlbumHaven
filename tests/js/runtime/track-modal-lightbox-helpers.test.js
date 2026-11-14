@@ -1649,6 +1649,49 @@ async function run() {
   }
 
   {
+    const compactMergedAlbum = {
+      key: 'merged-album',
+      name: 'Merged Album',
+      album_artist: 'Merge Artist',
+      preview_only: true,
+      tracks: [],
+      track_count_preview: 11,
+    };
+    const optimisticMergedAlbum = {
+      ...compactMergedAlbum,
+      preview_only: false,
+      tracks: [{ path: 'C:\\Music\\Merge Artist\\Merged Album\\11 Moved Track.flac' }],
+      track_count_preview: 1,
+    };
+    const canonicalMergedAlbum = {
+      ...compactMergedAlbum,
+      preview_only: false,
+      tracks: Array.from({ length: 11 }, (_value, index) => ({
+        path: `C:\\Music\\Merge Artist\\Merged Album\\${String(index + 1).padStart(2, '0')} Track.flac`,
+      })),
+      track_count_preview: 11,
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactMergedAlbum],
+      fetchedAlbum: canonicalMergedAlbum,
+    });
+
+    context.cacheHydratedTrackModalAlbum(compactMergedAlbum.key, optimisticMergedAlbum, {
+      tagEditMutationClaim: { id: 'merge-in-flight' },
+    });
+
+    assert.strictEqual(
+      context.state.gallery.albumIndex.get(compactMergedAlbum.key),
+      compactMergedAlbum,
+      'a partial optimistic merge must not replace the compact card that declares full membership',
+    );
+    const resolvedMergedAlbum = await context.loadTrackModalAlbumDetails(compactMergedAlbum.key);
+    assert.strictEqual(resolvedMergedAlbum, canonicalMergedAlbum);
+    assert.equal(resolvedMergedAlbum.tracks.length, 11);
+    assert.equal(context.fetchCalls.length, 1, 'opening the merged card must fetch canonical membership');
+  }
+
+  {
     const indexedAlpha = { key: 'alpha', name: 'Album Alpha Preview', preview_only: true };
     const indexedBeta = { key: 'beta', name: 'Album Beta Preview', preview_only: true };
     const hydratedAlpha = {

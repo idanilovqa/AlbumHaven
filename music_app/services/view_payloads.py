@@ -3165,6 +3165,7 @@ def build_status_payload(
         "pending_cover_refresh_after_scan": bool(st.get("pending_cover_refresh_after_scan")),
         "last_scan_display": format_timestamp(float(st.get("last_scan") or 0.0)),
         "last_error": st.get("last_error"),
+        "covers_last_error": st.get("covers_last_error"),
         "album_total": len(st.get("albums", [])),
         "inventory_mutation_revision": int(
             st.get("inventory_mutation_revision") or 0

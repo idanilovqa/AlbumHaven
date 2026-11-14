@@ -971,6 +971,7 @@ function hasPendingLocalCoverSelection() {
   const pendingPath = String(modal.pendingLocalPath || '');
   if (!pendingPath) return false;
   if (pendingPath !== getCoverLookupActiveLocalPath()) return true;
+  if (modal.fallbackLocalSelectionPending) return true;
   // Clicking a cover the app applied automatically confirms it as the user's own choice.
   return !modal.artboxSlot && modal.album?.cover_selection_origin === 'automatic';
 }
@@ -1023,7 +1024,10 @@ function syncCoverLookupSaveButton() {
   const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
   saveButton.hidden = false;
   const clearsArtbox = Boolean(state.coverLookup.modal.artboxSlot && state.coverLookup.modal.artboxCleared);
-  ButtonComponent.setDisabled(saveButton, mutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
+  const fallbackAlreadyApplied = Boolean(
+    state.coverLookup.modal.fallbackLocalSelectionPending && hasLocalSelection,
+  );
+  ButtonComponent.setDisabled(saveButton, (mutationPending && !fallbackAlreadyApplied) || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -3380,9 +3384,43 @@ function buildCoverLookupGalleryCacheKey(album) {
   return String(requestKey || buildTrackPathSignature(album)).trim();
 }
 
+function sortCoverLookupLocalCovers(covers) {
+  const sortKey = (cover) => {
+    const coverPath = String(cover?.path || '');
+    const width = Number(cover?.width || 0);
+    const height = Number(cover?.height || 0);
+    const isSquareish = typeof cover?.is_squareish === 'boolean'
+      ? cover.is_squareish
+      : width > 0 && height > 0 && Math.abs(width - height) / Math.max(width, height) <= 0.18;
+    const explicitArea = cover?.area == null ? NaN : Number(cover.area);
+    const explicitDepth = cover?.depth == null ? NaN : Number(cover.depth);
+    return [
+      isSquareish ? 0 : 1,
+      -(Number.isFinite(explicitArea) ? explicitArea : width * height),
+      Number.isFinite(explicitDepth) ? explicitDepth : 1,
+      String(
+        cover?.sort_relative_path
+        || String(cover?.relative_path || cover?.filename || coverPath).toLowerCase(),
+      ),
+    ];
+  };
+  return Array.isArray(covers) ? covers.slice().sort((left, right) => {
+    const leftKey = sortKey(left);
+    const rightKey = sortKey(right);
+    for (let index = 0; index < leftKey.length; index += 1) {
+      if (leftKey[index] < rightKey[index]) return -1;
+      if (leftKey[index] > rightKey[index]) return 1;
+    }
+    return 0;
+  }) : [];
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
   const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
+  gallery = Array.isArray(gallery.local_covers)
+    ? { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) }
+    : gallery;
   coverLookupGalleryCache.delete(key);
   coverLookupGalleryCache.set(key, JSON.parse(JSON.stringify(gallery)));
   if (coverLookupGalleryCache.size > 50) {
@@ -3398,7 +3436,8 @@ function cachedCoverLookupGalleryPayload(album) {
 function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventory) {
   const key = buildCoverLookupGalleryCacheKey(album);
   const mutation = coverLookupLocalInventoryMutations.get(key);
-  if (!mutation || !Array.isArray(gallery?.local_covers)) return gallery;
+  if (!Array.isArray(gallery?.local_covers)) return gallery;
+  if (!mutation) return { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) };
   let localCovers = gallery.local_covers.slice();
   let otherArt = Array.isArray(gallery.other_art) ? gallery.other_art.slice() : [];
   const hasIncomingPath = path => localCovers.some((cover) => coverLookupLocalPathMatches(cover?.path, path));
@@ -3417,6 +3456,22 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   }
   mutation.addedCovers.forEach((cover, path) => {
     if (confirmLocalInventory && hasIncomingPath(path)) {
+      localCovers = localCovers.map((incoming) => {
+        if (!coverLookupLocalPathMatches(incoming?.path, path)) return incoming;
+        const width = Number(incoming?.width || 0) || Number(cover?.width || 0) || null;
+        const height = Number(incoming?.height || 0) || Number(cover?.height || 0) || null;
+        const incomingResolution = String(incoming?.resolution || '').trim();
+        return {
+          ...cover,
+          ...incoming,
+          preview_url: String(incoming?.preview_url || '').trim() || cover?.preview_url,
+          width,
+          height,
+          resolution: incomingResolution && incomingResolution !== 'Unknown'
+            ? incomingResolution
+            : String(cover?.resolution || '').trim() || (width && height ? `${width}x${height}` : 'Unknown'),
+        };
+      });
       mutation.addedCovers.delete(path);
       return;
     }
@@ -3435,7 +3490,7 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   }
   return {
     ...gallery,
-    local_covers: localCovers,
+    local_covers: sortCoverLookupLocalCovers(localCovers),
     other_art: otherArt,
     ...(optimisticSelectedPath ? {
       active_cover_path: optimisticSelectedPath,
@@ -3557,7 +3612,7 @@ function restoreCoverLookupGalleryAfterRemoteSaveFailure(album, pendingRemoteSav
 function invalidateCoverLookupGalleryCache(album) {
   coverLookupGalleryCache.delete(buildCoverLookupGalleryCacheKey(album));
 }
-const coverLookupPendingMutations = new Set();
+const coverLookupPendingMutations = new Map();
 const coverLookupPendingRemoteSaves = new Map();
 const coverLookupSeenRequests = new WeakMap();
 
@@ -3579,12 +3634,13 @@ function buildCoverLookupMutationKey(album) {
 }
 
 function isCoverLookupMutationPending(album = state.coverLookup.modal.album) {
-  return coverLookupPendingMutations.size > 0
-    && coverLookupPendingMutations.has(buildCoverLookupMutationKey(album));
+  return coverLookupPendingMutations.get(buildCoverLookupMutationKey(album)) === coverLookupModalSession;
 }
 
 async function finishCoverLookupMutation(mutationKey, session) {
-  coverLookupPendingMutations.delete(mutationKey);
+  if (coverLookupPendingMutations.get(mutationKey) === session) {
+    coverLookupPendingMutations.delete(mutationKey);
+  }
   if (buildCoverLookupMutationKey(state.coverLookup.modal.album) !== mutationKey) return;
   state.coverLookup.modal.saving = false;
   syncCoverLookupSaveButton();
@@ -3669,7 +3725,10 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
     const transition = coverLookupOptimisticIdentityByTrackSignature.get(signature)
       || Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).find((candidate) => (
         candidate?.originalAlbum
-        && findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+        && (
+          findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+          || findCoverLookupAlbumReplacement(task?.album_payload, candidate.priorReleases || [])
+        )
       ));
     if (!taskId || !transition) return task;
     if (transition.releases) {
@@ -3679,13 +3738,25 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
     if (!transition.replacement) return task;
     coverLookupSplitReleasesByTask.delete(taskId);
     coverLookupSplitChoiceByTask.delete(taskId);
-    return {
+    const optimisticTask = {
       ...task,
       artist: String(transition.replacement.album_artist || task.artist || ''),
       album: String(transition.replacement.name || task.album || ''),
       year: transition.replacement.year ?? task.year,
       album_payload: transition.replacement,
     };
+    const previousRequestKey = typeof getAlbumRequestKey === 'function'
+      ? String(getAlbumRequestKey(task?.album_payload) || '') : '';
+    const replacementRequestKey = typeof getAlbumRequestKey === 'function'
+      ? String(getAlbumRequestKey(transition.replacement) || '') : '';
+    if (
+      Array.isArray(transition.replacedTasks)
+      && !transition.replacedTasks.some((entry) => entry.taskId === taskId)
+      && (!previousRequestKey || !replacementRequestKey || previousRequestKey !== replacementRequestKey)
+    ) {
+      transition.replacedTasks.push({ taskId, previousTask: task, optimisticTask });
+    }
+    return optimisticTask;
   });
 }
 
@@ -3746,12 +3817,18 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
       [identitySignature, previousIdentity] = priorTransition;
     }
   }
+  if (mergedReplacement) {
+    mergedReplacement = { ...mergedReplacement };
+    delete mergedReplacement.identity_resolution;
+    delete mergedReplacement._identity_split_choices;
+  }
   const nextIdentity = isSplit
     ? { originalAlbum, releases, paths: new Set(originalPaths) }
     : mergedReplacement ? {
       originalAlbum: previousIdentity.originalAlbum || originalAlbum,
       replacement: mergedReplacement,
       paths: previousIdentity.paths,
+      priorReleases: previousIdentity.releases || previousIdentity.priorReleases || [],
     } : updatedSplitReleases ? {
       ...previousIdentity,
       releases: updatedSplitReleases,
@@ -3761,6 +3838,7 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const replacedTasks = [];
   const removedSplits = [];
   const removedChoices = [];
+  if (nextIdentity) nextIdentity.replacedTasks = replacedTasks;
   const nextTasks = (state.coverLookup.tasks || []).map((task) => {
     const taskPaths = getAlbumTrackPaths(task?.album_payload);
     const taskId = String(task?.id || '');
@@ -3773,7 +3851,20 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
       taskIds.push(taskId);
       return task;
     }
-    const knownSplit = coverLookupSplitReleasesByTask.get(taskId);
+    let knownSplit = coverLookupSplitReleasesByTask.get(taskId);
+    if (updatedSplitReleases && knownSplit === previousIdentity?.releases) {
+      knownSplit = updatedSplitReleases;
+      coverLookupSplitReleasesByTask.set(taskId, knownSplit);
+      const chosen = coverLookupSplitChoiceByTask.get(taskId);
+      if (chosen) {
+        coverLookupSplitChoiceByTask.set(
+          taskId,
+          findCoverLookupAlbumReplacement(chosen, knownSplit) || chosen,
+        );
+      }
+      taskIds.push(taskId);
+      return task;
+    }
     const knownSplitPaths = new Set(
       (knownSplit || []).flatMap((album) => Array.from(getAlbumTrackPaths(album))),
     );
@@ -3848,10 +3939,21 @@ function clearCoverLookupOptimisticSplit(recordedSplit) {
       if (releases !== recordedSplit.nextIdentity.releases) return;
       if (recordedSplit.previousIdentity?.releases) {
         coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+        const chosen = coverLookupSplitChoiceByTask.get(taskId);
+        if (chosen) {
+          const restoredChoice = findCoverLookupAlbumReplacement(
+            chosen,
+            recordedSplit.previousIdentity.releases,
+          ) || chosen;
+          coverLookupSplitChoiceByTask.set(taskId, {
+            ...restoredChoice,
+            identity_resolution: 'album_split_choice',
+          });
+        }
       } else {
         coverLookupSplitReleasesByTask.delete(taskId);
+        coverLookupSplitChoiceByTask.delete(taskId);
       }
-      coverLookupSplitChoiceByTask.delete(taskId);
     });
   }
   (recordedSplit?.taskIds || []).forEach((taskId) => {
@@ -3879,6 +3981,13 @@ function clearCoverLookupOptimisticSplit(recordedSplit) {
       };
     });
   });
+  if (recordedSplit?.previousIdentity?.releases) {
+    (recordedSplit?.replacedTasks || []).forEach(({ taskId }) => {
+      if (!coverLookupSplitReleasesByTask.has(taskId)) {
+        coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+      }
+    });
+  }
   (recordedSplit?.removedSplits || []).forEach(([taskId, releases]) => {
     if (!coverLookupSplitReleasesByTask.has(taskId)) {
       coverLookupSplitReleasesByTask.set(taskId, releases);
@@ -4042,6 +4151,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
@@ -4081,7 +4191,9 @@ async function openCoverLookupModal(album, options = {}) {
   if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery, { confirmLocalInventory: false });
   // UI-5 (owner, 11-09): a notification may belong to an album that was split; until its first gallery answer
   // says otherwise, the lookup stays invisible so a split goes straight to the chooser without a flash of it.
-  const awaitIdentity = Boolean(requestedTaskId) && album.identity_resolution !== 'album_split_choice';
+  const awaitIdentity = Boolean(requestedTaskId)
+    && !cachedGallery
+    && album.identity_resolution !== 'album_split_choice';
   els.overlay.toggleAttribute?.('data-awaiting-identity', awaitIdentity);
   const revealSession = coverLookupModalSession;
   const reveal = () => { if (revealSession === coverLookupModalSession) els.overlay.removeAttribute?.('data-awaiting-identity'); };
@@ -4117,6 +4229,7 @@ function closeCoverLookupModal({ immediate = false } = {}) {
   els.overlay.classList?.remove?.('is-mobile-sheet');
   els.overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.remoteCover = null;
@@ -4358,7 +4471,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     selectedPath: previousInventoryMutation.selectedPath,
   } : null;
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
-  coverLookupPendingMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   coverLookupGalleryRequest += 1;
   try {
     state.coverLookup.modal.saving = true;
@@ -4435,11 +4548,20 @@ async function deleteLocalCoverFromLookup(sourcePath) {
   const previousLocalCovers = Array.isArray(state.coverLookup.modal.localCovers)
     ? state.coverLookup.modal.localCovers.slice()
     : [];
+  const previousPendingLocalPath = String(state.coverLookup.modal.pendingLocalPath || '');
+  const previousActiveLocalSelectionPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
+  const previousFallbackLocalSelectionPending = Boolean(state.coverLookup.modal.fallbackLocalSelectionPending);
   const previousAlbum = deepCloneJson(album);
   const remainingLocalCovers = previousLocalCovers.filter((item) => String(item?.path || '') !== String(sourcePath || ''));
   const fallbackLocalCoverPath = String(remainingLocalCovers[0]?.path || '').trim();
+  const deletedPendingLocalSelection = Boolean(previousPendingLocalPath)
+    && coverLookupLocalPathMatches(previousPendingLocalPath, sourcePath);
+  const deletedActiveLocalSelection = coverLookupLocalPathMatches(
+    previousActiveLocalSelectionPath || album?.cover_path,
+    sourcePath,
+  );
   const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(album, sourcePath, fallbackLocalCoverPath);
-  coverLookupPendingMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   invalidateCoverLookupGalleryCache(album);
   coverLookupGalleryRequest += 1;
   try {
@@ -4450,6 +4572,14 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     }
     if (String(state.coverLookup.modal.activeLocalSelectionPath || '') === String(sourcePath || '')) {
       state.coverLookup.modal.activeLocalSelectionPath = '';
+    }
+    if (
+      fallbackLocalCoverPath
+      && (deletedPendingLocalSelection
+        || (deletedActiveLocalSelection && !previousPendingLocalPath))
+    ) {
+      state.coverLookup.modal.pendingLocalPath = fallbackLocalCoverPath;
+      state.coverLookup.modal.fallbackLocalSelectionPending = true;
     }
     state.coverLookup.modal.pendingPastedImageId = '';
     state.coverLookup.modal.selectedRemoteId = '';
@@ -4469,14 +4599,22 @@ async function deleteLocalCoverFromLookup(sourcePath) {
       throw new Error(data.error || 'Failed to delete local cover art');
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
-    const selectedFallbackPath = String(updatedAlbums[0]?.cover_path || '');
+    const selectedFallbackPath = String(
+      updatedAlbums[0]?.cover_path
+      || data.gallery?.selected_source_path
+      || fallbackLocalCoverPath,
+    );
     const inventoryKey = buildCoverLookupGalleryCacheKey(album);
     const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
       || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
     inventoryMutation.addedCovers.delete(String(sourcePath));
     inventoryMutation.deletedPaths.add(String(sourcePath));
-    if (String(previousAlbum?.cover_path || '') === String(sourcePath)) {
+    if (deletedActiveLocalSelection) {
       inventoryMutation.selectedPath = selectedFallbackPath;
+      if (ownsModal() && !previousPendingLocalPath) {
+        state.coverLookup.modal.pendingLocalPath = selectedFallbackPath;
+        state.coverLookup.modal.fallbackLocalSelectionPending = Boolean(selectedFallbackPath);
+      }
     }
     coverLookupLocalInventoryMutations.set(inventoryKey, inventoryMutation);
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
@@ -4493,7 +4631,12 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     }
   } catch (error) {
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
-    if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
+    if (ownsModal()) {
+      state.coverLookup.modal.localCovers = previousLocalCovers;
+      state.coverLookup.modal.pendingLocalPath = previousPendingLocalPath;
+      state.coverLookup.modal.activeLocalSelectionPath = previousActiveLocalSelectionPath;
+      state.coverLookup.modal.fallbackLocalSelectionPending = previousFallbackLocalSelectionPending;
+    }
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
@@ -4525,6 +4668,7 @@ function selectRemoteCoverFromLookup(candidateId) {
   }
   modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
@@ -4558,6 +4702,7 @@ function selectRemoteCoverFromLookup(candidateId) {
 
 function selectPastedCoverFromLookup(imageId) {
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.pendingPastedImageId = String(imageId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
@@ -4592,7 +4737,7 @@ async function saveRemoteCoverFromLookup() {
   if (!isSelectableRemoteCoverCandidate(selectedMatch)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
   const mutationKey = buildCoverLookupMutationKey(album);
-  coverLookupPendingMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
   const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
@@ -4686,7 +4831,9 @@ async function saveRemoteCoverFromLookup() {
     console.error('[AlbumHaven][CoverLookup] Failed to save remote cover.', error);
     showToast(error.message || 'Failed to save selected cover art.', 'error', 2800);
   } finally {
-    coverLookupPendingMutations.delete(mutationKey);
+    if (coverLookupPendingMutations.get(mutationKey) === session) {
+      coverLookupPendingMutations.delete(mutationKey);
+    }
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) syncCoverLookupSaveButton();
   }
 }
@@ -4730,7 +4877,7 @@ async function addRemoteCoverLinksFromLookup() {
     }
     if (data.gallery && typeof data.gallery === 'object') {
       state.coverLookup.modal.remoteCover = data.gallery.remote_cover && typeof data.gallery.remote_cover === 'object' ? data.gallery.remote_cover : null;
-      state.coverLookup.modal.localCovers = Array.isArray(data.gallery.local_covers) ? data.gallery.local_covers : [];
+      state.coverLookup.modal.localCovers = sortCoverLookupLocalCovers(data.gallery.local_covers);
       state.coverLookup.modal.otherArt = Array.isArray(data.gallery.other_art) ? data.gallery.other_art : [];
     }
     if (data.task && typeof data.task === 'object') {
@@ -4802,7 +4949,20 @@ async function savePastedCoverFromLookup(imageId) {
         value: task[field],
       },
     ]))]));
-  coverLookupPendingMutations.add(mutationKey);
+  const restoreTaskNotifications = (preservedTaskIds = new Set()) => {
+    state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+      const id = String(task?.id || '');
+      const snapshot = previousTaskNotifications.get(id);
+      if (!snapshot || preservedTaskIds.has(id)) return task;
+      const restored = { ...task };
+      notificationFields.forEach((field) => {
+        if (snapshot[field].present) restored[field] = snapshot[field].value;
+        else delete restored[field];
+      });
+      return restored;
+    });
+  };
+  coverLookupPendingMutations.set(mutationKey, session);
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
   try {
@@ -4846,15 +5006,17 @@ async function savePastedCoverFromLookup(imageId) {
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
     const updatedAlbum = updatedAlbums[0];
+    const selectedCoverPath = String(data.selected_cover_path || updatedAlbum?.cover_path || '').trim();
+    const selectedCoverRevision = String(data.cover_revision || updatedAlbum?.cover_revision || '').trim();
     restorePreviousInventory();
-    if (updatedAlbum?.cover_path) {
+    if (selectedCoverPath) {
       cacheOptimisticLocalCoverGallery(album, {
-        path: updatedAlbum.cover_path,
+        path: selectedCoverPath,
         preview_url: pastedItem.data_url,
-        filename: pastedItem.filename,
+        filename: selectedCoverPath.split(/[\\/]/).pop() || pastedItem.filename,
         width: pastedItem.width,
         height: pastedItem.height,
-        cover_revision: updatedAlbum.cover_revision,
+        cover_revision: selectedCoverRevision,
       });
     }
     clearOptimisticAlbumCovers(updatedAlbums);
@@ -4865,7 +5027,11 @@ async function savePastedCoverFromLookup(imageId) {
     actionedTaskIds.forEach((actionedTaskId) => {
       markCoverLookupTaskActionTaken(actionedTaskId, updatedAlbums[0] || album, { persist: false });
     });
-    renderCoverLookupDrawer({ taskIds: actionedTaskIds });
+    const actionedTaskIdSet = new Set(actionedTaskIds.map((id) => String(id || '')));
+    restoreTaskNotifications(actionedTaskIdSet);
+    renderCoverLookupDrawer({
+      taskIds: Array.from(new Set([...previousTaskNotifications.keys(), ...actionedTaskIdSet])),
+    });
   } catch (error) {
     restorePreviousInventory();
     if (previousAlbum) {
@@ -4875,16 +5041,7 @@ async function savePastedCoverFromLookup(imageId) {
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
     if (previousTaskNotifications.size) {
-      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
-        const snapshot = previousTaskNotifications.get(String(task?.id || ''));
-        if (!snapshot) return task;
-        const restored = { ...task };
-        notificationFields.forEach((field) => {
-          if (snapshot[field].present) restored[field] = snapshot[field].value;
-          else delete restored[field];
-        });
-        return restored;
-      });
+      restoreTaskNotifications();
       renderCoverLookupDrawer({ taskIds: Array.from(previousTaskNotifications.keys()) });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);

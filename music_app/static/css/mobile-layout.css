@@ -104,6 +104,10 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .gallery-bar__title { min-height: 40px; margin: 0; font-size: 18px; line-height: 1.3; min-width: 0; gap: 6px; }
   .gallery-bar__title > [data-gallery-context-name] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gallery-bar__summary { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+  .mobile-page-header { display: flex; align-items: flex-start; gap: 6px; }
+  .mobile-page-header > .gallery-bar__context { display: block; flex: 1 1 auto; min-width: 0; }
+  .mobile-page-header > [data-mobile-back] { align-self: flex-start; }
+  .mobile-page-header > .gallery-bar__actions { align-self: flex-start; }
   .gallery-bar__actions { flex-shrink: 0; gap: 4px; align-self: flex-start; }
   .gallery-bar :is(.gallery-action-button, .action-button), .gallery-view-cluster { --unfolding-action-size: 40px; }
   .gallery-bar :is(.gallery-action-button, .action-button) { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
@@ -641,7 +645,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__context { display: contents; }
   /* Hit areas remain 40px; they must not create a 40px text row above the counts. */
   [data-gallery-bar-layout="mobile-primary"] .gallery-bar__title {
-    grid-column: 2 / -1; min-height: 24px; line-height: 24px; align-items: flex-start;
+    grid-column: 2 / -1; min-height: 24px; line-height: 24px; align-items: flex-start; gap: 4px;
   }
   [data-gallery-bar-layout="mobile-primary"] :is(#mobile-library-button, .page-gallery-bar__back) {
     position: absolute; left: 0; top: -8px;
@@ -655,13 +659,23 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: 3; grid-row: 2; justify-self: end; align-self: start; margin: 0;
   }
-  /* Non-artist Gallery contexts may give a long name its own row. Artist headers remain two lines and ellipsize. */
+  /* Non-artist contexts may wrap. Artist headers stay two lines and move controls to row two first. */
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"] .gallery-bar__title { grid-row: 1; align-items: center; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) .gallery-bar__title { grid-column: 2; }
+[data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-controls-below .gallery-bar__title { grid-column: 2 / -1; }
   /* Owner (11-09): the 40px buttons sit on the 24px title line without making it taller, so the count follows the
      title as closely as on web. */
-  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping) > .gallery-bar__actions { grid-row: 1; margin-block: -8px; }
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping):not(.is-controls-below) > .gallery-bar__actions { grid-row: 1; margin-block: -8px; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-name-wrapping .gallery-bar__title > [data-gallery-context-name] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] { grid-template-rows: 24px 20px 20px; }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-metadata { display: none; }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-mobile-summary {
+    display: flex; grid-column: 2; grid-row: 2; align-items: center; gap: 6px; min-width: 0;
+    color: var(--muted); font-size: 12px; line-height: 20px; white-space: nowrap; overflow: hidden;
+  }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__summary { grid-column: 2 / -1; grid-row: 3; margin: 0; min-width: 0; }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__summary-count { display: none; }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-genre::before { display: none; }
   /* UI-9 (owner): page headers match the Gallery header exactly: same title row, buttons on it, subtitle under
      it. Page titles are short; one that does not fit wraps inside its own column. */
   .page-gallery-bar[data-gallery-bar-layout="mobile-primary"] { grid-template-rows: minmax(32px, auto) auto; }
@@ -817,6 +831,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   }
   .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="utilities"]) > #mobile-page-header > .gallery-bar__context { align-self: flex-start; }
   .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="utilities"]) > #mobile-page-header #mobile-page-title { min-height: 0; line-height: 24px; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="non-album"]) > #mobile-page-header[data-gallery-bar-layout="mobile-primary"] { grid-template-rows: auto auto; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="non-album"]) > #mobile-page-header .gallery-bar__summary { display: flex; }
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] :is(.gallery-bar__title, .gallery-bar__summary) {
     display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }

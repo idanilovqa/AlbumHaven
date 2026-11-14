@@ -16,6 +16,7 @@ function hideAlbumCardContextMenu() {
   menu.hidden = true;
   menu.dataset.albumKey = '';
   menu.dataset.menuKind = '';
+  menu.albumContext = null;
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
@@ -26,6 +27,7 @@ function showAlbumCardContextMenu(x, y, album) {
   menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   menu.dataset.menuKind = 'album';
+  menu.albumContext = album || null;
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
     ? state.view.manual_version_links
@@ -433,7 +435,7 @@ async function fetchNonAlbumPayload(url) {
 function hydrateArtistNonAlbumAvailability() {
   const view = state.view || {};
   const selectedArtist = String(view.selected_artist || '').trim();
-  if (!selectedArtist || String(view.query || '').trim()) return Promise.resolve(0);
+  if (!selectedArtist) return Promise.resolve(0);
   const url = buildArtistNonAlbumRequestUrl(view, { availability: true });
   const scopeKey = getDeferredNonAlbumScopeKey(url);
   if (hasHydratedArtistNonAlbumAvailability(view)) {
@@ -454,6 +456,10 @@ function hydrateArtistNonAlbumAvailability() {
       return state.view.non_album_track_count;
     }
     state.view.non_album_track_count_scope = scopeKey;
+    if (String(state.view.query || '').trim()
+        && getVisibleNonAlbumTracks().length !== state.view.non_album_track_count) {
+      state.view.non_album_tracks_deferred = true;
+    }
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return state.view.non_album_track_count;
   }).finally(() => {
@@ -541,8 +547,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   }
   const view = state.view || {};
   const requestedArtist = String(view.selected_artist || '');
-  const familyOnly = Boolean(String(view.selected_artist || '').trim())
-    && !String(view.query || '').trim();
+  const familyOnly = Boolean(String(view.selected_artist || '').trim());
   const requestUrl = familyOnly
     ? buildArtistNonAlbumRequestUrl(view)
     : new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
@@ -556,8 +561,7 @@ async function hydrateDeferredNonAlbumTracks(options = {}) {
   request.promise = (async () => {
     const payload = await fetchNonAlbumPayload(requestUrl);
     const currentView = state.view || {};
-    const currentFamilyOnly = Boolean(String(currentView.selected_artist || '').trim())
-      && !String(currentView.query || '').trim();
+    const currentFamilyOnly = Boolean(String(currentView.selected_artist || '').trim());
     const currentScopeUrl = currentFamilyOnly
       ? buildArtistNonAlbumRequestUrl(currentView)
       : new URL(buildApiUrl(currentView, { omitSidebar: true }), 'http://localhost');
@@ -604,9 +608,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const yearLabel = String(item.year_label || '').trim();
     return {
       path: trackPath,
-      // Loose Tracks rows read "Artist / Title" with the year underneath.
+      // Loose Tracks rows lead with the title; artist and year share the quieter second line.
       title,
-      titlePrefix: knownArtist,
       playbackTitle: title,
       artist: String(item.artist || ''),
       albumArtist: String(item.album_artist || ''),
@@ -616,7 +619,7 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       duration,
       originalDuration: duration,
       trackNumber: rowIndex,
-      secondaryArtist: yearLabel && yearLabel !== 'Unknown' ? yearLabel : '',
+      secondaryArtist: [knownArtist, yearLabel && yearLabel !== 'Unknown' ? yearLabel : ''].filter(Boolean).join(' • '),
       displayPath,
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
@@ -658,7 +661,7 @@ function closeNonAlbumPageOnTreeNavigation(event) {
 }
 
 // Desktop shows Loose Tracks as a page over the gallery in the main surface; mobile uses the mobile page outlet.
-function setNonAlbumPagePresentation(overlay, open, navigationActive = open) {
+function setNonAlbumPagePresentation(overlay, open, navigationActive = open, syncNavigation = true) {
   const main = document.getElementById('shell-main-surface');
   const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
     && !overlay.classList.contains('is-mobile-page');
@@ -674,18 +677,28 @@ function setNonAlbumPagePresentation(overlay, open, navigationActive = open) {
     else if (!overlay.classList.contains('is-mobile-page')) { dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); }
   }
   const libraryWideOpen = Boolean(navigationActive && state.ui.nonAlbumLibraryWide);
-  syncNonAlbumNavigationPresentation(libraryWideOpen, Boolean(page));
+  if (syncNavigation) syncNonAlbumNavigationPresentation(libraryWideOpen, Boolean(page));
   return Boolean(page);
 }
 
 function syncNonAlbumNavigationPresentation(libraryWideOpen, page) {
   syncLibraryNavigationMode(libraryWideOpen && !page ? 'collections' : 'artists');
-  if (page && libraryWideOpen) {
-    document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
-      button.classList.add('is-selected');
-      button.setAttribute('aria-current', 'page');
-    });
-  }
+  if (page && libraryWideOpen) syncCompactLibraryNavigation(true);
+}
+
+function syncCompactLibraryNavigation(looseTracks) {
+  const setSelected = (button, selected) => {
+    if (!button) return;
+    if (selected) button.classList.add('is-selected');
+    else button.classList.remove('is-selected');
+    button.setAttribute('aria-pressed', String(selected));
+  };
+  setSelected(document.getElementById('artist-tree-navigation-button'), !looseTracks);
+  document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
+    setSelected(button, looseTracks);
+    if (looseTracks) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
 }
 
 // Mobile navigation has two explicit modes: Artists and Loose Tracks (the Custom Collections tree).
@@ -703,11 +716,7 @@ function syncLibraryNavigationMode(mode) {
   if (collectionsTree) collectionsTree.hidden = !collections;
   if (artistsTree) artistsTree.hidden = collections;
   collectionsTree?.querySelectorAll('[data-navigation-tree-item]').forEach((item) => window.NavigationTree?.setItemSelected(item, collections));
-  document.querySelectorAll('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]').forEach((button) => {
-    button.classList.toggle('is-selected', collections);
-    if (collections) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  });
+  syncCompactLibraryNavigation(collections);
 }
 
 function buildNonAlbumTrackSectionsMarkup(items) {
@@ -881,13 +890,9 @@ function openNonAlbumModal(options = {}) {
     })
     : '';
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
-      variant: 'copy',
-      title: 'Loose Tracks',
+    els.header.innerHTML = buildLooseTracksPageHeaderHtml({
       subtitle,
       leadingHtml,
-      titleId: 'non-album-modal-title',
-      subtitleId: 'non-album-modal-subtitle',
       actionsHtml: looseTracks.length ? buildLooseTracksHeaderActionsHtml() : '',
     });
   }
@@ -902,7 +907,8 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  if (!setNonAlbumPagePresentation(els.overlay, true) && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
+  if (!setNonAlbumPagePresentation(els.overlay, true, true, options.syncNavigation !== false)
+      && !els.overlay.classList.contains('is-mobile-page')) document.body.classList.add('modal-open');
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
@@ -924,7 +930,7 @@ function openNonAlbumModal(options = {}) {
   if (hydrationPending) {
     hydrateDeferredNonAlbumTracks({ libraryWide, resolveLibrary: true })
       .then(() => {
-        if (!els.overlay.hidden) openNonAlbumModal(options);
+        if (!els.overlay.hidden) openNonAlbumModal({ ...options, syncNavigation: false });
       })
       .catch((error) => {
         if (!els.overlay.hidden) {

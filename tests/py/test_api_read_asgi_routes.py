@@ -73,6 +73,21 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["log_history_revision"] == ""
 
 
+def test_asgi_status_route_keeps_scan_and_cover_failures_separate(app):
+    asgi_app = _make_asgi_app()
+    asgi_app.state.library_state.update(
+        last_error="scan failed",
+        covers_last_error="cover refresh failed",
+    )
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["last_error"] == "scan failed"
+    assert payload["covers_last_error"] == "cover refresh failed"
+
+
 @pytest.mark.parametrize("owner", [True, False])
 def test_asgi_status_allows_musicbrainz_sync_only_for_the_library_owner(app, owner):
     from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
@@ -742,10 +757,16 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
     assert len(postgres_calls) == 1
 
 
-def test_asgi_loose_track_availability_forwards_artist_scope(
+@pytest.mark.parametrize(
+    ("artist", "count"),
+    [("ДДТ", 3), ("Начало Века", 0)],
+)
+def test_asgi_loose_track_availability_forwards_cyrillic_artist_scope(
     app,
     asgi_app,
     monkeypatch,
+    artist,
+    count,
 ):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -754,10 +775,11 @@ def test_asgi_loose_track_availability_forwards_artist_scope(
             assert config is app.config
 
         def build_library_loose_tracks_payload(self, *, query_params=None):
-            assert query_params.get("artist") == "Karfagen"
+            assert query_params.get("artist") == artist
             assert query_params.get("availability") == "1"
             assert query_params.get("category") == "main_library"
-            return {"non_album_track_count": 15}
+            assert query_params.get("q") is None
+            return {"non_album_track_count": count}
 
     monkeypatch.setattr(
         asgi_read_routes,
@@ -774,12 +796,12 @@ def test_asgi_loose_track_availability_forwards_artist_scope(
         asgi_app,
         "GET",
         "/library/loose-tracks",
-        query={"artist": "Karfagen", "availability": "1", "category": "main_library"},
+        query={"artist": artist, "availability": "1", "category": "main_library"},
     )
 
     assert status == 200
     assert _decode_json(body) == {
-        "non_album_track_count": 15,
+        "non_album_track_count": count,
         "inventory_mutation_revision": 0,
     }
 
@@ -5215,8 +5237,9 @@ def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
         def __init__(self, _config):
             pass
 
-        def build_problematic_files_page(self, *, limit):
+        def build_problematic_files_page(self, *, limit, cursor=""):
             assert limit == 50
+            assert cursor == "page-2"
             return {
                 "count": 1,
                 "items": [{"key": "bounded-album", "detail_loaded": False}],
@@ -5238,12 +5261,48 @@ def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
         asgi_app,
         "GET",
         "/utilities/problematic-files",
-        query={"limit": "50"},
+        query={"limit": "50", "cursor": "page-2"},
     )
 
     assert status == 200
     payload = _decode_json(body)
     assert [item["key"] for item in payload["items"]] == ["bounded-album"]
+
+
+def test_asgi_problematic_files_rejects_malformed_base_and_search_cursors(
+    app,
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_page(self, **_options):
+            raise ValueError("Invalid Problematic Files page cursor.")
+
+        def build_problematic_files_search(self, *_args, **_options):
+            raise ValueError("Invalid Problematic Files search cursor.")
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+
+    base_status, _headers, base_body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/problematic-files",
+        query={"limit": "50", "cursor": "malformed"},
+    )
+    search_status, _headers, search_body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/problematic-files",
+        query={"q": "needle", "limit": "50", "cursor": "malformed"},
+    )
+
+    assert base_status == 422
+    assert search_status == 422
+    assert json.loads(base_body)["error"] == "Invalid Problematic Files page cursor."
+    assert json.loads(search_body)["error"] == "Invalid Problematic Files search cursor."
 
 
 def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_runtime_hydration(
@@ -5281,8 +5340,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_page(self, *, limit):
+        def build_problematic_files_page(self, *, limit, cursor=""):
             assert limit == 50
+            assert cursor == ""
             return {
                 "count": 1,
                 "items": [{"key": "bounded-album", "detail_loaded": False}],
@@ -5293,8 +5353,10 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_search(self, query):
+        def build_problematic_files_search(self, query, *, limit=50, cursor=""):
             assert query == "needle"
+            assert limit == 50
+            assert cursor == ""
             return {
                 "count": 1,
                 "items": [{"key": "needle-album", "detail_loaded": False}],

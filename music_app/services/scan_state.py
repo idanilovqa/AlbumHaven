@@ -155,27 +155,8 @@ def finalize_post_scan_actions(
         start_manual_cover_refresh(force_search=pending_cover_force_search)
         return
 
-    current_album_keys = album_key_snapshot(library_state.get("albums", []))
-    added_album_keys = current_album_keys - previous_album_keys
-    if added_album_keys:
-        log_app_event(
-            config,
-            logger,
-            "Cover art refresh queued after indexing",
-            level="info",
-            added_album_count=len(added_album_keys),
-        )
-        start_background_cover_refresh()
-        return
-
-    log_app_event(
-        config,
-        logger,
-        "Cover art refresh queued after indexing",
-        level="info",
-        reason="automatic_candidate_refresh",
-    )
-    start_background_cover_refresh()
+    # A scan publishes inventory. Cover-provider crawls are explicit user work;
+    # starting one here turns an ordinary scan into a library-wide remote crawl.
 
 
 # A full scan of a slow library can take hours; any watcher or tag-edit
@@ -375,6 +356,7 @@ def refresh_library_state(
 
     if file_cache and (not existing_cache or disk_last_scan > last_scan):
         rebuilt_albums = build_albums_from_file_cache(file_cache, set(scan_separate_release_keys or set()))
+        previous_album_keys = album_key_snapshot(rebuilt_albums)
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["file_cache"] = file_cache

@@ -35,7 +35,7 @@ test('exception editor uses a predefined-only anchored listbox without a text ca
 
   assert.match(template, /data-tag-editor-exception-anchor/);
   assert.match(template, /class="ui-dropdown-control"/);
-  assert.match(template, /data-tag-field="exception_type"[^>]+role="combobox"[^>]+readonly/);
+  assert.match(template, /data-tag-field="exception_type"[^>]+role="combobox"[^>]+readonly[^>]+placeholder="None"/);
   assert.match(template, /aria-controls="tag-editor-exception-menu"/);
   assert.match(template, /id="tag-editor-exception-menu"[^>]+role="listbox"[^>]+hidden/);
   assert.doesNotMatch(template, /<datalist id="tag-editor-exception-types"/);
@@ -179,6 +179,40 @@ test('exception listbox renders every library-scoped choice as a selectable opti
   assert.match(html, /data-tag-editor-exception-option="Custom Collection"/);
   assert.match(html, /aria-selected="true"[^>]+data-tag-editor-exception-option="Custom Collection"/);
   assert.match(html, /Archive &amp; outtake/);
+});
+
+test('selecting None preserves an empty exception value and reports the change', () => {
+  const context = loadHelpers();
+  const inputEvents = [];
+  const input = {
+    value: 'Interview',
+    dispatchEvent(event) { inputEvents.push(event.type); },
+  };
+  let closeOptions = null;
+  context.Event = class Event {
+    constructor(type) { this.type = type; }
+  };
+  context.getTagEditorElements = () => ({
+    form: {
+      querySelector(selector) {
+        return selector === '[data-tag-field="exception_type"]' ? input : null;
+      },
+    },
+  });
+  context.closeTagEditorExceptionMenu = (options) => { closeOptions = options; };
+
+  context.selectTagEditorExceptionOption('');
+
+  assert.equal(input.value, '');
+  assert.deepEqual(inputEvents, ['input']);
+  assert.equal(closeOptions?.restoreFocus, true);
+});
+
+test('tag editor rendering keeps None visible for an empty exception', () => {
+  assert.match(
+    helperSource,
+    /input\.placeholder\s*=\s*displayValue\.mixed\s*\?\s*'Mixed values'\s*:\s*\(field === 'exception_type' \? 'None' : ''\)/,
+  );
 });
 
 test('exception listbox supports selection, dismissal, and keyboard navigation', () => {

@@ -40,8 +40,18 @@ operate, or contribute to the application.
   existing side-bar buttons in their style. Never place the same control in
   two places, and never render an empty or icon-less button.
 - Artist Gallery headers stay exactly two lines on web and mobile: artist name,
-  info icon, and only the highest-ranked genre on line one; album count, a fat
-  dot, and country on line two. Neither line may wrap.
+  info icon, and country on line one; album count, a fat dot, and only the
+  highest-ranked genre on line two. Neither line may wrap. If the first line
+  collides with Gallery controls, move those controls to line two before
+  ellipsizing the artist name.
+- After changing a Gallery dropdown invocation or its shared connected-anchor
+  owner (`music_app/templates/index.html`, `music_app/static/js/runtime/gallery-main-components.js`,
+  `music_app/static/js/runtime/gallery-main-interactions.js`, `music_app/static/js/runtime/trigger-anchor.js`,
+  `music_app/static/css/gallery-main.css`, or `music_app/static/css/runtime/trigger-anchor.css`), immediately run
+  `npx playwright test --config=playwright.component.config.js triggerAnchorSurface.spec.js --grep "Gallery (Header Artist Info|Artist Row Info|Album Types|Artist Family) keeps one continuous anchored outline"`.
+  The controlled visual cases must retain a continuous trigger-to-panel outline
+  and unchanged trigger/icon geometry for both Artist Info invocations, Album
+  Types, and Artist Family.
 - Postgres migrations (owner rule, 2026-11-10): every file in `migrations/postgres`
   has a unique four-digit number. Numbers may leave gaps and may be applied out
   of order, but a new migration never reuses a number that main or any open pull

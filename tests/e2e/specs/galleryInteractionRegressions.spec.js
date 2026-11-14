@@ -153,6 +153,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
           panelBottom:panelBounds.bottom,
           panelTop:panelBounds.top,
           playerTop:playerBounds?.top??window.innerHeight,
+          triggerOwner:trigger?.closest('.family-artist-header')?'divider':(trigger?.closest('[data-gallery-bar-instance="gallery"]')?'header':'unknown'),
           triggerTop:triggerBounds?.top??null,
           triggerBottom:triggerBounds?.bottom??null,
           triggerExpanded:trigger?.getAttribute('aria-expanded')==='true',
@@ -170,6 +171,9 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(opened.panelClipPath).toBe('none');
       expect(opened.panelBottom).toBeLessThanOrEqual(opened.playerTop+1);
       expect(opened.panelTop).toBeCloseTo(opened.triggerBottom-1,0);
+      expect(opened.triggerOwner).toBe('divider');
+      await expect(ui.headingInfo).toHaveAttribute('aria-expanded','true');
+      await expect(ui.toolbarInfo).toHaveAttribute('aria-expanded','false');
 
       const galleryBounds=await ui.galleryScroll.boundingBox();
       expect(galleryBounds).not.toBeNull();
@@ -205,6 +209,11 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
       expect(farScrolled.panelTop).toBeGreaterThanOrEqual(0);
       expect(farScrolled.panelBottom).toBeLessThanOrEqual(farScrolled.playerTop+1);
       expect(farScrolled.panelTop).toBeCloseTo(farScrolled.triggerBottom-1,0);
+      expect(farScrolled.triggerOwner).toBe('header');
+      await expect(ui.headingInfo).toHaveAttribute('aria-expanded','false');
+      await expect(ui.toolbarInfo).toHaveAttribute('aria-expanded','true');
+      await expect(ui.infoPanel.getByRole('heading',{name:'Neal Morse',exact:true})).toBeVisible();
+      await expect(ui.infoSummary).toBeInViewport();
       await page.keyboard.press('Escape');
       await expect(ui.infoPanel).toBeHidden();
     } finally {

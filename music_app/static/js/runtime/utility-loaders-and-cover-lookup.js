@@ -1,4 +1,5 @@
 async function loadProblematicFiles(force = false, options = {}) {
+  if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
   const renderRequested = () => (options.render === 'when-open'
     ? isUtilityModalOpen()
@@ -45,6 +46,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     && state.utility.problematicFilesComplete === true;
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
+  state.utility.problematicArtistItems = [];
+  state.utility.problematicArtistHasMore = true;
+  state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
   if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
@@ -86,11 +90,17 @@ async function loadProblematicFiles(force = false, options = {}) {
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
+        if (Array.isArray(data.problem_reason_types)) {
+          state.utility.completeProblemReasonTypes = data.problem_reason_types
+            .map((reason) => String(reason || '').trim())
+            .filter(Boolean);
+        }
         initialDetailKey = String(initialDetail?.key || '').trim();
         const selectedKey = String(state.utility.selectedProblematicKey || '');
-        const selectedDetail = preserveSelectedDetail
-          ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+        const selectedAlbum = preserveSelectedDetail
+          ? (state.utility.problematicFiles || []).find(item => item.key === selectedKey)
           : null;
+        const selectedDetail = selectedAlbum?.detail_loaded === true ? selectedAlbum : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
         const previousSummary = previousSummaryItems.find(item => item.key === selectedKey);
@@ -98,13 +108,16 @@ async function loadProblematicFiles(force = false, options = {}) {
         // Client request ownership does not prove that the server snapshot is unchanged.
         const unchangedSelection = continuation && previousSummary && nextSummary
           && JSON.stringify(previousSummary) === JSON.stringify(nextSummary);
-        const selectedPendingDetail = unchangedSelection && selectedKey !== initialDetailKey
+        const selectedPendingDetail = preserveSelectedDetail && selectedKey !== initialDetailKey
           ? state.utility.detailLoadPromises?.[selectedKey] : null;
         const refreshChangedSelection = continuation && previousSummary && nextSummary
           && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
         // A track-opened album stays listed until the complete list can confirm it.
-        const pinnedKey = String(state.utility.pinnedProblematicKey || '');
+        const pinnedKey = String(
+          state.utility.pinnedProblematicKey
+          || (data.complete === false && selectedAlbum && !state.utility.problematicMutation ? selectedKey : ''),
+        );
         const pinnedAlbum = pinnedKey && data.complete === false
           && !summaryItems.some((item) => item.key === pinnedKey)
           ? state.utility.problematicFiles.find((item) => item.key === pinnedKey) || null
@@ -132,13 +145,18 @@ async function loadProblematicFiles(force = false, options = {}) {
 
       let data = await fetchSummary('/utilities/problematic-files?limit=50');
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      let committedSelection = commitSummary(data, options.preserveSelectedDetail === true);
+      let committedSelection = commitSummary(
+        data,
+        options.preserveSelectedDetail === true || data.complete === false,
+      );
       boundedPayloadCommitted = data.complete === false;
+      state.utility.problematicHasMore = data.has_more === true
+        || (data.has_more === undefined && data.complete === false);
+      state.utility.problematicNextCursor = String(data.next_cursor || '');
       settleInitialSummary(state.utility.problematicFiles);
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         scheduleProblematicServerSearch();
-        const completePayloadPromise = fetchSummary('/utilities/problematic-files');
         if (state.utility.loadPromise === requestPromise) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
@@ -149,11 +167,9 @@ async function loadProblematicFiles(force = false, options = {}) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
-        data = await completePayloadPromise;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(data, true, true);
+        scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
       }
-      state.utility.problematicFilesComplete = true;
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -235,14 +251,159 @@ async function loadProblematicFiles(force = false, options = {}) {
 
 let problematicServerSearchTimer = 0;
 
-// Until the complete list arrives, a search also asks the server, which searches
-// every album, so matches beyond the first page appear without waiting.
+async function loadNextProblematicArtistPage() {
+  const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const activeRequest = state.utility.problematicArtistLoadPromise;
+  if (
+    activeRequest
+    && Number(activeRequest.problematicSummaryRequestToken || 0) === summaryToken
+  ) return activeRequest;
+  if (state.utility.problematicArtistHasMore === false) return null;
+  const cursor = String(state.utility.problematicArtistNextCursor || '');
+  const request = (async () => {
+    try {
+      const response = await fetch(`/utilities/problematic-files?artists=true&limit=50&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken) return null;
+      const { summaryItems } = validateProblematicSummaryPayload(data);
+      const known = new Set((state.utility.problematicArtistItems || []).map((item) => String(item?.key || '')));
+      const additions = summaryItems.filter((item) => item?.key && !known.has(String(item.key)));
+      state.utility.problematicArtistItems = data.cursor_restarted === true
+        ? summaryItems
+        : [...(state.utility.problematicArtistItems || []), ...additions];
+      state.utility.problematicArtistNextCursor = String(data.next_cursor || '');
+      state.utility.problematicArtistHasMore = data.has_more === true && summaryItems.length > 0;
+      if ((additions.length || data.cursor_restarted === true)
+          && state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) {
+        renderUtilityModalContent();
+      }
+      return additions;
+    } catch (error) {
+      console.warn('[AlbumHaven][Utilities] Problematic Files artist page failed.', error);
+      return null;
+    } finally {
+      if (state.utility.problematicArtistLoadPromise === request) state.utility.problematicArtistLoadPromise = null;
+    }
+  })();
+  request.problematicSummaryRequestToken = summaryToken;
+  state.utility.problematicArtistLoadPromise = request;
+  return request;
+}
+
+async function loadNextProblematicFilesPage() {
+  if (state.utility.problematicPageLoadPromise || !state.utility.problematicHasMore) return state.utility.problematicPageLoadPromise;
+  const requestToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const cursor = String(state.utility.problematicNextCursor || '');
+  const request = (async () => {
+    try {
+      const response = await fetch(`/utilities/problematic-files?limit=50&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      const { summaryItems } = validateProblematicSummaryPayload(data);
+      const known = new Set((state.utility.problematicFiles || []).map((item) => String(item?.key || '')));
+      const additions = summaryItems.filter((item) => item?.key && !known.has(String(item.key)));
+      state.utility.problematicFiles = data.cursor_restarted === true
+        ? summaryItems
+        : [...(state.utility.problematicFiles || []), ...additions];
+      state.utility.problematicNextCursor = String(data.next_cursor || '');
+      state.utility.problematicHasMore = data.has_more === true && summaryItems.length > 0;
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
+      if (Array.isArray(data.problem_reason_types)) {
+        state.utility.completeProblemReasonTypes = Array.from(new Set([
+          ...(state.utility.completeProblemReasonTypes || []),
+          ...data.problem_reason_types.map((reason) => String(reason || '').trim()).filter(Boolean),
+        ]));
+      }
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      return additions;
+    } catch (error) {
+      console.warn('[AlbumHaven][Utilities] Problematic Files page failed.', error);
+      return null;
+    } finally {
+      if (state.utility.problematicPageLoadPromise === request) state.utility.problematicPageLoadPromise = null;
+    }
+  })();
+  state.utility.problematicPageLoadPromise = request;
+  return request;
+}
+
+async function loadProblematicPagesUntilLocalQueryMatch(query) {
+  const normalizedQuery = String(query || '').trim();
+  if (!normalizedQuery) return null;
+  while (
+    String(state.utility.searchQuery || '').trim() === normalizedQuery
+    && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)
+    && !(typeof getFilteredProblematicAlbums === 'function' && getFilteredProblematicAlbums().length)
+  ) {
+    const previousBaseCursor = String(state.utility.problematicNextCursor || '');
+    const previousArtistCursor = String(state.utility.problematicArtistNextCursor || '');
+    const previousBaseHasMore = state.utility.problematicHasMore === true;
+    const previousArtistHasMore = state.utility.problematicArtistHasMore === true;
+    await Promise.all([
+      previousBaseHasMore ? loadNextProblematicFilesPage() : null,
+      previousArtistHasMore ? loadNextProblematicArtistPage() : null,
+    ]);
+    const baseProgressed = String(state.utility.problematicNextCursor || '') !== previousBaseCursor
+      || (state.utility.problematicHasMore === true) !== previousBaseHasMore;
+    const artistProgressed = String(state.utility.problematicArtistNextCursor || '') !== previousArtistCursor
+      || (state.utility.problematicArtistHasMore === true) !== previousArtistHasMore;
+    if (!baseProgressed && !artistProgressed) break;
+  }
+  if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+  return typeof getFilteredProblematicAlbums === 'function'
+    ? getFilteredProblematicAlbums()
+    : [];
+}
+
+// Search the server so every album is covered, including matches beyond the
+// bounded local inventory.
 function scheduleProblematicServerSearch() {
   if (problematicServerSearchTimer) clearBrowserTimeout(problematicServerSearchTimer);
   problematicServerSearchTimer = 0;
   const query = String(state.utility.searchQuery || '').trim();
-  // One character matches most of a library; the loaded rows answer it.
-  if (query.length < 2 || state.utility.problematicFilesComplete !== false) return;
+  const cacheKey = query.toLocaleLowerCase();
+  state.utility.problematicServerSearchRequestToken = Number(
+    state.utility.problematicServerSearchRequestToken || 0,
+  ) + 1;
+  if (!query && state.utility.problematicServerSearchSettledQuery) {
+    const selectedKey = String(state.utility.selectedProblematicKey || '');
+    const selectedSearchItem = (state.utility.problematicServerSearchItems || [])
+      .find((item) => String(item?.key || '') === selectedKey);
+    if (selectedSearchItem && !(state.utility.problematicFiles || [])
+      .some((item) => String(item?.key || '') === selectedKey)) {
+      state.utility.problematicFiles = [...(state.utility.problematicFiles || []), selectedSearchItem];
+      state.utility.pinnedProblematicKey = selectedKey;
+    }
+  }
+  if (state.utility.problematicServerSearchSettledQuery !== query) {
+    state.utility.problematicServerSearchItems = [];
+    state.utility.problematicServerSearchSettledQuery = '';
+    state.utility.problematicServerSearchHasMore = false;
+    state.utility.problematicServerSearchNextOffset = 0;
+    state.utility.problematicServerSearchNextCursor = '';
+  }
+  state.utility.problematicServerSearchPendingQuery = '';
+  if (query.length === 1 && state.utility.problematicFilesComplete === false) {
+    void loadProblematicPagesUntilLocalQueryMatch(query);
+    return;
+  }
+  if (query.length < 2) return;
+  const cached = state.utility.problematicServerSearchCache?.[cacheKey];
+  if (cached) {
+    state.utility.problematicServerSearchItems = cached.items;
+    state.utility.problematicServerSearchSettledQuery = query;
+    state.utility.problematicServerSearchHasMore = cached.hasMore;
+    state.utility.problematicServerSearchNextCursor = cached.nextCursor;
+    if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+    return;
+  }
+  state.utility.problematicServerSearchPendingQuery = query;
   problematicServerSearchTimer = scheduleBrowserTimeout(() => {
     problematicServerSearchTimer = 0;
     void searchProblematicFilesOnServer(query);
@@ -251,9 +412,10 @@ function scheduleProblematicServerSearch() {
 
 async function searchProblematicFilesOnServer(query) {
   const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const searchToken = Number(state.utility.problematicServerSearchRequestToken || 0);
   let data;
   try {
-    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}`, {
+    const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50`, {
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) return;
@@ -262,15 +424,62 @@ async function searchProblematicFilesOnServer(query) {
     console.warn('[AlbumHaven][Utilities] Problematic Files search failed.', error);
     return;
   }
-  // The complete list, a newer query or a reload supersedes this answer.
+  // A newer query or reload supersedes this answer.
   if (String(state.utility.searchQuery || '').trim() !== query
-    || state.utility.problematicFilesComplete !== false
-    || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken) return;
-  const known = new Set((state.utility.problematicFiles || []).map((item) => item?.key));
-  const found = (Array.isArray(data?.items) ? data.items : []).filter((item) => item?.key && !known.has(item.key));
-  if (!found.length) return;
-  state.utility.problematicFiles = [...state.utility.problematicFiles, ...found];
+    || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
+    || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return;
+  state.utility.problematicServerSearchPendingQuery = '';
+  state.utility.problematicServerSearchSettledQuery = query;
+  state.utility.problematicServerSearchItems = Array.isArray(data?.items) ? data.items : [];
+  state.utility.problematicServerSearchHasMore = data?.has_more === true;
+  state.utility.problematicServerSearchNextOffset = Number(data?.next_offset || state.utility.problematicServerSearchItems.length);
+  state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
+  state.utility.problematicServerSearchCache = {
+    [query.toLocaleLowerCase()]: {
+      items: state.utility.problematicServerSearchItems,
+      hasMore: state.utility.problematicServerSearchHasMore,
+      nextCursor: state.utility.problematicServerSearchNextCursor,
+    },
+  };
   if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+}
+
+async function loadNextProblematicServerSearchPage() {
+  const query = String(state.utility.searchQuery || '').trim();
+  if (query.length < 2 || state.utility.problematicServerSearchSettledQuery !== query
+      || !state.utility.problematicServerSearchHasMore) return null;
+  if (state.utility.problematicServerSearchLoadPromise) return state.utility.problematicServerSearchLoadPromise;
+  const summaryToken = Number(state.utility.problematicSummaryRequestToken || 0);
+  const searchToken = Number(state.utility.problematicServerSearchRequestToken || 0);
+  const cursor = String(state.utility.problematicServerSearchNextCursor || '');
+  const request = (async () => {
+    try {
+      const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (String(state.utility.searchQuery || '').trim() !== query
+          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryToken
+          || Number(state.utility.problematicServerSearchRequestToken || 0) !== searchToken) return null;
+      const knownSearch = new Set(state.utility.problematicServerSearchItems.map((item) => String(item?.key || '')));
+      const additions = (Array.isArray(data?.items) ? data.items : [])
+        .filter((item) => item?.key && !knownSearch.has(String(item.key)));
+      state.utility.problematicServerSearchItems = data?.cursor_restarted === true
+        ? (Array.isArray(data?.items) ? data.items : [])
+        : [...state.utility.problematicServerSearchItems, ...additions];
+      state.utility.problematicServerSearchNextCursor = String(data?.next_cursor || '');
+      state.utility.problematicServerSearchHasMore = data?.has_more === true;
+      if (state.utility.activeTab === 'problematic-files' && isUtilityModalOpen()) renderUtilityModalContent();
+      return additions;
+    } finally {
+      if (state.utility.problematicServerSearchLoadPromise === request) {
+        state.utility.problematicServerSearchLoadPromise = null;
+      }
+    }
+  })();
+  state.utility.problematicServerSearchLoadPromise = request;
+  return request;
 }
 
 async function waitForProblematicFilesComplete() {
@@ -284,7 +493,11 @@ async function waitForProblematicFilesComplete() {
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey) return null;
-  const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+  const currentAlbum = [
+    ...(state.utility.problematicFiles || []),
+    ...(state.utility.problematicArtistItems || []),
+    ...(state.utility.problematicServerSearchItems || []),
+  ].find((item) => String(item?.key || '') === normalizedKey) || null;
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
@@ -340,29 +553,37 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         || String(state.utility.selectedProblematicKey || '') !== normalizedKey
       ) return null;
       const stateCommitStartedAt = getProblematicUtilityNow();
-      state.utility.problematicFiles = (state.utility.problematicFiles || []).map((item) => (
-        String(item?.key || '') === normalizedKey
-          ? {
-            ...item,
-            ...detail,
-            detail_loaded: true,
-            detail_load_failed: false,
-          }
-          : item
-      ));
+      for (const owner of ['problematicFiles', 'problematicArtistItems', 'problematicServerSearchItems']) {
+        state.utility[owner] = (state.utility[owner] || []).map((item) => (
+          String(item?.key || '') === normalizedKey
+            ? {
+              ...item,
+              ...detail,
+              detail_loaded: true,
+              detail_load_failed: false,
+            }
+            : item
+        ));
+      }
       loadSucceeded = true;
       stateCommitMs = roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
-      return (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+      return [
+        ...(state.utility.problematicFiles || []),
+        ...(state.utility.problematicArtistItems || []),
+        ...(state.utility.problematicServerSearchItems || []),
+      ].find((item) => String(item?.key || '') === normalizedKey) || null;
     } catch (error) {
       if (Number(state.utility.problematicDetailRequestToken || 0) !== requestToken) return null;
       loadError = String(error?.message || error || 'Unable to load problematic album detail.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic album detail.', error);
       if (state.utility.detailLoadPromises?.[normalizedKey] === nextPromise) {
-        state.utility.problematicFiles = (state.utility.problematicFiles || []).map((item) => (
-          String(item?.key || '') === normalizedKey
-            ? { ...item, detail_load_failed: true }
-            : item
-        ));
+        for (const owner of ['problematicFiles', 'problematicArtistItems', 'problematicServerSearchItems']) {
+          state.utility[owner] = (state.utility[owner] || []).map((item) => (
+            String(item?.key || '') === normalizedKey
+              ? { ...item, detail_load_failed: true }
+              : item
+          ));
+        }
         showToast('Unable to load the selected problematic album.', 'error', 3200);
       }
       return null;
@@ -2915,7 +3136,9 @@ function renderTagEditor(options = {}) {
     const displayValue = getTagEditorFieldDisplayValue(field, selectedPaths);
     input.disabled = selectedPaths.length === 0;
     input.value = displayValue.value;
-    input.placeholder = displayValue.mixed ? 'Mixed values' : '';
+    input.placeholder = displayValue.mixed
+      ? 'Mixed values'
+      : (field === 'exception_type' ? 'None' : '');
   });
   syncTagEditorCollectionFields(selectedPaths);
   syncTagEditorPendingChanges();

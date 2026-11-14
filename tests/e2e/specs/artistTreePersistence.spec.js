@@ -38,6 +38,14 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
   // Owner rule (11-08): no buttons in the web navigation-tree header; a new side-bar entry goes vertically under
   // the existing side-bar buttons; one control in one place; never an empty or icon-less button.
   const navigation = navigationPanelActions.navigationPanel;
+  await stepLogger.step('Full Gallery omits the artist-only Non-album tracks action', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await artistPageSettingsActions.open();
+    await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksButton).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(artistPageSettingsActions.artistPageSettings.menu).toBeHidden();
+  });
   await stepLogger.step('Expanded panel: only the fold control in the header, no Loose Tracks entry', async () => {
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
@@ -82,9 +90,14 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     await searchToolbarActions.waitForQuery('Metallica');
     await artistPageSettingsActions.openLibraryWideNonAlbumTracks();
     await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeVisible();
-    // The expanded side panel shows Loose Tracks' own tree, as on the owner's screen.
+    // Expanding Artist Tree is an explicit navigation action: it leaves Loose Tracks selected as the
+    // open main surface, but the navigation panel itself must switch back to the Artists tree.
     await navigationPanelActions.setArtistTreeFolded(false);
-    await expect(page.locator('#sidebar-collections')).toBeVisible();
+    await expect(page.locator('#sidebar-list')).toBeVisible();
+    await expect(page.locator('#sidebar-collections')).toBeHidden();
+    await expect(page.locator('#artist-tree-navigation-button')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]'))
+      .toHaveAttribute('aria-pressed', 'false');
     // parity-check: allow-read-only-measurement-evaluate -- record, on every frame, which tree entries are visible
     await page.evaluate(() => {
       const frames = [];
@@ -132,3 +145,72 @@ test('FTC-ARTIST-TREE-003 keeps the web navigation-tree header free of buttons a
     expect(header.height).toBeGreaterThan(8);
   });
 });
+
+for (const hydrationCase of [
+  {
+    name: 'FTC-ARTIST-TREE-004 keeps Loose Tracks selected after cold hydration without another navigation action',
+    expandArtistTree: false,
+  },
+  {
+    name: 'FTC-ARTIST-TREE-005 keeps Artist Tree selected when expanded during cold Loose Tracks hydration',
+    expandArtistTree: true,
+  },
+]) {
+  test(hydrationCase.name, { tag: '@area:gallery-search' }, async ({
+    artistPageSettingsActions,
+    galleryActions,
+    navigationPanelActions,
+    page,
+  }) => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.setArtistTreeFolded(true);
+    const isLibraryWideLooseTracks = (url) => {
+      const parsed = new URL(url);
+      return parsed.pathname === '/library/loose-tracks' && !parsed.searchParams.has('artist');
+    };
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditionsByRule', {
+      matchedNetworkConditions: [{
+        urlPattern: `${new URL(page.url()).origin}/library/loose-tracks*`,
+        latency: 5000,
+        downloadThroughput: -1,
+        uploadThroughput: -1,
+      }],
+    });
+
+    try {
+      const hydrationRequested = page.waitForRequest((request) => isLibraryWideLooseTracks(request.url()));
+      const hydrationResponse = page.waitForResponse((response) => isLibraryWideLooseTracks(response.url()));
+      const openingLooseTracks = artistPageSettingsActions.openLibraryWideNonAlbumTracks();
+      await hydrationRequested;
+      await openingLooseTracks;
+      await expect(page.locator('#non-album-modal-subtitle'))
+        .toHaveText(/^Loading loose tracks across library/);
+
+      if (hydrationCase.expandArtistTree) {
+        await navigationPanelActions.setArtistTreeFolded(false);
+        await expect(page.locator('#artist-tree-navigation-button')).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]'))
+          .toHaveAttribute('aria-pressed', 'false');
+      }
+
+      await hydrationResponse;
+      await expect(page.locator('#non-album-modal-subtitle')).toHaveText(/^\d+ tracks?$/);
+      await expect(artistPageSettingsActions.artistPageSettings.nonAlbumTracksModal).toBeVisible();
+      await expect(page.locator('#artist-tree-navigation-button'))
+        .toHaveAttribute('aria-pressed', hydrationCase.expandArtistTree ? 'true' : 'false');
+      await expect(page.locator('#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]'))
+        .toHaveAttribute('aria-pressed', hydrationCase.expandArtistTree ? 'false' : 'true');
+
+      if (hydrationCase.expandArtistTree) {
+        await expect(page.locator('#sidebar-list')).toBeVisible();
+        await expect(page.locator('#sidebar-collections')).toBeHidden();
+      }
+    } finally {
+      await cdp.send('Network.emulateNetworkConditionsByRule', { matchedNetworkConditions: [] });
+      await cdp.detach();
+    }
+  });
+}

@@ -383,7 +383,7 @@ test('artist info stays open and follows its header while the gallery scrolls', 
     getBoundingClientRect: () => ({ bottom: 300 }),
     classList: { add() {}, remove() {} },
     dataset: {},
-    style: { setProperty() {} },
+    style: { setProperty() {}, removeProperty() {} },
   };
   context.openGalleryMainSurface('artist:Neal Morse', anchor, surface);
   assert.equal(surface.style.top, '199px');
@@ -470,7 +470,7 @@ test('artist info transfers between the gallery header and visible family separa
     getBoundingClientRect: () => ({ bottom: 300 }),
     classList: { add() {}, remove() {} },
     dataset: {},
-    style: { setProperty() {} },
+    style: { setProperty() {}, removeProperty() {} },
   };
 
   context.openGalleryMainSurface('artist:Neal Morse', galleryAnchor, surface);
@@ -577,7 +577,7 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(singleArtistBar, /data-gallery-context-artist-divider hidden/);
   // "Alestorm (i) • 4 albums" on the title line; the summary line is free for pills.
   assert.match(singleArtistBar, /data-gallery-context-inline-total hidden><\/span>/);
-  assert.match(singleArtistBar, /data-gallery-context-summary>4 albums<\/span>/);
+  assert.match(singleArtistBar, /data-gallery-context-summary><span class="gallery-bar__summary-count">4 albums<\/span>/);
 
   const toggle = buildSwitchHtml({ id: 'gallery-source-hoard', label: 'Hoard', checked: true });
   assert.match(toggle, /role="switch"/);
@@ -601,7 +601,7 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
 });
 
-test('current GalleryBar owner keeps artist metadata to two lines on web and mobile', () => {
+test('current GalleryBar owner keeps desktop metadata to two lines and gives mobile genres one third line', () => {
   const context = loadRuntime();
   const projection = {
     country: 'Russia',
@@ -616,16 +616,17 @@ test('current GalleryBar owner keeps artist metadata to two lines on web and mob
 
   const nameAt = markup.indexOf('Kipelov');
   const infoAt = markup.indexOf('data-artist-info-trigger');
-  const firstGenreAt = markup.indexOf('Heavy Metal');
-  const countAt = markup.indexOf('4 albums');
   const countryAt = markup.indexOf('Russia');
-  assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < firstGenreAt && firstGenreAt < countAt && countAt < countryAt);
-  assert.match(markup, /gallery-bar__title[\s\S]*data-artist-info-trigger[\s\S]*data-gallery-context-metadata[\s\S]*Heavy Metal[\s\S]*<\/div><span class="gallery-bar__summary"/);
+  const countAt = markup.indexOf('4 albums');
+  const firstGenreAt = markup.indexOf('Heavy Metal');
+  assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < countryAt && countryAt < countAt && countAt < firstGenreAt);
+  assert.match(markup, /gallery-bar__title[\s\S]*data-artist-info-trigger[\s\S]*data-gallery-context-metadata[\s\S]*Russia[\s\S]*<\/div>[\s\S]*<span class="gallery-bar__summary"[\s\S]*4 albums[\s\S]*Heavy Metal/);
   assert.match(markup, /class="ui-metadata-pill ui-metadata-pill--country"[^>]*>Russia</);
-  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 1);
+  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 4);
   assert.match(markup, />Heavy Metal</);
-  assert.doesNotMatch(markup, /Power Metal|Hard Rock/);
-  assert.doesNotMatch(markup, /Fourth Genre/);
+  assert.match(markup, />Power Metal</);
+  assert.match(markup, />Hard Rock</);
+  assert.match(markup, />Fourth Genre</);
   assert.doesNotMatch(markup, /gallery-bar__actions[\s\S]*MusicBrainz/);
 
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill\s*\{[^}]*display:\s*inline-flex/s);
@@ -634,27 +635,102 @@ test('current GalleryBar owner keeps artist metadata to two lines on web and mob
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#1c1730;[^}]*--ui-metadata-pill-country-border:\s*#8b6fd6;[^}]*--ui-metadata-pill-country-ink:\s*#cbb8ff;[^}]*background:\s*var\(--ui-metadata-pill-country-fill\)/s);
   assert.match(buttonComponentCssSource, /:root\[data-appearance-mode='light'\] \.ui-metadata-pill--country\s*\{[^}]*--ui-metadata-pill-country-fill:\s*#f1ecfd;[^}]*--ui-metadata-pill-country-ink:\s*#4a2e99;/s);
   assert.doesNotMatch(galleryMainCssSource, /ui-metadata-pill--country/, 'no page-local country colour');
-  assert.match(markup, /data-gallery-context-summary>4 albums<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
-    'the second line is album count, fat dot, and country');
-  assert.match(galleryMainCssSource, /\.gallery-bar__artist-country::before\s*\{[^}]*content:\s*"\\2022"/s);
+  assert.match(markup, /data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
+    'the first line ends with the country pill');
+  assert.match(markup, /data-gallery-context-mobile-summary>4 albums<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
+    'mobile owns a second row for album count and country');
+  assert.match(markup, /data-gallery-context-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
+    'desktop keeps count and ranked genres on its second line');
+  assert.doesNotMatch(galleryMainCssSource, /\.gallery-bar__artist-country::before\s*\{[^}]*content:/s);
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-genre::before\s*\{[^}]*content:\s*"\\2022"/s);
   assert.match(galleryMainCssSource, /\.gallery-bar__summary\s*\{[^}]*display:\s*flex;[^}]*white-space:\s*nowrap/s);
   assert.doesNotMatch(galleryMainCssSource + mobileLayoutCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*flex-wrap:\s*wrap/s);
-  assert.equal((markup.match(/data-gallery-context-metadata/g) || []).length, 1, 'genre metadata has no third-row owner');
+  assert.equal((markup.match(/data-gallery-context-mobile-summary/g) || []).length, 1, 'mobile count and country have one owner');
+  assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*grid-template-rows:\s*24px 20px 20px/s);
+  assert.match(galleryMainCssSource, /\.gallery-bar__artist-genres\s*\{[^}]*overflow:\s*hidden/s);
 });
 
-test('mobile artist GalleryBar ellipsizes instead of creating a third line', () => {
-  const classes = new Set(['is-name-wrapping']);
+test('artist GalleryBar moves controls down before allowing the name to ellipsize', () => {
+  const classes = new Set();
   const context = loadRuntime({ window: { innerWidth: 390 } });
+  const metadata = { textContent: 'Russia' };
+  const summary = { textContent: '4 albums Heavy Metal' };
   const bar = {
     dataset: { galleryContextKind: 'artist' },
     classList: {
       add: value => classes.add(value),
       remove: value => classes.delete(value),
     },
-    querySelector: () => ({}),
+    querySelector: selector => ({
+      '[data-artist-info-trigger]': {},
+      '[data-gallery-context-metadata]': metadata,
+      '[data-gallery-context-summary]': summary,
+    }[selector] || null),
   };
   context.syncGalleryBarNameFit(bar, { textContent: 'A very long artist name', scrollWidth: 260, clientWidth: 100 });
-  assert.equal(classes.has('is-name-wrapping'), false);
+  assert.equal(classes.has('is-controls-below'), true);
+  assert.equal(classes.has('is-name-wrapping'), false, 'artist names never create a third metadata row');
+});
+
+test('GalleryBar name fit cache includes artist metadata that changes available title width', () => {
+  const classes = new Set();
+  let removals = 0;
+  const metadata = { textContent: 'Russia' };
+  const summary = { textContent: '4 albums Heavy Metal' };
+  const context = loadRuntime({ window: { innerWidth: 390 } });
+  const bar = {
+    dataset: { galleryContextKind: 'artist' },
+    classList: {
+      add: value => classes.add(value),
+      remove: value => { removals += 1; classes.delete(value); },
+    },
+    querySelector: selector => ({
+      '[data-artist-info-trigger]': {},
+      '[data-gallery-context-metadata]': metadata,
+      '[data-gallery-context-summary]': summary,
+    }[selector] || null),
+  };
+  const name = { textContent: 'Kipelov', scrollWidth: 100, clientWidth: 100 };
+  context.syncGalleryBarNameFit(bar, name);
+  const firstRemovals = removals;
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(removals, firstRemovals, 'unchanged content uses the cached fit result');
+  metadata.textContent = 'United Kingdom';
+  context.syncGalleryBarNameFit(bar, name);
+  assert.ok(removals > firstRemovals, 'country changes invalidate the fit cache');
+});
+
+test('GalleryBar name fit cache follows same-viewport Artist Tree width changes', () => {
+  const classes = new Set();
+  const context = loadRuntime({ window: { innerWidth: 1200 } });
+  const bar = {
+    clientWidth: 760,
+    dataset: { galleryContextKind: 'artist' },
+    classList: {
+      add: value => classes.add(value),
+      remove: value => classes.delete(value),
+    },
+    querySelector: selector => ({
+      '[data-artist-info-trigger]': {},
+      '[data-gallery-context-metadata]': { textContent: 'United Kingdom' },
+      '[data-gallery-context-summary]': { textContent: '4 albums · Progressive Rock' },
+    }[selector] || null),
+  };
+  const name = { textContent: 'The Alan Parsons Project', scrollWidth: 220, clientWidth: 260 };
+
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), false);
+
+  bar.clientWidth = 520;
+  name.clientWidth = 180;
+  context.syncGalleryBarNameFit(bar, name);
+  assert.equal(classes.has('is-controls-below'), true,
+    'opening Artist Tree must invalidate fit even when the browser viewport did not resize');
+  assert.match(
+    galleryMainInteractionsSource,
+    /addEventListener\('album-haven:artist-tree-settled', updateGalleryMainChrome\)/,
+    'the fit must be recomputed after the Artist Tree width transition settles',
+  );
 });
 
 test('GalleryBar distinguishes confirmed-empty genres and never leaks metadata into family contexts', () => {
@@ -769,6 +845,8 @@ test('Combine similar artists sits in its own row directly below the Artist Fami
   assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:hover:not\(:disabled\):not\(\[aria-disabled="true"\]\),\s*:root \.artist-family-panel__combine-row \.gallery-switch:active/);
   assert.match(triggerAnchorCssSource, /\):hover:not\(:where\(\.gallery-switch\)\):not\(:disabled\):not\(\[aria-disabled="true"\]\)\s*\{\s*background: var\(--dropdown-item-hover-background/);
   assert.match(galleryMainCssSource, /\.gallery-switch, \.gallery-type-choice, \.gallery-menu-action[^}]*background:\s*transparent/);
+  assert.match(galleryMainCssSource, /\.gallery-switch\[hidden\], \.gallery-menu-action\[hidden\]\s*\{\s*display:\s*none;/,
+    'hidden Album Types actions stay out of layout despite their shared flex display');
 });
 
 test('Artist Family pills disable native dragging while the primary artist stays separated', () => {
@@ -865,6 +943,7 @@ test('a newly selected artist disables stale Loose Tracks on first paint until i
 
 test('artist non-album tracks stay disabled until the family count is known', () => {
   const requested = [];
+  let opened = 0;
   const button = { dataset: {}, disabled: true, setAttribute(name, value) { this[name] = value; } };
   const context = loadRuntime({
     state: { view: { selected_artist: 'Agalloch', non_album_tracks_deferred: true } },
@@ -878,6 +957,7 @@ test('artist non-album tracks stay disabled until the family count is known', ()
     hydrateArtistNonAlbumAvailability: () => { requested.push('availability'); return new Promise(() => {}); },
     hydrateDeferredNonAlbumTracks: options => { requested.push(options); return new Promise(() => {}); },
     hasHydratedArtistNonAlbumAvailability: () => Boolean(context.state.view.non_album_track_count_scope),
+    openNonAlbumModal: () => { opened += 1; },
   });
   context.ensureGalleryMainState = () => ({ sources: {} });
   context.updateGalleryMainControls();
@@ -898,12 +978,39 @@ test('artist non-album tracks stay disabled until the family count is known', ()
     non_album_tracks: [],
     non_album_tracks_deferred: true,
   };
+  context.hasNonAlbumSearchMatches = () => true;
   context.updateGalleryMainControls();
-  assert.equal(button.disabled, false, 'artist-scoped search retains its deferred menu fetch');
+  assert.equal(requested.at(-2), 'availability', 'search still requests the selected artist availability');
+  assert.equal(requested.at(-1).libraryWide, true, 'search also keeps its library-wide match probe');
+  assert.equal(button.disabled, true, 'artist-scoped search stays disabled until its family count settles');
+  assert.equal(button.dataset.searchMatch, 'false', 'every artist loose track is already in artist scope');
+  context.handleGalleryMainClick({
+    target: { closest: selector => (selector === '[data-open-non-album-tracks]' ? button : null) },
+    preventDefault() {},
+  });
+  assert.equal(opened, 0, 'clicking the pending artist-scoped action cannot open an empty page');
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'ДДТ',
+    non_album_track_count: 3,
+    non_album_track_count_scope: 'artist-family:ддт',
+  };
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, false, 'ДДТ enables as soon as its positive artist count settles');
+  assert.equal(button.dataset.searchMatch, 'false');
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Начало Века',
+    non_album_track_count: 0,
+    non_album_track_count_scope: 'artist-family:начало-века',
+  };
+  context.updateGalleryMainControls();
+  assert.equal(button.disabled, true, 'Начало Века remains disabled after its confirmed zero count');
   button.dataset.libraryWide = '1';
   context.hasHydratedLibraryNonAlbumTracks = () => false;
   context.updateGalleryMainControls();
   assert.equal(button.disabled, false, 'artist-only hydration cannot disable library-wide browsing');
+  assert.equal(button.dataset.searchMatch, 'true', 'library-wide Loose Tracks keeps its meaningful match dot');
   context.hasHydratedLibraryNonAlbumTracks = () => true;
   context.updateGalleryMainControls();
   assert.equal(button.disabled, false, 'library-wide Loose Tracks is a navigation destination and stays pressable when empty');
@@ -912,11 +1019,11 @@ test('artist non-album tracks stay disabled until the family count is known', ()
   context.hasNonAlbumSearchMatches = () => false;
   context.updateGalleryMainControls();
   assert.equal(requested.at(-1).libraryWide, true, 'search checks library-wide loose tracks without opening the menu');
-  assert.equal(button.dataset.searchMatch, 'false');
+  assert.equal(button.hidden, true, 'Album Types does not show an artist-only action in full Gallery');
+  assert.equal(button.disabled, true);
   context.hasNonAlbumSearchMatches = () => true;
   context.updateGalleryMainControls();
-  assert.equal(button.dataset.searchMatch, 'true');
-  assert.equal(button['aria-description'], 'Contains tracks matching your search');
+  assert.equal(button.hidden, true, 'library-wide search matches do not turn the artist-only action into navigation');
 });
 
 test('a stale enabled artist Loose Tracks button cannot open an empty new artist scope', () => {
@@ -970,14 +1077,17 @@ test('a search with an artist selected loads that artist\'s loose tracks only on
       querySelector: () => null,
       getElementById: id => (id === 'gallery-album-types-menu' ? menu : null),
     },
+    hydrateArtistNonAlbumAvailability: () => { requested.push('availability'); return new Promise(() => {}); },
     hydrateDeferredNonAlbumTracks: options => { requested.push(options.libraryWide); return new Promise(() => {}); },
   });
   const hydrate = requireContract(context, 'hydrateDeferredNonAlbumTracksForAlbumTypes');
   hydrate();
-  assert.deepEqual(requested, [true], 'a closed menu keeps the search to its library-wide probe');
+  assert.deepEqual(requested, ['availability', true],
+    'a closed menu requests artist availability and keeps the search to its library-wide probe');
   menu.hidden = false;
   hydrate();
-  assert.deepEqual(requested, [true, true, false], 'the open menu also resolves the artist\'s own button');
+  assert.deepEqual(requested, ['availability', true, 'availability', true, false],
+    'the open menu also resolves the artist\'s full collection');
 });
 
 test('the live Album types menu starts with unavailable loose tracks disabled', () => {
@@ -1026,12 +1136,14 @@ test('artist info triggers use a larger plain information glyph with neutral env
   assert.match(galleryMainCssSource, /\.artist-info-overlay__full-page\s*\{[^}]*color:\s*var\(--appearance-accent,/);
   assert.match(galleryMainCssSource, /\.artist-info-overlay__image\s*\{[^}]*background:\s*var\(--panel-2,/);
   assert.match(galleryMainCssSource, /\.gallery-info-button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*border-radius:\s*6px/);
-  assert.match(galleryMainCssSource, /\.artist-info-overlay::before/);
-  assert.match(galleryMainCssSource, /:root \.artist-info-overlay\.trigger-anchor-surface::before\s*\{[^}]*display:\s*block/);
-  assert.match(galleryMainCssSource, /:root \.artist-info-overlay\.trigger-anchor-surface\s*\{[^}]*clip-path:\s*none/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-info-overlay::(?:before|after)/,
+    'artist info uses the shared trigger-anchor connector instead of a second outline painter');
+  assert.match(triggerAnchorCssSource, /:root \.trigger-anchor-open::after/);
+  assert.match(triggerAnchorCssSource, /:root \.trigger-anchor-surface::after/);
   const artistInfoBodyRules = [...galleryMainCssSource.matchAll(/\.artist-info-overlay__body\s*\{([^}]*)\}/g)];
   assert.match(artistInfoBodyRules.at(-1)[1], /var\(--artist-info-body-max-height,/);
-  assert.match(galleryMainCssSource, /\.artist-family-panel::before/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel::(?:before|after)/,
+    'Artist Family uses the shared trigger-anchor connector');
 });
 
 test('view navigation closes the drawer controller as well as clearing its rendered family', () => {
@@ -1277,7 +1389,7 @@ test('relationship controls synchronize and dispatch without enabling release-ty
   assert.equal(prevented.length, 2);
 });
 
-test('all-artists Non-album tracks opens the reloadable library-wide page', () => {
+test('all-artists Album Types action is inert while library-wide Loose Tracks navigation still opens', () => {
   const context = loadRuntime({
     state: { view: { selected_artist: '' }, ui: {} },
     window: { innerWidth: 1440 },
@@ -1298,6 +1410,15 @@ test('all-artists Non-album tracks opens the reloadable library-wide page', () =
     },
   });
 
+  assert.equal(opened, undefined);
+
+  button.dataset.libraryWide = '1';
+  context.handleGalleryMainClick({
+    preventDefault() {},
+    target: {
+      closest: selector => selector === '[data-open-non-album-tracks]' ? button : null,
+    },
+  });
   assert.deepEqual(plain(opened), { libraryWide: true });
 });
 
@@ -1914,6 +2035,7 @@ test('opening Artist Info adds the missing scroll range when the gallery is too 
   const surface = {
     matches: selector => selector === '.artist-info-overlay',
     getBoundingClientRect: () => ({ bottom: 486 }),
+    style: { removeProperty() {} },
   };
   const anchor = {
     isConnected: true,
@@ -2119,18 +2241,19 @@ test('opening a Gallery surface moves focus inside it or onto the empty dialog i
 
 
 test('Artist Family connector measures the trigger gap and tracks the Gallery bottom edge', () => {
-  const values = {};
-  const context = loadRuntime({ window: { innerWidth: 1200 } });
-  const panel = { dataset: {}, style: { setProperty: (key, value) => { values[key] = value; } } };
+  const synchronized = [];
+  const context = loadRuntime({
+    window: { innerWidth: 1200 },
+    syncTriggerAnchor: (panel, anchor) => synchronized.push([panel, anchor]),
+  });
+  const panel = { dataset: {}, style: {} };
   const anchor = {
     getBoundingClientRect: () => ({ width: 34, height: 34, right: 1100, bottom: 60 }),
     closest: () => ({ getBoundingClientRect: () => ({ bottom: 72 }) }),
   };
   context.positionArtistFamilyPanelEnvelope(panel, anchor);
   assert.equal(panel.style.top, '72px');
-  assert.equal(values['--gallery-anchor-gap'], '12px');
-  assert.equal(values['--gallery-anchor-right'], '100px');
-  assert.equal(values['--gallery-anchor-width'], '34px');
+  assert.deepEqual(synchronized, [[panel, anchor]]);
 });
 
 

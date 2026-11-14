@@ -716,7 +716,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
+    const refreshView = (
+      String(state.view?.query || '').trim()
+      && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
+    )
+      ? { ...state.view, selected_artist: '' }
+      : state.view;
+    const refreshApplied = await fetchAndRender(buildApiUrl(refreshView, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
       preserveMountedGalleryChildren: true,

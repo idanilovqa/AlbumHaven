@@ -1487,6 +1487,159 @@ def test_live_problematic_files_lists_cross_root_copies_as_duplicate_files(watch
     assert duplicate_items, payload["items"]
 
 
+def test_live_cold_problematic_first_page_matches_complete_prefix_without_global_candidate_scan(
+    watcher_repair_inventory,
+    monkeypatch,
+):
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        invalidate_postgres_utility_projection_cache,
+    )
+
+    fixture = watcher_repair_inventory
+    album_problem = fixture.entry(
+        "Cases/A00 Album Problem/01.flac",
+        album="A00 Album Problem",
+    )
+    track_file_problem = {
+        **fixture.entry("Cases/A01 Track File/01.flac", album="A01 Track File"),
+        "title": "",
+    }
+    mixed_folder = [
+        fixture.entry("Cases/Mixed Folder/01.flac", album="A02 Mixed Folder Left"),
+        fixture.entry("Cases/Mixed Folder/02.flac", album="A03 Mixed Folder Right"),
+    ]
+    duplicate_files = [
+        {
+            **fixture.entry(
+                f"Cases/A04 Duplicate {copy}/01.flac",
+                album="A04 Cross Folder Duplicate",
+            ),
+            "title": "Same Track",
+        }
+        for copy in ("Left", "Right")
+    ]
+    incomplete_order = [
+        {
+            **fixture.entry(
+                f"Cases/A05 Incomplete Order/{number:02d}.flac",
+                album="A05 Incomplete Order",
+            ),
+            "track_number": number,
+        }
+        for number in (1, 3)
+    ]
+    missing_album = fixture.entry(
+        "Cases/A06 Missing Album/01.flac",
+        album="A06 Missing Album",
+    )
+    loose_file = {
+        **fixture.entry("Cases/A07 Loose Source/01.flac", album=""),
+        "album_artist": "",
+    }
+    fillers = [
+        fixture.entry(
+            f"Cases/M{index:02d} Filler/01.flac",
+            album=f"M{index:02d} Filler",
+        )
+        for index in range(45)
+    ]
+    late_albums = [
+        fixture.entry(
+            f"Cases/Z{index:02d} Must Not Hydrate/01.flac",
+            album=f"Z{index:02d} Must Not Hydrate",
+        )
+        for index in range(3)
+    ]
+    fixture.seed(
+        album_problem,
+        track_file_problem,
+        *mixed_folder,
+        *duplicate_files,
+        *incomplete_order,
+        missing_album,
+        loose_file,
+        *fillers,
+        *late_albums,
+    )
+    _rate_live_album(fixture, "owner::a06 missing album")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """update library.local_track_files
+               set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true')
+               where private_path = %s""",
+            (missing_album["path"],),
+        )
+
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config,
+        connect=isolatedPostgres._connect,
+    )
+    complete = repository._build_problematic_files_payload_uncached()
+    assert len(complete["items"]) > 50
+    expected_items = complete["items"][:50]
+    expected_detail = complete["initial_detail"]
+    names = {item["name"]: item for item in expected_items}
+    reasons = {
+        reason
+        for item in expected_items
+        for reason in item.get("problem_reasons") or []
+    }
+    assert "Missing cover art" in names["A00 Album Problem"]["problem_reasons"]
+    assert "Missing track title" in names["A01 Track File"]["problem_reasons"]
+    assert "Mixed album metadata in one folder" in reasons
+    assert "Duplicate files" in names["A04 Cross Folder Duplicate"]["problem_reasons"]
+    assert any(
+        reason.startswith("Incomplete track order:")
+        for reason in names["A05 Incomplete Order"]["problem_reasons"]
+    )
+    assert names["A06 Missing Album"]["problem_reasons"] == ["Album not found"]
+    assert any(item["key"].startswith("loose-source::") for item in expected_items)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        ordered_active_ids = [
+            row["id"]
+            for row in connection.execute(
+                """
+                select distinct albums.id, albums.title, lower(albums.title) as title_sort
+                from library.local_albums albums
+                join library.local_tracks tracks on tracks.album_id = albums.id
+                join library.local_track_files files on files.track_id = tracks.id
+                where files.scan_cache_stale is false
+                order by title_sort, albums.title, albums.id
+                """
+            ).fetchall()
+        ]
+
+    invalidate_postgres_utility_projection_cache(
+        database_url=fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"],
+    )
+    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        repository,
+        "_problematic_candidate_album_ids",
+        lambda **_kwargs: pytest.fail("a cold page must not run the global candidate CTE"),
+    )
+    hydrated_ids = []
+    load_rows = repository._load_problematic_file_rows
+
+    def record_bounded_rows(*args, **kwargs):
+        album_ids = kwargs.get("album_ids")
+        assert album_ids is not None, "the cold page must hydrate bounded album batches"
+        hydrated_ids.extend(album_ids)
+        return load_rows(*args, **kwargs)
+
+    monkeypatch.setattr(repository, "_load_problematic_file_rows", record_bounded_rows)
+
+    page = repository.build_problematic_files_page(limit=50)
+
+    assert page["items"] == expected_items
+    assert page["initial_detail"] == expected_detail
+    evaluated_positions = sorted({ordered_active_ids.index(album_id) for album_id in hydrated_ids})
+    assert evaluated_positions == list(range(evaluated_positions[-1] + 1))
+    assert evaluated_positions[-1] < len(ordered_active_ids) - 1
+
+
 def test_live_watcher_folder_deletion_removes_its_loose_tracks(watcher_repair_inventory):
     import shutil
 
@@ -3278,6 +3431,264 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
         assert corrected_alias["payload"] == "Corrected Structural Artist"
         assert final_unrelated_entries == unrelated_relation_entries
         assert final_journal == []
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_edit_tags_merge_album_details_returns_every_persisted_track(
+    monkeypatch,
+    tmp_path,
+):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        import shutil
+        import subprocess
+
+        import imageio_ffmpeg
+        from mutagen.id3 import ID3, TALB, TDRC, TIT2, TPE1, TPE2, TRCK
+
+        import config as app_config
+        from music_app.services.library_roots_postgres import (
+            PostgresLibraryRootSettingsStore,
+        )
+        from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+        from tests.py.asgi_testing import create_test_asgi_app, decode_json, run_asgi_request
+
+        monkeypatch.setenv("ALBUM_HAVEN_APP_DATABASE_URL", runtime_url)
+        monkeypatch.setattr(
+            app_config.Config,
+            "ALBUM_HAVEN_APP_DATABASE_URL",
+            runtime_url,
+        )
+        asgi_app = create_test_asgi_app(tmp_path / "merged-album-asgi", monkeypatch)
+        config = asgi_app.state.config
+        config["ALBUM_HAVEN_APP_DATABASE_URL"] = runtime_url
+        music_dir = Path(config["MUSIC_DIR"])
+
+        base_audio = tmp_path / "merge-base.mp3"
+        generated = subprocess.run(
+            [
+                imageio_ffmpeg.get_ffmpeg_exe(),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.05:sample_rate=44100",
+                "-codec:a",
+                "libmp3lame",
+                "-q:a",
+                "9",
+                str(base_audio),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        assert generated.returncode == 0, generated.stderr
+
+        def write_track(path: Path, *, album: str, title: str, number: int) -> dict[str, object]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(base_audio, path)
+            tags = ID3(path)
+            for frame_name in ("TALB", "TDRC", "TIT2", "TPE1", "TPE2", "TRCK"):
+                tags.delall(frame_name)
+            tags.add(TALB(encoding=3, text=[album]))
+            tags.add(TDRC(encoding=3, text=["2026"]))
+            tags.add(TIT2(encoding=3, text=[title]))
+            tags.add(TPE1(encoding=3, text=["Merge Contract Artist"]))
+            tags.add(TPE2(encoding=3, text=["Merge Contract Artist"]))
+            tags.add(TRCK(encoding=3, text=[str(number)]))
+            tags.save(path)
+            stat = path.stat()
+            return {
+                "path": str(path),
+                "mtime": stat.st_mtime,
+                "size": stat.st_size,
+                "album": album,
+                "album_artist": "Merge Contract Artist",
+                "artist": "Merge Contract Artist",
+                "title": title,
+                "track_number": number,
+                "disc_number": 1,
+                "duration_seconds": 1,
+                "year": 2026,
+                "edition": "",
+                "album_rating": 0,
+                "library_root_id": "merge-contract-root",
+                "library_root_category": "main_library",
+                "exception_type": None,
+            }
+
+        entries = {}
+        destination_titles = ["Destination One", "Destination Two", "Destination Three"]
+        for number, title in enumerate(destination_titles, 1):
+            path = music_dir / "Merge Contract Artist" / "Merged Album" / f"{number:02d} {title}.mp3"
+            entries[str(path)] = write_track(
+                path,
+                album="Merged Album",
+                title=title,
+                number=number,
+            )
+        source_path = music_dir / "Merge Contract Artist" / "Source Album" / "04 Moved Track.mp3"
+        entries[str(source_path)] = write_track(
+            source_path,
+            album="Source Album",
+            title="Moved Track",
+            number=4,
+        )
+
+        PostgresLibraryRootSettingsStore(config).save_settings(
+            {
+                "main_library_roots": [
+                    {
+                        "id": "merge-contract-root",
+                        "path": str(music_dir),
+                        "layout_mode": "artist",
+                    }
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+            }
+        )
+        PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect).save_snapshot(
+            Path("unused-merge-contract.json"),
+            entries,
+            "merge-contract-root-identity",
+            1.0,
+            observed_library_root_ids={"merge-contract-root"},
+        )
+        _finish_live_startup(config)
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            albums_before = {
+                row["title"]: dict(row)
+                for row in connection.execute(
+                    """
+                    select id, album_key, title
+                    from library.local_albums
+                    where title = any(%s::text[])
+                    """,
+                    (["Merged Album", "Source Album"],),
+                ).fetchall()
+            }
+        destination_before = albums_before["Merged Album"]
+        source_before = albums_before["Source Album"]
+
+        edit_status, _edit_headers, edit_body = run_asgi_request(
+            asgi_app,
+            "POST",
+            "/utilities/edit-tags",
+            json_body={
+                "confirmed": True,
+                "album": {
+                    "album_id": source_before["id"],
+                    "key": source_before["album_key"],
+                    "name": "Source Album",
+                    "album_artist": "Merge Contract Artist",
+                    "year": 2026,
+                    "tracks": [{"path": str(source_path)}],
+                },
+                "updates": {str(source_path): {"album": "Merged Album"}},
+            },
+        )
+        edit_payload = decode_json(edit_body)
+        assert edit_status == 200, edit_payload
+        assert edit_payload["save_task_status"] == "completed"
+        assert edit_payload["destination_album_id"] == destination_before["id"]
+
+        task_status, _task_headers, task_body = run_asgi_request(
+            asgi_app,
+            "GET",
+            f"/utilities/save-task/{edit_payload['save_task_id']}",
+        )
+        task_payload = decode_json(task_body)
+        assert task_status == 200
+        assert task_payload["status"] == "completed"
+
+        view_status, _view_headers, view_body = run_asgi_request(
+            asgi_app,
+            "GET",
+            "/view-data",
+            query={
+                "artist": "Merge Contract Artist",
+                "surface": "albums",
+                "omit_sidebar": "1",
+            },
+        )
+        view_payload = decode_json(view_body)
+        assert view_status == 200, view_payload
+        current_cards = [
+            album
+            for group in [
+                *view_payload["primary_artist_groups"],
+                *view_payload["family_artist_groups"],
+            ]
+            for album in group["albums"]
+            if album["name"] == "Merged Album"
+        ]
+        assert len(current_cards) == 1
+        current_card = current_cards[0]
+        assert current_card["key"] == edit_payload["destination_album_key"]
+        assert current_card["track_count_preview"] == 4
+
+        detail_status, _detail_headers, detail_body = run_asgi_request(
+            asgi_app,
+            "GET",
+            "/album-details",
+            query={
+                "album_key": current_card["key"],
+            },
+        )
+        detail_payload = decode_json(detail_body)
+        assert detail_status == 200, detail_payload
+        assert detail_payload["album"]["album_id"] == destination_before["id"]
+        assert [track["title"] for track in detail_payload["album"]["tracks"]] == [
+            *destination_titles,
+            "Moved Track",
+        ]
+
+        stale_status, _stale_headers, stale_body = run_asgi_request(
+            asgi_app,
+            "GET",
+            "/album-details",
+            query={
+                "album_id": source_before["id"],
+                "album_key": source_before["album_key"],
+                "resolve_lineage": "1",
+            },
+        )
+        stale_payload = decode_json(stale_body)
+        assert stale_status == 200, stale_payload
+        assert stale_payload["album"]["album_id"] == destination_before["id"]
+        assert len(stale_payload["album"]["tracks"]) == 4
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted_titles = [
+                row["title"]
+                for row in connection.execute(
+                    """
+                    select tracks.title
+                    from library.local_tracks as tracks
+                    where tracks.album_id = %s
+                    order by tracks.track_number, tracks.id
+                    """,
+                    (destination_before["id"],),
+                ).fetchall()
+            ]
+        assert persisted_titles == [*destination_titles, "Moved Track"]
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True

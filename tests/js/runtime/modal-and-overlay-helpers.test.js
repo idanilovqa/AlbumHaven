@@ -35,6 +35,10 @@ const appChromeCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'),
   'utf8',
 );
+const indexTemplateSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'),
+  'utf8',
+);
 
 class FakeClassList {
   constructor() {
@@ -502,6 +506,74 @@ test('artist loose-track availability automatically retries a deferred snapshot 
   assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
 });
 
+test('artist loose-track availability ignores gallery search and expands a matched subset to the full artist collection', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.state.view = {
+    selected_artist: 'ДДТ',
+    query: 'ремиксы',
+    visible_library_categories: ['main_library'],
+    non_album_tracks: [{ path: '/music/ddt/remix.flac', artist: 'ДДТ', title: 'Ремиксы' }],
+    non_album_tracks_deferred: false,
+  };
+  context.fetch = async (url) => {
+    const requestUrl = new URL(url, 'http://localhost');
+    requested.push(requestUrl);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => requestUrl.searchParams.get('availability') === '1'
+        ? { non_album_track_count: 2 }
+        : {
+          non_album_tracks: [
+            { path: '/music/ddt/remix.flac', artist: 'ДДТ', title: 'Ремиксы' },
+            { path: '/music/ddt/other.flac', artist: 'ДДТ', title: 'Другая песня' },
+          ],
+        },
+    };
+  };
+
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 2);
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].pathname, '/library/loose-tracks');
+  assert.equal(requested[0].searchParams.get('artist'), 'ДДТ');
+  assert.equal(requested[0].searchParams.get('availability'), '1');
+  assert.equal(requested[0].searchParams.get('q'), null);
+  assert.equal(context.state.view.non_album_tracks_deferred, true,
+    'a search-matched subset must not masquerade as the full artist collection');
+
+  await context.hydrateDeferredNonAlbumTracks();
+  assert.equal(requested.length, 2);
+  assert.equal(requested[1].pathname, '/library/loose-tracks');
+  assert.equal(requested[1].searchParams.get('artist'), 'ДДТ');
+  assert.equal(requested[1].searchParams.get('q'), null);
+  assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Ремиксы', 'Другая песня']);
+});
+
+test('confirmed zero artist loose-track availability remains terminal under search', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.state.view = {
+    selected_artist: 'Начало Века',
+    query: 'ремиксы',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.fetch = async (url) => {
+    requested.push(new URL(url, 'http://localhost'));
+    return { ok: true, status: 200, json: async () => ({ non_album_track_count: 0 }) };
+  };
+
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 0);
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), true);
+  assert.equal(requested[0].searchParams.get('artist'), 'Начало Века');
+  assert.equal(requested[0].searchParams.get('q'), null);
+});
+
 test('library loose tracks automatically retry a deferred snapshot and follow inventory revision', async () => {
   const { context } = loadHelper();
   const requested = [];
@@ -806,32 +878,22 @@ test('deferred non-album hydration starts a new request after gallery identity c
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
-test('an older deferred hydration cannot overwrite a newer scope for the same artist', async () => {
+test('artist deferred hydration is shared across query changes because it loads the full artist collection', async () => {
   const { context } = loadHelper();
-  let resolveOldRequest;
+  const requested = [];
+  let resolveRequest;
   context.updateGalleryMainControls = () => {};
   context.URL = URL;
-  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}&query=${encodeURIComponent(view.query || '')}`;
-  context.fetch = async (url) => {
-    if (new URL(url, 'http://localhost').searchParams.get('query') === 'old') {
-      return new Promise((resolve) => {
-        resolveOldRequest = () => resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            non_album_tracks: [{ path: '/music/neal-morse/old.flac', title: 'Old Scope' }],
-          }),
-        });
-      });
-    }
-    return {
+  context.fetch = async (url) => new Promise((resolve) => {
+    requested.push(new URL(url, 'http://localhost'));
+    resolveRequest = () => resolve({
       ok: true,
       status: 200,
       json: async () => ({
-        non_album_tracks: [{ path: '/music/neal-morse/new.flac', title: 'New Scope' }],
+        non_album_tracks: [{ path: '/music/neal-morse/full.flac', title: 'Full Artist Scope' }],
       }),
-    };
-  };
+    });
+  });
 
   context.state.view = {
     selected_artist: 'Neal Morse',
@@ -839,7 +901,7 @@ test('an older deferred hydration cannot overwrite a newer scope for the same ar
     non_album_tracks: [],
     non_album_tracks_deferred: true,
   };
-  const oldHydration = context.hydrateDeferredNonAlbumTracks();
+  const oldQueryHydration = context.hydrateDeferredNonAlbumTracks();
   await Promise.resolve();
 
   context.state.view = {
@@ -848,13 +910,17 @@ test('an older deferred hydration cannot overwrite a newer scope for the same ar
     non_album_tracks: [],
     non_album_tracks_deferred: true,
   };
-  await context.hydrateDeferredNonAlbumTracks();
-  resolveOldRequest();
-  await oldHydration;
+  const newQueryHydration = context.hydrateDeferredNonAlbumTracks();
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].pathname, '/library/loose-tracks');
+  assert.equal(requested[0].searchParams.get('artist'), 'Neal Morse');
+  assert.equal(requested[0].searchParams.get('q'), null);
+  resolveRequest();
+  await Promise.all([oldQueryHydration, newQueryHydration]);
 
   assert.deepEqual(
     Array.from(context.state.view.non_album_tracks, (track) => track.title),
-    ['New Scope'],
+    ['Full Artist Scope'],
   );
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
@@ -1121,7 +1187,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     markup,
     /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="album-track-table__title" data-title-prefix="Main Artist feat\. Guest \/ ">Rare Song</);
+  assert.match(markup, /class="album-track-table__title">Rare Song<span class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest<\/span>/);
   assert.match(markup, /album-track-table__disc-title">Non-album rarity<\/span><span class="album-track-table__disc-count">1 track<\/span><span class="album-track-table__disc-length">4:05</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
@@ -1140,7 +1206,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   assert.match(rarityOnly, />Non-album rarity</);
   assert.doesNotMatch(rarityOnly, /data-track-path-column/, 'without a display path the File path column is absent');
   const withYear = context.buildNonAlbumTrackSectionsMarkup([{ path: 'C:/Music/A.mp3', title: 'Song', artist: 'Band', year_label: '2024', exception_type: 'Interview' }]);
-  assert.match(withYear, /album-track-table__secondary" title="2024"><span>2024</);
+  assert.match(withYear, /class="album-track-table__title">Song<span class="album-track-table__secondary" title="Band • 2024"><span>Band • 2024</);
   assert.doesNotMatch(rarityOnly, />Interviews</);
 
   const otherOnly = context.buildNonAlbumTrackSectionsMarkup([{
@@ -2210,7 +2276,7 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
 
 {
   const { context } = loadHelper();
-  context.showAlbumCardContextMenu(12, 24, {
+  const album = {
     key: 'arrival-album',
     allowed_actions: { 'library.files.edit_tags': true },
     move_availability: {
@@ -2220,8 +2286,10 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
         move_to_library: { available: true, target_category: 'main_library' },
       },
     },
-  });
+  };
+  context.showAlbumCardContextMenu(12, 24, album);
   const menu = context.document.getElementById('album-card-context-menu');
+  assert.equal(menu.albumContext, album);
   assert.match(menu.innerHTML, /data-album-card-action="edit-tags"/);
   assert.match(menu.innerHTML, /Open in File Explorer[\s\S]*Edit Tags/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_hoard"/);
@@ -2232,6 +2300,7 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   assert.equal(context.__activatedSurfaces[0].surface, menu);
   context.__activatedSurfaces[0].close();
   assert.equal(menu.hidden, true);
+  assert.equal(menu.albumContext, null);
   assert.equal(context.__clearedSurfaces.at(-1), menu);
 }
 
@@ -2567,11 +2636,14 @@ test('Mark As A Version saves the changed selection in the background: link, unl
 });
 
 test('library navigation modes still switch between Artists and Custom Collections explicitly', () => {
+  assert.match(indexTemplateSource, /class_name='shell-navigation-compact-action is-selected'[^\n]*id='artist-tree-navigation-button'[^\n]*'aria-pressed': 'true'/);
+  assert.match(indexTemplateSource, /class_name='shell-navigation-compact-action shell-navigation-compact-action--loose-tracks'[^\n]*'aria-pressed': 'false'/);
   const { context } = loadHelper();
   const heading = new FakeElement('navigation-tree-heading');
   const collections = new FakeElement('sidebar-collections');
   const artists = new FakeElement('sidebar-list');
-  [heading, collections, artists].forEach((element) => context.document.body.appendChild(element));
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [heading, collections, artists, compactArtists].forEach((element) => context.document.body.appendChild(element));
   const artistsMode = new FakeElement();
   artistsMode.dataset.navigationMode = 'artists';
   const collectionsMode = new FakeElement();
@@ -2596,6 +2668,9 @@ test('library navigation modes still switch between Artists and Custom Collectio
   assert.equal(artists.hidden, true);
   assert.equal(collectionsMode.getAttribute('aria-pressed'), 'true');
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.classList.contains('is-selected'), false);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'true');
   assert.equal(compactLooseTracks.getAttribute('aria-current'), 'page');
   assert.equal(compactLooseTracks.classList.contains('is-selected'), true);
   assert.match(
@@ -2609,6 +2684,9 @@ test('library navigation modes still switch between Artists and Custom Collectio
   assert.equal(collections.hidden, true);
   assert.equal(artists.hidden, false);
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactArtists.classList.contains('is-selected'), true);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'false');
   assert.equal(compactLooseTracks.getAttribute('aria-current'), '');
   assert.equal(compactLooseTracks.classList.contains('is-selected'), false);
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
@@ -2621,7 +2699,8 @@ test('desktop Loose Tracks keeps the expanded Artist Tree while selecting its co
   const heading = new FakeElement('navigation-tree-heading');
   const collections = new FakeElement('sidebar-collections');
   const artists = new FakeElement('sidebar-list');
-  [main, rail, heading, collections, artists].forEach((element) => context.document.body.appendChild(element));
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [main, rail, heading, collections, artists, compactArtists].forEach((element) => context.document.body.appendChild(element));
   const artistsMode = new FakeElement();
   artistsMode.dataset.navigationMode = 'artists';
   const collectionsMode = new FakeElement();
@@ -2658,12 +2737,63 @@ test('desktop Loose Tracks keeps the expanded Artist Tree while selecting its co
   assert.equal(rail.getAttribute('data-library-navigation-mode'), 'artists');
   assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
   assert.equal(collectionsMode.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.classList.contains('is-selected'), false);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'true');
   assert.equal(compactLooseTracks.getAttribute('aria-current'), 'page');
   assert.equal(compactLooseTracks.classList.contains('is-selected'), true);
   assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
 });
 
 // Mark As A Version renders the real NavigationTree wide item from its template.
+test('hydration-only Loose Tracks repaint preserves an explicit Artist Tree selection', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const rail = new FakeElement('shell-navigation-rail');
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [main, rail, heading, collections, artists, compactArtists]
+    .forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected() {} } };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-navigation-mode]') return [artistsMode, collectionsMode];
+    if (selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]') return [compactLooseTracks];
+    return [];
+  };
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.state.ui.nonAlbumLibraryWide = true;
+  const overlay = new FakeElement('non-album-modal');
+  overlay.classList.toggle = (token, force) => {
+    if (force) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  overlay.querySelector = () => null;
+
+  context.syncLibraryNavigationMode('artists');
+  context.setNonAlbumPagePresentation(overlay, true, true, false);
+
+  assert.equal(artists.hidden, false);
+  assert.equal(collections.hidden, true);
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'false');
+  assert.match(helperSource, /openNonAlbumModal\(\{ \.\.\.options, syncNavigation: false \}\)/,
+    'the delayed hydration repaint must opt out of another navigation transition');
+});
+
 function useNavigationTree(context) {
   const fs = require('node:fs');
   const path = require('node:path');

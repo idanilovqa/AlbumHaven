@@ -425,6 +425,111 @@ def test_candidate_query_selects_private_path_override_before_track_id_then_newe
     assert "on exception_override.track_file_id = active_track_files.id" in sql
 
 
+def test_non_album_membership_only_scope_filters_before_the_row_limit():
+    sql = " ".join(
+        inventory_module._non_album_candidates_sql(
+            unassigned_only=True,
+            membership_problems_only=True,
+        ).lower().split()
+    )
+
+    tail = sql.rsplit(" where ", 1)[1]
+    membership = "metadata #>> '{scan_cache,file_entry,local_album_membership_problem}'"
+    assert membership in tail
+    assert tail.index(membership) < tail.index("limit %(limit)s")
+    assert "exception_override.exception_type is not null" not in tail
+    eligible = sql.split("eligible_track_file_ids as (", 1)[1].split("active_track_files as (", 1)[0]
+    assert " union " not in eligible
+    assert "join library.local_tracks membership_tracks" in eligible
+    assert "membership_tracks.album_id is null" in eligible
+
+
+def test_membership_group_hydration_is_unbounded_and_pushed_into_eligibility():
+    sql = " ".join(
+        inventory_module._non_album_candidates_sql(
+            unassigned_only=True,
+            membership_problems_only=True,
+            membership_groups=True,
+        ).lower().split()
+    )
+
+    eligible = sql.split("eligible_track_file_ids as (", 1)[1].split("active_track_files as (", 1)[0]
+    assert "%(membership_group_ids)s::text[]" in eligible
+    assert "btrim(roots.id::text) || chr(1)" in eligible
+    assert "library.local_path_style(files.private_path)" in eligible
+    assert "limit %(limit)s" not in sql
+
+
+def test_membership_group_filter_preserves_projected_identity_bytes():
+    connection = FakeConnection([FakeCursor(rows=[])])
+    repository_for(connection).load_non_album_candidates(
+        membership_problems_only=True,
+        membership_group_ids=["root\x01Music/Album ", "root\x01Music/Album"],
+    )
+
+    _sql, params = connection.calls[0]
+    assert params["membership_group_ids"] == [
+        "root\x01Music/Album",
+        "root\x01Music/Album ",
+    ]
+
+
+def test_membership_group_headers_group_before_the_limit():
+    sql = " ".join(
+        inventory_module._membership_problem_group_headers_sql(bounded=True).lower().split()
+    )
+
+    assert "tracks.album_id is null" in sql
+    assert "local_album_membership_problem" in sql
+    assert "group by btrim(roots.id::text) || chr(1)" in sql
+    assert "fetch first %(limit)s rows with ties" in sql
+    assert "root_id || '/' || folder_path" not in sql
+    assert "overrides.updated_at desc" in sql
+    assert "overrides.id desc" in sql
+    assert sql.index("case when overrides.track_key = files.private_path") < sql.index(
+        "overrides.updated_at desc"
+    ) < sql.index("overrides.id desc")
+    assert "case when exception_override.override_payload ? 'exception_type'" in sql
+    assert "else files.metadata #>> '{scan_cache,file_entry,exception_type}'" in sql
+    assert "local_album_membership_problem" in sql
+    assert "))) = ''" in sql
+    assert sql.index("))) = ''") < sql.index("group by btrim(roots.id::text)")
+    assert (
+        'lower(coalesce(album_artist, \'\') collate "und-x-icu") collate "c"'
+        in sql
+    )
+
+
+def test_membership_group_header_and_hydration_share_physical_folder_identity():
+    header_sql = " ".join(
+        inventory_module._membership_problem_group_headers_sql(bounded=True).lower().split()
+    )
+    hydration_sql = " ".join(
+        inventory_module._non_album_candidates_sql(
+            unassigned_only=True,
+            membership_problems_only=True,
+            membership_groups=True,
+        ).lower().split()
+    )
+
+    identity = "btrim(roots.id::text) || chr(1) || regexp_replace(case"
+    assert identity in header_sql
+    assert identity in hydration_sql
+    assert "library.local_path_style(files.private_path)" in header_sql
+    assert "library.local_path_style(files.private_path)" in hydration_sql
+    assert "as membership_group_id" in hydration_sql
+    assert "as membership_group_folder" in hydration_sql
+
+
+def test_complete_membership_group_headers_are_not_clamped():
+    sql = " ".join(
+        inventory_module._membership_problem_group_headers_sql(bounded=False).lower().split()
+    )
+
+    assert "fetch first" not in sql
+    assert "limit %(limit)s" not in sql
+
+
 def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
     sql = "\n".join(
         (

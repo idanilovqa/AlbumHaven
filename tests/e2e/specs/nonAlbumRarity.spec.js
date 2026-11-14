@@ -346,6 +346,16 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
       await trackModalActions.openTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
+      await expect(tagEditorActions.tagEditor.exceptionSelect).toHaveValue('');
+      await expect(tagEditorActions.tagEditor.exceptionSelect).toHaveAttribute('placeholder', 'None');
+      const openedAt = performance.now();
+      await tagEditorActions.tagEditor.exceptionSelect.click();
+      await expect(tagEditorActions.tagEditor.exceptionMenu).toBeVisible();
+      expect(performance.now() - openedAt).toBeLessThanOrEqual(500);
+      const closedAt = performance.now();
+      await tagEditorActions.tagEditor.exceptionSelect.click();
+      await expect(tagEditorActions.tagEditor.exceptionMenu).toBeHidden();
+      expect(performance.now() - closedAt).toBeLessThanOrEqual(500);
       await tagEditorActions.setException('Non-album rarity');
       await tagEditorActions.selectTrackByFilename(SIBLING_TRACK_FILENAME);
       await tagEditorActions.setException('Interview');
@@ -423,6 +433,24 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
         savedNotificationDelivery: 'status-page',
         onSaveTaskCompleted: () => { fixtureRestored = true; },
       });
+      await trackModalActions.closeIfOpen();
+      await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
+      await galleryActions.waitForGalleryReady();
+      expect(await galleryActions.selectAlbumDetailsByIdentity({
+        artist: RARITY_ARTIST,
+        album: RARITY_ALBUM,
+        year: RARITY_YEAR,
+      })).toEqual({ artist: RARITY_ARTIST, album: RARITY_ALBUM, year: RARITY_YEAR });
+      await trackModalActions.waitForInteractiveSummary();
+      await trackModalActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+      for (const filename of [RARITY_TRACK_FILENAME, SIBLING_TRACK_FILENAME]) {
+        await tagEditorActions.selectTrackByFilename(filename);
+        await expect(tagEditorActions.tagEditor.exceptionSelect).toHaveValue('');
+        await expect(tagEditorActions.tagEditor.exceptionSelect).toHaveAttribute('placeholder', 'None');
+      }
+      await tagEditorActions.dismissTopmostOverlayWithEscape();
+      await trackModalActions.closeIfOpen();
     });
   } finally {
     if (exceptionsApplied && !fixtureRestored) {

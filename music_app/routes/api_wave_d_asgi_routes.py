@@ -1769,6 +1769,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
                 config=config,
                 logger=logger,
                 cover_revision=cover_revision,
+                selected_local_cover_source_path=saved_cover_path,
                 cover_selection_origin="user",
                 explicit_selection=True,
             )
@@ -1788,6 +1789,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
                 logger=logger,
                 library_state=library_state,
                 cover_revision=cover_revision,
+                selected_local_cover_source_path=saved_cover_path,
                 schedule_cache_update=False,
             ),
         )
@@ -1796,6 +1798,26 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     if error_response is not None:
         return error_response
     saved_cover_path, cover_revision, updated_albums, updated_problematic_album = persisted
+    inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
+    if inventory_worker is not None:
+        try:
+            await run_in_threadpool(inventory_worker.invalidate_paths, [saved_cover_path])
+        except Exception:
+            logger.exception(
+                "Local cover inventory invalidation failed after pasted cover save committed"
+            )
+            schedule_retry = getattr(
+                inventory_worker,
+                "schedule_invalidation_retry",
+                None,
+            )
+            if callable(schedule_retry):
+                try:
+                    await run_in_threadpool(schedule_retry, [saved_cover_path])
+                except Exception:
+                    logger.exception(
+                        "Failed to schedule local cover inventory invalidation retry"
+                    )
     task_id = str(payload.get("task_id") or "").strip()
     try:
         if task_id:

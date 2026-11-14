@@ -21,6 +21,7 @@
   function create({
     list,
     renderRow,
+    onNearEnd,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
   }) {
@@ -58,6 +59,8 @@
       const stride = getStride(horizontal);
       const offset = horizontal ? Number(list.scrollLeft) : Number(list.scrollTop);
       const viewport = horizontal ? Number(list.clientWidth) : Number(list.clientHeight);
+      const visibleStart = Math.floor(Math.max(0, offset) / stride);
+      const visibleCount = Math.max(1, Math.ceil(Math.max(1, viewport) / stride));
       const range = calculateRange({
         count: items.length,
         offset,
@@ -110,6 +113,8 @@
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
       }
+      const prefetchRows = Math.max(overscan, visibleCount * 4);
+      if (items.length && visibleStart + visibleCount >= Math.max(0, items.length - prefetchRows)) onNearEnd?.();
     };
 
     const schedule = () => {

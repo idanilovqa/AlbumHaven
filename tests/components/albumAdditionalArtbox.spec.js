@@ -62,3 +62,49 @@ for (const scenario of [{ saved: false, links: false }, { saved: true, links: tr
     }
   });
 }
+
+test('the second-artbox quick-search spinner stays centered without moving its trigger', async ({ page }) => {
+  await page.setContent(`<!doctype html><html><body style="margin:0">
+    <button class="action-button track-modal-cover-tool is-fast-fetch" style="width:34px;height:34px"
+      data-additional-artbox-quick-search="1" type="button">
+      <span class="action-button__content"><span class="action-button__icon">Q</span></span>
+    </button>
+  </body></html>`);
+  for (const file of [
+    'runtime/base-layout.css',
+    'runtime/track-modal-and-lightbox.css',
+    'button-component.css',
+  ]) {
+    await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
+  const button = page.locator('[data-additional-artbox-quick-search]');
+  const before = await button.boundingBox();
+
+  await button.evaluate((element) => element.setAttribute('aria-busy', 'true'));
+
+  const after = await button.boundingBox();
+  expect(after).toEqual(before);
+  const spinner = await button.evaluate((element) => {
+    const animation = element.getAnimations({ subtree: true })
+      .find((candidate) => candidate.effect?.pseudoElement === '::before');
+    animation.pause();
+    animation.currentTime = 200;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element, '::before');
+    const matrix = new DOMMatrixReadOnly(style.transform);
+    return {
+      left: Number.parseFloat(style.left),
+      top: Number.parseFloat(style.top),
+      transform: style.transform,
+      translateX: matrix.e,
+      translateY: matrix.f,
+      halfWidth: element.clientWidth / 2,
+      halfHeight: element.clientHeight / 2,
+    };
+  });
+  expect(spinner.left).toBeCloseTo(spinner.halfWidth, 1);
+  expect(spinner.top).toBeCloseTo(spinner.halfHeight, 1);
+  expect(spinner.transform).not.toBe('none');
+  expect(spinner.translateX).toBeCloseTo(-7, 1);
+  expect(spinner.translateY).toBeCloseTo(-7, 1);
+});

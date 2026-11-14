@@ -57,6 +57,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-004 keeps Loose Tracks selected after cold hydration without another navigation action",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistTreePersistence.spec.js",
+              "case": "FTC-ARTIST-TREE-005 keeps Artist Tree selected when expanded during cold Loose Tracks hydration",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
               "case": "FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing",
               "area": "settings"
@@ -894,9 +908,23 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/coverLookup.spec.js",
-              "case": "FTC-COVERS-041 unhydrated notification opens the optimistic split chooser immediately",
-              "area": "cover-providers"
-            },
+        "case": "FTC-COVERS-041 unhydrated notification opens the optimistic split chooser immediately",
+        "area": "cover-providers"
+      },
+      {
+        "config": "playwright.config.js",
+        "project": "functional",
+        "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-047 split re-merge redirects unanswered split chooser notification to the survivor",
+        "area": "cover-providers"
+      },
+      {
+        "config": "playwright.config.js",
+        "project": "functional",
+        "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-047 split re-merge redirects chosen split release notification to the survivor",
+        "area": "cover-providers"
+      },
             {
               "config": "playwright.config.js",
               "project": "functional",

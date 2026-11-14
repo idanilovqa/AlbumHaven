@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from contextlib import nullcontext
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -185,6 +186,79 @@ def test_worker_forwards_deleted_subtree_without_filesystem_discovery():
         "subtree_paths": ["library/artist"], "context_changed": True,
     })]
     assert worker._wake.is_set()
+
+
+def test_invalidation_retry_coalesces_backs_off_and_eventually_drains(monkeypatch):
+    now = [100.0]
+    attempts = []
+
+    def invalidate_paths(paths, **kwargs):
+        attempts.append((tuple(paths), kwargs))
+        if len(attempts) in {1, 3}:
+            raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: now[0])
+    worker = inventory.LocalCoverInventoryWorker(
+        {},
+        repository=SimpleNamespace(invalidate_paths=invalidate_paths),
+    )
+    worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
+    worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
+
+    assert len(worker._invalidation_retries) == 1
+    worker._retry_scheduled_invalidation()
+    assert len(attempts) == 1
+
+    worker._retry_scheduled_invalidation()
+    assert len(attempts) == 1, "backoff must prevent a hot retry loop"
+
+    now[0] += worker._INVALIDATION_RETRY_BASE_SECONDS
+    worker._retry_scheduled_invalidation()
+    assert len(attempts) == 2
+    assert worker._invalidation_retries == {}
+
+    worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
+    key = next(iter(worker._invalidation_retries))
+    worker._invalidation_retries[key] = (now[0], 100)
+    worker._retry_scheduled_invalidation()
+    next_attempt_at, _attempt_count = worker._invalidation_retries[key]
+    assert next_attempt_at - now[0] == worker._INVALIDATION_RETRY_MAX_SECONDS
+
+    now[0] = next_attempt_at
+    worker._retry_scheduled_invalidation()
+    assert len(attempts) == 4
+    assert worker._invalidation_retries == {}
+
+
+def test_failed_invalidation_retry_does_not_starve_normal_inventory_work():
+    normal_work_reached = Event()
+    invalidation_attempts = []
+
+    def invalidate_paths(paths, **_kwargs):
+        invalidation_attempts.append(tuple(paths))
+        raise RuntimeError("database unavailable")
+
+    worker = inventory.LocalCoverInventoryWorker(
+        {},
+        repository=SimpleNamespace(
+            work_slot=lambda: nullcontext(True),
+            invalidate_paths=invalidate_paths,
+            next_context=lambda **_kwargs: None,
+            next_pending=lambda **_kwargs: normal_work_reached.set() or None,
+        ),
+    )
+    worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
+    thread = Thread(target=worker._run, daemon=True)
+    thread.start()
+    try:
+        assert normal_work_reached.wait(1), "retry failure must not block normal inventory work"
+    finally:
+        worker._stop.set()
+        worker._wake.set()
+        thread.join(2)
+
+    assert not thread.is_alive()
+    assert invalidation_attempts == [(inventory.root_key("library/artist/cover.jpg"),)]
 
 
 def _touch(*paths):

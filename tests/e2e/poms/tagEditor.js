@@ -110,6 +110,7 @@ export class TagEditor extends BasePage {
     this.trackNumberInput = this.overlay.locator('input[data-tag-field="track_number"]');
     this.discNumberInput = this.overlay.locator('input[data-tag-field="disc_number"]');
     this.exceptionSelect = this.overlay.locator('input[data-tag-field="exception_type"]');
+    this.exceptionMenu = this.page.locator('#tag-editor-exception-menu');
     this.exceptionNoneOption = page.locator(
       '#tag-editor-exception-menu [data-tag-editor-exception-option=""]',
     );

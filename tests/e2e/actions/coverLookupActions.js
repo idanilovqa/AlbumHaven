@@ -1477,6 +1477,18 @@ export class CoverLookupActions {
     return candidates;
   }
 
+  async readLocalSectionCoverCandidates() {
+    const candidates = [];
+    const count = await this.coverLookup.localSectionCoverCards.count();
+    for (let index = 0; index < count; index += 1) {
+      candidates.push(await this.readLocalCoverCardEvidence(
+        this.coverLookup.localSectionCoverCards.nth(index),
+        `LOCAL section cover candidate ${index + 1}`,
+      ));
+    }
+    return candidates;
+  }
+
   async readActiveLocalCoverEvidence(options = {}) {
     const timeout = options.timeout || 30000;
     await expect(this.coverLookup.activeLocalCoverCard).toHaveCount(1, { timeout });

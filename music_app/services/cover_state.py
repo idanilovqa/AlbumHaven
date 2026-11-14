@@ -185,6 +185,7 @@ def iter_local_cover_candidates(
                 "path": str(path),
                 "filename": path.name,
                 "relative_path": str(relative_path),
+                "sort_relative_path": str(relative_path).casefold(),
                 "width": width,
                 "height": height,
                 "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
@@ -208,6 +209,7 @@ def iter_local_cover_candidates(
                         "path": str(active_cover_path),
                         "filename": active_cover_path.name,
                         "relative_path": active_cover_path.name,
+                        "sort_relative_path": active_cover_path.name.casefold(),
                         "width": width,
                         "height": height,
                         "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
@@ -361,6 +363,7 @@ def serialize_cover_gallery_payload(
             local_candidates.append({
                 "path": str(active_cover_path), "filename": active_cover_path.name,
                 "relative_path": active_cover_path.name, "width": width, "height": height,
+                "sort_relative_path": active_cover_path.name.casefold(),
                 "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
                 "is_squareish": is_squareish_cover(width, height), "is_active": True,
                 "area": width * height, "depth": 0, "sha256": active_cover_revision,

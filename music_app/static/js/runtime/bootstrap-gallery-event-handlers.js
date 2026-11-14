@@ -129,7 +129,7 @@ function handleGalleryBootstrapClick(event) {
     const action = albumAction.getAttribute('data-album-card-action') || '';
     const menu = document.getElementById('album-card-context-menu');
     const menuAlbumKey = menu?.dataset.albumKey || '';
-    const album = getIndexedAlbum(menuAlbumKey);
+    const album = menu?.albumContext || getIndexedAlbum(menuAlbumKey);
 
     hideAlbumCardContextMenu();
 

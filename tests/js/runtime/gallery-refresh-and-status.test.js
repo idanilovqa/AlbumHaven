@@ -146,6 +146,30 @@ test('foreground view consumes a deferred inventory refresh at the revision it a
   assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
 });
 
+test('background refresh replays an automatic search without narrowing it to the top artist', async () => {
+  const { context } = createContext();
+  const requestedViews = [];
+  context.state.view = {
+    ...context.state.view,
+    query: 'ремиксы',
+    selected_artist: 'ДДТ',
+    search_context: { selected_artist_source: 'auto_top_match' },
+  };
+  context.buildApiUrl = (view) => {
+    requestedViews.push(JSON.parse(JSON.stringify(view)));
+    return '/view-data';
+  };
+  context.fetchAndRender = async () => true;
+
+  assert.equal(await context.refreshCurrentViewAfterBackgroundCompletion(), true);
+  assert.equal(requestedViews[0].query, 'ремиксы');
+  assert.equal(requestedViews[0].selected_artist, '');
+
+  context.state.view.search_context.selected_artist_source = 'requested_artist';
+  assert.equal(await context.refreshCurrentViewAfterBackgroundCompletion(), true);
+  assert.equal(requestedViews[1].selected_artist, 'ДДТ');
+});
+
 test('post-scan search refresh rejects a transient active-scan snapshot', async () => {
   const { context, calls, pendingRequests } = createSearchOwnerContext();
   const scheduledRetries = [];

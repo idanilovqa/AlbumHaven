@@ -214,7 +214,7 @@ def test_finalize_post_scan_actions_prefers_pending_manual_refresh(monkeypatch):
     )]
 
 
-def test_finalize_post_scan_actions_starts_background_refresh_for_new_albums(monkeypatch):
+def test_finalize_post_scan_actions_does_not_start_provider_crawl_for_new_albums(monkeypatch):
     background_calls = []
     logged = []
     config = {"LOG_EVENTS": True}
@@ -236,14 +236,11 @@ def test_finalize_post_scan_actions_starts_background_refresh_for_new_albums(mon
         start_background_cover_refresh=lambda: background_calls.append(True),
     )
 
-    assert background_calls == [True]
-    assert logged == [(
-        (config, logger, "Cover art refresh queued after indexing"),
-        {"level": "info", "added_album_count": 1},
-    )]
+    assert background_calls == []
+    assert logged == []
 
 
-def test_finalize_post_scan_actions_checks_existing_albums_for_automatic_cover_candidates(monkeypatch):
+def test_finalize_post_scan_actions_does_not_crawl_existing_albums(monkeypatch):
     logged = []
     background_calls = []
     config = {"LOG_EVENTS": True}
@@ -265,11 +262,60 @@ def test_finalize_post_scan_actions_checks_existing_albums_for_automatic_cover_c
         start_background_cover_refresh=lambda: background_calls.append(True),
     )
 
-    assert background_calls == [True]
-    assert logged == [(
-        (config, logger, "Cover art refresh queued after indexing"),
-        {"level": "info", "reason": "automatic_candidate_refresh"},
-    )]
+    assert background_calls == []
+    assert logged == []
+
+
+def test_forced_scan_after_restart_does_not_treat_hydrated_albums_as_new(
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+):
+    album = SimpleNamespace(key="artist::existing-album")
+    disk_file_cache = {
+        "existing-track": {
+            "path": "existing-track",
+            "album": "Existing Album",
+            "album_artist": "Artist",
+        },
+    }
+    _install_scan_cache_adapter(
+        monkeypatch,
+        FakeScanCacheAdapter(
+            file_cache=disk_file_cache,
+            last_scan=1.0,
+            root_identity=library_root_cache_identity(runtime_config),
+        ),
+    )
+    library_state.update({
+        "file_cache": {},
+        "albums": [],
+        "last_scan": 0.0,
+        "relation_views": {"artists": []},
+    })
+    background_calls = []
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(
+        scan_state,
+        "build_albums_from_file_cache",
+        lambda _file_cache, _separate_release_keys: [album],
+    )
+
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=lambda **_kwargs: (disk_file_cache, 2.0),
+        refresh_relation_views=lambda **_kwargs: None,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: background_calls.append(True),
+    )
+
+    assert library_state["albums"] == [album]
+    assert background_calls == []
 
 
 def test_refresh_library_state_skips_scan_for_fresh_cache_and_repairs_relations(

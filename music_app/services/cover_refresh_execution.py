@@ -649,6 +649,9 @@ def run_cover_jobs(
         if reason == "remote_provider_group_disabled":
             terminal_category = "skipped"
             skipped += 1
+        elif reason == "cover_selection_recovery_failed":
+            terminal_category = "failed"
+            failed += 1
         elif downloaded:
             terminal_category = "downloaded"
             downloaded_count += 1
@@ -806,7 +809,10 @@ def run_cover_jobs(
                         "line": origin.tb_lineno,
                     },
                 )
-                raise
+                detail["reason"] = "cover_selection_recovery_failed"
+                detail["error_type"] = type(exc).__name__
+                record_job_outcome(index, job, cover_path, False, detail)
+                return
             changed = changed or recovered
             selection_conflict = selection_conflict or conflict
             if conflict:

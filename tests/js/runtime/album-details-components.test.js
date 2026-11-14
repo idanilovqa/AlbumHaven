@@ -199,6 +199,16 @@ test('Album Details header actions use the approved outline icons instead of tex
   assert.match(html, /data-open-track-modal-folder="1"/);
 });
 
+test('Album Details hides Open folder when the client cannot open server-local paths', () => {
+  const context = loadComponents();
+  context.AlbumHavenCapabilities = { allows: capability => capability !== 'library.files.open_location' };
+  const html = context.buildAlbumDetailsHeaderActionsHtml({ missing: false });
+
+  assert.match(html, /data-open-track-modal-editor="1"/);
+  assert.match(html, /data-close-track-modal="1"/);
+  assert.doesNotMatch(html, /track-modal-folder|data-open-track-modal-folder/);
+});
+
 test('Loose Tracks uses the shared Album Details header with custom copy and actions', () => {
   const context = loadComponents();
   const html = context.buildAlbumDetailsHeaderHtml({
@@ -222,7 +232,21 @@ test('Loose Tracks uses the shared Album Details header with custom copy and act
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
 });
 
-test('Loose Tracks template delegates its header contents to AlbumDetailsHeader', () => {
+test('Loose Tracks page header uses GalleryBar geometry and keeps Back beside both text lines', () => {
+  const context = loadComponents();
+  const html = context.buildLooseTracksPageHeaderHtml({
+    subtitle: '155 tracks · ДДТ and family',
+    leadingHtml: '<button class="non-album-modal-back">Back</button>',
+    actionsHtml: '<button>Edit</button>',
+  });
+
+  assert.match(html, /^<button class="non-album-modal-back">Back<\/button><div class="gallery-bar__context">/);
+  assert.match(html, /<h1 class="gallery-bar__title" id="non-album-modal-title">Loose Tracks<\/h1>/);
+  assert.match(html, /<p class="gallery-bar__summary" id="non-album-modal-subtitle">155 tracks · ДДТ and family<\/p>/);
+  assert.match(html, /<div class="gallery-bar__actions"><button>Edit<\/button><\/div>$/);
+});
+
+test('Loose Tracks template delegates its header geometry to GalleryBar', () => {
   const template = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'templates', 'partials', 'primary-modals.html'),
     'utf8',
@@ -231,7 +255,7 @@ test('Loose Tracks template delegates its header contents to AlbumDetailsHeader'
   const modalEnd = template.indexOf('</div>\n\n  <div', modalStart);
   const modal = template.slice(modalStart, modalEnd);
 
-  assert.match(modal, /<div class="non-album-modal-header" id="non-album-modal-header"><\/div>/);
+  assert.match(modal, /<div class="non-album-modal-header gallery-bar page-gallery-bar" id="non-album-modal-header" data-gallery-bar data-gallery-bar-instance="page"><\/div>/);
   assert.doesNotMatch(modal, /&#9998;|>✕<|class="icon-button/);
 });
 

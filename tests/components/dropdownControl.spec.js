@@ -69,25 +69,39 @@ test('shared dropdown keeps a centered neutral chevron and pointer cursor across
 test('exception dropdown toggles its production menu on consecutive pointer clicks', async ({ page }) => {
   await page.setContent(`
     <!doctype html>
-    <form id="tag-editor-form">
-      <div class="ui-dropdown-control" data-tag-editor-exception-anchor>
-        <input
-          type="text"
-          data-tag-field="exception_type"
-          role="combobox"
-          aria-expanded="false"
-          value="Custom Collection"
-          readonly
-        >
-      </div>
-      <div id="tag-editor-exception-menu" role="listbox" hidden></div>
-    </form>
+    <div id="tag-editor-modal" style="--panel:#1f2937;--text:#f9fafb;--muted:#9ca3af;--border:#4b5563">
+      <form class="tag-editor-form" id="tag-editor-form">
+        <div class="tag-editor-exception-field" data-tag-editor-exception-anchor>
+          <div class="ui-dropdown-control">
+            <input
+              type="text"
+              data-tag-field="exception_type"
+              role="combobox"
+              aria-expanded="false"
+              value=""
+              placeholder="None"
+              readonly
+            >
+            <div id="tag-editor-exception-menu" class="tag-editor-exception-menu" role="listbox" hidden></div>
+          </div>
+        </div>
+      </form>
+    </div>
   `);
   await page.addStyleTag({
     path: path.join(repositoryRoot, 'music_app/static/css/button-component.css'),
   });
+  await page.addStyleTag({
+    path: path.join(repositoryRoot, 'music_app/static/css/runtime/utilities.css'),
+  });
   await page.addScriptTag({ content: `
-    var state = { view: { non_album_tracks: [] } };
+    var state = {
+      view: {
+        non_album_tracks: Array.from({ length: 10000 }, (_, index) => ({
+          exception_type: index % 2 ? 'Interview' : 'Non-album rarity',
+        })),
+      },
+    };
     function escapeHtml(value) { return String(value ?? ''); }
     function getTagEditorElements() { return { form: document.getElementById('tag-editor-form') }; }
   ` });
@@ -104,13 +118,50 @@ test('exception dropdown toggles its production menu on consecutive pointer clic
   const input = page.getByRole('combobox');
   const menu = page.getByRole('listbox');
   await expect(input).toHaveAttribute('readonly', '');
+  await expect(input).toHaveAttribute('placeholder', 'None');
+  expect(await input.evaluate((element) => element.matches(':placeholder-shown'))).toBe(true);
   await expect(input).toHaveCSS('caret-color', 'rgba(0, 0, 0, 0)');
 
-  await input.click();
+  const readGeometry = () => input.evaluate((element) => {
+    const control = element.closest('.ui-dropdown-control');
+    const controlBox = control.getBoundingClientRect();
+    const inputBox = element.getBoundingClientRect();
+    const chevron = getComputedStyle(control, '::after');
+    const matrix = new DOMMatrix(chevron.transform);
+    return {
+      control: [controlBox.x, controlBox.y, controlBox.width, controlBox.height],
+      input: [inputBox.x, inputBox.y, inputBox.width, inputBox.height],
+      chevron: [
+        controlBox.right - Number.parseFloat(chevron.right) - Number.parseFloat(chevron.width),
+        controlBox.top + Number.parseFloat(chevron.top) + matrix.f,
+        Number.parseFloat(chevron.width),
+        Number.parseFloat(chevron.height),
+      ],
+    };
+  });
+  const closedGeometry = await readGeometry();
+  const openDuration = await input.evaluate((element) => {
+    const startedAt = performance.now();
+    element.click();
+    const menuElement = document.getElementById('tag-editor-exception-menu');
+    if (menuElement.hidden || getComputedStyle(menuElement).display === 'none') return Infinity;
+    menuElement.getBoundingClientRect();
+    return performance.now() - startedAt;
+  });
   await expect(menu).toBeVisible();
   await expect(input).toHaveAttribute('aria-expanded', 'true');
+  expect(openDuration).toBeLessThan(50);
+  expect(await readGeometry()).toEqual(closedGeometry);
 
-  await input.click();
+  const closeDuration = await input.evaluate((element) => {
+    const startedAt = performance.now();
+    element.click();
+    const menuElement = document.getElementById('tag-editor-exception-menu');
+    if (!menuElement.hidden || getComputedStyle(menuElement).display !== 'none') return Infinity;
+    return performance.now() - startedAt;
+  });
   await expect(menu).toBeHidden();
   await expect(input).toHaveAttribute('aria-expanded', 'false');
+  expect(closeDuration).toBeLessThan(50);
+  expect(await readGeometry()).toEqual(closedGeometry);
 });

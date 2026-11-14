@@ -552,7 +552,7 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return findProblematicItemByKey(state.utility.selectedProblematicKey);
 }
 
 function getAlbumTrackPaths(album) {
@@ -1869,9 +1869,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     || !selectedKey
     || (normalizedExpectedAlbumKey && selectedKey !== normalizedExpectedAlbumKey)
   ) return null;
-  const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-    String(album?.key || '').trim() === selectedKey
-  )) || null;
+  const selectedAlbum = findProblematicItemByKey(selectedKey);
   const originalKey = String(originalAlbum?.key || '').trim();
   if (!selectedAlbum || !originalAlbum || (originalKey !== selectedKey && !albumsShareTrackPath(selectedAlbum, getAlbumTrackPaths(originalAlbum)))) {
     return null;
@@ -1886,14 +1884,22 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
   const list = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.list
     : null;
+  const selectedOwnerItems = [
+    state.utility.problematicFiles || [],
+    state.utility.problematicArtistItems || [],
+    state.utility.problematicServerSearchItems || [],
+  ].find((items) => items.some((album) => String(album?.key || '').trim() === selectedKey)) || [];
   const mutation = {
     taskId: normalizedTaskId,
     albumKey: selectedKey,
     originalTrackPaths: Array.from(getAlbumTrackPaths(originalAlbum)),
-    priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
+    priorKeys: selectedOwnerItems.map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
   };
+  if (String(state.utility.pinnedProblematicKey || '') === selectedKey) {
+    state.utility.pinnedProblematicKey = '';
+  }
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   return mutation;
@@ -1907,7 +1913,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     String(state.utility.selectedProblematicKey || '') === String(mutation.albumKey || '')
   );
   if (reconcileSelection && mutationOwnsView) {
-    const items = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
+    const items = getAllProblematicItems();
     const survivingKeys = new Set(items.map((album) => String(album?.key || '')).filter(Boolean));
     const selectedKey = String(mutation.albumKey || '');
     if (survivingKeys.has(selectedKey)) {
@@ -2061,6 +2067,11 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
   ) return false;
 
   const activeQuery = String(state.view?.query || '').trim();
+  if (
+    activeQuery
+    && selectedArtistKey === destinationArtist.toLocaleLowerCase()
+    && String(state.view?.search_context?.selected_artist_source || '').trim() === 'auto_top_match'
+  ) return false;
   const destinationView = {
     ...state.view,
     selected_artist: destinationArtist,
@@ -3014,6 +3025,48 @@ function normalizeProblemFilterReason(reason) {
     : normalized;
 }
 
+function compareProblematicItems(left, right) {
+  for (const field of ['name', 'album_artist']) {
+    const compared = String(left?.[field] || '').toLowerCase()
+      .localeCompare(String(right?.[field] || '').toLowerCase());
+    if (compared) return compared;
+  }
+  const comparedYear = String(left?.year || '').localeCompare(String(right?.year || ''));
+  if (comparedYear) return comparedYear;
+  return String(left?.key || '').toLowerCase().localeCompare(String(right?.key || '').toLowerCase());
+}
+
+function mergeProblematicItems(...sources) {
+  const byKey = new Map();
+  for (const source of sources) {
+    for (const item of source || []) {
+      const key = String(item?.key || '');
+      if (key && !byKey.has(key)) byKey.set(key, item);
+    }
+  }
+  return Array.from(byKey.values()).sort(compareProblematicItems);
+}
+
+function getProblematicBaseItems() {
+  return mergeProblematicItems(
+    state.utility.problematicFiles,
+    state.utility.problematicArtistItems,
+  );
+}
+
+function getAllProblematicItems() {
+  return mergeProblematicItems(
+    state.utility.problematicFiles,
+    state.utility.problematicArtistItems,
+    state.utility.problematicServerSearchItems,
+  );
+}
+
+function findProblematicItemByKey(key) {
+  const normalized = String(key || '');
+  return getAllProblematicItems().find((item) => String(item?.key || '') === normalized) || null;
+}
+
 function getAlbumProblemFilterReasons(album) {
   return (Array.isArray(album?.problem_reasons) ? album.problem_reasons : [])
     .map((reason) => normalizeProblemFilterReason(reason))
@@ -3022,15 +3075,18 @@ function getAlbumProblemFilterReasons(album) {
 
 function getProblemReasonTypes() {
   const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
+  getProblematicBaseItems().forEach((album) => {
     getAlbumProblemFilterReasons(album).forEach((reason) => {
       if (reason) reasons.add(reason);
     });
   });
   const current = Array.from(reasons).sort((a, b) => a.localeCompare(b));
   if (state.utility.problematicFilesComplete === true) {
-    state.utility.completeProblemReasonTypes = current;
-    return current;
+    state.utility.completeProblemReasonTypes = Array.from(new Set([
+      ...(state.utility.completeProblemReasonTypes || []),
+      ...current,
+    ])).sort((a, b) => a.localeCompare(b));
+    return state.utility.completeProblemReasonTypes;
   }
   return Array.from(new Set([...(state.utility.completeProblemReasonTypes || []), ...current]))
     .sort((a, b) => a.localeCompare(b));
@@ -3099,8 +3155,11 @@ function renderProblemFilterControls(els) {
 }
 
 function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
+  const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
+  const items = query.length >= 2 && serverQuery === query
+    ? getAllProblematicItems()
+    : getProblematicBaseItems();
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
@@ -3149,7 +3208,7 @@ function getSelectedUtilityRule() {
 
 function getProblematicAlbumForTrackPath(trackPath) {
   const normalized = String(trackPath || '');
-  return (state.utility.problematicFiles || []).find((album) =>
+  return getAllProblematicItems().find((album) =>
     (Array.isArray(album.problematic_track_paths) && album.problematic_track_paths.includes(normalized))
     || (Array.isArray(album.track_paths) && album.track_paths.includes(normalized))
   ) || null;
@@ -3160,7 +3219,7 @@ function getProblematicAlbumForTrackPath(trackPath) {
 // Matches getProblematicAlbumForTrackPath: the first album in list order wins.
 function buildProblematicAlbumTrackPathIndex() {
   const index = new Map();
-  for (const album of state.utility.problematicFiles || []) {
+  for (const album of getAllProblematicItems()) {
     for (const paths of [album?.problematic_track_paths, album?.track_paths]) {
       if (!Array.isArray(paths)) continue;
       for (const path of paths) {
@@ -3417,7 +3476,7 @@ async function openMusicBrainzArtistProblem(occurrenceId) {
     const loadResult = await loadProblematicFiles(true, { render: false });
     if (loadResult === null) return;
   }
-  const findProblem = () => (state.utility.problematicFiles || []).find((item) => [
+  const findProblem = () => getAllProblematicItems().find((item) => [
     item?.occurrence_id,
     item?.musicbrainz_occurrence_id,
     item?.key,

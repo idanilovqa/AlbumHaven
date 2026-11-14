@@ -98,13 +98,15 @@ function buildAlbumServiceLinksHtml(links = []) {
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
   const missing = Boolean(config.missing);
+  const capabilities = typeof window === 'undefined' ? null : window.AlbumHavenCapabilities;
+  const canOpenFolder = !capabilities || capabilities.allows('library.files.open_location');
   const editLabel = missing ? 'Edit album tags unavailable while album is missing' : 'Edit album tags';
   const folderLabel = missing ? 'Open album folder unavailable while album is missing' : 'Open album in File Explorer';
   const editAttributes = { id: 'track-modal-edit-tags' };
   const folderAttributes = { id: 'track-modal-folder' };
   if (!missing) {
     editAttributes['data-open-track-modal-editor'] = '1';
-    folderAttributes['data-open-track-modal-folder'] = '1';
+    if (canOpenFolder) folderAttributes['data-open-track-modal-folder'] = '1';
   }
   return [
     ButtonComponent.renderActionButton({
@@ -116,7 +118,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
       attributes: editAttributes,
     }),
-    ButtonComponent.renderActionButton({
+    canOpenFolder ? ButtonComponent.renderActionButton({
       presentation: 'bare',
       ariaLabel: folderLabel,
       title: folderLabel,
@@ -124,7 +126,7 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       className: 'track-modal-folder album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
       attributes: folderAttributes,
-    }),
+    }) : '',
     ButtonComponent.renderActionButton({
       presentation: 'bare',
       ariaLabel: 'Close tracklist',
@@ -144,6 +146,12 @@ function buildLooseTracksHeaderActionsHtml() {
     iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
     attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
   });
+}
+
+function buildLooseTracksPageHeaderHtml(config = {}) {
+  const leadingHtml = String(config.leadingHtml || '');
+  const actionsHtml = String(config.actionsHtml || '');
+  return `${leadingHtml}<div class="gallery-bar__context"><h1 class="gallery-bar__title" id="non-album-modal-title">Loose Tracks</h1><p class="gallery-bar__summary" id="non-album-modal-subtitle">${escapeHtml(config.subtitle || '')}</p></div>${actionsHtml ? `<div class="gallery-bar__actions">${actionsHtml}</div>` : ''}`;
 }
 
 const MISSING_ALBUM_REASON_TEXT = {

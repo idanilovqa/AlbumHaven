@@ -5,6 +5,8 @@ from music_app.services.log_history import history_scope_for_request, normalize_
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
 
 import logging
+import hashlib
+import json
 import shlex
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -561,6 +563,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         "pending_cover_refresh_after_scan": bool(library_state.get("pending_cover_refresh_after_scan")),
         "last_scan_display": format_timestamp(float(library_state.get("last_scan") or 0.0)),
         "last_error": library_state.get("last_error"),
+        "covers_last_error": library_state.get("covers_last_error"),
         "album_total": len(browse_state.get("albums", []) or []),
         "inventory_mutation_revision": int(
             library_state.get("inventory_mutation_revision") or 0
@@ -1412,22 +1415,76 @@ def utilities_problematic_files(
     request: Request,
     limit: int | None = Query(default=None, ge=1, le=200),
     q: str = Query(default="", max_length=200),
+    artists: bool = Query(default=False),
+    cursor: str = Query(default="", max_length=1000),
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
+        if artists:
+            sort_key = lambda item: (
+                str(item.get("name") or "").lower(),
+                str(item.get("album_artist") or "").lower(),
+                str(item.get("year") or ""),
+                str(item.get("key") or "").lower(),
+            )
+            artist_items = sorted(load_problematic_artist_items(request), key=sort_key)
+            fingerprint = hashlib.sha256(json.dumps(
+                [(item.get("key"), item.get("problem_reasons")) for item in artist_items],
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")).hexdigest()[:16]
+            after = None
+            cursor_restarted = False
+            if cursor:
+                try:
+                    cursor_payload = json.loads(cursor)
+                    if cursor_payload.get("fingerprint") == fingerprint:
+                        after = tuple(str(value) for value in cursor_payload["after"])
+                    else:
+                        cursor_restarted = True
+                except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                    return JSONResponse({"error": "Invalid Problematic Files Artist cursor."}, status_code=422)
+            remaining = [item for item in artist_items if after is None or sort_key(item) > after]
+            page_limit = limit or 50
+            page_items = remaining[:page_limit]
+            has_more = len(remaining) > page_limit
+            next_cursor = json.dumps({
+                "fingerprint": fingerprint,
+                "after": list(sort_key(page_items[-1])),
+            }, separators=(",", ":")) if has_more and page_items else ""
+            return JSONResponse(_attach_library_watch_health(request, {
+                "items": page_items,
+                "count": len(page_items),
+                "complete": not has_more,
+                "has_more": has_more,
+                "next_cursor": next_cursor,
+                "cursor_restarted": cursor_restarted,
+            }))
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         if limit is not None and not q.strip():
-            payload = repository.build_problematic_files_page(limit=limit)
+            try:
+                payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
+            except ValueError as error:
+                return JSONResponse({"error": str(error)}, status_code=422)
             _project_missing_album_actions_for_request(request, payload)
             return JSONResponse(_attach_library_watch_health(request, payload))
-        # The owner's Artist rows load beside the page, adding no readiness time.
+        # Artist rows have their own bounded client owner. Search combines those
+        # already-loaded rows locally, keeping this request on the SQL search path.
         with ThreadPoolExecutor(max_workers=1) as pool:
-            artist_items = pool.submit(load_problematic_artist_items, request)
+            artist_items = None if q.strip() else pool.submit(load_problematic_artist_items, request)
             if q.strip():
-                payload = repository.build_problematic_files_search(q)
+                try:
+                    payload = repository.build_problematic_files_search(
+                        q,
+                        limit=limit or 50,
+                        cursor=cursor,
+                    )
+                except ValueError as error:
+                    return JSONResponse({"error": str(error)}, status_code=422)
             else:
                 payload = repository.build_problematic_files_payload()
             _project_missing_album_actions_for_request(request, payload)
-            project_artist_problems_into_problematic_files(request, payload, artist_items.result())
+            if artist_items is not None:
+                project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_albums_payload(

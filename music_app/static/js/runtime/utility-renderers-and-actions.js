@@ -26,13 +26,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   };
 
   const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (mobileIndex) disposeProblematicFilesVirtualList();
-  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+  const virtualListApi = typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
-  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const albumsByKey = new Map(getAllProblematicItems().map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
@@ -41,6 +40,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onNearEnd: () => {
+          const query = String(state.utility.searchQuery || '').trim();
+          if (query.length >= 2) void loadNextProblematicServerSearchPage();
+          void loadNextProblematicFilesPage();
+          void loadNextProblematicArtistPage();
+        },
       });
     }
     if (problematicFilesVirtualList) {
@@ -110,9 +115,31 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
-  if (!items.length && state.utility.problematicFilesComplete === false) {
-    replaceListContents('<div class="utility-empty-state compact">Loading remaining albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading remaining albums...</div>';
+  const activeSearchQuery = String(state.utility.searchQuery || '').trim();
+  if (!items.length
+      && activeSearchQuery.length >= 2
+      && state.utility.problematicServerSearchPendingQuery === activeSearchQuery
+      && state.utility.problematicServerSearchSettledQuery !== activeSearchQuery) {
+    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
+    return;
+  }
+  if (!items.length && activeSearchQuery.length >= 2
+      && state.utility.problematicServerSearchHasMore) {
+    void loadNextProblematicServerSearchPage();
+    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
+    return;
+  }
+  if (!items.length
+      && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)) {
+    if (activeSearchQuery) void loadProblematicPagesUntilLocalQueryMatch(activeSearchQuery);
+    else {
+      void loadNextProblematicFilesPage();
+      void loadNextProblematicArtistPage();
+    }
+    replaceListContents('<div class="utility-empty-state compact">Loading more matching albums...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading more matching albums...</div>';
     return;
   }
   if (!items.length) {
@@ -130,9 +157,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
-  if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
+  if (selectedProblematicMissing && (activeSearchQuery || (state.utility.selectedProblemFilters || []).length)) {
     renderTree('');
-    els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
+    els.detail.innerHTML = '<div class="utility-empty-state">Select an entry from the list to see the details.</div>';
     return;
   }
 

@@ -392,7 +392,7 @@ test('problematic-files cases exclusively use the dedicated fixture surface whil
   const problematicCases = matrix.filter((entry) =>
     /FTC-UTIL-PROBLEMS-(009|010)/.test(entry.case));
 
-  assert.equal(problematicCases.length, 2);
+  assert.equal(problematicCases.length, 3);
   assert.deepEqual(
     new Set(problematicCases.map((entry) => entry.case.match(/FTC-UTIL-PROBLEMS-(?:009|010)/)[0])),
     new Set(['FTC-UTIL-PROBLEMS-009', 'FTC-UTIL-PROBLEMS-010']),
@@ -432,7 +432,7 @@ test('problematic-files performance targets use only the dedicated profile and s
     assert.ok(target, name);
     assert.equal(target.fixtureProfile, 'utility-problematic-files', name);
     assert.equal(target.workers, 1, name);
-    assert.equal(target.cases.length, 1, name);
+    assert.equal(target.cases.length, name === 'problematic-files-focused' ? 2 : 1, name);
     assert.equal(target.cases[0].config, 'playwright.utility-problematic-files.config.cjs', name);
     assert.equal(target.cases[0].project, 'utility-problematic-files', name);
     assert.match(target.cases[0].test, /^tests\/e2e\/utilityProblematicFiles\//, name);
@@ -518,7 +518,7 @@ test('matrix validation accepts isolated database-only mutation ownership', () =
   assert.deepEqual(errors, []);
 });
 
-test('functional shard contract owns all 183 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 185 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -534,7 +534,7 @@ test('functional shard contract owns all 183 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 183);
+  assert.equal(expectedCases.size, 187);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 8);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -752,15 +752,15 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 183,
-    component: 296,
+    browserFunctional: 187,
+    component: 304,
     mobile: 78,
     performance: 61,
-    total: 618,
+    total: 630,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 618,
-    functionalShards: 183,
+    testDataMatrix: 630,
+    functionalShards: 187,
     performanceTargets: 61,
   });
 });

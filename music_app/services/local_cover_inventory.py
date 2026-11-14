@@ -333,6 +333,9 @@ def discover_local_cover_inventory(root, config, *, cancel_requested=None):
 class LocalCoverInventoryWorker:
     """One background filesystem reader; Postgres coalesces requests by root."""
 
+    _INVALIDATION_RETRY_BASE_SECONDS = 1.0
+    _INVALIDATION_RETRY_MAX_SECONDS = 60.0
+
     def __init__(self, config, *, repository=None, logger=None):
         self.config = config
         self.repository = repository or LocalCoverInventoryRepository(config)
@@ -340,6 +343,8 @@ class LocalCoverInventoryWorker:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = None
+        self._invalidation_retry_lock = threading.Lock()
+        self._invalidation_retries = {}
         self._after_album_id = 0
         self._backfill_done = False
         self._foreground_at = time.monotonic()
@@ -375,6 +380,58 @@ class LocalCoverInventoryWorker:
     def invalidate_paths(self, paths, *, context_changed=False, subtree_paths=()):
         self.repository.invalidate_paths(list(paths), context_changed=context_changed, subtree_paths=list(subtree_paths))
         self._wake.set()
+
+    def schedule_invalidation_retry(self, paths, *, context_changed=False, subtree_paths=()):
+        key = (
+            tuple(sorted({root_key(path) for path in paths})),
+            bool(context_changed),
+            tuple(sorted({root_key(path) for path in subtree_paths})),
+        )
+        if not key[0] and not key[2]:
+            return
+        with self._invalidation_retry_lock:
+            self._invalidation_retries.setdefault(key, (time.monotonic(), 0))
+        self._wake.set()
+
+    def _retry_scheduled_invalidation(self):
+        now = time.monotonic()
+        with self._invalidation_retry_lock:
+            due = next(
+                (
+                    (key, state)
+                    for key, state in self._invalidation_retries.items()
+                    if state[0] <= now
+                ),
+                None,
+            )
+        if due is None:
+            return
+        key, state = due
+        paths, context_changed, subtree_paths = key
+        try:
+            self.repository.invalidate_paths(
+                paths,
+                context_changed=context_changed,
+                subtree_paths=subtree_paths,
+            )
+        except Exception:
+            attempts = state[1] + 1
+            delay = min(
+                self._INVALIDATION_RETRY_BASE_SECONDS
+                * (2 ** min(attempts - 1, 6)),
+                self._INVALIDATION_RETRY_MAX_SECONDS,
+            )
+            with self._invalidation_retry_lock:
+                if self._invalidation_retries.get(key) == state:
+                    self._invalidation_retries[key] = (now + delay, attempts)
+            self._logger.exception(
+                "Local cover inventory invalidation retry failed; retrying in %.1f seconds.",
+                delay,
+            )
+            return
+        with self._invalidation_retry_lock:
+            if self._invalidation_retries.get(key) == state:
+                self._invalidation_retries.pop(key, None)
 
     def rescan(self):
         self.repository.invalidate_all()
@@ -419,6 +476,7 @@ class LocalCoverInventoryWorker:
                 with self.repository.work_slot() as admitted:
                     if not admitted:
                         continue
+                    self._retry_scheduled_invalidation()
                     background = time.monotonic() - self._foreground_at > 5
                     context = self.repository.next_context(background=background)
                     if context:

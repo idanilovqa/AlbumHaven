@@ -2541,14 +2541,49 @@
         "js:music_app/static/js/runtime/loop-range-controls.js#attachDocumentDragListeners:event:pointerup"
       ],
       "owners": [
-        "music_app/static/js/runtime/loop-range-controls.js"
+        "music_app/static/js/runtime/loop-range-controls.js",
+        "music_app/static/js/runtime/utility-loop-playback.js",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/admin-members.js",
+        "music_app/static/js/unfolding-action-button.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js",
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/player-loop-playback.js",
+        "music_app/static/js/admin-server.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/client-device-preferences.js",
+        "music_app/static/js/runtime/date-range-picker.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "requests": 0,
+        "domQueries": 270,
+        "domMutations": 130,
+        "animationFrames": 10,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "domQueries",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loop-playback.test.js",
+      "testIdentity": "bounded interaction: loop range handle drag previews one saved loop among 1,000",
+      "performanceTargets": [],
+      "rollback": "Test-only registration; an editing drag already uses the editor's frozen duration and renders one animation frame per move, so removing the contract changes no product behavior."
     },
     {
       "id": "js:runtime/loop-range-controls.js#leave",

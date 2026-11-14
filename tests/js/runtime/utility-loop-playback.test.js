@@ -2418,7 +2418,24 @@ function createCountedSavedLoopPage(counter, loopCount) {
     selectors.set(`[data-loop-play="${id}"]`, new CountedNode('BUTTON'));
     selectors.set(`[data-loop-timeline="${id}"]`, timeline);
     selectors.set(`[data-loop-stereo-waveform="${id}"]`, canvas);
-    selectors.set(`[data-loop-range-owner="saved-loop-${id}"]`, new CountedNode());
+    const rangeRoot = new CountedNode();
+    const rangeParts = {
+      '[data-loop-range-surface]': Object.assign(new CountedNode(), {
+        getBoundingClientRect: () => ({ left: 100, width: 600, top: 0, height: 40 }),
+      }),
+      '[data-loop-range-handle="start"]': new CountedNode('BUTTON'),
+      '[data-loop-range-handle="end"]': new CountedNode('BUTTON'),
+      '[data-loop-range-time="start"]': new CountedNode('SPAN'),
+      '[data-loop-range-time="end"]': new CountedNode('SPAN'),
+    };
+    rangeRoot.querySelector = (selector) => { counter.count('domQueries'); return rangeParts[selector] || null; };
+    rangeRoot.parts = rangeParts;
+    const actionRoot = new CountedNode();
+    const actionParts = Object.fromEntries(['enter', 'create', 'cancel']
+      .map(action => [`[data-loop-action="${action}"]`, new CountedNode('BUTTON')]));
+    actionRoot.querySelector = (selector) => { counter.count('domQueries'); return actionParts[selector] || null; };
+    selectors.set(`[data-loop-range-owner="saved-loop-${id}"]`, rangeRoot);
+    selectors.set(`[data-loop-action-owner="saved-loop-${id}"]`, actionRoot);
     selectors.set(`[data-saved-loop-main-surface="${id}"]`, main);
     selectors.set(`[data-loop-speed-value-button="${id}"]`, trigger);
     selectors.set(`[data-loop-speed-menu="${id}"]`, menu);
@@ -2442,7 +2459,7 @@ function createCountedSavedLoopPage(counter, loopCount) {
     assert.match(String(url), /^\/playback\/waveform\?/);
     return { ok: true, status: 200, json: async () => ({ sampleCount: 280, left: peaks, right: peaks }) };
   };
-  return { loops, selectors, document, documentListeners, fetch, CountedNode };
+  return { loops, selectors, document, documentListeners, fetch, CountedNode, frames: [] };
 }
 
 function loadCountedSavedLoopPage(counter, loopCount) {
@@ -2453,6 +2470,12 @@ function loadCountedSavedLoopPage(counter, loopCount) {
     fetch: page.fetch,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     window: { innerWidth: 1280, innerHeight: 800, addEventListener() {} },
+    requestAnimationFrame: (callback) => {
+      counter.count('animationFrames');
+      page.frames.push(callback);
+      return page.frames.length;
+    },
+    cancelAnimationFrame: () => {},
     state: {
       player: { streaming: { generation: 0 }, appearance: { seekbarMode: 'waveform' } },
       utility: {
@@ -2528,5 +2551,38 @@ test('bounded interaction: page scroll closes a loop speed menu among 1,000 save
     run,
     budgets: { itemsVisited: 0, requests: 0, domQueries: 0, domMutations: 17, listeners: 0 },
     growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: loop range handle drag previews one saved loop among 1,000', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, page } = loadCountedSavedLoopPage(counter, cardinality);
+    const loopId = `loop-${cardinality - 1}`;
+    await context.openSavedLoopCreation(loopId);
+    assert.equal(context.state.utility.loopEditors[loopId].active, true);
+    const range = page.selectors.get(`[data-loop-range-owner="saved-loop-${loopId}"]`);
+    range.parts['[data-loop-range-handle="end"]'].dispatch('pointerdown', { pointerId: 7 });
+    const pointermove = page.documentListeners.get('pointermove');
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        pointermove({ pointerId: 7, clientX: 700 - step * 30 });
+        page.frames.splice(0).forEach(frame => frame());
+      }
+    });
+    assert.deepEqual(
+      { start: context.state.utility.loopEditors[loopId].startSeconds, end: context.state.utility.loopEditors[loopId].endSeconds },
+      { start: 0, end: 60 },
+    );
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/loop-range-controls.js#attachDocumentDragListeners',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, requests: 0, domQueries: 270, domMutations: 130, animationFrames: 10, listeners: 0 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
   });
 });

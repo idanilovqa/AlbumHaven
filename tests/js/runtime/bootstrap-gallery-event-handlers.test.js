@@ -5829,3 +5829,85 @@ for (const query of ['Devin', '']) {
     assert.equal(context.state.ui.artistsDrawerOpen, false);
   });
 }
+
+// Request-capture contracts (tests/ci/bounded-interactions.json): gallery links, similar-artist
+// chips and history steps run through the real fetchAndRender and view URL helpers; each action
+// requests its own endpoint once, and Home always requests /home-data.
+const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
+const { createGalleryRefreshContext, useRealViewUrls } = require('../helpers/gallery-refresh-context');
+const {
+  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
+} = require('../helpers/request-capture');
+
+function capturedGalleryHandlers() {
+  const { context } = createGalleryRefreshContext();
+  useRealViewUrls(context);
+  context.state.gallery = {};
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  Object.assign(context, {
+    hideVersionContextMenu() {},
+    overlayClickStartedOnOverlay: () => false,
+    applyLocalRelatedArtistFilter: () => false,
+  });
+  const capture = createRequestCapture(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+  context.fetch = capture.fetch;
+  return { context, capture };
+}
+
+const settleGallery = async () => { for (let turn = 0; turn < 20; turn += 1) await new Promise(setImmediate); };
+const galleryRequestShape = (url) => {
+  const parsed = new URL(url, 'http://localhost');
+  return [parsed.pathname, ...['artist', 'q', 'related_artist', 'gallery_anchor_artist'].map(name => parsed.searchParams.get(name))];
+};
+const clickEvent = matches => ({
+  target: { closest: selector => matches[selector] || null },
+  preventDefault() {},
+});
+
+test('request capture: gallery links and similar-artist chips request their own view once per click', async () => {
+  const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick';
+  await measureInteractionContract(id, async (repeatedClicks) => {
+    const { context, capture } = capturedGalleryHandlers();
+    const clickRepeatedly = async (event) => {
+      for (let click = 0; click < repeatedClicks; click += 1) context.handleGalleryBootstrapClick(event);
+      await settleGallery();
+    };
+    await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/' } }));
+    await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/?artist=Broadcast' } }));
+    context.state.view = { ...context.state.view, selected_artist: 'Broadcast', related_filter_artists: [] };
+    await clickRepeatedly(clickEvent({ '[data-related-artist]': { getAttribute: () => 'Stereolab' } }));
+    const urls = capture.urls();
+    assert.deepEqual(urls.map(galleryRequestShape), [
+      ['/home-data', null, null, null, null],
+      ['/view-data', 'Broadcast', null, null, null],
+      ['/view-data', 'Broadcast', null, 'Stereolab', null],
+    ]);
+    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+    assertInteractionRequests(id, urls);
+    return capture.counter.snapshot();
+  });
+});
+
+test('request capture: history steps request the restored view once, Home through /home-data', async () => {
+  const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState';
+  await measureInteractionContract(id, async (repeatedSteps) => {
+    const { context, capture } = capturedGalleryHandlers();
+    const step = async (href, options) => {
+      context.window.location.href = href;
+      for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState(options);
+      await settleGallery();
+    };
+    await step('http://localhost/');
+    await step('http://localhost/?q=broadcast');
+    await step('http://localhost/', { parentViewUrl: 'http://localhost/?surface=albums', galleryAnchorArtist: 'Broadcast' });
+    const urls = capture.urls();
+    assert.deepEqual(urls.map(galleryRequestShape), [
+      ['/home-data', null, null, null, null],
+      ['/view-data', null, 'broadcast', null, null],
+      ['/view-data', null, null, null, 'Broadcast'],
+    ]);
+    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+    assertInteractionRequests(id, urls);
+    return capture.counter.snapshot();
+  });
+});

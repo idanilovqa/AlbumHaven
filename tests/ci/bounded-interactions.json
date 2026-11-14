@@ -977,7 +977,7 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick",
-      "action": "fetchAndRender requests installed by handleGalleryBootstrapClick",
+      "action": "Click Home and artist gallery links and a similar-artist chip, each repeatedly",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick:request:fetchAndRender"
       ],
@@ -989,20 +989,48 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/",
           "/*",
           "/home-data",
+          "/view-data",
           "/view-data*"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "request capture: gallery links and similar-artist chips request their own view once per click",
+      "performanceTargets": [
+        "all-artists",
+        "selected-artist",
+        "root-album-browse",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "gallery-artwork-diversity"
+      ],
+      "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState",
-      "action": "fetchAndRender requests installed by handleGalleryBootstrapPopState",
+      "action": "Step back to Home, to a search, and to an anchored root gallery, each step repeated",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState:request:fetchAndRender"
       ],
@@ -1014,14 +1042,42 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
+          "/view-data",
           "/view-data*"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "request capture: history steps request the restored view once, Home through /home-data",
+      "performanceTargets": [
+        "all-artists",
+        "selected-artist",
+        "root-album-browse",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "gallery-artwork-diversity"
+      ],
+      "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleSidebarArtistSelectionClick",

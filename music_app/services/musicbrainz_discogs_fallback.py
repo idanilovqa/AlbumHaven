@@ -1,0 +1,167 @@
+"""Discogs fallback for artists and albums MusicBrainz lacks, then MusicBrainz again
+(MusicBrainz Delivery 2, S3; owner 2026-11-07 and 2026-11-09).
+
+1. Discogs: the artist by name (Discogs numbers namesakes, "Amarok (2)"), then each local
+   album against that artist's masters and releases by title ("original = translation"
+   titles included) and, decisively, by tracks: the same bar as MusicBrainz, a release is
+   certain on its title, track titles and track count.
+2. MusicBrainz again, with what Discogs proved: a certain release's barcode leads to the
+   MusicBrainz release and its credited artist; the Discogs artist's aliases, real name and
+   name variations are searched as names.
+3. What MusicBrainz still lacks keeps its Discogs IDs, marked Discogs-derived, and the
+   artist is flagged "remote info update needed" for the future contribution feature.
+
+MusicBrainz stays authoritative: a MusicBrainz artist found here is only a hint the artist
+matcher still has to prove on album evidence. Nothing writes media tags.
+"""
+from __future__ import annotations
+
+from music_app.services.discogs_metadata import DiscogsMetadataClient
+from music_app.services.musicbrainz_evidence import (
+    SPECIAL_PURPOSE_ARTISTS,
+    album_level,
+    album_signals,
+    candidate_name_keys,
+    name_keys,
+    title_agreement,
+)
+
+_MAX_ARTISTS = 3
+_MAX_RELEASES_PER_ALBUM = 2
+_MAX_DISCOGS_REQUESTS = 40
+_MAX_BARCODES = 6
+_MAX_NAME_SEARCHES = 4
+_CERTAIN = frozenset({"track_list", "track_count"})
+
+
+class _Budget:
+    def __init__(self, requests: int) -> None:
+        self.remaining = requests
+
+
+class _Failure(Exception):
+    def __init__(self, classification: str) -> None:
+        super().__init__(classification)
+        self.classification = classification
+
+
+def _call(budget: _Budget, method, *args, **kwargs):
+    if budget.remaining <= 0:
+        return None
+    budget.remaining -= 1
+    result = method(*args, **kwargs)
+    if result.get("classification") not in {"complete", "not_found"}:
+        raise _Failure(str(result.get("classification") or "provider_unavailable"))
+    return result
+
+
+def _title_parts(title: str) -> list[str]:
+    """A Discogs title and, for "original = translation", each side of it."""
+    parts = [title] + [part.strip() for part in title.split(" = ")] if " = " in title else [title]
+    return [part for part in dict.fromkeys(parts) if part]
+
+
+def _agreement(local_title: str, remote_title: str, names: tuple[str, ...]) -> str | None:
+    for part in _title_parts(remote_title):
+        agreement = title_agreement(local_title, part, names)
+        if agreement:
+            return agreement
+    return None
+
+
+def resolve_with_discogs(context: dict[str, object], *, discogs: DiscogsMetadataClient, musicbrainz) -> dict[str, object]:
+    """``context``: ``local_name`` and ``albums`` (id, title, year, tracks) of one local artist
+    MusicBrainz could not identify."""
+    try:
+        return _resolve(context, discogs, musicbrainz, _Budget(_MAX_DISCOGS_REQUESTS))
+    except _Failure as failure:
+        return {"classification": failure.classification}
+
+
+def _resolve(context, discogs, musicbrainz, budget) -> dict[str, object]:
+    local_name = str(context.get("local_name") or "").strip()
+    local_keys = name_keys(local_name)
+    albums = [album for album in context.get("albums") or [] if isinstance(album, dict) and album.get("title")]
+    search = _call(budget, discogs.search_artists, local_name)
+    named = [artist for artist in (search or {}).get("artists") or [] if name_keys(artist["name"]) & local_keys]
+    best = None
+    for candidate in named[:_MAX_ARTISTS]:
+        found = _match_albums(candidate, albums, local_name, discogs, budget)
+        if found and (best is None or len(found) > len(best[1])):
+            best = (candidate, found)
+    if best is None:
+        return {"classification": "not_found", "albums": [], "musicbrainz_hints": [], "remote_info_needed": True,
+                "evidence_summary": "Neither MusicBrainz nor Discogs has an artist with these albums."}
+    candidate, matched = best
+    detail = _call(budget, discogs.artist, candidate["id"])
+    artist = (detail or {}).get("artist") or {"id": candidate["id"], "name": candidate["name"]}
+    hints = _musicbrainz_hints(artist, matched, musicbrainz)
+    return {
+        "classification": "found", "discogs_artist": artist, "albums": matched, "musicbrainz_hints": hints,
+        # Whatever MusicBrainz still lacks is collected for the future contribution feature.
+        "remote_info_needed": not any(hint["via"] == "barcode" for hint in hints),
+        "evidence_summary": (f"Found on Discogs with {len(matched)} of your album"
+                             f"{'' if len(matched) == 1 else 's'}; " +
+                             ("MusicBrainz has it under another name." if hints else "MusicBrainz does not have it yet.")),
+    }
+
+
+def _match_albums(candidate, albums, local_name, discogs, budget) -> list[dict[str, object]]:
+    """Local albums one of the candidate's Discogs releases certainly is."""
+    listing = _call(budget, discogs.artist_releases, candidate["id"])
+    items = (listing or {}).get("releases") or []
+    names = (local_name, candidate["name"])
+    matched = []
+    for album in albums:
+        titled = [(item, _agreement(album["title"], item["title"], names)) for item in items]
+        titled = [(item, agreement) for item, agreement in titled if agreement]
+        for item, agreement in titled[:_MAX_RELEASES_PER_ALBUM]:
+            release_id = item["main_release"] if item["kind"] == "master" else item["id"]
+            if not release_id:
+                continue
+            found = _call(budget, discogs.release, release_id)
+            release = (found or {}).get("release")
+            if not release:
+                continue
+            signals = album_signals(album, {"first_release_date": release.get("year") or item.get("year"),
+                                            "tracks": release["tracks"]})
+            if album_level(agreement, signals) == "strong" and _CERTAIN <= signals:
+                matched.append({"local_album_id": album.get("id"), "local_title": album["title"],
+                                "discogs_release_id": release["id"], "discogs_master_id": release.get("master_id"),
+                                "barcodes": release["barcodes"], "signals": sorted(signals),
+                                "tracks": release["tracks"]})
+                break
+    return matched
+
+
+def _musicbrainz(method, *args):
+    """A MusicBrainz outage retries the fallback; it never reads as "MusicBrainz lacks it"."""
+    result = method(*args)
+    if result.get("classification") not in {"complete", "not_found", "invalid_request"}:
+        raise _Failure(str(result.get("classification") or "provider_unavailable"))
+    return result
+
+
+def _musicbrainz_hints(artist, matched, musicbrainz) -> list[dict[str, object]]:
+    """MusicBrainz artists Discogs leads to: by a certain release's barcode, then by the
+    Discogs artist's other names. Hints only; the artist matcher still decides."""
+    hints: dict[str, dict[str, object]] = {}
+    barcodes = [barcode for album in matched for barcode in album["barcodes"]][:_MAX_BARCODES]
+    for barcode in barcodes:
+        found = _musicbrainz(musicbrainz.search_releases_by_barcode, barcode)
+        for release in found.get("releases") or []:
+            for credit in release.get("credits") or []:
+                mbid = str(credit.get("artist_mbid") or "")
+                if mbid and mbid not in SPECIAL_PURPOSE_ARTISTS and mbid not in hints:
+                    hints[mbid] = {"artist_mbid": mbid, "via": "barcode", "barcode": barcode,
+                                   "release_mbid": release["id"], "name": credit.get("artist_name")}
+    other_names = [artist.get("real_name"), *(artist.get("name_variations") or []),
+                   *(alias["name"] for alias in artist.get("aliases") or [])]
+    for name in [name for name in dict.fromkeys(other_names) if name][:_MAX_NAME_SEARCHES]:
+        found = _musicbrainz(musicbrainz.search_artists, name)
+        for candidate in found.get("candidates") or []:
+            mbid = str(candidate.get("mbid") or "")
+            if mbid and mbid not in hints and mbid not in SPECIAL_PURPOSE_ARTISTS \
+                    and candidate_name_keys(candidate) & name_keys(name):
+                hints[mbid] = {"artist_mbid": mbid, "via": "name", "name": name}
+    return list(hints.values())

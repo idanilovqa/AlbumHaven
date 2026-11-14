@@ -444,6 +444,25 @@ class MusicBrainzClient:
             })
         return {"classification": "complete" if releases else "not_found", "releases": releases}
 
+    def search_releases_by_barcode(self, barcode: object) -> JsonDict:
+        """Releases carrying this barcode (a Discogs release's barcode leads back to MusicBrainz)."""
+        digits = re.sub(r"\D", "", _text(barcode))
+        if not 8 <= len(digits) <= 14:
+            return {"classification": "invalid_request", "releases": []}
+        query = urllib.parse.urlencode({"query": f"barcode:{digits}", "fmt": "json", "limit": 10})
+        payload, transport = self.get_json(f"{self.base_url}/release/?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "releases": [], "transport": transport}
+        releases = [
+            {"id": _valid_mbid(raw.get("id")), "title": _text(raw.get("title")), "barcode": _text(raw.get("barcode")),
+             "release_group_id": _valid_mbid((raw.get("release-group") or {}).get("id"))
+             if isinstance(raw.get("release-group"), dict) else None,
+             "credits": _artist_credit(raw.get("artist-credit"))}
+            for raw in payload.get("releases") or []
+            if isinstance(raw, dict) and _valid_mbid(raw.get("id")) and re.sub(r"\D", "", _text(raw.get("barcode"))) == digits
+        ]
+        return {"classification": "complete" if releases else "not_found", "releases": releases}
+
     def release_group_tracks(self, release_group_id: object, *, track_count: int = 0,
                              exclude: tuple[str, ...] = ()) -> JsonDict:
         """The tracks of the release in a release group closest to ``track_count``.

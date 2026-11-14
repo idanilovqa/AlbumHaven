@@ -58,8 +58,8 @@ class FakeConnection:
 
     def execute(self, sql, params=None):
         if "pg_advisory_xact_lock" in sql:
-            # The per-artist writer lock must come before any other statement.
-            self.artist_locks.append((len(self.calls), params["local_artist_id"]))
+            # Writer locks must come before any other statement.
+            self.artist_locks.append((len(self.calls), sql, params))
             return FakeCursor()
         if "insert into library.metadata_enrichment_problems" in sql:
             self.problem_syncs.append(params)
@@ -299,7 +299,7 @@ def test_candidate_replacement_is_atomic_scoped_and_replaces_the_complete_set():
 
     assert count == 2
     assert connection.transaction_count == 1
-    assert [index for index, _artist in connection.artist_locks] == [0], "writers lock the artist first"
+    assert [index for index, _sql, _params in connection.artist_locks] == [0], "writers lock the artist first"
     combined_sql = " ".join(sql.lower() for sql, _params in connection.calls)
     assert "delete from library.local_artist_musicbrainz_candidates" in combined_sql
     assert "insert into integration.musicbrainz_artists" in combined_sql
@@ -379,6 +379,25 @@ def test_automatic_outcome_preserves_prior_projection_through_disappearance_and_
     assert "local_tracks" in sql
 
 
+def test_automatic_outcome_serializes_shared_musicbrainz_artist_projection():
+    connection = FakeConnection([FakeCursor(row={"protected": True})])
+
+    repository_for(connection).record_automatic_outcome(
+        local_artist_id=41,
+        state="matched",
+        artist={"mbid": ARTIST_MBID, "canonical_name": "Shared artist"},
+        confidence=1,
+        evidence_summary="Album evidence agreed.",
+        observed_at=NOW,
+    )
+
+    assert len(connection.artist_locks) == 2
+    assert [index for index, _sql, _params in connection.artist_locks] == [0, 0]
+    assert "local_artist_id" in connection.artist_locks[0][1]
+    assert "artist_mbid" in connection.artist_locks[1][1]
+    assert connection.artist_locks[1][2]["artist_mbid"] == ARTIST_MBID
+
+
 def test_manual_assignment_commits_canonical_projection_decision_assertion_and_audit_together():
     artist = {
         "mbid": ARTIST_MBID,
@@ -428,6 +447,10 @@ def test_manual_assignment_commits_canonical_projection_decision_assertion_and_a
 
     assert assigned is True
     assert connection.transaction_count == 1
+    assert len(connection.artist_locks) == 2
+    assert [index for index, _sql, _params in connection.artist_locks] == [0, 0]
+    assert "local_artist_id" in connection.artist_locks[0][1]
+    assert "artist_mbid" in connection.artist_locks[1][1]
     combined_sql = " ".join(sql.lower() for sql, _params in connection.calls)
     assert "insert into integration.musicbrainz_artists" in combined_sql
     assert "integration.musicbrainz_artist_aliases" in combined_sql
@@ -476,7 +499,10 @@ def test_projection_refresh_is_complete_guarded_atomic_and_preserves_match_owner
 
     assert refreshed is True
     assert connection.transaction_count == 1
-    assert connection.artist_locks == [(0, 41)]
+    assert len(connection.artist_locks) == 2
+    assert [index for index, _sql, _params in connection.artist_locks] == [0, 0]
+    assert "local_artist_id" in connection.artist_locks[0][1]
+    assert "artist_mbid" in connection.artist_locks[1][1]
     combined_sql = " ".join(sql.lower() for sql, _params in connection.calls)
     assert "insert into integration.musicbrainz_artists" in combined_sql
     assert "integration.musicbrainz_artist_aliases" in combined_sql

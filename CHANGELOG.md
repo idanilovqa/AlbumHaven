@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.6 - 2026-11-14
+
+- Serialized shared MusicBrainz artist projection writes by MBID so concurrent matches for differently spelled local artists cannot collide while replacing aliases, country, and genre labels.
+
 ## 0.11.5 - 2026-11-13
 
 - Expanded real-browser regression coverage for MusicBrainz artist identities, info links, country and genre labels, split identities, and first-page repair filters.

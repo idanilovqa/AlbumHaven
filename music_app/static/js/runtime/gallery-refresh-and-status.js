@@ -1545,7 +1545,10 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     const responseInventoryMutationRevision = Number(data?.inventory_mutation_revision);
-    if (Number.isSafeInteger(responseInventoryMutationRevision) && responseInventoryMutationRevision >= 0) {
+    const responseProjectionIsCurrent = data?.gallery_page?.projection_stale !== true;
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(responseInventoryMutationRevision)
+      && responseInventoryMutationRevision >= 0) {
       [
         payloadToApply?.primary_artist_groups,
         payloadToApply?.family_artist_groups,
@@ -1576,7 +1579,8 @@ async function fetchAndRender(url, push = true, options = {}) {
     // A library view without its tree stays behind this revision until a full refresh adds it.
     const rootViewLacksArtistTree = String(url).includes('omit_sidebar=1')
       && !/[?&](?:artist|q)=/.test(String(url));
-    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0
       && !rootViewLacksArtistTree) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;

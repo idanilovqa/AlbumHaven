@@ -3103,7 +3103,7 @@
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest",
-      "action": "fetch requests, setTimeout timers installed by playbackOwnershipRequest",
+      "action": "Select tracks in a burst, renew the claim, release it, and be refused by another owner",
       "entrypoints": [
         "js:music_app/static/js/runtime/playback-ownership-helpers.js#playbackOwnershipRequest:request:fetch",
         "js:music_app/static/js/runtime/playback-ownership-helpers.js#playbackOwnershipRequest:timer:setTimeout"
@@ -3116,7 +3116,34 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/refs",
+          "/playback/state"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/track",
+          "/playback/session/complete"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 200
+      },
+      "budgets": {
+        "requests": 7
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "request capture: playback ownership requests stay on ownership endpoints with one claim per selection burst",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; playback requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipTrack",

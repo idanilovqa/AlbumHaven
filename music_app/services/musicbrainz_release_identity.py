@@ -16,6 +16,7 @@ only, and are display data until the owner approves a correction.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 
 from music_app.services.musicbrainz_evidence import (
     _compact,
@@ -34,6 +35,7 @@ from music_app.services.musicbrainz_enrichment import (
     _match_box_set_discs,
     _match_release_titles,
     _match_tracks_alone,
+    retry_delay,
 )
 
 RELEASE_MATCHER_VERSION = 1
@@ -253,8 +255,6 @@ class MusicBrainzAlbumReleaseProcessor:
 
     def __init__(self, *, repository, client, now=None, lease_duration=None, max_attempts: int = 6,
                  sweep_interval=None) -> None:
-        from datetime import datetime, timedelta, timezone
-
         self._repository = repository
         self._client = client
         self._now = now or (lambda: datetime.now(timezone.utc))
@@ -269,8 +269,6 @@ class MusicBrainzAlbumReleaseProcessor:
                                  local_artist_id=local_artist_id, force=True)
 
     def process_next(self, *, worker_id: str) -> dict[str, object]:
-        from music_app.services.musicbrainz_enrichment import retry_delay
-
         observed_at = self._now()
         job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at,
                                              lease_duration=self._lease_duration)
@@ -306,24 +304,3 @@ class MusicBrainzAlbumReleaseProcessor:
         self._repository.finish(job_id=job_id, worker_id=worker_id, state="succeeded", classification="complete",
                                 observed_at=observed_at)
         return {"processed": True, "state": "succeeded", "job_id": job_id}
-
-
-class ArtistThenAlbumProcessor:
-    """Artists first (Delivery 1), then their albums (Delivery 2), then the Discogs fallback
-    for artists MusicBrainz lacks, in one enrichment queue."""
-
-    def __init__(self, artist_processor, album_processor, fallback_processor=None) -> None:
-        self._artists = artist_processor
-        self._albums = album_processor
-        self._fallback = fallback_processor
-
-    def process_next(self, *, worker_id: str) -> dict[str, object]:
-        result = self._artists.process_next(worker_id=worker_id)
-        if result.get("processed"):
-            if result.get("state") == "succeeded" and result.get("local_artist_id"):
-                self._albums.queue_artist(int(result["local_artist_id"]))
-            return result
-        result = self._albums.process_next(worker_id=worker_id)
-        if result.get("processed") or self._fallback is None:
-            return result
-        return self._fallback.process_next(worker_id=worker_id)

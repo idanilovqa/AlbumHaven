@@ -14,10 +14,7 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     MusicBrainzEnrichmentPostgresRepository,
 )
 from music_app.services.musicbrainz_http import _set_block
-from music_app.services.musicbrainz_release_identity import (
-    ArtistThenAlbumProcessor,
-    MusicBrainzAlbumReleaseProcessor,
-)
+from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 from music_app.services.musicbrainz_release_identity_postgres import (
     MusicBrainzReleaseIdentityPostgresRepository,
 )
@@ -136,13 +133,34 @@ class MusicBrainzEnrichmentWorker:
                 pass
 
 
+class MusicBrainzEnrichmentChain:
+    """Artists first (Delivery 1), then their albums (Delivery 2), then the Discogs fallback
+    for artists MusicBrainz lacks, in one enrichment queue."""
+
+    def __init__(self, artist_processor, album_processor, fallback_processor=None) -> None:
+        self._artists = artist_processor
+        self._albums = album_processor
+        self._fallback = fallback_processor
+
+    def process_next(self, *, worker_id: str) -> dict[str, object]:
+        result = self._artists.process_next(worker_id=worker_id)
+        if result.get("processed"):
+            if result.get("state") == "succeeded" and result.get("local_artist_id"):
+                self._albums.queue_artist(int(result["local_artist_id"]))
+            return result
+        result = self._albums.process_next(worker_id=worker_id)
+        if result.get("processed") or self._fallback is None:
+            return result
+        return self._fallback.process_next(worker_id=worker_id)
+
+
 def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
     repository = MusicBrainzEnrichmentPostgresRepository(config)
     client = MusicBrainzClient(
         base_url=str(config.get("MUSICBRAINZ_BASE_URL") or ""),
         user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven"),
     )
-    processor = ArtistThenAlbumProcessor(
+    processor = MusicBrainzEnrichmentChain(
         MusicBrainzArtistEnrichmentProcessor(
             repository=repository,
             client=client,

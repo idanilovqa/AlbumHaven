@@ -8,10 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from music_app.services.musicbrainz_release_identity import (
-    ArtistThenAlbumProcessor,
-    MusicBrainzAlbumReleaseProcessor,
-)
+from music_app.services.musicbrainz_enrichment_worker import MusicBrainzEnrichmentChain
+from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 from music_app.services.musicbrainz_release_identity_postgres import (
     JOB_KIND,
     MusicBrainzReleaseIdentityPostgresRepository,
@@ -197,7 +195,7 @@ def test_the_album_queue_waits_until_no_artist_job_is_due(monkeypatch):
             calls.append("album")
             return {"processed": True, "state": "succeeded"}
 
-    combined = ArtistThenAlbumProcessor(Artists(), Albums())
+    combined = MusicBrainzEnrichmentChain(Artists(), Albums())
     combined.process_next(worker_id="w")
     combined.process_next(worker_id="w")
     assert calls == ["artist", ("queue", 7), "artist", "album"]

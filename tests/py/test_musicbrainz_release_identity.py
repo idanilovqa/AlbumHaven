@@ -6,9 +6,9 @@ replayed against a fake mirror built from the shared test-mirror helpers.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-
-import pytest
 
 from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_release_identity import (
@@ -195,8 +195,7 @@ def test_an_album_no_release_is_titled_like_stays_unresolved_with_its_reason():
     assert [(album["state"], album["diagnostic"]) for album in outcome["albums"]] == [("unresolved", "no_title_match")]
 
 
-@pytest.mark.parametrize("budget_spent", [True])
-def test_a_spent_budget_is_retried_never_stored_as_absent(budget_spent, monkeypatch):
+def test_a_spent_budget_is_retried_never_stored_as_absent(monkeypatch):
     from music_app.services import musicbrainz_release_identity as module
     monkeypatch.setattr(module, "_BASE_REQUESTS", 0)
     monkeypatch.setattr(module, "_REQUESTS_PER_ALBUM", 0)
@@ -224,10 +223,7 @@ def test_without_a_tracklist_to_compare_an_album_is_only_a_release_group():
 # MusicBrainz lists a data track first, the tags are cut at ID3v1's 30 characters and
 # write "Main Theme" where MusicBrainz writes "MainTheme".
 
-import json as _json
-from pathlib import Path as _Path
-
-_FIXTURE = _json.loads((_Path(__file__).resolve().parents[1] / "fixtures" / "musicbrainz"
+_FIXTURE = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "musicbrainz"
                         / "delivery-2-release-identity-mirror.json").read_text(encoding="utf-8"))
 
 

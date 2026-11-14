@@ -16,7 +16,10 @@ matcher still has to prove on album evidence. Nothing writes media tags.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from music_app.services.discogs_metadata import DiscogsMetadataClient
+from music_app.services.musicbrainz_enrichment import retry_delay
 from music_app.services.musicbrainz_evidence import (
     SPECIAL_PURPOSE_ARTISTS,
     album_level,
@@ -28,7 +31,10 @@ from music_app.services.musicbrainz_evidence import (
 
 _MAX_ARTISTS = 3
 _MAX_RELEASES_PER_ALBUM = 2
-_MAX_DISCOGS_REQUESTS = 40
+# The search, the artist and its release list, then up to two releases per album.
+_BASE_DISCOGS_REQUESTS = 6
+_DISCOGS_REQUESTS_PER_ALBUM = 3
+_MAX_DISCOGS_REQUESTS = 120
 _MAX_BARCODES = 6
 _MAX_NAME_SEARCHES = 4
 _CERTAIN = frozenset({"track_list", "track_count"})
@@ -73,7 +79,9 @@ def resolve_with_discogs(context: dict[str, object], *, discogs: DiscogsMetadata
     """``context``: ``local_name`` and ``albums`` (id, title, year, tracks) of one local artist
     MusicBrainz could not identify."""
     try:
-        return _resolve(context, discogs, musicbrainz, _Budget(_MAX_DISCOGS_REQUESTS))
+        albums = len(context.get("albums") or [])
+        budget = min(_MAX_DISCOGS_REQUESTS, _BASE_DISCOGS_REQUESTS + _DISCOGS_REQUESTS_PER_ALBUM * albums)
+        return _resolve(context, discogs, musicbrainz, _Budget(budget))
     except _Failure as failure:
         return {"classification": failure.classification}
 
@@ -173,8 +181,6 @@ class DiscogsFallbackProcessor:
 
     def __init__(self, *, repository, discogs: DiscogsMetadataClient, musicbrainz, now=None, sweep_interval=None,
                  max_attempts: int = 6) -> None:
-        from datetime import datetime, timedelta, timezone
-
         self._repository = repository
         self._discogs = discogs
         self._musicbrainz = musicbrainz
@@ -185,8 +191,6 @@ class DiscogsFallbackProcessor:
         self._last_sweep = None
 
     def process_next(self, *, worker_id: str) -> dict[str, object]:
-        from music_app.services.musicbrainz_enrichment import retry_delay
-
         observed_at = self._now()
         job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at, lease_duration=self._lease)
         if not job and (self._last_sweep is None or observed_at - self._last_sweep >= self._sweep_interval):

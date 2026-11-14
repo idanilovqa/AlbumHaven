@@ -474,8 +474,14 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       const before = [];
       for (const ratingCase of ratingCases) {
         await openArtist({ galleryActions, searchToolbarActions }, ratingCase.artist);
-        const rating = await galleryActions.readAlbumRatingSurface(ratingCase.artist, ratingCase.album);
-        expect(rating.filledStarCount).toBe(ratingCase.rating);
+        let rating;
+        await expect.poll(async () => {
+          rating = await galleryActions.readAlbumRatingSurface(ratingCase.artist, ratingCase.album);
+          return {
+            filledStarCount: rating.filledStarCount,
+            colorsReady: Boolean(rating.filledColor && (rating.emptyStarCount === 0 || rating.emptyColor)),
+          };
+        }, { timeout: 60000 }).toEqual({ filledStarCount: ratingCase.rating, colorsReady: true });
         before.push(rating);
       }
       await galleryActions.goto('/?surface=albums');

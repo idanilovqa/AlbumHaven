@@ -4541,7 +4541,7 @@
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#fetchSummary",
-      "action": "fetch requests installed by fetchSummary",
+      "action": "Open Problematic Files: one bounded first page, then one complete summary shared by concurrent loads",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#fetchSummary:request:fetch"
       ],
@@ -4553,7 +4553,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/utilities/problematic-files/detail"
+        ]
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 5000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loaders-and-cover-lookup.test.js",
+      "testIdentity": "request capture: Problematic Files loads one bounded page and one complete summary",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only request-capture contract; the Utility loaders are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#fetchUnsuccessfulAlbumCovers",
@@ -4797,7 +4825,7 @@
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#resumeDeferredUtilityViewRequest",
-      "action": "fetchAndRender requests installed by resumeDeferredUtilityViewRequest",
+      "action": "Close Settings and resume the gallery request it deferred (Home or a search)",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#resumeDeferredUtilityViewRequest:request:fetchAndRender"
       ],
@@ -4809,11 +4837,38 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 5000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loaders-and-cover-lookup.test.js",
+      "testIdentity": "request capture: closing Settings resumes a deferred view on its own endpoint, once",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only request-capture contract; the Utility loaders are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#runLocalPlaylistImportAnalysis",
-      "action": "fetch requests installed by runLocalPlaylistImportAnalysis",
+      "action": "Analyze a selected local playlist, with repeated clicks while the analysis runs",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#runLocalPlaylistImportAnalysis:request:fetch"
       ],
@@ -4825,13 +4880,31 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/imports/local-playlists/analyze"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loaders-and-cover-lookup.test.js",
+      "testIdentity": "request capture: local playlist analysis posts once to the advertised analysis route",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; the Utility loaders are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#saveLastfmIntegration",

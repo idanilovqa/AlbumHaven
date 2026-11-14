@@ -104,12 +104,7 @@ class CoverPreviewBackfill:
         for source_path, cover_revision in self._load_cover_paths():
             if not self._wait_until_idle():
                 break
-            # Only a revisioned preview follows the storage policy; any other stays in app data.
-            storage_policy = (
-                self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
-                if cover_revision or not self._data_dir
-                else None
-            )
+            storage_policy = self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
             previous_root = source_path.parent / ".album-haven"
             if (storage_policy is not None and storage_policy.write_cache_root(source_path) != previous_root
                     and previous_root not in cleanup_attempted):

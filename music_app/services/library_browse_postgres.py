@@ -8932,8 +8932,7 @@ def _queue_display_cover_variants_for_groups(
                 revision_options = (
                     {"revision": cover_revision} if cover_revision else {}
                 )
-                # Only a revisioned preview follows the storage policy; any other stays in app data.
-                preview_policy = storage_policy if cover_revision else None
+                preview_policy = storage_policy
                 if not display_variant_awaits_relocation(
                     source_path,
                     storage_policy=preview_policy,

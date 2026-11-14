@@ -23,7 +23,7 @@ _DOCKED_COMPACT_FIELDS = (*_COMPACT_FIELDS, "docked_compact_player_behavior")
 _LEGACY_COMPACT_FIELDS = (*_FIELDS, "compact_player_style")
 _ALBUM_PAGE_FIELDS = ("album_details_layout", "album_playing_row_animation")
 _ALERT_FIELDS = ("alert_family",)
-_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": True, "icons": True}
+_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": False, "icons": True}
 _PLAYER_FIELDS = ("background", "fill", "edge")
 _PLAYER_COLUMNS = (
     "player_background_color", "player_waveform_fill_color", "player_waveform_edge_color"

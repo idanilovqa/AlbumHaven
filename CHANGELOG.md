@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.11.7 - 2026-11-14
+
+- Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.
+
+## 0.11.6 - 2026-11-14
+
+- Serialized shared MusicBrainz artist projection writes by MBID so concurrent matches for differently spelled local artists cannot collide while replacing aliases, country, and genre labels.
+
+## 0.11.5 - 2026-11-13
+
+- Expanded real-browser regression coverage for MusicBrainz artist identities, info links, country and genre labels, split identities, and first-page repair filters.
+- Refreshed accepted MusicBrainz matches with the complete current artist projection, including Discogs links, aliases, names, type, disambiguation, country and genres, without replacing owner decisions or album identities.
+- Kept an open artist information panel visible while Gallery position restoration settles after a MusicBrainz refresh.
+
+## 0.11.4 - 2026-11-12
+
+- Kept known appearance settings when a newer client stored fields this build does not recognize.
+- Made the unsaved and recovery appearance solid black with library-source outlines enabled.
+- Recovered an unresponsive Android page after returning to the app while preserving native playback, queue, and position.
+- Kept first web playback responsive while browser decoder verification finishes in the background.
+
+## 0.11.3 - 2026-11-12
+
+- Improved MusicBrainz matching across localized, original-script, alternate, split, re-release and compilation titles, with bounded typo and mojibake handling and exact track evidence.
+- Kept evidence honest when MusicBrainz track lengths are missing or releases disagree, and gave split-artist albums enough matching attempts.
+- Linked a same-name person and band when MusicBrainz records the membership, while keeping differently named collaborations separate; migration 0178 stores the associated artist identities.
+
 ## 0.11.2 - 2026-11-12
 
 - Added MusicBrainz artist identity for album artists: each artist is matched on album evidence (titles, track titles, track counts and lengths), never on a name alone, and an album that certainly matches one MusicBrainz artist gives that artist its identity. The tags themselves never change.

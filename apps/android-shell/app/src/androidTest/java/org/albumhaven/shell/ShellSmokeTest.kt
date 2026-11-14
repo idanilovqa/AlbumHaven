@@ -142,14 +142,15 @@ class ShellSmokeTest {
         requireBridgeSupport()
         serve()
         ActivityScenario.launch(ShellActivity::class.java).use { scenario ->
-            waitUntil("bridge reply") { webTitle(scenario) == "replied" }
+            waitUntil("bridge reply and hidden recovery") {
+                webTitle(scenario) == "replied" && !recoveryVisible(scenario)
+            }
             val reply = JSONObject(evaluate(scenario, "window.reply").let { JSONObject("{\"v\":$it}").getString("v") })
             val payload = reply.getJSONObject("payload")
             assertTrue(payload.getBoolean("ok"))
             assertEquals(BuildConfig.CHANNEL, payload.getString("variant"))
             assertEquals(BuildConfig.DEV_ORIGIN, payload.getString("origin"))
             assertEquals("idle", payload.getJSONObject("playback").getString("state"))
-            assertFalse(recoveryVisible(scenario))
         }
     }
 

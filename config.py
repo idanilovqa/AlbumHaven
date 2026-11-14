@@ -264,6 +264,10 @@ class Config:
         os.environ.get("MUSICBRAINZ_ENRICHMENT_ENABLED", "0").strip().lower()
         not in {"0", "false", "no"}
     )
+    MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED = os.environ.get(
+        "MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED",
+        "1" if MUSICBRAINZ_ENRICHMENT_ENABLED else "0",
+    ).strip().lower() not in {"0", "false", "no"}
     # Artists resolved at once by the enrichment worker (1-8). Each lane claims
     # its own jobs; claims skip locked rows and writes lock per artist.
     MUSICBRAINZ_ENRICHMENT_CONCURRENCY = max(1, min(8, int(

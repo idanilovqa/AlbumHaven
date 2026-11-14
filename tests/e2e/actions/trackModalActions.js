@@ -148,6 +148,10 @@ export class TrackModalActions {
     return this.trackModal.readTrackCreditColorsAt(index);
   }
 
+  async readHeaderTags() {
+    return this.trackModal.headerTags.allInnerTexts();
+  }
+
   async waitForReady(options = {}) {
     await this.trackModal.waitForPageCondition((selectors) => {
       const modal = document.querySelector(selectors.dialogSelector);

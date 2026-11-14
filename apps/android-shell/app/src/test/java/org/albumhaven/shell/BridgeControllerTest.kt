@@ -32,6 +32,7 @@ class BridgeControllerTest {
     private class FakeHost : BridgeHost {
         var connected: Int? = null
         var bridgeConnections = 0
+        val foregroundReady = mutableListOf<Long>()
         val incompatible = mutableListOf<IntRange>()
         var selectedSlot: Int? = null
         var nextSelectResult = true
@@ -48,6 +49,9 @@ class BridgeControllerTest {
         }
         override fun onBridgeConnected() {
             bridgeConnections++
+        }
+        override fun onForegroundReady(token: Long) {
+            foregroundReady += token
         }
     }
 
@@ -320,6 +324,21 @@ class BridgeControllerTest {
         assertTrue(ok(send(sandbox, load(revision = 4))))
         assertTrue(ok(send(sandbox, load(revision = 5, items = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0,"year":"1999"}]"""))))
         assertEquals("stale_revision", errorCode(send(sandbox, command("playback.play", """{"queueRevision":2}"""))))
+    }
+
+    @Test
+    fun foregroundReadinessAcceptsOnlyOnePositiveIntegerWithoutTouchingPlayback() {
+        send(sandbox, handshake())
+        val before = playback.controller.snapshot
+
+        assertTrue(ok(send(sandbox, command("shell.foregroundReady", """{"token":7}"""))))
+        assertEquals(listOf(7L), host.foregroundReady)
+        assertEquals(before, playback.controller.snapshot)
+
+        for (payload in listOf("{}", """{"token":0}""", """{"token":-1}""", """{"token":"7"}""", """{"token":7,"extra":true}""")) {
+            assertEquals("invalid_payload", errorCode(send(sandbox, command("shell.foregroundReady", payload))))
+        }
+        assertEquals(listOf(7L), host.foregroundReady)
     }
 
     @Test

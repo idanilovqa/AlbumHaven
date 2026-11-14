@@ -1627,7 +1627,10 @@ async function fetchAndRender(url, push = true, options = {}) {
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
     const responseInventoryMutationRevision = Number(data?.inventory_mutation_revision);
-    if (Number.isSafeInteger(responseInventoryMutationRevision) && responseInventoryMutationRevision >= 0) {
+    const responseProjectionIsCurrent = data?.gallery_page?.projection_stale !== true;
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(responseInventoryMutationRevision)
+      && responseInventoryMutationRevision >= 0) {
       [
         payloadToApply?.primary_artist_groups,
         payloadToApply?.family_artist_groups,
@@ -1655,7 +1658,8 @@ async function fetchAndRender(url, push = true, options = {}) {
         !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
         || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
       );
-    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0
       && Array.isArray(payloadToApply?.artists_sidebar)) {
       state.ui.appliedArtistTreeInventoryMutationRevision = appliedInventoryMutationRevision;

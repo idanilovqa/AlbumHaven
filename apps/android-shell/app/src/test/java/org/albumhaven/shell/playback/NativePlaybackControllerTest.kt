@@ -520,6 +520,23 @@ class NativePlaybackControllerTest {
     }
 
     @Test
+    fun aShutdownReleasesOutputBeforeWaitingForTheCheckpoint() {
+        val listenIo = ManualExecutor()
+        val long = SyntheticTrack(tag = 3, frames = 30L * RATE)
+        val harness = ControllerHarness(long, listenIo = listenIo)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 12 * RATE }
+        harness.settleListening(listenIo)
+        var finished = false
+
+        harness.controller.shutdown { finished = true }
+        harness.step()
+
+        assertFalse(finished)
+        assertTrue("release" in harness.sinks.last().operations)
+    }
+
+    @Test
     fun aShutdownWhilePausedSendsNoUnloadCheckpoint() {
         val listenIo = ManualExecutor()
         val long = SyntheticTrack(tag = 3, frames = 30L * RATE)

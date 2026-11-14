@@ -11,7 +11,7 @@ const fixture = JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixture
 const runtimeDir = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime');
 const handshakePayload = fixture.handshakeResponse.payload;
 
-function loadRuntime({ bridge } = {}) {
+function loadRuntime({ bridge, requestAnimationFrame = callback => callback() } = {}) {
   const listeners = [];
   const context = {
     window: {
@@ -24,6 +24,7 @@ function loadRuntime({ bridge } = {}) {
     state: { utility: { activeTab: 'appearance' } },
     setTimeout,
     clearTimeout,
+    requestAnimationFrame,
     escapeHtml: value => String(value),
     buildOnPageAlertHtml: ({ severity, title, message }) => `<alert ${severity}>${title}|${message}</alert>`,
     buildStatusBadgeHtml: ({ label, variant }) => `<badge ${variant}>${label}</badge>`,
@@ -36,7 +37,7 @@ function loadRuntime({ bridge } = {}) {
     vm.runInContext(fs.readFileSync(path.join(runtimeDir, file), 'utf8'), context, { filename: file });
   }
   vm.runInContext(`globalThis.api = { androidBridge, androidSettings, buildAndroidSettingsHtml,
-    connectAndroidBridge, initAndroidSettings, isAndroidPlaybackUnavailable, isAndroidShell, selectAndroidSandbox };`, context);
+    acknowledgeAndroidForeground, connectAndroidBridge, initAndroidSettings, isAndroidPlaybackUnavailable, isAndroidShell, selectAndroidSandbox };`, context);
   context.listeners = listeners;
   return context;
 }
@@ -85,6 +86,46 @@ test('connection is negotiated once per document', async () => {
   const { api } = loadRuntime({ bridge });
   await Promise.all([api.connectAndroidBridge(), api.connectAndroidBridge()]);
   assert.equal(bridge.sent.length, 1);
+});
+
+test('foreground health is acknowledged only after two painted frames', async () => {
+  const frames = [];
+  const bridge = fakeBridge(message => (message.name === 'bridge.handshake' ? handshakePayload : { ok: true }));
+  const { api } = loadRuntime({ bridge, requestAnimationFrame: callback => frames.push(callback) });
+  await api.connectAndroidBridge();
+
+  assert.equal(api.acknowledgeAndroidForeground(7), true);
+  assert.equal(bridge.sent.length, 1);
+  frames.shift()();
+  assert.equal(bridge.sent.length, 1);
+  frames.shift()();
+  await new Promise(setImmediate);
+
+  assert.equal(bridge.sent[1].name, 'shell.foregroundReady');
+  assert.deepEqual({ ...bridge.sent[1].payload }, { token: 7 });
+});
+
+test('foreground health waits for a visible selection transition to settle', async () => {
+  const frames = [];
+  const bridge = fakeBridge(message => (message.name === 'bridge.handshake' ? handshakePayload : { ok: true }));
+  const context = loadRuntime({ bridge, requestAnimationFrame: callback => frames.push(callback) });
+  const loader = { hidden: false };
+  context.document.visibilityState = 'visible';
+  context.document.getElementById = id => (id === 'library-loader' ? loader
+    : id === 'library-loader-title' ? { textContent: 'Loading selection' } : null);
+  await context.api.connectAndroidBridge();
+
+  context.api.acknowledgeAndroidForeground(8);
+  frames.shift()();
+  frames.shift()();
+  assert.equal(bridge.sent.length, 1);
+
+  loader.hidden = true;
+  await new Promise(resolve => setTimeout(resolve, 110));
+  frames.shift()();
+  frames.shift()();
+  await new Promise(setImmediate);
+  assert.equal(bridge.sent[1].name, 'shell.foregroundReady');
 });
 
 test('a failed handshake is asked again instead of leaving the document silent', async () => {

@@ -73,8 +73,7 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["log_history_revision"] == ""
 
 
-def test_asgi_status_route_keeps_scan_and_cover_failures_separate(app):
-    asgi_app = _make_asgi_app()
+def test_asgi_status_route_keeps_scan_and_cover_failures_separate(asgi_app):
     asgi_app.state.library_state.update(
         last_error="scan failed",
         covers_last_error="cover refresh failed",

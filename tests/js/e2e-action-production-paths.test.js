@@ -234,14 +234,14 @@ test('notification hover evidence waits for finite owned transitions before read
 test('cover toast entrance observer detects movement and owns bounded cleanup', async (t) => {
   const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
   const vm = require('node:vm');
-  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'already-settled', 'timeout', 'cancel']) {
+  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'settled-first-running-frame', 'already-settled', 'already-animating', 'timeout', 'cancel']) {
     await t.test(scenario, async () => {
       const frames = new Map();
       const timers = new Map();
       let nextId = 0;
       let settled = scenario === 'already-settled';
       let progressVisible = false;
-      let toastVisible = scenario !== 'settled-after-baseline';
+      let toastVisible = ['already-settled', 'already-animating'].includes(scenario);
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
         querySelector: () => ({ textContent: 'Cover search started.' }),
@@ -285,18 +285,34 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         callback();
       };
       paint();
-      assert.equal(frames.size, 1, 'no baseline until running progress is rendered');
+      if (scenario.startsWith('already-')) {
+        assert.equal(frames.size, 0, 'a pre-existing matching toast must reject observation');
+      } else {
+        assert.equal(frames.size, 1, 'the pre-search observer must remain armed');
+      }
       if (scenario === 'timeout') {
         [...timers.values()][0]();
       } else if (scenario === 'cancel') {
         measurement.cancel();
+      } else if (scenario.startsWith('already-')) {
+        // The observer rejected the stale toast before the new search action.
       } else {
         progressVisible = true;
+        if (scenario === 'settled-first-running-frame') {
+          toastVisible = true;
+          settled = true;
+        } else if (scenario !== 'settled-after-baseline') {
+          toastVisible = true;
+        }
         paint();
-        if (scenario === 'settled-after-baseline') {
+        if (scenario === 'settled-first-running-frame') {
+          if (frames.size) paint();
+          if (frames.size) paint();
+        } else if (scenario === 'settled-after-baseline') {
           toastVisible = true;
           settled = true;
           paint();
+          if (frames.size) paint();
           if (frames.size) paint();
         } else if (scenario !== 'already-settled') {
           if (scenario === 'translation') rectangle = { ...rectangle, x: 104, y: 48 };
@@ -310,12 +326,13 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         }
       }
       const result = await measurement.result;
-      if (scenario === 'already-settled') assert.match(result.error, /already settled/);
+      if (scenario.startsWith('already-')) assert.match(result.error, /already present/);
       else if (scenario === 'timeout') assert.match(result.error, /Timed out/);
       else if (scenario === 'cancel') assert.match(result.error, /cancelled/);
       else {
         assert.equal(result.baselineUnsettled, true);
-        assert.equal(result.sampledFrames, scenario === 'settled-after-baseline' ? 2 : 4);
+        assert.equal(result.sampledFrames,
+          ['settled-after-baseline', 'settled-first-running-frame'].includes(scenario) ? 3 : 4);
         assert.deepEqual(JSON.parse(JSON.stringify(result.delta)), {
           height: scenario === 'resize' ? 10 : 0,
           width: scenario === 'resize' ? 2 : 0,
@@ -2777,6 +2794,11 @@ test('functional race checks arm transient mutation observation before submit an
   assert.match(
     playerActions,
     /const preReload = await this\.globalPlayer\.readPlaybackTiming\(\);[\s\S]*?page\.reload[\s\S]*?preReload,/,
+  );
+  assert.match(
+    reloadSpec,
+    /pauseAndReadListenCheckpoint\(\)[\s\S]*?waitForFullTrackTiming\(\)[\s\S]*?reloadAndWaitForRestoredTrack\(/,
+    'paused reload must await the listen checkpoint and claim release before reading its snapshot',
   );
   assert.match(
     reloadSpec,
@@ -5816,7 +5838,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
   assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
-  assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
+  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseToReleasePlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'end', 0\.75\)/);
@@ -6049,6 +6071,7 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
   const originalDocument = global.document;
   const originalGetSelected = global.getSelectedProblematicAlbum;
   try {
+    let artistDetailVisible = false;
     global.state = { utility: { selectedProblematicKey: 'neal morse::?' } };
     global.document = {
       querySelector(selector) {
@@ -6058,12 +6081,18 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
         if (selector === '#utility-problematic-detail .utility-detail-title') {
           return { textContent: '?' };
         }
+        if (selector === '#utility-problematic-detail [data-musicbrainz-artist-problem]') {
+          return artistDetailVisible
+            ? { getAttribute: () => '7' }
+            : null;
+        }
         return null;
       },
     };
     global.getSelectedProblematicAlbum = () => ({ key: 'neal morse::?', detail_loaded: true });
     const actions = new UtilityProblematicFilesActions({
       activeListItemSelector: '[data-problematic-album-key].is-active',
+      artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
       detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
       async waitForPageCondition(callback, options, argument) {
         assert.equal(options.timeout, 4321);
@@ -6071,9 +6100,23 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
           key: 'neal morse::?',
           title: '?',
           activeListItemSelector: '[data-problematic-album-key].is-active',
+          artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
           detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
         });
         assert.equal(callback(argument), true);
+        global.getSelectedProblematicAlbum = () => ({
+          key: 'neal morse::?',
+          entity_kind: 'artist',
+          local_artist_id: 7,
+          detail_loaded: false,
+        });
+        assert.equal(callback(argument), false, 'stale detail cannot satisfy artist selection');
+        artistDetailVisible = true;
+        assert.equal(
+          callback(argument),
+          true,
+          'matching visible artist detail is authoritative even though its summary row remains unloaded',
+        );
       },
     });
 
@@ -6717,6 +6760,27 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
       },
     }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
   }
+});
+
+test('MusicBrainz identity E2E covers native names and every manual resolution path through owned actions', () => {
+  const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
+
+  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings[\s\S]*readArtistInfoSnapshot/);
+  assert.match(spec, /MBD1-11:[\s\S]*enterManualArtistReference/);
+  assert.match(spec, /MBD1-12:[\s\S]*readMusicBrainzIdentityTable[\s\S]*expectMusicBrainzAssignmentDisabled[\s\S]*openMusicBrainzCandidate[\s\S]*selectMusicBrainzCandidate/);
+  assert.match(spec, /MBD1-13:[\s\S]*readMusicBrainzIdentityTable[\s\S]*keepCurrentMusicBrainzIdentity/);
+  assert.match(spec, /MBD1-20:[\s\S]*assignSelectedMusicBrainzIdentity/);
+  assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
+});
+
+test('MusicBrainz retry status reads rendered label and value boundaries', () => {
+  const actions = read('tests/e2e/actions/utilityProblematicFilesActions.js');
+  const start = actions.indexOf('async readMusicBrainzRetryStatus()');
+  const method = actions.slice(start, actions.indexOf('async retryMusicBrainzIdentity', start));
+
+  assert.ok(start >= 0);
+  assert.match(method, /musicBrainzRetryStatus\.innerText\(\)/);
+  assert.doesNotMatch(method, /musicBrainzRetryStatus\.textContent\(\)/);
 });
 
 test('Edit Tags duration gates use the shared timing-budget helper', () => {

@@ -25,6 +25,7 @@ interface BridgeHost {
 
     /** This app cannot run the site offering [webProtocols]: no shared protocol, or a required capability is missing. */
     fun onIncompatibleWeb(webProtocols: IntRange)
+    fun onForegroundReady(token: Long)
 
     /** The document negotiated the bridge. */
     fun onBridgeConnected()
@@ -188,6 +189,8 @@ class BridgeController(
                 files.handle(message.payload) { respond(message, protocol, it, reply) }
             message.name == APP_COPY_STATE && copies != null ->
                 reportCopy(message, protocol, copies, reply)
+            message.name == FOREGROUND_READY ->
+                foregroundReady(message, protocol, reply)
             else -> respond(message, protocol, playbackBridge.handle(message.name, message.payload), reply)
         }
     }
@@ -281,6 +284,17 @@ class BridgeController(
         reply(BridgeCodec.success(message, protocol))
     }
 
+    private fun foregroundReady(message: BridgeMessage, protocol: Int, reply: (String) -> Unit) {
+        val value = message.payload.opt("token")
+        val token = if (value is Int || value is Long) (value as Number).toLong() else null
+        if (token == null || token <= 0 || message.payload.length() != 1) {
+            reply(BridgeCodec.failure(message, protocol, "invalid_payload", "Invalid foreground token"))
+            return
+        }
+        host.onForegroundReady(token)
+        reply(BridgeCodec.success(message, protocol))
+    }
+
     /** Commands take no arguments; progress and results follow as `updates.state` events. */
     private fun update(message: BridgeMessage, protocol: Int, updates: UpdatePort, reply: (String) -> Unit) {
         if (message.payload.length() != 0) {
@@ -329,6 +343,7 @@ class BridgeController(
         const val FILES_CAPABILITY = "files.save.v1"
         const val APP_COPY_CAPABILITY = "app.copy.v1"
         private const val APP_COPY_STATE = "copy.state"
+        private const val FOREGROUND_READY = "shell.foregroundReady"
         private const val APP_COPY_FORGET = "copy.forget"
         private const val DOWNLOAD_LINK = "downloads.link"
         private const val FILES_SAVE = "files.save"

@@ -58,7 +58,6 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     await utilityLoopsActions.selectGroupByTitle(selectedTrack.title);
     await utilityLoopsActions.playLoopByName(SAVED_LOOP_NAME);
     await utilityLoopsActions.enableRepeatByName(SAVED_LOOP_NAME);
-    await globalPlayerActions.resumeIfPaused();
     await globalPlayerActions.installLoopEditExpiryClock();
   });
 
@@ -80,6 +79,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     await globalPlayerActions.moveAwayFromLoopAction();
     expect((await globalPlayerActions.pauseLoopEditExpiryClockBeforeRenewal()).paused).toBe(false);
     await globalPlayerActions.dragLoopBoundary('end', 0.8);
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
     await globalPlayerActions.advanceLoopEditExpiryClock(299000);
     await globalPlayerActions.expectLoopEditorActive();
     await globalPlayerActions.dragLoopBoundary('end', 0.75);

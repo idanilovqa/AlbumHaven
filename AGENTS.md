@@ -58,6 +58,16 @@ operate, or contribute to the application.
   request already uses; renumber before merging when two branches collide. Only
   code merged to main may apply migrations to a shared or production database;
   branch work uses an isolated database or a disposable copy.
+- Production-copy development (owner rule, 2026-11-14): production stays up and
+  is never a development database. Each branch or sandbox develops against its
+  own restored copy of the production database, with media writes disabled or a
+  test library, because a database copy does not isolate the real music files.
+  Never place such copies or dumps in CI, pull requests or artifacts; CI keeps
+  synthetic fixtures. Reserve migration numbers in the owner's shared ledger
+  (private repository) before creating the file. A migration that needs
+  another migration starts with `-- depends on: <file>`, carries a higher
+  number and merges only after its dependency is on main. Never edit a
+  migration after a shared database has applied it.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - E2E tests for owner-reported regressions must assert every named

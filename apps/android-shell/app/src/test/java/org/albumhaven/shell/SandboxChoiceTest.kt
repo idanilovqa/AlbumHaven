@@ -117,3 +117,29 @@ class HandshakeWatchTest {
         assertFalse(stable.timedOut())
     }
 }
+
+class ForegroundWatchTest {
+    private val watch = ForegroundWatch()
+
+    @Test
+    fun onlyTheCurrentForegroundProbeCanAnswerOrRecover() {
+        val first = watch.start()
+        val second = watch.start()
+
+        assertFalse(watch.answered(first))
+        assertTrue(watch.answered(second))
+        assertFalse(watch.timedOut(second))
+
+        val third = watch.start()
+        assertTrue(watch.timedOut(third))
+        assertFalse(watch.timedOut(third))
+    }
+
+    @Test
+    fun leavingTheForegroundCancelsRecovery() {
+        val probe = watch.start()
+        watch.cancel()
+        assertFalse(watch.answered(probe))
+        assertFalse(watch.timedOut(probe))
+    }
+}

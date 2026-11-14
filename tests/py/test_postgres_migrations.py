@@ -462,13 +462,22 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.lower() == ".sql"
     )
-    migration_numbers = [int(name[:4]) for name in migration_names]
+    migration_numbers = [
+        int(name[:4])
+        for name in migration_names
+        if name != "0117b_define_fold_search_accents.sql"
+    ]
 
-    assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
+    # 0117b is the immutable compatibility bridge required before applied migration 0118.
+    assert all(
+        re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name)
+        or name == "0117b_define_fold_search_accents.sql"
+        for name in migration_names
+    )
     # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-92:] == [
+    assert migration_names[-98:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -546,6 +555,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0115_aggregate_gallery_membership_per_artist.sql",
         "0116_add_problematic_text_corrections.sql",
         "0117_create_problematic_files_snapshots.sql",
+        "0117b_define_fold_search_accents.sql",
         "0118_fold_accents_in_duplicate_identity.sql",
         "0119_create_cover_mutation_revisions.sql",
         "0120_create_deleted_loose_track_removal_function.sql",
@@ -561,6 +571,11 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0175_add_musicbrainz_match_album_evidence.sql",
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
+        "0178_add_musicbrainz_associated_artists.sql",
+        "0179_add_ordered_cover_metadata_constraint.sql",
+        "0180_add_confirmed_copy_retirement.sql",
+        "0181_add_cue_virtual_tracks.sql",
+        "0182_create_custom_collection_artwork.sql",
     ]
 
 

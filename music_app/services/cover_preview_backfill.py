@@ -149,20 +149,29 @@ class CoverPreviewBackfill:
         recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
         if recorder is None:
             return 0
+
+        def handle_walk_error(error: OSError) -> None:
+            if not isinstance(error, FileNotFoundError):
+                raise error
+
         recorded = 0
         for source_path, cover_revision in self._load_cover_paths():
             for cache_root in (
                 source_path.parent / ".album-haven" / "cover_variants",
                 source_path.parent / ".album-haven" / "v1" / "cover_variants",
             ):
-                # os.walk skips folders that vanish mid-walk (concurrent variant
-                # cleanup); rglob aborted the whole relocation inventory instead.
-                for folder, _subfolders, file_names in os.walk(cache_root):
-                    for file_name in file_names:
-                        preview_path = Path(folder) / file_name
-                        if preview_path.is_file():
-                            recorder(source_path, preview_path)
-                            recorded += 1
+                if not cache_root.is_dir():
+                    continue
+                for directory, _subdirectories, filenames in os.walk(
+                    cache_root,
+                    onerror=handle_walk_error,
+                ):
+                    for filename in filenames:
+                        preview_path = Path(directory) / filename
+                        if not preview_path.is_file():
+                            continue
+                        recorder(source_path, preview_path)
+                        recorded += 1
             if self._data_dir and cover_revision:
                 preview_path = find_existing_cover_display_variant(
                     source_path,

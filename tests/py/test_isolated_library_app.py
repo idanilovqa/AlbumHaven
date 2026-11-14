@@ -29,6 +29,8 @@ from music_app.services import (
 )
 from music_app.services.cover_provider_matching import album_name_in_alt
 from music_app.services.library import build_albums_from_file_cache
+from music_app.services.musicbrainz_client import MusicBrainzClient
+from music_app.services.musicbrainz_enrichment import resolve_artist
 from music_app.services.playback_pcm import (
     PcmDecoderProcess,
     PcmOpenCommand,
@@ -4393,6 +4395,127 @@ def test_isolated_fixture_lastfm_target_survives_alias_fixture_reordering(tmp_pa
     ) == expected_target
     assert loop_source.name == "01 - Fake Loop Source.mp3"
     assert reordered_loop_source.name == "01 - Fake Loop Source.mp3"
+
+
+def test_held_musicbrainz_hydration_keeps_the_client_connection_alive(monkeypatch, tmp_path):
+    monkeypatch.setenv("ALBUM_HAVEN_E2E_MUSICBRAINZ_HYDRATION_HOLD", "1")
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "MUSICBRAINZ_HYDRATION_HEARTBEAT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    cover_path = tmp_path / "fixture.jpg"
+    cover_path.write_bytes(b"fixture-image")
+    other_art_path = tmp_path / "fixture-other-art.jpg"
+    other_art_path.write_bytes(b"fixture-other-art-image")
+    service = isolatedLibraryApp.ProviderFixtureService(0, [{
+        "cover_id": "fixture",
+        "staged_path": str(cover_path),
+        "other_art_staged_path": str(other_art_path),
+        "artist": "Fixture Artist",
+        "album": "Fixture Album",
+        "year": 2024,
+        "width": 1200,
+        "height": 1200,
+    }])
+    service.start()
+    port = service._server.server_address[1]
+    outcome = []
+
+    def request_artist():
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.05)
+        try:
+            connection.request(
+                "GET",
+                f"/musicbrainz/artist/{isolatedLibraryApp.MUSICBRAINZ_HYDRATION_MBID}",
+            )
+            response = connection.getresponse()
+            outcome.append(json.loads(response.read()))
+        except Exception as error:  # surfaced below
+            outcome.append(error)
+        finally:
+            connection.close()
+
+    request = threading.Thread(target=request_artist)
+    request.start()
+    try:
+        assert service._server.musicbrainz_hydration_started.wait(1)
+        time.sleep(0.12)
+        assert request.is_alive(), "the held provider response exceeded the client's socket timeout"
+        service._server.release_musicbrainz_hydration()
+        request.join(1)
+        assert not request.is_alive()
+        assert outcome[0]["country"] == "FI"
+        assert [genre["name"] for genre in outcome[0]["genres"]] == [
+            "progressive rock",
+            "art rock",
+            "doom metal",
+            "folk rock",
+        ]
+    finally:
+        service._server.release_musicbrainz_hydration()
+        request.join(1)
+        service.stop()
+
+
+def test_provider_outage_musicbrainz_fixture_resolves_from_album_evidence(tmp_path):
+    cover_path = tmp_path / "fixture.jpg"
+    cover_path.write_bytes(b"fixture-image")
+    service = isolatedLibraryApp.ProviderFixtureService(0, [{
+        "cover_id": "fixture",
+        "staged_path": str(cover_path),
+        "other_art_staged_path": str(cover_path),
+        "other_art_width": 1200,
+        "other_art_height": 1200,
+        "artist": "Fixture Artist",
+        "album": "Fixture Album",
+        "year": 2024,
+        "width": 1200,
+        "height": 1200,
+    }])
+    service.start()
+    port = service._server.server_address[1]
+    try:
+        def get_json(url, _user_agent, **_kwargs):
+            parsed = urlparse(url)
+            assert parsed.hostname == "127.0.0.1" and parsed.port == port
+            connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=2)
+            connection.request("GET", f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path)
+            response = connection.getresponse()
+            body = response.read()
+            connection.close()
+            metadata = {"status": "network", "http_status": response.status, "cache_hit": False}
+            return (json.loads(body), metadata) if response.status == 200 else (None, metadata)
+
+        client = MusicBrainzClient(
+            base_url=f"http://127.0.0.1:{port}/musicbrainz/",
+            user_agent="Album Haven test",
+            get_json=get_json,
+        )
+        outcome = resolve_artist(
+            {
+                "local_artist_id": 7,
+                "local_name": "Provider Outage Artist",
+                "albums": [{
+                    "title": "Provider Outage Album",
+                    "year": 2019,
+                    "tracks": [
+                        {"title": f"The Pure Shine Track {index}", "duration_seconds": 180}
+                        for index in range(1, 19)
+                    ],
+                }],
+                "existing_artist_mbid": "0e2e0001-0000-4000-8000-000000000014",
+                "existing_match_state": "matched",
+            },
+            client=client,
+        )
+
+        assert outcome["classification"] == "found"
+        assert outcome["artist"]["mbid"] == "0e2e0001-0000-4000-8000-000000000014"
+        assert [genre["name"] for genre in outcome["artist"]["genres"]] == ["rock"]
+    finally:
+        service.stop()
 
 
 def test_provider_fixture_serves_music_service_musicbrainz_and_cover_archive_shapes(tmp_path):

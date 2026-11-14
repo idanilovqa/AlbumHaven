@@ -3,8 +3,8 @@
   "channel": "stable",
   "shells": {
     "latest": {
-      "versionCode": 5,
-      "sourceCommit": "c913cb849278fb754246ac56d495e24fa359b3e7",
+      "versionCode": 7,
+      "sourceCommit": "f7d46ecf7ba82297d83dca2eb600abaa619a34c0",
       "fixture": "v1.json",
       "bridgeProtocolMin": 1,
       "bridgeProtocolMax": 1,
@@ -22,8 +22,8 @@
       ]
     },
     "previous": {
-      "versionCode": 5,
-      "sourceCommit": "c913cb849278fb754246ac56d495e24fa359b3e7",
+      "versionCode": 6,
+      "sourceCommit": "8fcc3f8cd6d09386c87f4bd032c0b212497c091c",
       "fixture": "v1.json",
       "bridgeProtocolMin": 1,
       "bridgeProtocolMax": 1,

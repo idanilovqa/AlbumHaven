@@ -27,6 +27,12 @@ const playerStyle = () => ({
   waveform: { fill: '#387F68', edge: '#AFD8C2' },
   handles: { color: '#AFD8C2' },
 });
+
+test('unsaved appearance resolves to a solid black canvas', () => {
+  const appearance = runtime().resolveAppearance(defaults());
+  assert.equal(appearance.main, '#000000');
+  assert.equal(appearance.panel, '#000000');
+});
 const interactions = source => ({
   item_hover: null,
   item_selected: null,

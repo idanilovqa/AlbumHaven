@@ -6,6 +6,25 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+
+test('a stale gallery projection does not count applying inventory revision', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.ui.appliedViewInventoryMutationRevision = 12;
+
+  const refresh = context.fetchAndRender('/view-data?surface=albums', false, {
+    preserveScroll: true,
+  });
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    inventory_mutation_revision: 13,
+    gallery_page: { projection_stale: true },
+  });
+  await refresh;
+
+  assert.equal(context.state.ui.appliedViewInventoryMutationRevision, 12);
+  assert.equal(context.state.view.artist_groups[0].albums[0].identity_revision, undefined);
+});
+
 const galleryEventHandlersPath = path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js');
 const galleryEventHandlersSource = fs.readFileSync(galleryEventHandlersPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');

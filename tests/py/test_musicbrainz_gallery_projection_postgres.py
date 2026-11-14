@@ -219,3 +219,20 @@ def test_a_split_artist_projects_the_musicbrainz_artists_its_albums_belong_to():
     # An artist with neither a match nor identities projects nothing.
     assert "artist_musicbrainz" not in browse._root_album_browse_artist_groups(
         [{**row, "artist_identities": None}])[0]
+
+
+def test_a_person_projects_the_same_named_band_they_belong_to_as_associated():
+    """Owner 2026-11-09: Alice Cooper is one artist, the singer, whose 1969-74 band keeps its MBID."""
+    from music_app.services import library_browse_postgres as browse
+
+    band = "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"
+    row = {**_stored_artist_row(), "artist_name": "Alice Cooper", "artist_identities": [
+        {"artist_mbid": band, "canonical_name": "Alice Cooper", "disambiguation": "the band", "album_count": 7}]}
+
+    projection = browse._root_album_browse_artist_groups([row])[0]["artist_musicbrainz"]
+
+    assert projection["artist_mbid"] == _stored_artist_row()["artist_mbid"]
+    assert projection["associated"] == [
+        {"artist_mbid": band, "musicbrainz_url": f"https://musicbrainz.org/artist/{band}", "canonical_name": "Alice Cooper",
+         "disambiguation": "the band", "album_count": 7}]
+    assert "identities" not in projection

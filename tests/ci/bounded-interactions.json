@@ -3421,14 +3421,44 @@
         "js:music_app/static/js/runtime/problematic-files-virtual-list.js#create:event:scroll"
       ],
       "owners": [
-        "music_app/static/js/runtime/problematic-files-virtual-list.js"
+        "music_app/static/js/runtime/problematic-files-virtual-list.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/player-loop-playback.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/client-device-preferences.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 50,
+        "production": 706
+      },
+      "budgets": {
+        "itemsVisited": 17,
+        "renderCommits": 17,
+        "nodesCreated": 17,
+        "domMutations": 17,
+        "markupBytes": 935,
+        "animationFrames": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/problematic-files-virtual-list.test.js",
+      "testIdentity": "bounded interaction: list scroll mounts only the next window of 706 Problematic Files rows",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only registration; removing the contract returns the entry to static proof, which the validator rejects while helper hazards remain reachable."
     },
     {
       "id": "js:runtime/problematic-files-virtual-list.js#schedule",

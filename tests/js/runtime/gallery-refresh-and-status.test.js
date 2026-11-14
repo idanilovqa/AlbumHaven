@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const { createGalleryRefreshContext: createContext } = require('../helpers/gallery-refresh-context');
 
 test('a stale gallery projection does not count applying inventory revision', async () => {
   const { context, pendingRequests } = createContext();
@@ -402,362 +403,6 @@ const responseStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_ap
 const responseStateHelperSource = fs.readFileSync(responseStateHelperPath, 'utf8');
 const viewValueHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js');
 const viewValueHelperSource = fs.readFileSync(viewValueHelperPath, 'utf8');
-
-function createContext() {
-  const calls = {
-    applyViewPayload: [],
-    fetchRequests: [],
-    renderView: [],
-    renderLibraryLoader: [],
-    renderLibraryLoaderOptions: [],
-    renderSidebar: 0,
-    renderArtistGroups: 0,
-    renderRelated: 0,
-    animationFrames: [],
-    cancelledAnimationFrames: [],
-    pushBrowserViewState: [],
-    showToast: [],
-    startupMarks: [],
-    startupFailures: 0,
-    updateStatusIndicator: [],
-    consoleErrors: [],
-    clearedTimeouts: [],
-    familyPrefetchBegins: [],
-    familyPrefetchCancels: [],
-    familyPrefetchPending: false,
-    familyForegroundIdleChecks: [],
-    speculativeDetailPrewarmCancels: 0,
-    hydratedAlbumDetailInvalidations: 0,
-    waveformPeakLoadSuspensions: [],
-    waveformPeakLoadResumptions: [],
-    prependUtilityLogHistoryEntries: [],
-    syncUtilityLogHistoryRevision: [],
-  };
-  const pendingRequests = [];
-  const searchInput = { value: '' };
-  const lastError = {
-    style: { display: 'none' },
-    textContent: '',
-  };
-  const hiddenInputs = [];
-  let transitionImage = null;
-  const artistGroups = {
-    innerHTML: '<section class="artist-section"></section>',
-    querySelector(selector) {
-      return selector === '.artist-section, .album-card'
-        && this.innerHTML.includes('artist-section')
-        ? { className: 'artist-section' }
-        : null;
-    },
-    querySelectorAll(selector) {
-      return selector === 'img' && transitionImage ? [transitionImage] : [];
-    },
-  };
-  const topSpacer = { style: { height: '120px' } };
-  const bottomSpacer = { style: { height: '120px' } };
-  const scanIndicator = {
-    title: '',
-    classList: {
-      values: new Set(['is-done']),
-      add(...names) {
-        names.forEach((name) => this.values.add(name));
-      },
-      remove(...names) {
-        names.forEach((name) => this.values.delete(name));
-      },
-      contains(name) {
-        return this.values.has(name);
-      },
-    },
-  };
-
-  const context = {
-    URL,
-    window: {
-      AlbumHavenStartupProgress: {
-        fail() { calls.startupFailures += 1; },
-      },
-    },
-    AbortController,
-    URL,
-    HTMLFormElement: function HTMLFormElement() {},
-    HTMLImageElement: function HTMLImageElement() {},
-    Promise,
-    console: {
-      error(...args) {
-        calls.consoleErrors.push(args);
-      },
-    },
-    document: {
-      getElementById(id) {
-        if (id === 'search-input') return searchInput;
-        if (id === 'search-form') return searchForm;
-        if (id === 'scan-indicator') return scanIndicator;
-        if (id === 'last-error') return lastError;
-        if (id === 'artist-groups') return artistGroups;
-        if (id === 'albums-spacer-top') return topSpacer;
-        if (id === 'albums-spacer-bottom') return bottomSpacer;
-        return null;
-      },
-      querySelectorAll() {
-        return [];
-      },
-      createElement(tagName) {
-        return {
-          tagName: String(tagName || '').toUpperCase(),
-          type: '',
-          name: '',
-          value: '',
-          remove() {
-            const index = hiddenInputs.indexOf(this);
-            if (index >= 0) {
-              hiddenInputs.splice(index, 1);
-            }
-          },
-        };
-      },
-    },
-    cssEscape(value) {
-      return String(value || '');
-    },
-    escapeHtml(value) {
-      return String(value ?? '');
-    },
-    getAlbumCardRenderKey(album) {
-      return JSON.stringify([
-        String(album?.key || ''),
-        String(album?.name || ''),
-        String(album?.album_artist || ''),
-        String(album?.year || ''),
-        Number(album?.album_preference?.rating || 0),
-        Number(album?.track_count_preview || album?.tracks?.length || 0),
-        String(album?.total_duration_display || ''),
-        String(album?.cover_url || ''),
-      ]);
-    },
-    state: {
-      busy: false,
-      view: {
-        query: '',
-        selected_artist: '',
-      },
-      utility: {
-        loaded: false,
-        logHistoryRevision: '',
-        logHistoryTargetRevision: '',
-        logHistorySyncPromise: null,
-      },
-      ui: {
-        forceScanPageVisible: false,
-        activeViewRequestController: null,
-        activeViewRequestId: 0,
-        activeViewRequestUrl: '',
-        activeViewRequestPush: false,
-        activeViewRequestStartupRefresh: false,
-        activeViewRequestStartupHydrationTier: '',
-        viewStateRevision: 0,
-        pendingViewRequest: null,
-        searchDraftQuery: '',
-      },
-    },
-    cancelTrackModalAlbumDetailsPrewarms() {
-      calls.speculativeDetailPrewarmCancels += 1;
-    },
-    invalidateAllHydratedTrackModalAlbumDetails() {
-      calls.hydratedAlbumDetailInvalidations += 1;
-    },
-    suspendPlayerWaveformPeakLoadsForForegroundView() {
-      const suspension = { id: calls.waveformPeakLoadSuspensions.length + 1 };
-      calls.waveformPeakLoadSuspensions.push(suspension);
-      return suspension;
-    },
-    resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
-      calls.waveformPeakLoadResumptions.push(suspension);
-      return Promise.resolve(null);
-    },
-    hideGalleryOptionsMenu() {},
-    buildApiUrl(value) {
-      return typeof value === 'string' ? value : `/view-data?artist=${encodeURIComponent(String(value?.selected_artist || ''))}`;
-    },
-    parseBrowserUrlState(value) {
-      return value;
-    },
-    fetch(url, options = {}) {
-      calls.fetchRequests.push({ url, options });
-      return new Promise((resolve, reject) => {
-        const request = {
-          url,
-          options,
-          resolveWith(payload) {
-            resolve({
-              ok: payload?.responseOk ?? (payload?.ok !== false),
-              status: payload?.status || 200,
-              clone() {
-                return { json: async () => payload };
-              },
-              async json() {
-                return payload;
-              },
-            });
-          },
-          rejectWith(error) {
-            reject(error);
-          },
-        };
-        if (options.signal && typeof options.signal.addEventListener === 'function') {
-          options.signal.addEventListener('abort', () => {
-            const abortError = new Error('aborted');
-            abortError.name = 'AbortError';
-            reject(abortError);
-          }, { once: true });
-        }
-        pendingRequests.push(request);
-      });
-    },
-    applyViewPayload(payload) {
-      calls.applyViewPayload.push(payload);
-      context.state.view = {
-        ...context.state.view,
-        ...payload,
-      };
-    },
-    attachModalEvents() {},
-    renderRelated() {
-      calls.renderRelated += 1;
-    },
-    renderArtistGroups() {
-      calls.renderArtistGroups += 1;
-    },
-    renderLibraryLoader(payload, options = {}) {
-      calls.renderLibraryLoader.push(payload);
-      calls.renderLibraryLoaderOptions.push(options);
-    },
-    renderView(options) {
-      calls.renderView.push(options);
-    },
-    startupMetrics: {
-      completed: 0,
-      visibleCompleted: 0,
-      visibleCompletions: [],
-      markOnce(name, detail) {
-        calls.startupMarks.push({ name, detail });
-      },
-      schedulePaintMark(name, readDetail) {
-        calls.startupMarks.push({
-          name,
-          detail: typeof readDetail === 'function' ? readDetail() : {},
-        });
-      },
-      completeVisibleInitialRefresh(view, detail) {
-        this.visibleCompleted += 1;
-        this.visibleCompletions.push({ view, detail });
-      },
-      completeInitialRefresh() {
-        this.completed += 1;
-      },
-    },
-    pushBrowserViewState(view) {
-      calls.pushBrowserViewState.push(view);
-    },
-    clearPendingSidebarSelection() {},
-    renderSidebar() {
-      calls.renderSidebar += 1;
-    },
-    isEffectivelyEmptyView() {
-      return false;
-    },
-    async loadProblematicFiles() {},
-    async prependUtilityLogHistoryEntry(entry) {
-      calls.prependUtilityLogHistoryEntries.push(entry);
-    },
-    async syncUtilityLogHistoryRevision(revision) {
-      calls.syncUtilityLogHistoryRevision.push(revision);
-      context.state.utility.logHistoryRevision = revision;
-      return { revision };
-    },
-    showToast(message, level, durationMs) {
-      calls.showToast.push({ message, level, durationMs });
-    },
-    updateStatusIndicator(payload) {
-      calls.updateStatusIndicator.push(payload);
-      context.state.status = {
-        ...(context.state.status || {}),
-        ...payload,
-      };
-    },
-    startStatusIndicatorImmediately() {},
-    scheduleBrowserTimeout() {},
-    clearBrowserTimeout(timeoutId) {
-      calls.clearedTimeouts.push(timeoutId);
-      return true;
-    },
-    galleryCoverLoadScheduler: {
-      beginFamilyPrefetchReconciliation() {
-        const generation = calls.familyPrefetchBegins.length + 1;
-        calls.familyPrefetchBegins.push(generation);
-        calls.familyPrefetchPending = true;
-        return generation;
-      },
-      cancelFamilyPrefetchReconciliation(generation) {
-        calls.familyPrefetchCancels.push(generation);
-        calls.familyPrefetchPending = false;
-        return true;
-      },
-      async whenForegroundIdle() {
-        calls.familyForegroundIdleChecks.push(calls.familyPrefetchPending);
-        return { familyPrefetchPending: calls.familyPrefetchPending };
-      },
-    },
-    scheduleBrowserAnimationFrame(callback) {
-      calls.animationFrames.push(callback);
-      return calls.animationFrames.length;
-    },
-    cancelBrowserAnimationFrame(frameId) {
-      calls.cancelledAnimationFrames.push(frameId);
-      return true;
-    },
-    buildApiUrlForTests(value) {
-      return context.buildApiUrl(value);
-    },
-  };
-  transitionImage = Object.create(context.HTMLImageElement.prototype);
-  transitionImage.loading = 'lazy';
-  transitionImage.attributes = new Map([['src', '/cover?path=old']]);
-  transitionImage.removeAttribute = function removeAttribute(name) {
-    this.attributes.delete(name);
-  };
-  const searchForm = Object.create(context.HTMLFormElement.prototype);
-  searchForm.querySelectorAll = (selector) => {
-    const match = /\[name="([^"]+)"\]/.exec(String(selector || ''));
-    const name = match ? match[1] : '';
-    return hiddenInputs.filter((input) => input.type === 'hidden' && input.name === name);
-  };
-  searchForm.appendChild = (input) => {
-    hiddenInputs.push(input);
-    return input;
-  };
-
-  vm.createContext(context);
-  vm.runInContext(helperSource, context, { filename: helperPath });
-  const runtimeRenderView = context.renderView;
-  context.renderView = function renderViewStub(options) {
-    calls.renderView.push(options);
-  };
-  return {
-    context,
-    calls,
-    pendingRequests,
-    runtimeRenderView,
-    searchInput,
-    lastError,
-    hiddenInputs,
-    artistGroups,
-    transitionImage,
-    topSpacer,
-    bottomSpacer,
-    scanIndicator,
-  };
-}
 
 test('fetchAndRender rejects JSON HTTP errors without applying their payload', async () => {
   const { context, calls, pendingRequests } = createContext();
@@ -7982,4 +7627,157 @@ test('status changes that only add or remove actions never refetch Problematic F
   await observeStatus({ musicbrainz_enrichment: { state: 'running', queued: 3 } });
 
   assert.deepEqual(fixture.refreshes, [], 'only inventory or watcher-health changes refresh the list');
+});
+
+// Request-capture contracts (tests/ci/bounded-interactions.json): the real refresh runtime, with the
+// real view URL helpers, records every request; each must hit its owned endpoint, once per action.
+const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
+const { useRealViewUrls } = require('../helpers/gallery-refresh-context');
+const {
+  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
+} = require('../helpers/request-capture');
+
+const settleRequests = async () => { for (let turn = 0; turn < 20; turn += 1) await new Promise(setImmediate); };
+const requestShape = (url) => {
+  const parsed = new URL(url, 'http://localhost');
+  return [parsed.pathname, ...['artist', 'q', 'gallery_cursor', 'gallery_page_direction'].map(name => parsed.searchParams.get(name))];
+};
+
+function capturedGallery(respond) {
+  const fixture = createContext();
+  const { context } = fixture;
+  useRealViewUrls(context);
+  const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 1000 };
+  const getElementById = context.document.getElementById;
+  context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+  const timers = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  context.clearTimeout = () => {};
+  const capture = createRequestCapture(respond);
+  context.fetch = capture.fetch;
+  return { ...fixture, scroll, timers, capture };
+}
+
+function retainedRootView(albums) {
+  return {
+    surface_request: 'albums', query: '', selected_artist: '',
+    artist_groups: Array.from({ length: albums }, (_, index) => ({ artist: `Artist ${String(index).padStart(5, '0')}`, albums: [{ key: `album-${index}` }] })),
+    gallery_page: { next_cursor: 'next-1', previous_cursor: 'previous-1', has_more: true, has_previous: true, revision: 'r1' },
+  };
+}
+
+const rootPage = { artist_groups: [{ artist: 'Zed', albums: [{ key: 'zed' }] }], gallery_page: { revision: 'r1', has_more: false, has_previous: false } };
+
+test('request capture: gallery navigation fetches its own endpoint once and dispatches one queued view', async () => {
+  const id = 'js:runtime/gallery-refresh-and-status.js#fetchAndRender';
+  await measureInteractionContract(id, async (repeats) => {
+    let pendingAnswers = 0;
+    const gallery = capturedGallery(url => (new URL(url, 'http://localhost').searchParams.get('q') === 'pending' && pendingAnswers++ === 0
+      ? jsonResponse({ code: 'search_projection_pending' }, { status: 503 })
+      : jsonResponse({ artist_groups: [], payload_tier: 'full' })));
+    const { context, timers } = gallery;
+    await context.fetchAndRender('/');
+    const artist = context.fetchAndRender('/?artist=Neal+Morse');
+    const duplicates = Array.from({ length: repeats }, () => context.fetchAndRender('/?artist=Neal+Morse'));
+    const queued = context.fetchAndRender('/?q=queued', true, { interruptCurrent: false });
+    await Promise.all([artist, ...duplicates, queued]);
+    await settleRequests();
+    const pending = context.fetchAndRender('/?q=pending');
+    await settleRequests();
+    timers.shift()();
+    await pending;
+    const urls = gallery.capture.urls();
+    assert.deepEqual(urls.map(requestShape), [
+      ['/home-data', null, null, null, null], ['/view-data', 'Neal Morse', null, null, null],
+      ['/view-data', null, 'queued', null, null], ['/view-data', null, 'pending', null, null], ['/view-data', null, 'pending', null, null],
+    ]);
+    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+    assertInteractionRequests(id, urls);
+    return gallery.capture.counter.snapshot();
+  });
+});
+
+test('request capture: startup hydration follow-ups dispatch one request after busy retries', async () => {
+  const id = 'js:runtime/gallery-refresh-and-status.js#runDispatch';
+  await measureInteractionContract(id, async (busyRetries) => {
+    const gallery = capturedGallery(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+    const { context } = gallery;
+    const retries = [];
+    context.scheduleBrowserTimeout = (callback) => { retries.push(callback); return retries.length; };
+    for (const [endpoint, view] of [['/home-data', {}], ['/view-data?payload_tier=sidebar&artist=Broadcast', { selected_artist: 'Broadcast' }]]) {
+      context.state.view = { ...context.state.view, query: '', selected_artist: '', ...view };
+      context.queueStartupHydrationFollowup(endpoint, {
+        startupHydrationTier: view.selected_artist ? 'sidebar' : 'full',
+        ...(view.selected_artist ? { retainMountedSelectedViewState: { ...context.state.view } } : {}),
+      });
+      context.state.busy = true;
+      context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
+      await settleRequests();
+      for (let retry = 1; retry < busyRetries; retry += 1) {
+        retries.shift()();
+        await settleRequests();
+      }
+      context.state.busy = false;
+      retries.shift()();
+      await settleRequests();
+    }
+    const urls = gallery.capture.urls();
+    assert.deepEqual(urls, ['/home-data', '/view-data?payload_tier=sidebar&artist=Broadcast']);
+    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+    assertInteractionRequests(id, urls);
+    return gallery.capture.counter.snapshot();
+  });
+});
+
+test('request capture: root gallery scrolling requests one /view-data cursor page per direction', async () => {
+  for (const [id, load, cursor, direction] of [
+    ['js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage', 'loadNextRootGalleryPage', 'next-1', null],
+    ['js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage', 'loadPreviousRootGalleryPage', 'previous-1', 'previous'],
+  ]) {
+    await measureInteractionContract(id, async (albums) => {
+      const gallery = capturedGallery(() => jsonResponse(rootPage));
+      gallery.context.state.view = retainedRootView(albums);
+      await Promise.all(Array.from({ length: 5 }, () => gallery.context[load]()));
+      const urls = gallery.capture.urls();
+      assert.deepEqual(urls.map(requestShape), [['/view-data', null, null, cursor, direction]], load);
+      const params = new URL(urls[0], 'http://localhost').searchParams;
+      assert.equal(params.get('gallery_page_size'), '50');
+      assert.equal(params.get('omit_sidebar'), '1');
+      assertInteractionRequests(id, urls);
+      return gallery.capture.counter.snapshot();
+    });
+  }
+});
+
+test('request capture: a pending gallery projection retries the same page once per second until cancelled', async () => {
+  for (const id of [
+    'js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse',
+    'js:runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse',
+  ]) {
+    await measureInteractionContract(id, async (albums) => {
+      let answers = 0;
+      const gallery = capturedGallery(() => (answers++ < 2
+        ? jsonResponse({ code: 'gallery_projection_pending' }, { status: 503 })
+        : jsonResponse(rootPage)));
+      gallery.context.state.view = retainedRootView(albums);
+      const load = gallery.context.loadNextRootGalleryPage();
+      await settleRequests();
+      gallery.timers.shift()();
+      await settleRequests();
+      gallery.timers.shift()();
+      assert.equal(await load, true);
+      const [first, ...retries] = gallery.capture.urls();
+      assert.deepEqual(retries, [first, first], 'retries repeat the same page request');
+      // A cancelled continuation stops retrying without another request.
+      gallery.context.state.view = retainedRootView(albums);
+      answers = 0;
+      const cancelled = gallery.context.loadNextRootGalleryPage();
+      await settleRequests();
+      gallery.context.cancelRootGalleryPageRequest();
+      assert.equal(await cancelled, false);
+      assert.equal(gallery.timers.length, 1, 'the cancelled retry timer never fires');
+      assertInteractionRequests(id, gallery.capture.urls());
+      return gallery.capture.counter.snapshot();
+    });
+  }
 });

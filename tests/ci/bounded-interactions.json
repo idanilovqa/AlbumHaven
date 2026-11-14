@@ -2276,7 +2276,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
-      "action": "fetch/fetchAndRender/retryPendingGalleryViewResponse requests installed by fetchAndRender",
+      "action": "Navigate Home, to an artist with repeated presses, to a queued search, and to a pending search",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetch",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetchAndRender",
@@ -2290,14 +2290,37 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
+          "/view-data",
           "/view-data*"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 5
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: gallery navigation fetches its own endpoint once and dispatches one queued view",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchArtist",
@@ -2317,7 +2340,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse",
-      "action": "fetch/retryPendingGalleryViewResponse requests installed by fetchGalleryViewResponse",
+      "action": "Load a root gallery page while its projection is pending, then cancel a pending load",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:fetch",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:retryPendingGalleryViewResponse"
@@ -2329,8 +2352,37 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a pending gallery projection retries the same page once per second until cancelled",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchRecoveryResponse",
@@ -2350,7 +2402,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage",
-      "action": "fetchGalleryViewResponse requests installed by loadNextRootGalleryPage",
+      "action": "Scroll toward the end of the root gallery, with repeated scroll checks while the page loads",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage:request:fetchGalleryViewResponse"
       ],
@@ -2361,12 +2413,41 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: root gallery scrolling requests one /view-data cursor page per direction",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage",
-      "action": "fetchGalleryViewResponse requests installed by loadPreviousRootGalleryPage",
+      "action": "Scroll toward the start of an anchored root gallery, with repeated scroll checks while the page loads",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage:request:fetchGalleryViewResponse"
       ],
@@ -2377,8 +2458,37 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: root gallery scrolling requests one /view-data cursor page per direction",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#pollStatus",
@@ -2427,7 +2537,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse",
-      "action": "abort listeners, fetch requests, setTimeout timers installed by retryPendingGalleryViewResponse",
+      "action": "Retry a pending gallery projection once per second until it answers or is cancelled",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:event:abort",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:request:fetch",
@@ -2440,12 +2550,41 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a pending gallery projection retries the same page once per second until cancelled",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",
-      "action": "fetchAndRender requests installed by runDispatch",
+      "action": "Dispatch Home and selected-artist startup hydration follow-ups after busy retries",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#runDispatch:request:fetchAndRender"
       ],
@@ -2457,7 +2596,36 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: startup hydration follow-ups dispatch one request after busy retries",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",

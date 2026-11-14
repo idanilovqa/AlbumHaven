@@ -93,7 +93,7 @@ test('FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is
       inherited = await stageOwnedLegacyCoverContamination(fixture);
       expect(inherited.origin).toBe('user');
       expect(inherited.provenance).toBeNull();
-      expect(inherited.coverRef).toBe(inherited.wrongCoverRef);
+      expect(inherited.coverPath).toBe(inherited.wrongCoverPath);
       expect(inherited.repairPrevious).toBeNull();
     } finally {
       await managedAppLifecycle.restart();
@@ -118,17 +118,17 @@ test('FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is
     expect(opened.album.cover_selection_origin).toBe('automatic');
     expect(opened.album.local_cover_width).toBe(1600);
     expect(opened.album.local_cover_height).toBe(1600);
-    expect(opened.album.cover_ref).not.toBe(inherited.wrongCoverRef);
+    expect(opened.album.cover_path).not.toBe(inherited.wrongCoverPath);
     const visibleCover = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage, 'repaired physical album artwork',
-      { expectedCoverRef: opened.album.cover_ref },
+      { expectedCoverPath: opened.album.cover_path },
     );
-    expect(visibleCover.coverRef).toBe(opened.album.cover_ref);
+    expect(visibleCover.coverPath).toBe(opened.album.cover_path);
     const persisted = await readOwnedLegacyCoverState(fixture);
-    expect(persisted.coverRef).toBe(opened.album.cover_ref);
+    expect(persisted.coverPath).toBe(opened.album.cover_path);
     expect(persisted.origin).toBe('automatic');
     expect(persisted.repairPrevious).toEqual({
-      cover_ref: inherited.wrongCoverRef,
+      cover_path: inherited.wrongCoverPath,
       cover_selection_origin: 'user',
       cover_revision: inherited.wrongRevision,
     });
@@ -159,7 +159,7 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
     for (const excluded of fixture.excludedPaths) expect(tracks.map(track => track.path)).not.toContain(excluded);
     expect(album.local_cover_width).toBe(1600);
     expect(album.local_cover_height).toBe(1600);
-    expect(album.cover_ref).not.toContain('Random songs');
+    expect(album.cover_path).not.toContain('Random songs');
     await trackModalActions.waitForLoadedSummary();
     await expectCompleteSourceTracks(album, fixture, trackModalActions);
     await trackModalActions.close();
@@ -265,8 +265,8 @@ test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cove
   await stepLogger.step('Save only to the selected release and leave the sibling source untouched', async () => {
     const saved = await coverLookupActions.selectLocalCoverByNameAndSave('manual-choice.png');
     expect(saved.candidate.sourcePath).toBe(path.join(selectedRoot, 'manual-choice.png'));
-    expect(saved.selectedCoverRef).toBe(path.join(selectedRoot, 'cover.jpg'));
-    expect(saved.updatedAlbum.cover_ref).toBe(saved.selectedCoverRef);
+    expect(saved.selectedCoverPath).toBe(path.join(selectedRoot, 'cover.jpg'));
+    expect(saved.updatedAlbum.cover_path).toBe(saved.selectedCoverPath);
     expect(await fs.readFile(path.join(siblingRoot, 'cover.png'))).toEqual(siblingCoverBytes);
     const siblingCanonicalExists = await fs.stat(path.join(siblingRoot, 'cover.jpg'))
       .then(() => true, error => {
@@ -326,14 +326,14 @@ test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and mak
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
     expect(opened.album.cover_selection_origin).toBe('user');
-    expect(opened.album.cover_ref).toBe(saved.selectedCoverRef);
+    expect(opened.album.cover_path).toBe(saved.selectedCoverPath);
     expect(opened.album.cover_revision).toBe(saved.updatedAlbum.cover_revision);
     displayedBaseline = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage, 'settled explicit selection before rescan',
-      { expectedCoverRef: opened.album.cover_ref, expectedCoverRevision: opened.album.cover_revision },
+      { expectedCoverPath: opened.album.cover_path, expectedCoverRevision: opened.album.cover_revision },
     );
     const fullSize = await coverLookupActions.readFullSizeCoverEvidence({
-      coverRef: opened.album.cover_ref, coverRevision: opened.album.cover_revision,
+      coverPath: opened.album.cover_path, coverRevision: opened.album.cover_revision,
       label: 'explicit selection source before rescan',
     });
     expect(fullSize.sha256).toBe(saved.candidateFullSize.sha256);
@@ -349,13 +349,13 @@ test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and mak
       await galleryActions.waitForGalleryReady();
       const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
       expect(opened.album.cover_selection_origin).toBe('user');
-      expect(opened.album.cover_ref).toBe(saved.selectedCoverRef);
+      expect(opened.album.cover_path).toBe(saved.selectedCoverPath);
       expect(opened.album.cover_revision).toBe(saved.updatedAlbum.cover_revision);
       const image = await coverLookupActions.readDisplayedImageEvidence(trackModalActions.trackModal.detailedCoverImage,
-        'explicit selection after physical rescan', { expectedCoverRef: opened.album.cover_ref, expectedCoverRevision: opened.album.cover_revision });
+        'explicit selection after physical rescan', { expectedCoverPath: opened.album.cover_path, expectedCoverRevision: opened.album.cover_revision });
       expect(image.sha256).toBe(displayedBaseline.sha256);
       const fullSize = await coverLookupActions.readFullSizeCoverEvidence({
-        coverRef: opened.album.cover_ref, coverRevision: opened.album.cover_revision,
+        coverPath: opened.album.cover_path, coverRevision: opened.album.cover_revision,
         label: 'explicit selection source after rescan',
       });
       expect(fullSize.sha256).toBe(saved.candidateFullSize.sha256);
@@ -402,7 +402,7 @@ test('FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequa
     expect(opened.album.local_cover_height).toBe(640);
     baselineImage = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage, 'undersized automatic artwork',
-      { expectedCoverRef: inherited.coverRef, expectedCoverRevision: inherited.wrongRevision },
+      { expectedCoverPath: inherited.coverPath, expectedCoverRevision: inherited.wrongRevision },
     );
     await trackModalActions.close();
   });
@@ -422,12 +422,12 @@ test('FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequa
       expect(opened.album.local_cover_height).toBeGreaterThanOrEqual(2000);
       const image = await coverLookupActions.readDisplayedImageEvidence(
         trackModalActions.trackModal.detailedCoverImage, 'automatic adequate legacy replacement',
-        { expectedCoverRef: opened.album.cover_ref, expectedCoverRevision: opened.album.cover_revision },
+        { expectedCoverPath: opened.album.cover_path, expectedCoverRevision: opened.album.cover_revision },
       );
       expect(image.sha256).not.toBe(baselineImage.sha256);
       const persisted = await readOwnedLegacyCoverState(fixture);
       expect(persisted.origin).toBe('automatic');
-      expect(persisted.coverRef).toBe(opened.album.cover_ref);
+      expect(persisted.coverPath).toBe(opened.album.cover_path);
       await trackModalActions.waitForCoverLookupImprovementIndicator(false);
       await trackModalActions.close();
     };

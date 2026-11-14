@@ -24,9 +24,9 @@ export function observeExactCoverTraffic(page) {
   const isPinnedJosephCoverUrl = (rawUrl) => {
     if (!URL.canParse(String(rawUrl || ''))) return false;
     const url = new URL(String(rawUrl || ''));
-    const coverRef = decodeURIComponent(url.searchParams.get('path') || '');
+    const coverPath = decodeURIComponent(url.searchParams.get('path') || '');
     const size = url.searchParams.get('size');
-    return path.basename(coverRef) === JOSEPH_COVER_FILENAME
+    return path.basename(coverPath) === JOSEPH_COVER_FILENAME
       && (size === null || size === '480');
   };
   const onRequest = (request) => {

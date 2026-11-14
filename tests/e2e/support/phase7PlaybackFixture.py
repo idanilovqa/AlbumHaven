@@ -39,7 +39,7 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
             "disc_number_raw": "1",
             "duration_seconds": 180,
             "duration_display": "3:00",
-            "cover_ref": str(cover),
+            "cover_path": str(cover),
             "library_root_id": "isolated-e2e-root",
             "library_root_category": "main_library",
             "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
@@ -49,7 +49,7 @@ def prepare_settings_playback_media(library_root: Path) -> dict[str, dict[str, o
     arrival.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(track, arrival)
     inventory[str(arrival)] = {**inventory[str(track)], "path": str(arrival),
-        "album": "Boundary Arrival", "title": "Arrival Signal", "cover_ref": None}
+        "album": "Boundary Arrival", "title": "Arrival Signal", "cover_path": None}
     return inventory
 
 
@@ -100,7 +100,7 @@ def persist_settings_playback_inventory(
     missing_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(existing_path, missing_path)
     missing = {**existing, "path": str(missing_path), "album": "Missing Boundary Session",
-               "title": "Missing Signal", "cover_ref": None}
+               "title": "Missing Signal", "cover_path": None}
     adapter = PostgresScanCacheAdapter(config)
     root_identity = library_root_cache_identity(config)
     adapter.save_snapshot(

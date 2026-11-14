@@ -573,7 +573,7 @@ def load_real_cover_manifest() -> dict[str, Any]:
     return json.loads(APPROVED_COVER_METADATA_PATH.read_text(encoding="utf-8"))
 
 
-def resolve_manifest_cover_ref(cover: dict[str, Any]) -> Path:
+def resolve_manifest_cover_path(cover: dict[str, Any]) -> Path:
     expected_hash = str(cover.get("sha256") or "").strip()
     if not expected_hash:
         raise RuntimeError("Approved cover metadata requires sha256.")
@@ -1094,7 +1094,7 @@ def register_gapless_playback_fixture(
                 "disc_number_raw": None,
                 "duration_seconds": 0,
                 "duration_display": _format_duration(0),
-                "cover_ref": None,
+                "cover_path": None,
                 "cover_revision": None,
                 "local_cover_width": None,
                 "local_cover_height": None,
@@ -1139,7 +1139,7 @@ def register_gapless_playback_fixture(
                 "disc_number_raw": "1",
                 "duration_seconds": persisted_duration_seconds,
                 "duration_display": _format_duration(persisted_duration_seconds),
-                "cover_ref": None,
+                "cover_path": None,
                 "cover_revision": None,
                 "comment": f"gapless-fixture kind={track['kind']}",
                 "gapless_fixture": {
@@ -1211,7 +1211,7 @@ def stage_real_cover_pool(
                     f"Restart reuse requires the staged cover file: {destination_path}"
                 )
         else:
-            source_path = resolve_manifest_cover_ref(cover)
+            source_path = resolve_manifest_cover_path(cover)
             destination_path = staged_dir / (
                 f"{str(cover.get('assetId') or '').strip()}"
                 f"{str(cover.get('extension') or source_path.suffix).strip().lower()}"
@@ -1388,20 +1388,20 @@ def restore_reused_fixture09_user_owned_cover(
         raise RuntimeError(
             "Restart reuse requires a second staged cover spec for Fixture 09."
         )
-    persisted_cover_ref = (
+    persisted_cover_path = (
         library_root
         / REUSED_FIXTURE09_ARTIST
         / f"{REUSED_FIXTURE09_ALBUM} Fixture 09"
         / "cover.jpg"
     )
-    if not persisted_cover_ref.is_file():
+    if not persisted_cover_path.is_file():
         raise RuntimeError(
             "Restart reuse requires the persisted Fixture 09 active cover: "
-            f"{persisted_cover_ref}"
+            f"{persisted_cover_path}"
         )
-    resolved_cover_ref = persisted_cover_ref.resolve(strict=True)
-    cover_specs[1]["user_owned_cover_ref"] = str(resolved_cover_ref)
-    return resolved_cover_ref
+    resolved_cover_path = persisted_cover_path.resolve(strict=True)
+    cover_specs[1]["user_owned_cover_path"] = str(resolved_cover_path)
+    return resolved_cover_path
 
 
 def stage_joseph_cover(library_root: Path) -> dict[str, Any]:
@@ -2046,7 +2046,7 @@ def build_file_cache(
                 and album_index == 1
             )
             if is_joseph_fixture:
-                active_cover_ref = _materialize_album_image(
+                active_cover_path = _materialize_album_image(
                     Path(str(cover["staged_path"])),
                     album_dir / JOSEPH_COVER_FILENAME,
                 )
@@ -2056,29 +2056,29 @@ def build_file_cache(
                 or is_progressive_candidate_fixture
                 or is_automatic_candidate_fixture
             ):
-                active_cover_ref = None
+                active_cover_path = None
             elif is_primary_manifest_cover_lookup_album:
-                active_cover_ref = materialize_cover_lookup_album_art(
+                active_cover_path = materialize_cover_lookup_album_art(
                     album_dir,
                     cover_specs,
                 )
             elif is_first_display_album:
-                active_cover_ref, _other_art_path = materialize_album_art(album_dir, cover)
+                active_cover_path, _other_art_path = materialize_album_art(album_dir, cover)
             elif is_partial_cover_lookup_mutation_fixture:
-                active_cover_ref = _materialize_independent_album_image(
+                active_cover_path = _materialize_independent_album_image(
                     Path(str(cover["staged_path"])),
                     album_dir / "cover.jpg",
                 )
             elif is_user_owned_improvement_fixture:
-                active_cover_ref = materialize_user_owned_cover(
+                active_cover_path = materialize_user_owned_cover(
                     album_dir,
                     Path(str(user_owned_cover_source["staged_path"])),
                 )
-                user_owned_cover_source["user_owned_cover_ref"] = str(
-                    active_cover_ref.resolve()
+                user_owned_cover_source["user_owned_cover_path"] = str(
+                    active_cover_path.resolve()
                 )
             else:
-                active_cover_ref = _materialize_album_image(
+                active_cover_path = _materialize_album_image(
                     Path(str(cover["staged_path"])),
                     album_dir / "cover.jpg",
                 )
@@ -2091,7 +2091,7 @@ def build_file_cache(
                     or is_automatic_candidate_fixture
                 )
                 else _cached_cover_revision(
-                    active_cover_ref
+                    active_cover_path
                     if is_user_owned_improvement_fixture
                     else
                     Path(str(cover["staged_path"])),
@@ -2329,7 +2329,7 @@ def build_file_cache(
                     "artist": track_artist,
                     "duration_seconds": duration_seconds,
                     "duration_display": _format_duration(duration_seconds),
-                    "cover_ref": (
+                    "cover_path": (
                         None
                         if (
                             is_problematic_fixture_album
@@ -2338,7 +2338,7 @@ def build_file_cache(
                             or is_progressive_candidate_fixture
                             or is_automatic_candidate_fixture
                         )
-                        else str(active_cover_ref)
+                        else str(active_cover_path)
                     ),
                     "cover_revision": (
                         None
@@ -2778,8 +2778,8 @@ def rebase_preloaded_fixture_paths(
         connection.execute(
             """
             update library.local_albums
-            set cover_ref = %(new_root)s || substring(cover_ref from length(%(old_root)s) + 1)
-            where left(cover_ref, length(%(old_root)s)) = %(old_root)s
+            set cover_path = %(new_root)s || substring(cover_path from length(%(old_root)s) + 1)
+            where left(cover_path, length(%(old_root)s)) = %(old_root)s
             """,
             params,
         )
@@ -2899,7 +2899,7 @@ def seed_functional_cover_search_cache(
                 on library.local_artists.id = library.local_albums.artist_id
                and library.local_artists.library_id = library.libraries.id
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-                and nullif(btrim(library.local_albums.cover_ref), '') is null
+                and nullif(btrim(library.local_albums.cover_path), '') is null
 
               union
 
@@ -2925,7 +2925,7 @@ def seed_functional_cover_search_cache(
               join library.local_track_files
                 on library.local_track_files.track_id = library.local_tracks.id
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-                and nullif(btrim(library.local_albums.cover_ref), '') is null
+                and nullif(btrim(library.local_albums.cover_path), '') is null
                 and btrim(library.local_track_files.metadata #>> '{scan_cache,file_entry,year}')
                     ~ '^[0-9]{4}$'
             ) as cover_queries
@@ -2984,12 +2984,12 @@ def build_preloaded_synthetic_provider_cover_specs(
                 "Functional-core provider startup requires its fixture-owned cover response contract."
             )
         cover_root = media_root / "covers" / "approved"
-        cover_refs = sorted(
+        cover_paths = sorted(
             path.resolve(strict=True)
             for path in cover_root.iterdir()
             if path.is_file() and path.suffix.casefold() in {".jpg", ".jpeg", ".png"}
         ) if cover_root.is_dir() else []
-        if len(cover_refs) < 2:
+        if len(cover_paths) < 2:
             raise RuntimeError(
                 "Preloaded provider startup requires at least two fixture-owned approved covers."
             )
@@ -3001,12 +3001,12 @@ def build_preloaded_synthetic_provider_cover_specs(
                 "year": 2026,
                 "width": 1000,
                 "height": 1000,
-                "staged_path": str(cover_ref),
-                "other_art_staged_path": str(cover_refs[(index + 1) % len(cover_refs)]),
+                "staged_path": str(cover_path),
+                "other_art_staged_path": str(cover_paths[(index + 1) % len(cover_paths)]),
                 "other_art_width": 1000,
                 "other_art_height": 1000,
             }
-            for index, cover_ref in enumerate(cover_refs)
+            for index, cover_path in enumerate(cover_paths)
         ]
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
@@ -3051,9 +3051,9 @@ def build_preloaded_synthetic_provider_cover_specs(
         )
         if spec["staged_path"] == spec["other_art_staged_path"]:
             raise RuntimeError("Fixture-owned cover response requires distinct other art.")
-        if spec.get("user_owned_cover_ref"):
-            spec["user_owned_cover_ref"] = str(
-                resolve_fixture_file(spec["user_owned_cover_ref"])
+        if spec.get("user_owned_cover_path"):
+            spec["user_owned_cover_path"] = str(
+                resolve_fixture_file(spec["user_owned_cover_path"])
             )
         specs.append(spec)
     if len(specs) < 2:
@@ -4203,12 +4203,12 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         neutral_user_cover_source = cover_specs[1] if len(cover_specs) > 1 else cover_specs[0]
         neutral_user_cover_source_path = Path(
             str(
-                neutral_user_cover_source.get("user_owned_cover_ref")
+                neutral_user_cover_source.get("user_owned_cover_path")
                 or neutral_user_cover_source.get("staged_path")
                 or ""
             )
         )
-        neutral_user_cover_ref, neutral_user_cover_source_sha256 = (
+        neutral_user_cover_path, neutral_user_cover_source_sha256 = (
             _fixture_jpeg_derivative(
                 neutral_user_cover_source_path,
                 width=600,
@@ -4218,7 +4218,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         )
         self.cover_lookup_neutral_user_cover_spec = prepare_provider_artwork_spec({
             **dict(neutral_user_cover_source),
-            "staged_path": str(neutral_user_cover_ref),
+            "staged_path": str(neutral_user_cover_path),
             "original_source_sha256": neutral_user_cover_source_sha256,
             "cover_id": "automatic-coverless-neutral",
             "artist": "Mastodon",
@@ -4348,7 +4348,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         self.itunes_search_delay_lock = threading.Lock()
         self.itunes_search_delay_seconds = 0.0
         self.set_itunes_search_delay(itunes_search_delay_seconds)
-        self.cover_refs = {
+        self.cover_paths = {
             str(spec["cover_id"]): Path(str(spec["staged_path"]))
             for spec in self.cover_specs
         }
@@ -4409,10 +4409,10 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             (item for item in self.cover_specs if str(item["cover_id"]) == cover_id),
             None,
         )
-        cover_ref = self.cover_refs.get(cover_id)
-        if spec is None or cover_ref is None or not cover_ref.is_file():
+        cover_path = self.cover_paths.get(cover_id)
+        if spec is None or cover_path is None or not cover_path.is_file():
             return None
-        payload = cover_ref.read_bytes()
+        payload = cover_path.read_bytes()
         if str(spec.get("fixture_role") or "") not in {"base", "deluxe"}:
             return payload
         try:
@@ -4791,11 +4791,11 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         cover_id = Path(parts[1]).stem
-        cover_ref = self.server.cover_refs.get(cover_id)
-        if cover_ref is None or not cover_ref.is_file():
+        cover_path = self.server.cover_paths.get(cover_id)
+        if cover_path is None or not cover_path.is_file():
             self.send_error(404)
             return
-        payload = cover_ref.read_bytes()
+        payload = cover_path.read_bytes()
         self._send_payload(payload, "image/jpeg", include_body=include_body)
 
     def _serve_cover_lookup_control(self) -> None:
@@ -5375,11 +5375,11 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         cover_id = Path(filename).stem
         if cover_id == "selection-concurrency-b":
             self.server.wait_for_cover_lookup_candidate_image()
-        cover_ref = self.server.cover_refs.get(cover_id)
-        if cover_ref is None or not cover_ref.is_file():
+        cover_path = self.server.cover_paths.get(cover_id)
+        if cover_path is None or not cover_path.is_file():
             self.send_error(404)
             return
-        self._send_payload(cover_ref.read_bytes(), "image/jpeg", include_body=include_body)
+        self._send_payload(cover_path.read_bytes(), "image/jpeg", include_body=include_body)
 
     def _serve_discogs_search(
         self,
@@ -5536,7 +5536,7 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         image_paths = (
             self.server.other_art_paths
             if image_name == "other-art.jpg"
-            else self.server.cover_refs
+            else self.server.cover_paths
         )
         image_path = image_paths.get(cover_id)
         if image_path is None or not image_path.is_file():

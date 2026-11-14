@@ -1286,14 +1286,36 @@
         "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#bindTarget:event:touchstart"
       ],
       "owners": [
-        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "domQueries": 0,
+        "domMutations": 11,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "domMutations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-modal-and-drawer.test.js",
+      "testIdentity": "bounded interaction: Cover Lookup sheet touchmove stays constant with 1,000 candidates",
+      "performanceTargets": [],
+      "rollback": "Test-only registration; the sheet swipe already writes one drag offset per touchmove, so removing the contract changes no product behavior."
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#clearCompletedCoverLookupTasks",

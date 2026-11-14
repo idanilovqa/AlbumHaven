@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import itertools
+import json
+import sqlite3
+
+import pytest
+
+from tests.py.bounded_interactions import (
+    CountingConnection,
+    LeaseTracker,
+    OperationCounts,
+    assert_plateau,
+    explain_actual_rows,
+    measure_scale_pair,
+)
+
+
+def test_scale_pair_rejects_linear_query_growth():
+    with pytest.raises(AssertionError, match=r"sql_statements=1001.*budget 2"):
+        measure_scale_pair(
+            interaction_id="example",
+            small=20,
+            large=1_000,
+            run=lambda size: OperationCounts(sql_statements=size + 1),
+            budgets={"sql_statements": 2},
+            growth=("sql_statements", 0),
+        )
+
+
+def test_unknown_metrics_fail_closed():
+    with pytest.raises(AttributeError, match="unknown operation counter"):
+        OperationCounts().count("queries")
+    with pytest.raises(AssertionError, match="unknown budget metric queries"):
+        measure_scale_pair(interaction_id="x", small=1, large=2, run=lambda _: OperationCounts(), budgets={"queries": 1})
+
+
+def test_plateau_rejects_generation_growth_after_warmup():
+    with pytest.raises(AssertionError, match="retained growth of 3"):
+        assert_plateau([1, 2, 3, 4, 5], warmup_samples=1)
+    assert assert_plateau([1, 2, 2, 2], warmup_samples=1) == 0
+
+
+def _album_db(size: int) -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("create table tracks (album_id integer, title text)")
+    connection.executemany("insert into tracks values (?, ?)", ((index % 13, f"t{index}") for index in range(size)))
+    return connection
+
+
+# BI-H05/H08 shape: a selected-album lookup that reads every track row, or one
+# query per album, versus one selected-set batch predicate.
+def _duplicate_lookup(size: int, *, strategy: str) -> OperationCounts:
+    counts = OperationCounts()
+    connection = CountingConnection(_album_db(size), counts)
+    selected = list(range(13))
+    if strategy == "global-scan":
+        rows = connection.execute("select album_id, title from tracks").fetchall()
+        [row for row in rows if row[0] in selected]
+    elif strategy == "per-album":
+        for album_id in range(size // 13):
+            connection.execute("select title from tracks where album_id = ? limit 1", (album_id % 13,)).fetchall()
+    else:
+        placeholders = ",".join("?" * len(selected))
+        connection.execute(f"select album_id, count(*) from tracks where album_id in ({placeholders}) group by album_id", selected).fetchall()
+    return counts
+
+
+@pytest.mark.parametrize(
+    ("strategy", "message"),
+    [
+        ("global-scan", r"returned_rows=1600 at cardinality 1600"),
+        ("per-album", r"sql_statements=123 at cardinality 1600"),
+    ],
+)
+def test_selected_album_lookup_rejects_global_and_n_plus_one_reads(strategy, message):
+    with pytest.raises(AssertionError, match=message):
+        measure_scale_pair(
+            interaction_id="BI-H08-selected-album-duplicates",
+            small=26,
+            large=1_600,
+            run=lambda size: _duplicate_lookup(size, strategy=strategy),
+            budgets={"sql_statements": 1, "returned_rows": 13},
+            growth=("returned_rows", 0),
+        )
+
+
+def test_selected_album_lookup_accepts_one_batched_selected_set_query():
+    _, large = measure_scale_pair(
+        interaction_id="BI-H08-selected-album-duplicates",
+        small=26,
+        large=1_600,
+        run=lambda size: _duplicate_lookup(size, strategy="batched"),
+        budgets={"sql_statements": 1, "returned_rows": 13},
+        growth=("returned_rows", 0),
+    )
+    assert (large.sql_statements, large.returned_rows) == (1, 13)
+
+
+def test_counting_connection_counts_affected_rows():
+    counts = OperationCounts()
+    connection = CountingConnection(_album_db(10), counts)
+    connection.execute("update tracks set title = 'x' where album_id = 1")
+    assert (counts.sql_statements, counts.affected_rows) == (1, 1)
+
+
+# BI-H05/H14 shape: a cache miss that synchronously rebuilds a global builder.
+def _search_cache_miss(artists: int, *, rebuild: bool) -> OperationCounts:
+    counts = OperationCounts()
+
+    def build_relation_views(source_rows):
+        counts.count("builder_calls")
+        counts.count("candidate_rows", len(source_rows))
+        return {}
+
+    if rebuild:
+        build_relation_views(range(artists * 19))
+    else:
+        counts.count("candidate_rows", 1)
+    counts.serialize({"artists": ["A"]}, rows=1)
+    return counts
+
+
+def test_cache_miss_rejects_synchronous_global_rebuild():
+    contract = dict(
+        interaction_id="BI-H05-interactive-search-projection",
+        small=20,
+        large=14_000,
+        budgets={"builder_calls": 0, "candidate_rows": 1, "serialized_rows": 1},
+        growth=("candidate_rows", 0),
+    )
+    with pytest.raises(AssertionError, match=r"builder_calls=1 at cardinality 20"):
+        measure_scale_pair(run=lambda size: _search_cache_miss(size, rebuild=True), **contract)
+    measure_scale_pair(run=lambda size: _search_cache_miss(size, rebuild=False), **contract)
+
+
+# BI-H16 shape: save finalization that keeps its database lease during media I/O.
+def _finalize_save(*, release_before_media: bool) -> OperationCounts:
+    counts = OperationCounts()
+    ticks = itertools.count()
+    tracker = LeaseTracker(counts, clock=lambda: next(ticks) / 1000)
+    if release_before_media:
+        with tracker.lease():
+            counts.count("affected_rows")
+        tracker.blocking_io()
+        with tracker.lease():
+            counts.count("affected_rows")
+    else:
+        with tracker.lease():
+            counts.count("affected_rows")
+            tracker.blocking_io()
+            counts.count("affected_rows")
+    return counts
+
+
+def test_lease_tracker_rejects_leases_held_across_media_io():
+    assert _finalize_save(release_before_media=False).leases_held_across_io == 1
+    repaired = _finalize_save(release_before_media=True)
+    assert (repaired.leases_held_across_io, repaired.pool_leases) == (0, 2)
+
+
+# BI-H10 shape: relocation and backfill that restart each other forever.
+def _preview_cycles(cycles: int, *, recorded_matches_written: bool) -> list[int]:
+    counts = OperationCounts()
+    samples = []
+    for _ in range(cycles):
+        if not recorded_matches_written:
+            counts.count("queue_claims")
+            counts.count("generation_changes")
+        samples.append(counts.generation_changes)
+    return samples
+
+
+def test_preview_relocation_must_converge():
+    with pytest.raises(AssertionError, match="retained growth of 99"):
+        assert_plateau(_preview_cycles(101, recorded_matches_written=False), warmup_samples=1, label="BI-H10 previews")
+    assert_plateau(_preview_cycles(101, recorded_matches_written=True), warmup_samples=1, label="BI-H10 previews")
+
+
+class _ExplainCursor:
+    def __init__(self, plan):
+        self._plan = plan
+        self.query = ""
+
+    def execute(self, query, params=None):
+        self.query = query
+
+    def fetchone(self):
+        return (json.dumps([{"Plan": self._plan}]),)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+
+class _ExplainConnection:
+    def __init__(self, plan):
+        self.cursor_instance = _ExplainCursor(plan)
+
+    def cursor(self):
+        return self.cursor_instance
+
+
+def test_explain_actual_rows_sums_rows_times_loops_for_named_relations():
+    plan = {
+        "Node Type": "Limit", "Actual Rows": 50, "Actual Loops": 1,
+        "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "track_files", "Actual Rows": 1_000, "Actual Loops": 3},
+            {"Node Type": "Index Scan", "Relation Name": "albums", "Actual Rows": 1, "Actual Loops": 50},
+        ],
+    }
+    connection = _ExplainConnection(plan)
+    assert explain_actual_rows(connection, "select 1", relations=["track_files"]) == 3_000
+    assert explain_actual_rows(connection, "select 1") == 50 + 3_000 + 50
+    assert connection.cursor_instance.query.startswith("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) select 1")
+
+
+# BI-H09 shape: targeted reconciliation that absorbs unrelated dirty backlog.
+def _reconcile_one_track(unrelated_dirty: int, *, absorb_backlog: bool) -> OperationCounts:
+    counts = OperationCounts()
+    dirty = {"changed-track", *(f"unrelated-{index}" for index in range(unrelated_dirty))}
+    targets = dirty if absorb_backlog else {"changed-track"}
+    for identity in sorted(targets):
+        counts.count("affected_rows")
+        if identity != "changed-track":
+            counts.count("unrelated_writes")
+    return counts
+
+
+def test_targeted_reconciliation_rejects_unrelated_backlog_absorption():
+    contract = dict(
+        interaction_id="BI-H09-targeted-reconciliation",
+        small=1,
+        large=1_000,
+        budgets={"unrelated_writes": 0, "affected_rows": 12},
+        growth=("affected_rows", 0),
+    )
+    with pytest.raises(AssertionError, match=r"unrelated_writes=1000 at cardinality 1000"):
+        measure_scale_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=True), **contract)
+    measure_scale_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=False), **contract)

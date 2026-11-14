@@ -133,3 +133,19 @@ class CoverReferenceStore:
             return False
         self._remember(library_id, path, row["reference"], row["kind"])
         return row["kind"] == COVER
+
+
+def cover_library_id(actor) -> int | None:
+    """The library whose covers this actor may name: its current one, while it is a member."""
+    library_id = getattr(actor, "current_library_id", None)
+    if not getattr(actor, "is_authenticated", False) or library_id is None:
+        return None
+    if not any(member.library_id == library_id for member in actor.library_relationships):
+        return None
+    return library_id
+
+
+def legacy_cover_path_is_named(store: CoverReferenceStore | None, actor, path: str) -> bool:
+    """`/cover?path=` serves only files the actor's library names as covers, until it is retired."""
+    library_id = cover_library_id(actor)
+    return bool(path) and store is not None and library_id is not None and store.is_named_cover(library_id, path)

@@ -16,7 +16,11 @@ import json
 import re
 from urllib.parse import unquote
 
-from music_app.services.cover_references import CANDIDATE, COVER, REFERENCE_PATTERN
+from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
+
+from music_app.services.cover_references import CANDIDATE, COVER, REFERENCE_PATTERN, cover_library_id
+from music_app.services.current_actor_asgi import current_actor_from_request
 
 # Server field -> (client field, reference kind). Lookup candidates are the only `candidate`s.
 OUTBOUND_FIELDS: Mapping[str, tuple[str, str]] = {
@@ -131,7 +135,7 @@ def _with_length(headers: list[tuple[bytes, bytes]], length: int) -> list[tuple[
 
 
 class CoverReferenceBoundary:
-    """Pure ASGI middleware, installed inside the private route boundary so the actor is known."""
+    """Pure ASGI middleware over every HTTP response; installed inside the private route boundary."""
 
     def __init__(self, app):
         self.app = app
@@ -140,14 +144,18 @@ class CoverReferenceBoundary:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        from starlette.concurrency import run_in_threadpool
-
         state = scope.setdefault("state", {})
         store = getattr(scope["app"].state, "cover_reference_store", None)
 
-        def library_id() -> int | None:
+        async def library_id() -> int | None:
+            # The private boundary normally resolved the actor already; the lookup is cached.
             actor = state.get("current_actor")
-            return getattr(actor, "current_library_id", None) if getattr(actor, "is_authenticated", False) else None
+            if actor is None:
+                try:
+                    actor = await current_actor_from_request(Request(scope))
+                except Exception:
+                    return None
+            return cover_library_id(actor)
 
         def name_covers(library, wanted):
             return store.references_for(library, wanted) if store is not None else {}
@@ -168,7 +176,7 @@ class CoverReferenceBoundary:
             body = b"".join(request_chunks)
             text = body.decode("utf-8", errors="surrogateescape")
             if carries_cover_references(text):
-                rewritten = await run_in_threadpool(resolve_cover_references, text, library_id(), resolve_covers)
+                rewritten = await run_in_threadpool(resolve_cover_references, text, await library_id(), resolve_covers)
             else:
                 rewritten = text
             if rewritten is not text:
@@ -206,10 +214,12 @@ class CoverReferenceBoundary:
                 return
             body = b"".join(chunks)
             text = body.decode("utf-8", errors="surrogateescape")
+            headers = list(start.get("headers") or [])
             if carries_cover_paths(text):
-                published = await run_in_threadpool(publish_cover_references, text, library_id(), name_covers)
+                published = await run_in_threadpool(publish_cover_references, text, await library_id(), name_covers)
                 body = published.encode("utf-8", errors="surrogateescape")
-            await send({**start, "headers": _with_length(list(start.get("headers") or []), len(body))})
+                headers = _with_length(headers, len(body))
+            await send({**start, "headers": headers})
             await send({"type": "http.response.body", "body": body, "more_body": False})
 
         await self.app(scope, receive, send_published)

@@ -81,9 +81,11 @@ async def browse_artwork_response(request) -> Response | None:
         # Ignore a supplied path: only this owned loop's stored cover is eligible.
         raw_path = str(item["cover_path"])
     else:
-        from music_app.routes.web_asgi import legacy_cover_path_is_named
+        from music_app.services.cover_references import legacy_cover_path_is_named
 
-        if not await run_in_threadpool(legacy_cover_path_is_named, request, raw_path):
+        store = getattr(request.app.state, "cover_reference_store", None)
+        actor = getattr(request.state, "current_actor", None)
+        if not await run_in_threadpool(legacy_cover_path_is_named, store, actor, raw_path):
             raise HTTPException(status_code=404, detail="Artwork not found.")
     resolved = await run_in_threadpool(resolve_configured_media_path, config, raw_path)
     if resolved is None:

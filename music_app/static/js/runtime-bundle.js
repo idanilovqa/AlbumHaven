@@ -15229,7 +15229,7 @@ function buildCoverUrl(coverRef, options = {}) {
 
 // The reference a `/cover/<reference>` URL names, or ''.
 function readCoverUrlReference(url) {
-  const path = String(url || '').split(/[?#]/, 1)[0];
+  const path = String(url || '').replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '').split(/[?#]/, 1)[0];
   if (!path.startsWith('/cover/')) return '';
   try {
     return decodeURIComponent(path.slice('/cover/'.length));
@@ -15398,7 +15398,7 @@ const LIGHTBOX_SOURCE_TIMEOUT_MS = 8000;
 const LOCAL_FULL_SIZE_LIGHTBOX_RETRY_DELAY_MS = 150;
 
 function isLocalFullSizeLightboxSource(source) {
-  return String(source || '').trim().startsWith('/cover/');
+  return /^\/cover[/?]/.test(String(source || '').trim());
 }
 
 function buildLightboxCoverRetryUrl(source) {

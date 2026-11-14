@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.8 - 2026-11-14
+
+- Covers are addressed by opaque references (`/cover/<reference>`): no page or payload carries a local cover file path or the music folder any more. Migration 0200 stores the references and 0201 names every stored cover without changing any cover choice.
+- Only images the library names as covers can be fetched; the legacy `/cover?path=` route no longer serves other files under a library root and will be removed in a later release.
+- Cover responses are cached privately by the viewer's browser only.
+
 ## 0.11.7 - 2026-11-14
 
 - Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.

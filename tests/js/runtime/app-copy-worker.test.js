@@ -400,7 +400,7 @@ test('covers still load from the server online, as today, and each size keeps it
 });
 
 test('a page naming covers by reference keeps them under opaque keys and fetches them once', async () => {
-  const reference = 'AbCdEfGhIjKlMnOpQrStUv';
+  const reference = 'AbCdEfGhIjKlMnOpQrStU-'; // ends in a non-word character
   const coverUrl = `/cover/${reference}?size=480&v=process-abc`;
   const referencedPage = () => new Response(
     '<!doctype html><html><head><meta name="album-haven-app-copy" content="network" data-account="acct-a"></head><body>'

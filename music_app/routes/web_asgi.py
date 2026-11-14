@@ -49,7 +49,7 @@ from music_app.services.loops import resolve_loop_media_path, resolve_loop_previ
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.capability_artwork import render_browse_artwork
-from music_app.services.cover_references import CANDIDATE as CANDIDATE_COVER
+from music_app.services.cover_references import CANDIDATE as CANDIDATE_COVER, cover_library_id, legacy_cover_path_is_named
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
 from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
@@ -1502,20 +1502,14 @@ def _cover_response(
     )
 
 
-def _actor_library_id(request: Request) -> int | None:
-    actor = getattr(request.state, "current_actor", None)
-    library_id = getattr(actor, "current_library_id", None)
-    if not getattr(actor, "is_authenticated", False) or library_id is None:
-        return None
-    if not any(member.library_id == library_id for member in actor.library_relationships):
-        return None
-    return library_id
+def _cover_reference_store(request: Request):
+    return getattr(request.app.state, "cover_reference_store", None)
 
 
 def _referenced_cover_path(request: Request, reference: str) -> str | None:
     """The file a reference names, if this actor may see it (design: opaque cover references)."""
-    store = getattr(request.app.state, "cover_reference_store", None)
-    library_id = _actor_library_id(request)
+    store = _cover_reference_store(request)
+    library_id = cover_library_id(getattr(request.state, "current_actor", None))
     if store is None or library_id is None:
         return None
     named = store.resolve(library_id, reference)
@@ -1526,13 +1520,6 @@ def _referenced_cover_path(request: Request, reference: str) -> str | None:
             if named is None or named[1] == CANDIDATE_COVER:
                 return None
     return named[0] if named is not None else None
-
-
-def legacy_cover_path_is_named(request: Request, path: str) -> bool:
-    """`/cover?path=` serves only files this library names as covers, until it is retired."""
-    store = getattr(request.app.state, "cover_reference_store", None)
-    library_id = _actor_library_id(request)
-    return bool(path) and store is not None and library_id is not None and store.is_named_cover(library_id, path)
 
 
 def _referenced_cover_response(request: Request, reference: str, size: str | None, revision: str) -> Response:
@@ -1547,7 +1534,7 @@ def _referenced_cover_response(request: Request, reference: str, size: str | Non
 
 def _legacy_cover_response(request: Request, path: str, size: str | None, revision: str) -> Response:
     # Logged so its retirement can wait until no page still asks for it.
-    if not legacy_cover_path_is_named(request, path):
+    if not legacy_cover_path_is_named(_cover_reference_store(request), getattr(request.state, "current_actor", None), path):
         _app_logger(request).info("cover: refused an unnamed legacy path request")
         return _not_found()
     _app_logger(request).info("cover: served a legacy path request")

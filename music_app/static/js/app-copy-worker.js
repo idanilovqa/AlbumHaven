@@ -27,7 +27,7 @@
   const MAX_COVER_FILLS = 120;
   // A cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`); legacy paths are
   // percent-encoded.
-  const COVER_URL = /\/cover(?:\?path=|\/[A-Za-z0-9_-]{22}\b)[^"'\s<>]*/g;
+  const COVER_URL = /\/cover(?:\?path=|\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$))[^"'\s<>]*/g;
   const PATH_FIELDS = /("(?:cover_path|music_dir)":\s*)"(?:[^"\\]|\\.)*"/g;
   const PATH_ATTRIBUTES = /(data-cover-path=)"[^"]*"/g;
   const NETWORK_MARKER = '<meta name="album-haven-app-copy" content="network"';

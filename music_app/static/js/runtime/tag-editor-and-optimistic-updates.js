@@ -2525,6 +2525,18 @@ function peekNextQueuedTrack() {
   return queue.tracks[nextIndex];
 }
 
+// Natural playback into `track` crosses a consecutive album boundary only when `track` is the very
+// next entry of the current album's queue; a continuation into another album never qualifies.
+function isConsecutiveAlbumSuccessor(track) {
+  const queue = state.player.playbackQueue;
+  if (!track || !queue?.albumRef || !Array.isArray(queue.tracks)) return false;
+  const currentPath = String(state.player.current?.path || '');
+  const currentIndex = currentPath
+    ? queue.tracks.findIndex((item) => String(item.path || '') === currentPath)
+    : -1;
+  return currentIndex >= 0 && queue.tracks[currentIndex + 1] === track;
+}
+
 function getNextQueuedTrack() {
   const queue = state.player.playbackQueue;
   const nextTrack = peekNextQueuedTrack();

@@ -150,6 +150,13 @@
       ]
     },
     {
+      "paths": [
+        "music_app/static/js/audio-worklets/gapless-playback-processor.js",
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "targets": ["gapless-playback"]
+    },
+    {
       "paths": ["music_app/static/js/runtime/track-modal-lightbox-helpers.js"],
       "targets": [
         "selected-artist",

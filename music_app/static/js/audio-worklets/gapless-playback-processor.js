@@ -5,6 +5,12 @@
   const CHANNELS = 2;
   const MAX_BOUNDARY_CAPTURE_FRAMES = 64;
   const MAX_GENERATION = 2_147_483_647;
+  // Decoder padding at a natural consecutive-album boundary: an edge run of at most 64 ms whose
+  // every frame stays below -40 dBFS and whose RMS sits at least 20 dB under the next 10 ms.
+  const BOUNDARY_MAX_EDGE_SECONDS = 0.064;
+  const BOUNDARY_CONTENT_SECONDS = 0.010;
+  const BOUNDARY_ABSOLUTE_MAX_DBFS = -40;
+  const BOUNDARY_MIN_CONTENT_DELTA_DB = 20;
 
   function isIntegerBetween(value, minimum, maximum = MAX_GENERATION) {
     return Number.isInteger(value) && value >= minimum && value <= maximum;
@@ -24,6 +30,7 @@
       emittedFrames: 0,
       authoritativeTotalFrames: 0,
       firstFrameReported: false,
+      boundaryTailDecided: false,
     };
   }
 
@@ -38,6 +45,51 @@
     ring.emittedFrames = 0;
     ring.authoritativeTotalFrames = 0;
     ring.firstFrameReported = false;
+    ring.boundaryTailDecided = false;
+  }
+
+  function rmsDb(interleaved, startFrame, frameCount) {
+    let sum = 0;
+    for (let index = startFrame * CHANNELS; index < (startFrame + frameCount) * CHANNELS; index += 1) {
+      sum += interleaved[index] * interleaved[index];
+    }
+    return 10 * Math.log10(sum / (frameCount * CHANNELS));
+  }
+
+  // `edge` is 'prefix' or 'suffix' of `interleaved`, which holds the frames nearest that edge in
+  // playback order. Only a quiet run followed by real content within the bounds is removable.
+  function classifyBoundaryPadding(interleaved, sampleRate, edge) {
+    const frameCount = interleaved.length / CHANNELS;
+    const maxEdgeFrames = Math.round(sampleRate * BOUNDARY_MAX_EDGE_SECONDS);
+    const contentFrames = Math.round(sampleRate * BOUNDARY_CONTENT_SECONDS);
+    const rejected = { removableFrames: 0, edgeRmsDb: 0, contentRmsDb: 0, confident: false };
+    if (!Number.isInteger(frameCount) || !interleaved.every(Number.isFinite)) return rejected;
+    // Suffix samples are read back to front so the run counts inward; the swapped channel order
+    // does not matter because both channels are judged alike.
+    const ordered = edge === 'suffix' ? interleaved.slice().reverse() : interleaved;
+    const threshold = 10 ** (BOUNDARY_ABSOLUTE_MAX_DBFS / 20);
+    let quietFrames = 0;
+    while (quietFrames < frameCount && quietFrames <= maxEdgeFrames
+        && Math.abs(ordered[quietFrames * CHANNELS]) < threshold
+        && Math.abs(ordered[(quietFrames * CHANNELS) + 1]) < threshold) {
+      quietFrames += 1;
+    }
+    if (quietFrames === 0 || quietFrames > maxEdgeFrames
+        || quietFrames + contentFrames > frameCount) return rejected;
+    const edgeRmsDb = rmsDb(ordered, 0, quietFrames);
+    const contentRmsDb = rmsDb(ordered, quietFrames, contentFrames);
+    const confident = contentRmsDb - edgeRmsDb >= BOUNDARY_MIN_CONTENT_DELTA_DB;
+    return { removableFrames: confident ? quietFrames : 0, edgeRmsDb, contentRmsDb, confident };
+  }
+
+  function copyRingFrames(ring, offsetFrames, frameCount) {
+    const copy = new Float32Array(frameCount * CHANNELS);
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      const source = ((ring.readFrame + offsetFrames + frame) % ring.capacityFrames) * CHANNELS;
+      copy[frame * CHANNELS] = ring.samples[source];
+      copy[(frame * CHANNELS) + 1] = ring.samples[source + 1];
+    }
+    return copy;
   }
 
   function appendInterleaved(ring, pcm, frameCount) {
@@ -96,6 +148,7 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.consecutiveAlbumContinuity = false;
       this.port.onmessage = ({ data }) => this.handleCommand(data);
     }
 
@@ -123,6 +176,7 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.consecutiveAlbumContinuity = false;
     }
 
     handleCommand(message) {
@@ -153,6 +207,8 @@
       else if (message.type === 'reserve-buffered-seek') this.reserveBufferedSeek(message);
       else if (message.type === 'expect-continuity') {
         this.expectContinuity = message.active === true;
+        this.consecutiveAlbumContinuity = this.expectContinuity
+          && message.consecutiveAlbumBoundary === true;
       }
       else if (message.type === 'stop') this.stop(message);
     }
@@ -302,7 +358,49 @@
       if (!isIntegerBetween(message.streamId, 1)
           || this.continuity.streamId !== message.streamId) return;
       clearRing(this.continuity);
+      this.consecutiveAlbumContinuity = false;
       if (this.pendingSeek?.streamId === message.streamId) this.pendingSeek = null;
+    }
+
+    boundaryWindowFrames() {
+      return Math.round(this.sampleRate * (BOUNDARY_MAX_EDGE_SECONDS + BOUNDARY_CONTENT_SECONDS));
+    }
+
+    reportBoundaryPadding(edge, streamId, inspectedFrames, decision) {
+      this.port.postMessage({
+        type: 'boundary-padding', generation: this.generation, edge, streamId, inspectedFrames,
+        ...decision,
+      });
+    }
+
+    // Before the outgoing tail of a natural consecutive-album handoff is heard, its proven
+    // decoder padding is dropped; anything else keeps every frame.
+    trimConsecutiveAlbumTail() {
+      const ring = this.current;
+      ring.boundaryTailDecided = true;
+      if (!this.consecutiveAlbumContinuity || this.continuity.streamId === null
+          || this.loopActive || this.pendingSeek || this.pendingBufferedSeek) return;
+      const inspectedFrames = ring.bufferedFrames;
+      const decision = classifyBoundaryPadding(
+        copyRingFrames(ring, 0, inspectedFrames), this.sampleRate, 'suffix',
+      );
+      ring.bufferedFrames -= decision.removableFrames;
+      ring.writeFrame = (ring.writeFrame - decision.removableFrames + ring.capacityFrames)
+        % ring.capacityFrames;
+      this.reportBoundaryPadding('suffix', ring.streamId, inspectedFrames, decision);
+    }
+
+    // The promoted successor's proven leading padding is skipped; its timeline starts after it.
+    trimConsecutiveAlbumHead() {
+      const ring = this.current;
+      const inspectedFrames = Math.min(ring.bufferedFrames, this.boundaryWindowFrames());
+      const decision = classifyBoundaryPadding(
+        copyRingFrames(ring, 0, inspectedFrames), this.sampleRate, 'prefix',
+      );
+      ring.readFrame = (ring.readFrame + decision.removableFrames) % ring.capacityFrames;
+      ring.bufferedFrames -= decision.removableFrames;
+      this.timelineFrame = decision.removableFrames;
+      this.reportBoundaryPadding('prefix', ring.streamId, inspectedFrames, decision);
     }
 
     prepareSeek(message) {
@@ -818,9 +916,12 @@
             boundaryRenderedFrame = this.renderedFrames + outputFrame;
             boundaryOutgoingFrames = this.copyOutgoingCapture();
             boundaryPending = true;
+            const consecutiveAlbum = this.consecutiveAlbumContinuity;
             this.promoteContinuity();
             this.expectContinuity = false;
+            this.consecutiveAlbumContinuity = false;
             this.timelineFrame = 0;
+            if (consecutiveAlbum) this.trimConsecutiveAlbumHead();
             continue;
           }
           if (this.current.eos && this.loopActive && this.shortLoopActive
@@ -893,6 +994,11 @@
         }
 
         const ring = this.current;
+        if (ring.eos && !ring.boundaryTailDecided
+            && ring.bufferedFrames <= this.boundaryWindowFrames()) {
+          this.trimConsecutiveAlbumTail();
+          continue;
+        }
         if (!ring.firstFrameReported) {
           ring.firstFrameReported = true;
           this.port.postMessage({

@@ -265,6 +265,7 @@ function loadRosterRuntime({
     fetches,
     documentListeners,
     windowListeners, cleanup,
+    document: context.document,
     outside: element(),
   };
 }
@@ -673,6 +674,26 @@ test('roster outside wheel closes the menu without consuming internal scrolling 
   assert.equal(menuButton.getAttribute('aria-expanded'), 'false');
   runtime.cleanup();
   assert.equal(runtime.windowListeners.has('wheel'), false);
+});
+
+test('roster layout events close the open menu without scanning the document', async () => {
+  const runtime = loadRosterRuntime();
+  const { menuButton, menu } = runtime.row;
+  const documentQueries = [];
+  for (const method of ['querySelector', 'querySelectorAll']) {
+    const original = runtime.document[method];
+    runtime.document[method] = (selector) => { documentQueries.push(selector); return original(selector); };
+  }
+  for (const type of ['scroll', 'wheel']) {
+    await menuButton.click();
+    assert.equal(menu.hidden, false);
+    documentQueries.length = 0;
+    runtime.windowListeners.get(type)({ type, target: runtime.outside, preventDefault() {} });
+    runtime.windowListeners.get(type)({ type, target: runtime.outside, preventDefault() {} });
+    assert.equal(menu.hidden, true);
+    assert.equal(menuButton.getAttribute('aria-expanded'), 'false');
+    assert.deepEqual(documentQueries, []);
+  }
 });
 
 test('repeated edit saves do not navigate or repeat the previous mutation on a background GET', async () => {

@@ -3309,7 +3309,7 @@
     },
     {
       "id": "js:runtime/player-listen-session-helpers.js#postPlaybackSession",
-      "action": "fetch requests, setTimeout timers installed by postPlaybackSession",
+      "action": "Play one track to completion through many progress events",
       "entrypoints": [
         "js:music_app/static/js/runtime/player-listen-session-helpers.js#postPlaybackSession:request:fetch",
         "js:music_app/static/js/runtime/player-listen-session-helpers.js#postPlaybackSession:timer:setTimeout"
@@ -3322,7 +3322,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/session/now-playing",
+          "/playback/session/scrobble",
+          "/playback/session/complete"
+        ],
+        "forbidden": [
+          "/playback/state",
+          "/playback/refs",
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-listen-session-helpers.test.js",
+      "testIdentity": "request capture: one listen posts each session write once on listen-session endpoints",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; playback requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/player-loop-playback.js#attachPlayerEvents",

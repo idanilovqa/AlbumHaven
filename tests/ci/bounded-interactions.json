@@ -450,14 +450,34 @@
         "js:music_app/static/js/appearance-backgrounds.js#mountSeekbar:event:input"
       ],
       "owners": [
-        "music_app/static/js/appearance-backgrounds.js"
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 5
+      },
+      "budgets": {
+        "requests": 0,
+        "domQueries": 410,
+        "domMutations": 650,
+        "renderCommits": 30,
+        "markupBytes": 24620
+      },
+      "growth": {
+        "metric": "domQueries",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/appearance-editor-theme.test.js",
+      "testIdentity": "bounded interaction: seekbar editor input stays bounded at the five-set player history limit",
+      "performanceTargets": [],
+      "rollback": "Test-only registration; the editor already re-renders a fixed control set and at most five validated player history sets per input, so removing the contract changes no product behavior."
     },
     {
       "id": "js:appearance-backgrounds.js#mountSelectionAccent",

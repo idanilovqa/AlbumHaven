@@ -975,14 +975,14 @@ def _conditional_file_response(
     content: bytes | None = None,
 ) -> Response:
     resolved_stat = stat_result or path.stat()
-    # Covers (the only max_age responses) are private artwork named by reference, not by file.
     file_response = FileResponse(
         path,
         stat_result=resolved_stat,
-        filename=None if max_age is not None else path.name,
+        filename=path.name,
         content_disposition_type="inline",
     )
     if max_age is not None:
+        # Covers (the only max_age responses) are private artwork: no shared cache may keep them.
         file_response.headers["Cache-Control"] = f"private, max-age={max_age}" + (
             ", immutable" if max_age >= _IMMUTABLE_COVER_MAX_AGE else ""
         )
@@ -1535,6 +1535,25 @@ def legacy_cover_path_is_named(request: Request, path: str) -> bool:
     return bool(path) and store is not None and library_id is not None and store.is_named_cover(library_id, path)
 
 
+def _referenced_cover_response(request: Request, reference: str, size: str | None, revision: str) -> Response:
+    path = _referenced_cover_path(request, reference)
+    if path is None:
+        return _not_found()
+    if not allowed_actions_for_request(request, ("library.media.read",)).as_payload().get("library.media.read"):
+        resolved = resolve_configured_media_path(_app_config(request), path)
+        return _not_found() if resolved is None else render_browse_artwork(resolved)
+    return _cover_response(request, path, size, revision)
+
+
+def _legacy_cover_response(request: Request, path: str, size: str | None, revision: str) -> Response:
+    # Logged so its retirement can wait until no page still asks for it.
+    if not legacy_cover_path_is_named(request, path):
+        _app_logger(request).info("cover: refused an unnamed legacy path request")
+        return _not_found()
+    _app_logger(request).info("cover: served a legacy path request")
+    return _cover_response(request, path, size, revision)
+
+
 @router.get("/cover/{reference}")
 async def cover_by_reference(
     request: Request,
@@ -1542,19 +1561,11 @@ async def cover_by_reference(
     size: str | None = None,
     v: str = "",
 ) -> Response:
-    path = await run_in_threadpool(_referenced_cover_path, request, reference)
-    if path is None:
-        return _not_found()
-    if not allowed_actions_for_request(request, ("library.media.read",)).as_payload().get("library.media.read"):
-        resolved = await run_in_threadpool(resolve_configured_media_path, _app_config(request), path)
-        if resolved is None:
-            return _not_found()
-        return await run_in_threadpool(render_browse_artwork, resolved)
     return await asyncio.get_running_loop().run_in_executor(
         _COVER_RESPONSE_EXECUTOR,
-        _cover_response,
+        _referenced_cover_response,
         request,
-        path,
+        reference,
         size,
         v,
     )
@@ -1568,6 +1579,7 @@ async def cover(
     loop_id: str = "",
     v: str = "",
 ) -> Response:
+    respond = _legacy_cover_response
     if loop_id:
         item = get_loop(
             _app_config(request),
@@ -1577,14 +1589,10 @@ async def cover(
         if item is None or not item.get("cover_path"):
             return _not_found()
         path = str(item["cover_path"])
-    elif not await run_in_threadpool(legacy_cover_path_is_named, request, path):
-        _app_logger(request).info("cover: refused an unnamed legacy path request")
-        return _not_found()
-    else:
-        _app_logger(request).info("cover: served a legacy path request")
+        respond = _cover_response
     return await asyncio.get_running_loop().run_in_executor(
         _COVER_RESPONSE_EXECUTOR,
-        _cover_response,
+        respond,
         request,
         path,
         size,

@@ -42,9 +42,9 @@ function harness() {
   context.syncCoverLookupSelectionUi = () => context.syncCoverLookupSaveButton();
   context.refreshCoverLookupAlbumArtwork = (_original, updated) => updated.forEach(value => painted.set(value.name, value.cover_revision));
   const setGallery = (value, suffix = 'fresh') => server.set(value.name, { ok: true,
-    active_cover_ref: value.cover_ref, selected_source_path: value.cover_ref,
-    local_covers: [{ path: value.cover_ref, is_active: true, cover_revision: value.cover_revision },
-      { path: `/${value.name}/${suffix}.jpg` }] });
+    active_cover_ref: value.cover_ref, selected_source_cover_ref: value.cover_ref,
+    local_covers: [{ candidate_cover_ref: value.cover_ref, is_active: true, cover_revision: value.cover_revision },
+      { candidate_cover_ref: `/${value.name}/${suffix}.jpg` }] });
   const open = async value => {
     if (!server.has(value.name)) setGallery(value, 'source');
     await context.openCoverLookupModal(value);
@@ -143,7 +143,7 @@ for (const mutation of ['save', 'delete']) {
       h.context.closeCoverLookupDeleteConfirm();
       assert.equal(h.galleries.length, reads + 1, 'reopened album gets its own authoritative read');
       assert.equal(h.context.state.coverLookup.modal.album.cover_revision, outcome === 'success' ? 'A-settled' : 'A-old');
-      assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.path === (outcome === 'success' ? '/A/settled.jpg' : '/A/cover.jpg')));
+      assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === (outcome === 'success' ? '/A/settled.jpg' : '/A/cover.jpg')));
       const next = h.context.saveLocalCoverFromLookup('/A/newer.jpg');
       assert.equal(h.requests.length, 2, 'settlement releases the original claim');
       await h.settle(1);
@@ -253,10 +253,10 @@ test('a pre-mutation gallery response cannot restore the deleted cover', async (
   const pending = h.context.deleteLocalCoverFromLookup(a.cover_ref);
   await h.settle(0);
   await pending;
-  settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ path: '/A/deleted.jpg' }] }) });
+  settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ candidate_cover_ref: '/A/deleted.jpg' }] }) });
   await stale;
-  assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/settled.jpg'));
-  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/deleted.jpg'));
+  assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === '/A/settled.jpg'));
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === '/A/deleted.jpg'));
 });
 
 test('closing without reopening settles the local deletion without a new gallery read', async () => {
@@ -283,7 +283,7 @@ for (const outcome of ['success', 'error']) {
     await pending;
     assert.equal(h.remove.disabled, false);
     if (outcome === 'error') assert.deepEqual(clone(h.context.state.coverLookup.modal.localCovers), originalCards);
-    else assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/settled.jpg'));
+    else assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === '/A/settled.jpg'));
     const again = h.context.deleteLocalCoverFromLookup('/A/source.jpg');
     assert.equal(h.requests.length, 2);
     await h.settle(1);
@@ -308,7 +308,7 @@ test('a reopened reconciliation read cannot overwrite a subsequently admitted lo
   assert.equal(h.requests.length, 2);
   const cards = clone(h.context.state.coverLookup.modal.localCovers);
   const optimistic = h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'];
-  settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ path: '/A/stale.jpg' }] }) });
+  settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ candidate_cover_ref: '/A/stale.jpg' }] }) });
   await first;
   assert.deepEqual(clone(h.context.state.coverLookup.modal.localCovers), cards);
   assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'], optimistic);
@@ -505,7 +505,7 @@ for (const selectionType of ['local', 'pasted']) {
       const h = harness(), a = album('A');
       const generationAChoice = generationChoice('generation-a');
       await openGenerationAWhileBIsRunning(h, a, generationAChoice);
-      h.context.state.coverLookup.modal.localCovers = [{ path: '/A/next.jpg' }];
+      h.context.state.coverLookup.modal.localCovers = [{ candidate_cover_ref: '/A/next.jpg' }];
       h.context.state.coverLookup.modal.pastedImages = [{ id: 'new-pasted-image' }];
       h.context.selectRemoteCoverFromLookup(generationAChoice.id);
 
@@ -519,7 +519,7 @@ for (const selectionType of ['local', 'pasted']) {
 
       h.server.set('A', {
         ok: true,
-        local_covers: [{ path: '/A/next.jpg' }],
+        local_covers: [{ candidate_cover_ref: '/A/next.jpg' }],
         ...generationPayload('generation-b-task', terminalStatus, [generationChoice('generation-b')]),
       });
       await h.context.refreshCoverLookupGallery(false);
@@ -665,8 +665,8 @@ for (const choice of ['local', 'pasted', 'remote']) {
       const h = harness(), a = album('A');
       const snapshot = { search_generation: 'draft-generation', revision: 1, status: 'running',
         best_candidate_id: 'choice', candidates: [{ id: 'choice', url: 'https://example.test/choice.jpg' }] };
-      h.server.set('A', { ok: true, active_cover_ref: a.cover_ref, selected_source_path: a.cover_ref,
-        local_covers: [{ path: a.cover_ref, is_active: true }, { path: '/A/fallback.jpg' }, { path: '/A/next.jpg' }],
+      h.server.set('A', { ok: true, active_cover_ref: a.cover_ref, selected_source_cover_ref: a.cover_ref,
+        local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: true }, { candidate_cover_ref: '/A/fallback.jpg' }, { candidate_cover_ref: '/A/next.jpg' }],
         candidate_snapshot: snapshot });
       await h.open(a);
       h.context.state.coverLookup.modal.pastedImages = [{ id: 'new-pasted-image' }];
@@ -676,8 +676,8 @@ for (const choice of ['local', 'pasted', 'remote']) {
       else h.context.selectRemoteCoverFromLookup('choice');
       assert.equal(h.save.disabled, true, 'the new draft waits for the deletion to settle');
       const updated = { ...a, cover_ref: '/A/fallback.jpg', cover_revision: 'after-delete' };
-      const gallery = { ok: true, active_cover_ref: updated.cover_ref, selected_source_path: updated.cover_ref,
-        local_covers: [{ path: updated.cover_ref, is_active: true }, { path: '/A/next.jpg' }],
+      const gallery = { ok: true, active_cover_ref: updated.cover_ref, selected_source_cover_ref: updated.cover_ref,
+        local_covers: [{ candidate_cover_ref: updated.cover_ref, is_active: true }, { candidate_cover_ref: '/A/next.jpg' }],
         candidate_snapshot: { ...snapshot, revision: 2, best_candidate_id: 'persisted-choice',
           candidates: [{ id: 'persisted-choice', url: 'https://example.test/choice.jpg' }] } };
       h.server.set('A', gallery);

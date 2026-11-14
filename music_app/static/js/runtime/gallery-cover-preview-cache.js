@@ -144,10 +144,11 @@ class GalleryCoverPreviewCache {
     return `gallery-cover-${this.requestSessionId}-${this.requestSequence.toString(36)}`.slice(0, 64);
   }
 
+  // Diagnostics name the route, never the cover.
   diagnosticNormalizedUrl(productionUrl) {
     try {
       const url = new URL(productionUrl);
-      return `${url.origin}${url.pathname}`;
+      return `${url.origin}${url.pathname.startsWith('/cover/') ? '/cover' : url.pathname}`;
     } catch (_error) {
       return '/cover';
     }

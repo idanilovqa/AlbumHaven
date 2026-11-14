@@ -68,7 +68,7 @@ test('scan and cover refresh idle wait includes queued post-scan cover work', as
 
 test('cover cache diagnostics inspect the opaque production key and exact stored epoch', async () => {
   const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
-  const productionUrl = 'http://127.0.0.1:4173/cover/album-cover?size=480&v=revision';
+  const productionUrl = 'http://127.0.0.1:4173/cover?path=album-cover&size=480&v=revision';
   const matchedKeys = [];
   let storedProductionUrl = productionUrl;
   const page = {
@@ -114,7 +114,7 @@ test('cover cache diagnostics inspect the opaque production key and exact stored
 
   const state = await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl);
 
-  const opaqueKey = require('node:crypto').createHash('sha256').update('/cover/album-cover?size=480').digest('hex');
+  const opaqueKey = require('node:crypto').createHash('sha256').update('/cover?path=album-cover&size=480').digest('hex');
   assert.deepEqual(matchedKeys, [`http://127.0.0.1:4173/__album-haven-cover/${opaqueKey}`]);
   assert.equal(state.cached, true);
   assert.equal(state.cachedStatus, 200);
@@ -1331,7 +1331,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
     coverLookup,
     /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
-  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverRef = String\(selection\.payload\?\.optimistic_cover_ref[\s\S]*modal\.activeLocalCover\.coverRef[\s\S]*selectedCoverRef/);
+  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = String\(selection\.payload\?\.optimistic_cover_path[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
   assert.match(
     coverLookup,
     /selectedRemoteCandidateId = selection\.candidateId[\s\S]*readRemoteCandidateEvidence\([\s\S]*selectedRemoteCandidateId[\s\S]*persistedSelectedRemoteCover\.sha256[\s\S]*selectedRemoteCover\.sha256/,
@@ -1762,7 +1762,7 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
   );
   assert.match(
     beforeScan,
-    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverRef:\s*neutralBaselineAlbum\.cover_ref,[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
+    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverPath:\s*neutralBaselineAlbum\.cover_path,[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
   );
   assert.match(beforeScan, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
 
@@ -1782,7 +1782,7 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
   );
   assert.match(
     afterScan,
-    /expect\(neutralPreservedAlbum\.cover_ref\)\.toBe\(neutralBaselineAlbum\.cover_ref\)/u,
+    /expect\(neutralPreservedAlbum\.cover_path\)\.toBe\(neutralBaselineAlbum\.cover_path\)/u,
   );
   assert.match(
     afterScan,
@@ -3472,13 +3472,13 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
   const visibleImage = new FakeImageElement({
     complete: true,
     naturalWidth: 480,
-    productionSrc: '/cover/visible',
+    productionSrc: '/cover?path=visible',
     loading: 'eager',
   });
   const offscreenLazyImage = new FakeImageElement({
     complete: false,
     naturalWidth: 0,
-    productionSrc: '/cover/near',
+    productionSrc: '/cover?path=near',
     loading: 'lazy',
   });
   const cards = [
@@ -3516,7 +3516,7 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
       candidateCount: 1,
       visibleCardKeys: ['visible', 'no-art', 'no-art'],
       visibleCardOccurrenceKeys: ['artist:primary\u0000visible', 'artist:primary\u0000no-art', 'artist:featured\u0000no-art'],
-      decodedCards: [{ key: 'visible', productionSrc: '/cover/visible' }],
+      decodedCards: [{ key: 'visible', productionSrc: '/cover?path=visible' }],
       schedulerSettled: true,
       terminalCount: 0,
     });
@@ -3622,14 +3622,14 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
   });
   const firstDecodedCover = new FakeImageElement({
     naturalWidth: 480,
-    productionSrc: '/cover/first',
+    productionSrc: '/cover?path=first',
   });
   const secondDecodedCover = new FakeImageElement({
     naturalWidth: 480,
-    productionSrc: '/cover/second',
+    productionSrc: '/cover?path=second',
   });
   const cards = [
-    card('first', firstDecodedCover, { cover_ref: 'C:/covers/first.jpg' }),
+    card('first', firstDecodedCover, { cover_path: 'C:/covers/first.jpg' }),
     card('second', secondDecodedCover),
     card('legitimate-no-art'),
   ];
@@ -3663,7 +3663,7 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
       true,
       'a legitimate no-art card must not block two decoded production covers',
     );
-    cards.push(card('covered-without-image', null, { cover_ref: 'C:/covers/expected.jpg' }));
+    cards.push(card('covered-without-image', null, { cover_path: 'C:/covers/expected.jpg' }));
     assert.equal(
       readDecodedProductionCardWindow(args),
       false,
@@ -5319,7 +5319,7 @@ test('cover lookup rejects a pending gallery blob transition before hashing resp
   const { isDisplayedImageEvidenceReady } = await import(moduleUrl);
   const decodedBlobState = {
     currentSrc: 'blob:http://127.0.0.1:4173/stale-cover',
-    productionSrc: '/cover/fixture%2Fcover.jpg?v=new-revision',
+    productionSrc: '/cover?path=fixture%2Fcover.jpg&v=new-revision',
     complete: true,
     naturalWidth: 480,
     width: 240,
@@ -5378,7 +5378,7 @@ test('cover lookup measures exact no-size production cover bytes through the act
   const actions = new CoverLookupActions({ page });
 
   const evidence = await actions.readFullSizeCoverEvidence({
-    coverRef: 'Mastodon/Crack The Skye/cover.jpg',
+    coverPath: 'Mastodon/Crack The Skye/cover.jpg',
     coverRevision: 'A'.repeat(64),
     label: 'persisted canonical cover',
   });
@@ -5397,13 +5397,13 @@ test('cover lookup measures exact no-size production cover bytes through the act
   });
   assert.deepEqual(evidence, {
     src: requestedUrl.toString(),
-    coverRef: 'Mastodon/Crack The Skye/cover.jpg',
+    coverPath: 'Mastodon/Crack The Skye/cover.jpg',
     coverRevision: 'A'.repeat(64),
     sha256: createHash('sha256').update(body).digest('hex').toUpperCase(),
   });
   await assert.rejects(
     actions.readFullSizeCoverEvidence({
-      source: '/cover/Mastodon%2FCrack%20The%20Skye%2Fcover.jpg?size=480',
+      source: '/cover?path=Mastodon%2FCrack%20The%20Skye%2Fcover.jpg&size=480',
       label: 'resized candidate',
     }),
     /cannot use a resized cover variant/,
@@ -5416,7 +5416,7 @@ test('cover lookup records same-origin cover response evidence loaded through fe
   const page = new EventEmitter();
   page.url = () => 'http://127.0.0.1:4173/';
   const actions = new CoverLookupActions({ page });
-  const responseUrl = 'http://127.0.0.1:4173/cover/fixture%2Fcover.jpg?size=480';
+  const responseUrl = 'http://127.0.0.1:4173/cover?path=fixture%2Fcover.jpg&size=480';
   const body = Buffer.from('selected local cover bytes');
 
   page.emit('response', {
@@ -6353,7 +6353,7 @@ test('cover lookup observes exact displayed blob bytes without a network respons
   const element = Object.assign(new Image(), {
     currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
     isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
-    getAttribute: () => '/cover/fixture?v=upgraded', hasAttribute: () => false,
+    getAttribute: () => '/cover?path=fixture&v=upgraded', hasAttribute: () => false,
   });
   const expected = { currentSrc: element.currentSrc, productionSrc: element.getAttribute(), hasVisualState: false };
   const requests = [];
@@ -6373,13 +6373,13 @@ for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-a
     const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
     const vm = require('node:vm');
     class Image {}
-    let productionSrc = '/cover/fixture?v=upgraded';
+    let productionSrc = '/cover?path=fixture&v=upgraded';
     const element = Object.assign(new Image(), {
       currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
     isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
       getAttribute: () => productionSrc, hasAttribute: () => false,
     });
-    if (failure === 'network-url') element.currentSrc = 'http://127.0.0.1:4173/cover/fixture';
+    if (failure === 'network-url') element.currentSrc = 'http://127.0.0.1:4173/cover?path=fixture';
     if (failure === 'foreign-blob') element.currentSrc = 'blob:https://foreign.invalid/id';
     const expected = { currentSrc: element.currentSrc, productionSrc, hasVisualState: false };
     if (failure === 'source-before') element.currentSrc += '-changed';
@@ -6462,7 +6462,7 @@ test('search actions record the submission boundary before clicking Apply', asyn
 
 test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {
   const { AlbumCard } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/albumCard.js')).href);
-  const productionSrc = 'http://localhost/cover/album-cover?size=480&v=revision';
+  const productionSrc = 'http://localhost/cover?path=album-cover&size=480&v=revision';
   const blobSrc = 'blob:http://localhost/displayed-cover';
   for (const [label, overrides, expected] of [
     ['production blob', {}, true],
@@ -6470,7 +6470,7 @@ test('album cover checkpoint accepts coherent production blobs and rejects stale
     ['foreign blob', { src: 'blob:http://elsewhere/displayed-cover', currentSrc: 'blob:http://elsewhere/displayed-cover' }, false],
     ['uncommitted image', { visualState: 'pending' }, false],
     ['missing production identity', { productionSrc: '' }, false],
-    ['wrong production origin', { productionSrc: 'http://elsewhere/cover/album-cover' }, false],
+    ['wrong production origin', { productionSrc: 'http://elsewhere/cover?path=album-cover' }, false],
     ['non-cover production identity', { productionSrc: 'http://localhost/unrelated' }, false],
     ['undecoded image', { complete: false }, false],
   ]) {

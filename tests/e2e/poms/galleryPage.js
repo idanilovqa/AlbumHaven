@@ -178,7 +178,7 @@ function readDecodedProductionCardWindow(args = {}) {
     }
     const expectedCover = Boolean(
       productionSrc
-      || String(album?.cover_path || '').trim()
+      || String(album?.cover_ref || '').trim()
       || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
     );
     return {

@@ -24,6 +24,7 @@ OUTBOUND_FIELDS: Mapping[str, tuple[str, str]] = {
     "active_cover_path": ("active_cover_ref", COVER),
     "selected_cover_path": ("selected_cover_ref", COVER),
     "duplicate_of_cover_path": ("duplicate_of_cover_ref", COVER),
+    "optimistic_cover_path": ("optimistic_cover_ref", COVER),
     "coverPath": ("coverRef", COVER),
     "candidate_cover_path": ("candidate_cover_ref", CANDIDATE),
     "selected_source_cover_path": ("selected_source_cover_ref", CANDIDATE),
@@ -42,6 +43,7 @@ _HTML_ATTRIBUTE = re.compile(r'data-cover-path="([^"]*)"')
 # Paths in these URLs are percent-encoded; the next parameter follows as `&`, `&amp;` or `&`.
 _LEGACY_URL = re.compile(r'/cover\?path=([^"\'\s<>&\\]*)(&amp;|&|\\u0026)?')
 _MARKERS = tuple(f'"{field}"' for field in OUTBOUND_FIELDS) + ("data-cover-path=", "/cover?path=")
+_INBOUND_MARKERS = tuple(f'"{field}"' for field in INBOUND_FIELDS)
 
 # `(library_id, {path: kind}) -> {path: reference}`; `(library_id, references) -> {reference: path}`.
 NameCovers = Callable[[int, Mapping[str, str]], Mapping[str, str]]
@@ -50,6 +52,10 @@ ResolveCovers = Callable[[int, set[str]], Mapping[str, str]]
 
 def carries_cover_paths(text: str) -> bool:
     return any(marker in text for marker in _MARKERS)
+
+
+def carries_cover_references(text: str) -> bool:
+    return any(marker in text for marker in _INBOUND_MARKERS)
 
 
 def _json_string(raw: str) -> str | None:
@@ -76,8 +82,10 @@ def publish_cover_references(text: str, library_id: int | None, name_covers: Nam
     references = dict(name_covers(library_id, wanted)) if wanted and library_id is not None else {}
 
     def json_field(match: re.Match) -> str:
-        reference = references.get(_json_string(match.group(3)) or "")
-        return f'"{OUTBOUND_FIELDS[match.group(1)][0]}"{match.group(2)}{json.dumps(reference)}'
+        path = _json_string(match.group(3))
+        # An empty value stays as it was ("" or null); a path leaves only as its reference.
+        value = json.dumps(references.get(path)) if path else match.group(3)
+        return f'"{OUTBOUND_FIELDS[match.group(1)][0]}"{match.group(2)}{value}'
 
     def html_attribute(match: re.Match) -> str:
         return f'data-cover-ref="{escape(references.get(unescape(match.group(1)).strip(), ""))}"'
@@ -101,8 +109,9 @@ def resolve_cover_references(text: str, library_id: int | None, resolve_covers: 
     paths = dict(resolve_covers(library_id, wanted)) if wanted and library_id is not None else {}
 
     def json_field(match: re.Match) -> str:
-        path = paths.get(_json_string(match.group(3)) or "")
-        return f'"{INBOUND_FIELDS[match.group(1)]}"{match.group(2)}{json.dumps(path)}'
+        reference = _json_string(match.group(3))
+        value = json.dumps(paths.get(reference)) if reference else match.group(3)
+        return f'"{INBOUND_FIELDS[match.group(1)]}"{match.group(2)}{value}'
 
     return _INBOUND_JSON.sub(json_field, text)
 
@@ -148,26 +157,31 @@ class CoverReferenceBoundary:
 
         headers = list(scope.get("headers") or [])
         if scope["method"] in _BODY_METHODS and "application/json" in _header(headers, b"content-type").lower():
-            chunks = []
+            request_chunks = []
             while True:
                 message = await receive()
                 if message["type"] != "http.request":
                     break
-                chunks.append(message.get("body", b""))
+                request_chunks.append(message.get("body", b""))
                 if not message.get("more_body"):
                     break
-            body = b"".join(chunks)
+            body = b"".join(request_chunks)
             text = body.decode("utf-8", errors="surrogateescape")
-            rewritten = await run_in_threadpool(resolve_cover_references, text, library_id(), resolve_covers)
+            if carries_cover_references(text):
+                rewritten = await run_in_threadpool(resolve_cover_references, text, library_id(), resolve_covers)
+            else:
+                rewritten = text
             if rewritten is not text:
                 body = rewritten.encode("utf-8", errors="surrogateescape")
                 scope = {**scope, "headers": _with_length(headers, len(body))}
             replayed = False
+            client_receive = receive
 
             async def receive():
+                # The (rewritten) body once, then the client's own events, such as its disconnect.
                 nonlocal replayed
                 if replayed:
-                    return {"type": "http.disconnect"}
+                    return await client_receive()
                 replayed = True
                 return {"type": "http.request", "body": body, "more_body": False}
 
@@ -190,9 +204,11 @@ class CoverReferenceBoundary:
             chunks.append(message.get("body", b""))
             if message.get("more_body"):
                 return
-            text = b"".join(chunks).decode("utf-8", errors="surrogateescape")
-            published = await run_in_threadpool(publish_cover_references, text, library_id(), name_covers)
-            body = published.encode("utf-8", errors="surrogateescape")
+            body = b"".join(chunks)
+            text = body.decode("utf-8", errors="surrogateescape")
+            if carries_cover_paths(text):
+                published = await run_in_threadpool(publish_cover_references, text, library_id(), name_covers)
+                body = published.encode("utf-8", errors="surrogateescape")
             await send({**start, "headers": _with_length(list(start.get("headers") or []), len(body))})
             await send({"type": "http.response.body", "body": body, "more_body": False})
 

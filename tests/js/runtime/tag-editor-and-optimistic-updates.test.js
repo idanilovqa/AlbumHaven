@@ -3432,7 +3432,7 @@ test('first track-modal cover render stays source-less until a shared-cache hit 
   assert.ok(image instanceof TrackModalTestImage);
   assert.equal(image.getAttribute('src'), '', 'first render must not assign the production cover URL directly');
   assert.equal(loaderCalls.length, 1, 'the modal must resolve its preview through the shared gallery loader');
-  assert.match(loaderCalls[0].productionUrl, /^\/cover\?.*size=480/);
+  assert.match(loaderCalls[0].productionUrl, /^\/cover\/.*size=480/);
   assert.equal(typeof loaderCalls[0].options.isCurrent, 'function');
   assert.equal(loaderCalls[0].options.isCurrent(), true);
   assert.deepEqual(directFetchCalls, []);

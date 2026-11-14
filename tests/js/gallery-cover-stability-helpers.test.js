@@ -14,6 +14,8 @@ const helperUrl = pathToFileURL(path.join(
   'galleryCoverStabilityHelpers.js',
 )).href;
 
+const JOSEPH_REFERENCE = 'JosephCoverReference00';
+
 test('Joseph outage helper renames and restores only its runner-owned fixture', async () => {
   const helper = await import(helperUrl);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-e2e-helper-'));
@@ -22,10 +24,10 @@ test('Joseph outage helper renames and restores only its runner-owned fixture', 
   const sourcePath = path.join(mediaRoot, 'Neal Morse - The Dreamer - Joseph, Pt. One.png');
   fs.writeFileSync(sourcePath, 'fixture');
   try {
-    const outage = helper.temporarilyMakeJosephCoverUnavailable(
-      `/cover/${encodeURIComponent(sourcePath)}`,
+    const outage = await helper.temporarilyMakeJosephCoverUnavailable(
+      `/cover/${JOSEPH_REFERENCE}`,
       'http://127.0.0.1:4173/albums',
-      { mediaRoot },
+      { mediaRoot, resolveCoverPath: async (reference) => (reference === JOSEPH_REFERENCE ? sourcePath : '') },
     );
     assert.equal(fs.existsSync(sourcePath), false);
     outage.restore();
@@ -37,14 +39,16 @@ test('Joseph outage helper renames and restores only its runner-owned fixture', 
 
 test('Joseph outage helper rejects the owner library drive before touching the filesystem', async () => {
   const helper = await import(helperUrl);
-  assert.throws(
-    () => helper.temporarilyMakeJosephCoverUnavailable(
-      'http://127.0.0.1:4173/cover/N%3A%5CMusic%5CNeal%20Morse%20-%20The%20Dreamer%20-%20Joseph%2C%20Pt.%20One.png',
-      '',
-      { mediaRoot: path.join(os.tmpdir(), 'album-haven-e2e-owned', 'media') },
-    ),
-    /Refusing to alter/,
-  );
+  for (const ownerPath of ['N:/Music/Neal Morse - The Dreamer - Joseph, Pt. One.png', '']) {
+    await assert.rejects(
+      helper.temporarilyMakeJosephCoverUnavailable(
+        `http://127.0.0.1:4173/cover/${JOSEPH_REFERENCE}`,
+        '',
+        { mediaRoot: path.join(os.tmpdir(), 'album-haven-e2e-owned', 'media'), resolveCoverPath: async () => ownerPath },
+      ),
+      /Refusing to alter/,
+    );
+  }
 });
 
 function createTrafficPage() {
@@ -56,8 +60,8 @@ function createTrafficPage() {
 test('exact cover traffic resolves only the requested 200 response with body evidence', async () => {
   const helper = await import(helperUrl);
   const page = createTrafficPage();
-  const traffic = helper.observeExactCoverTraffic(page);
-  const url = 'http://127.0.0.1:4173/cover/Neal%20Morse%20-%20The%20Dreamer%20-%20Joseph%2C%20Pt.%20One.png';
+  const traffic = helper.observeExactCoverTraffic(page, { josephReference: JOSEPH_REFERENCE });
+  const url = `http://127.0.0.1:4173/cover/${JOSEPH_REFERENCE}`;
   const pending = traffic.waitForResponse(url, { timeout: 1000 });
   page.emit('response', {
     url: () => url,
@@ -77,8 +81,8 @@ test('exact cover traffic resolves only the requested 200 response with body evi
 test('exact cover traffic counts unrelated covers without reading every response body', async () => {
   const helper = await import(helperUrl);
   const page = createTrafficPage();
-  const traffic = helper.observeExactCoverTraffic(page);
-  const url = 'http://127.0.0.1:4173/cover/Unrelated.png?size=480';
+  const traffic = helper.observeExactCoverTraffic(page, { josephReference: JOSEPH_REFERENCE });
+  const url = 'http://127.0.0.1:4173/cover/UnrelatedReference0000?size=480';
   let bodyReads = 0;
   page.emit('response', {
     url: () => url,
@@ -98,8 +102,8 @@ test('exact cover traffic counts unrelated covers without reading every response
 test('exact cover traffic rejects a requestfailed event for the unsized full URL', async () => {
   const helper = await import(helperUrl);
   const page = createTrafficPage();
-  const traffic = helper.observeExactCoverTraffic(page);
-  const url = 'http://127.0.0.1:4173/cover/Joseph%2C%20Pt.%20One.png';
+  const traffic = helper.observeExactCoverTraffic(page, { josephReference: JOSEPH_REFERENCE });
+  const url = `http://127.0.0.1:4173/cover/${JOSEPH_REFERENCE}`;
   const pending = traffic.waitForResponse(url, { timeout: 1000 });
   page.emit('requestfailed', {
     url: () => url,

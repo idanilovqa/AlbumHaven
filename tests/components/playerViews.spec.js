@@ -104,11 +104,11 @@ test('mobile thin seek surface keeps touch dragging under player control', async
 });
 
 for (const mode of ['docked', 'floating']) {
-  test(`compact cover CSS accepts quoted paths in ${mode} mode`, async ({ page }) => {
+  test(`compact cover CSS accepts quoted references in ${mode} mode`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 640 });
     const requestedPaths = [];
-    await page.route('**/cover?*', route => {
-      requestedPaths.push(new URL(route.request().url()).searchParams.get('path'));
+    await page.route('**/cover/*', route => {
+      requestedPaths.push(decodeURIComponent(new URL(route.request().url()).pathname.slice('/cover/'.length)));
       return route.fulfill({ contentType: 'image/svg+xml',
         body: '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="green"/></svg>' });
     });

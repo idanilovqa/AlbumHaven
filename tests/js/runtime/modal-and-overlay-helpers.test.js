@@ -1442,7 +1442,7 @@ test('buildCoverUrl keeps one server process cover identity stable across browse
   assert.equal(repeatedFirstProcessUrl, firstProcessUrl);
 });
 
-test('album display cover rejects a canonical preview URL for a different local cover path', () => {
+test('album display cover rejects a canonical preview URL for a different local cover', () => {
   const { context } = loadHelper();
   const stalePreviewUrl = '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg?size=480&v=old-revision';
 
@@ -1456,11 +1456,10 @@ test('album display cover rejects a canonical preview URL for a different local 
   const parsed = new URL(url, 'http://127.0.0.1');
 
   assert.notEqual(url, stalePreviewUrl);
-  assert.equal(parsed.pathname, '/cover');
-  assert.equal(parsed.searchParams.get('path'), 'C:/music/Kaipa/cover.jpg');
+  assert.equal(parsed.pathname, `/cover/${encodeURIComponent('C:/music/Kaipa/cover.jpg')}`);
 });
 
-test('album display cover rejects an older preview revision for the current local cover path', () => {
+test('album display cover rejects an older preview revision for the current local cover', () => {
   const { context } = loadHelper();
   const stalePreviewUrl = '/cover/C%3A%2Fmusic%2FKaipa%2Fcover.jpg?size=480&v=old-revision';
 
@@ -1475,7 +1474,7 @@ test('album display cover rejects an older preview revision for the current loca
   const parsed = new URL(url, 'http://127.0.0.1');
 
   assert.notEqual(url, stalePreviewUrl);
-  assert.equal(parsed.searchParams.get('path'), 'C:/music/Kaipa/cover.jpg');
+  assert.equal(parsed.pathname, `/cover/${encodeURIComponent('C:/music/Kaipa/cover.jpg')}`);
   assert.equal(parsed.searchParams.get('v'), 'selected-front-revision');
 });
 

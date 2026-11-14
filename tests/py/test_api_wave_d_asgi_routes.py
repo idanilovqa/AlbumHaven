@@ -794,7 +794,7 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
     assert gallery_status == 200
     gallery_payload = _decode_json(gallery_body)
     assert gallery_payload["ok"] is True
-    assert gallery_payload["album_root"] == str(track_path.parent)
+    assert "album_root" not in gallery_payload
     assert gallery_payload["task"] is None
     assert queued_calls == [
         {
@@ -1036,7 +1036,7 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     )
 
     assert status == 200
-    assert _decode_json(body)["album_root"] == str(track_path.parent)
+    assert "album_root" not in _decode_json(body)
 
     key_status, _key_headers, key_body = _run_asgi_request(
         _make_wave_d_app(app),
@@ -1054,7 +1054,7 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     )
 
     assert key_status == 200
-    assert _decode_json(key_body)["album_root"] == str(track_path.parent)
+    assert "album_root" not in _decode_json(key_body)
     assert hydrated_album_ids == [41, None]
     assert snapshot_reads == [41, 41]
 
@@ -1255,7 +1255,7 @@ def test_asgi_cover_lookup_gallery_keeps_persisted_task_scope_out_of_any_superse
 
     payload = _decode_json(body)
     assert status == 200, payload
-    assert payload["album_root"] == str(track_path.parent)
+    assert "album_root" not in payload
     assert payload["task"]["possible_matches"][0]["id"] == "yaruga-caa-cover"
 
 
@@ -2829,7 +2829,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     assert delete_success_status == 200
     delete_success_payload = _decode_json(delete_success_body)
     assert delete_success_payload["ok"] is True
-    assert delete_success_payload["gallery"]["album_root"] == str(track_path.parent)
+    assert "album_root" not in delete_success_payload["gallery"]
     assert pasted_success_status == 200
     pasted_success_payload = _decode_json(pasted_success_body)
     assert pasted_success_payload["ok"] is True
@@ -2920,7 +2920,7 @@ def test_asgi_cover_lookup_delete_inactive_local_cover_preserves_active_selectio
     assert active_cover.exists()
     assert payload["gallery"]["active_cover_path"] == str(active_cover)
     assert [
-        candidate["path"]
+        candidate["candidate_cover_path"]
         for candidate in payload["gallery"]["local_covers"]
         if candidate["is_active"]
     ] == [str(active_cover)]
@@ -4437,7 +4437,7 @@ def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_id
 
     assert status == 200
     assert payload["ok"] is True
-    assert payload["album_root"] == str(track_path.parent.parent)
+    assert "album_root" not in payload
     assert payload["task"]["id"] == persisted_task["id"]
     assert payload["task"]["possible_matches"][0]["id"] == "preserved-candidate"
     assert resolved_context_calls == [(641037, None)]

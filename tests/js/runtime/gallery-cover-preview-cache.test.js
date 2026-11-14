@@ -1657,7 +1657,7 @@ test('the gallery cache and the app-copy worker key a cover identically', async 
   const { context } = createContext();
   const { createAppCopyWorker, COPY_HEADER } = require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js'));
   const origin = 'http://127.0.0.1:4173';
-  const coverUrl = `/cover/${encodeURIComponent('C:/Music/Mono/cover.jpg')}?size=480&v=process-1`;
+  const coverUrl = '/cover/MonoCoverReference0000?size=480&v=process-1';
   const pages = new Map();
   const caches = {
     async keys() { return [...pages.keys()]; },

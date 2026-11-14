@@ -240,7 +240,7 @@ for (const kind of ['problematic', 'loops']) {
       assert.match(html, new RegExp(`data-album-artbox-state="${available ? 'ready' : 'missing'}"`));
       if (available) {
         assert.match(html, /<button\b[^>]*data-open-lightbox="1"[^>]*>/);
-        assert.match(html, /data-cover-src="\/cover\/test-cover.jpg(?:&amp;size=original)?"/);
+        assert.match(html, /data-cover-src="\/cover\/test-cover.jpg(?:\?size=original)?"/);
       } else {
         assert.match(html, /album-artbox__missing-slash/);
         assert.doesNotMatch(html, /data-open-lightbox="1"/);

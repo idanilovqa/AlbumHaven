@@ -2877,7 +2877,7 @@
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks",
-      "action": "fetch requests installed by hydrateDeferredNonAlbumTracks",
+      "action": "Open artist and library loose tracks repeatedly for a selected artist and the root gallery",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks:request:fetch"
       ],
@@ -2889,7 +2889,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
+      "testIdentity": "request capture: loose-track hydration requests /view-data once per scope",
+      "performanceTargets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback"
+      ],
+      "rollback": "Test-only request-capture contract; loose-track hydration is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#openAlbumInExplorer",

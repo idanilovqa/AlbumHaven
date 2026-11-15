@@ -47,8 +47,6 @@ function createCountedDom(counter) {
       Object.assign(this, properties);
     }
 
-    get parentNode() { return this.parentElement; }
-    get firstElementChild() { return this.children[0] || null; }
     get childNodes() { return this.children; }
     get innerHTML() { return this.markup; }
     set innerHTML(value) {
@@ -62,8 +60,6 @@ function createCountedDom(counter) {
 
     setAttribute(name, value) { count('domMutations'); this.attributes[name] = String(value); }
     getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; }
-    hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
-    removeAttribute(name) { count('domMutations'); delete this.attributes[name]; }
     matches(selector) { return this.matching.has(selector); }
     closest(selector) {
       let node = this;
@@ -101,6 +97,12 @@ function createCountedDom(counter) {
       return node;
     }
     append(...nodes) { nodes.forEach(node => this.appendChild(node)); }
+    replaceChildren(...nodes) {
+      count('domMutations');
+      this.children.forEach((node) => { node.parentElement = null; });
+      this.children = [];
+      nodes.forEach(node => this.appendChild(node));
+    }
     remove() {
       count('domMutations');
       this.parentElement?.children.splice(this.parentElement.children.indexOf(this), 1);

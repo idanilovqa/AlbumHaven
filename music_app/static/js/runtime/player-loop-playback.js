@@ -1280,7 +1280,6 @@ function attachPlayerEvents() {
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
-    if (els.timeline) els.timeline.value = String(next);
     const playback = getPlayerPlaybackSnapshot();
     renderPlayerTimelinePosition(getPlayerElements(), playback, resolvePlayerUiStatus(playback));
   });

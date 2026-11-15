@@ -2315,68 +2315,9 @@ const loopRangeControlsSource = fs.readFileSync(path.join(path.dirname(helperPat
 // node mutation the real handlers perform is counted.
 function createCountedSavedLoopPage(counter, loopCount) {
   const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
   const documentListeners = new Map();
-  class CountedNode {
-    constructor(tagName = 'DIV', options = {}) {
-      this.tagName = tagName;
-      this.dataset = {};
-      this.attributes = {};
-      this.childNodes = [];
-      this.parentElement = null;
-      this.hidden = Boolean(options.hidden);
-      this.isConnected = true;
-      this.value = '';
-      this.listeners = new Map();
-      this.classes = new Set();
-      const node = this;
-      this.classList = {
-        add(...names) { counter.count('domMutations'); names.forEach(name => node.classes.add(name)); },
-        remove(...names) { counter.count('domMutations'); names.forEach(name => node.classes.delete(name)); },
-        toggle(name, force) {
-          counter.count('domMutations');
-          if (force ?? !node.classes.has(name)) node.classes.add(name);
-          else node.classes.delete(name);
-        },
-        contains: name => node.classes.has(name),
-      };
-      this.style = {
-        setProperty() { counter.count('domMutations'); },
-        removeProperty() { counter.count('domMutations'); },
-        getPropertyValue: () => '',
-      };
-    }
-    set textContent(value) { counter.count('domMutations'); this.text = value; }
-    get textContent() { return this.text || ''; }
-    setAttribute(name, value) { counter.count('domMutations'); this.attributes[name] = String(value); }
-    getAttribute(name) { return this.attributes[name] ?? null; }
-    addEventListener(type, listener) { counter.count('listeners'); this.listeners.set(type, listener); }
-    dispatch(type, event = {}) { return this.listeners.get(type)?.({ target: this, preventDefault() {}, ...event }); }
-    contains(node) { return node === this || this.childNodes.some(child => child.contains(node)); }
-    closest() { return null; }
-    focus() {}
-    getBoundingClientRect() { return { top: 100, bottom: 130, left: 100, right: 200, width: 100, height: 30 }; }
-    querySelector() { counter.count('domQueries'); return null; }
-    querySelectorAll() { counter.count('domQueries'); return []; }
-    append(...nodes) { nodes.forEach(node => this.appendChild(node)); }
-    appendChild(node) {
-      counter.count('domMutations');
-      node.parentElement?.childNodes.splice(node.parentElement.childNodes.indexOf(node), 1);
-      node.parentElement = this;
-      this.childNodes.push(node);
-      return node;
-    }
-    replaceChildren(...nodes) {
-      counter.count('domMutations');
-      this.childNodes.forEach((node) => { node.parentElement = null; });
-      this.childNodes = [];
-      nodes.forEach(node => this.appendChild(node));
-    }
-    remove() {
-      counter.count('domMutations');
-      this.parentElement?.childNodes.splice(this.parentElement.childNodes.indexOf(this), 1);
-      this.parentElement = null;
-    }
-  }
+  const { CountedElement: CountedNode, createElement } = createCountedDom(counter);
   const loops = countedCollection(Array.from({ length: loopCount }, (_value, index) => ({ id: `loop-${index}` })), counter);
   const selectors = new Map();
   const body = new CountedNode('BODY');
@@ -2443,7 +2384,7 @@ function createCountedSavedLoopPage(counter, loopCount) {
   const document = {
     body,
     activeElement: null,
-    createElement: (tagName) => { counter.count('nodesCreated'); return new CountedNode(tagName.toUpperCase()); },
+    createElement,
     querySelector(selector) { counter.count('domQueries'); return selectors.get(selector) || null; },
     querySelectorAll() { counter.count('domQueries'); return []; },
     addEventListener(type, listener, options = {}) {

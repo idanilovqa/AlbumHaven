@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -443,6 +444,7 @@ function loadHelper(options = {}) {
   };
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 

@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const {
   assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
 } = require('../helpers/request-capture');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'utility-loaders-and-cover-lookup.js');
 
@@ -23,6 +24,7 @@ function loadUtilityLoaders(capture, state, overrides = {}) {
     showToast() {},
     ...overrides,
   });
+  loadPendingProjectionFetch(context);
   vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
   return context;
 }
@@ -55,6 +57,41 @@ test('request capture: Problematic Files loads one bounded page and one complete
     assertInteractionRequests(id, capture.urls());
     return capture.counter.snapshot();
   });
+});
+
+test('Problematic Files summary and detail repeat a pending answer from a cold server until it loads', async () => {
+  const pendingFirst = new Set();
+  const capture = createRequestCapture((url) => {
+    if (!pendingFirst.has(url)) {
+      pendingFirst.add(url);
+      return jsonResponse({ ok: false, code: 'gallery_projection_pending' }, { status: 503 });
+    }
+    if (url.startsWith('/utilities/problematic-files/detail')) return jsonResponse({
+      key: 'album-0', detail_loaded: true, tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [],
+    });
+    return jsonResponse({ complete: true, items: [{ key: 'album-0', name: 'Album 0', detail_loaded: false }] });
+  });
+  const timers = [];
+  const context = loadUtilityLoaders(capture, utilityState(), {
+    setTimeout: (callback) => { timers.push(callback); return timers.length; },
+    clearTimeout() {},
+  });
+  const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await new Promise(setImmediate); };
+  const runTimers = async () => { await settle(); while (timers.length) { timers.shift()(); await settle(); } };
+
+  const summary = context.loadProblematicFiles(true);
+  await runTimers();
+  await summary;
+  assert.equal(context.state.utility.problematicFiles.length, 1);
+  context.state.utility.selectedProblematicKey = 'album-0';
+  const detail = context.loadProblematicAlbumDetail('album-0', true);
+  await runTimers();
+  await detail;
+  assert.equal(context.state.utility.problematicFiles[0].detail_loaded, true);
+  const detailUrl = '/utilities/problematic-files/detail?album_key=album-0';
+  assert.deepEqual(capture.urls(), [
+    '/utilities/problematic-files?limit=50', '/utilities/problematic-files?limit=50', detailUrl, detailUrl,
+  ], 'each pending answer repeats the same request once');
 });
 
 test('request capture: local playlist analysis posts once to the advertised analysis route', async () => {

@@ -47,12 +47,18 @@ function buildRootGalleryPageUrl(view) {
 
 // A root refresh reloads one anchored window around the artist on screen, whatever the scroll
 // depth; pages outside it reload through the continuation owners when scrolled to. Neighbouring
-// artists, nearest first, stand in when that artist no longer exists.
-function rootGalleryViewportArtists(groups = [], scrollAnchor = null) {
+// artists, nearest first, stand in when that artist no longer exists. Without a captured album,
+// the artist whose label the scrolled viewport has passed is the one on screen.
+function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
   const albumKey = String(scrollAnchor?.albumKey || '');
-  const viewportIndex = Math.max(0, albumKey
+  let viewportIndex = albumKey
     ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
-    : 0);
+    : -1;
+  if (viewportIndex < 0 && scrollTop > 0) {
+    const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
+    viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;
+  }
+  viewportIndex = Math.max(0, viewportIndex);
   const artists = [];
   for (let distance = 0; distance < groups.length && artists.length < ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT; distance += 1) {
     for (const index of distance ? [viewportIndex + distance, viewportIndex - distance] : [viewportIndex]) {
@@ -60,7 +66,7 @@ function rootGalleryViewportArtists(groups = [], scrollAnchor = null) {
       if (artist && !artists.includes(artist)) artists.push(artist);
     }
   }
-  return { artists: artists.slice(0, ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT), viewportIndex };
+  return { artists: artists.slice(0, ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) };
 }
 
 function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
@@ -122,7 +128,7 @@ async function loadNextRootGalleryPage() {
       // conflict is the recovery's one revision restart and counts toward its request cap.
       const recovered = await recoverRootGalleryWindow(
         `${url.pathname}${url.search}`, response,
-        rootGalleryViewportArtists(state.view.artist_groups, request.semanticScrollAnchor).artists,
+        rootGalleryViewportArtists(state.view.artist_groups, request.semanticScrollAnchor, scroll.scrollTop).artists,
         request.controller, ownsRootBrowseIdentity, { omitSidebar: false },
       );
       if (!recovered) return false;
@@ -968,33 +974,8 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-async function fetchGalleryViewResponse(url, signal) {
-  const response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
-  return retryPendingGalleryViewResponse(response, url, signal);
-}
-
-async function retryPendingGalleryViewResponse(response, url, signal) {
-  const deadline = Date.now() + 60000;
-  while (true) {
-    if (response.status !== 503) return response;
-    const pending = await response.clone().json().catch(() => null);
-    if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
-    await new Promise((resolve, reject) => {
-      let timer;
-      const abort = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', abort);
-        reject(Object.assign(new Error('Gallery request cancelled'), { name: 'AbortError' }));
-      };
-      if (signal?.aborted) return abort();
-      signal?.addEventListener('abort', abort, { once: true });
-      timer = setTimeout(() => {
-        signal?.removeEventListener('abort', abort);
-        resolve();
-      }, 1000);
-    });
-    response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
-  }
+function fetchGalleryViewResponse(url, signal) {
+  return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
 
 async function readGalleryResponse(response, ownsResponse) {
@@ -1116,15 +1097,17 @@ async function fetchAndRender(url, push = true, options = {}) {
   let apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
+  const galleryScrollTop = Number(document.getElementById('albums-scroll')?.scrollTop || 0);
   const rootWindow = refreshesRootGalleryWindow(apiUrl, requestOptions)
     ? rootGalleryViewportArtists(
       state.view.artist_groups,
       typeof virtualGrid === 'undefined' ? null : virtualGrid?.captureScrollAnchor?.(),
+      galleryScrollTop,
     )
     : null;
-  // Below the first loaded artist, or in a jump's window, refresh the window on screen rather
-  // than the top of the gallery or the jump's original target.
-  if (rootWindow?.artists.length && (rootWindow.viewportIndex > 0 || state.view.gallery_page?.anchor_artist)) {
+  // Once scrolled, or in a jump's window, refresh the window on screen rather than the top of
+  // the gallery or the jump's original target.
+  if (rootWindow?.artists.length && (galleryScrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
     const refreshUrl = new URL(apiUrl, 'http://localhost');
     if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
       refreshUrl.searchParams.set('gallery_anchor_artist', rootWindow.artists[0]);
@@ -1256,10 +1239,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    let response = await fetch(apiUrl, { headers: { Accept: 'application/json' }, signal: controller?.signal });
-    if (response.status === 503) {
-      response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
-    }
+    let response = await fetchGalleryViewResponse(apiUrl, controller?.signal);
     const ownsInitialResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision);
     if (rootWindow) {
       const recovered = await recoverRootGalleryWindow(
@@ -1291,13 +1271,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       ]) fallbackUrl.searchParams.delete(name);
       fallbackUrl.searchParams.set('all_artists', '1');
       apiUrl = `${fallbackUrl.pathname}${fallbackUrl.search}`;
-      response = await fetch(apiUrl, {
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal,
-      });
-      if (response.status === 503) {
-        response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
-      }
+      response = await fetchGalleryViewResponse(apiUrl, controller?.signal);
       data = await readGalleryResponse(response, ownsInitialResponse);
     }
     if (rootWindow) {

@@ -43,6 +43,7 @@ function loadGallery(artistCount) {
   const groups = Array.from({ length: artistCount }, (_, index) => ({
     artist: `Artist ${String(index).padStart(5, '0')}`,
     albums: [{ key: `album-${index}-a`, source: 'main_library' }, { key: `album-${index}-b`, source: 'main_library' }],
+    artist_image_url: `/artist-images/${index}.jpg`,
   }));
   const sections = groups.map((group, index) => ({ kind: 'artist', group, top: index * SECTION_HEIGHT }));
   const barParts = {
@@ -67,6 +68,8 @@ function loadGallery(artistCount) {
     },
   };
   const frames = [];
+  const documentListeners = {};
+  const prefetchedImages = [];
   const context = {
     console,
     escapeHtml: value => String(value ?? ''),
@@ -81,8 +84,9 @@ function loadGallery(artistCount) {
       querySelector: selector => (selector === '[data-gallery-bar-instance="gallery"]' ? bar : null),
       querySelectorAll: () => [],
       getElementById: id => (id === 'albums-scroll' ? scroll : null),
-      addEventListener() {},
+      addEventListener(type, listener) { (documentListeners[type] ||= []).push(listener); },
     },
+    Image: function Image() { prefetchedImages.push(this); },
     window: { innerWidth: 1400, addEventListener() {} },
     requestAnimationFrame: (callback) => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
   };
@@ -100,7 +104,12 @@ function loadGallery(artistCount) {
     scrollListeners.forEach(listener => listener({ type: 'scroll' }));
     while (frames.length) frames.shift()();
   };
-  return { context, counter, scrollTo, barParts };
+  // A pointer entering an artist's info button.
+  const hoverInfo = artist => (documentListeners.pointerover || []).forEach(listener => listener({
+    type: 'pointerover',
+    target: { closest: selector => (selector === '[data-artist-info-trigger]' ? { dataset: { artist } } : null) },
+  }));
+  return { context, counter, scrollTo, barParts, hoverInfo, prefetchedImages };
 }
 
 // One scroll frame that moves from one artist's section to the next.
@@ -154,4 +163,46 @@ test('gallery scroll context falls back to a full chrome update after an in-plac
   context.ensureGalleryMainState().view = 'covers';
   scrollTo(3 * SECTION_HEIGHT);
   assert.equal(fullUpdates, 2);
+});
+
+const artistName = index => `Artist ${String(index).padStart(5, '0')}`;
+
+// The second hover of a loaded gallery: the first one indexed the groups.
+async function portraitPrefetchHover(artistCount) {
+  const { counter, hoverInfo, prefetchedImages } = loadGallery(artistCount);
+  hoverInfo(artistName(0));
+  const counts = await counter.measure(() => hoverInfo(artistName(artistCount - 1)));
+  assert.deepEqual(prefetchedImages.map(image => image.src), ['/artist-images/0.jpg', `/artist-images/${artistCount - 1}.jpg`]);
+  return counts;
+}
+
+test('BI gallery info hover prefetches a portrait through the artist index at production scale', async () => {
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/gallery-main-interactions.js#initGalleryMain',
+    small: 20,
+    large: 14000,
+    run: portraitPrefetchHover,
+    budgets: { itemsVisited: 32, renderCommits: 0, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 24 },
+  });
+  assert.equal(large.itemsVisited, small.itemsVisited, 'a hover reads one indexed group whatever the library size');
+  assert.equal(large.itemsVisited, 1);
+});
+
+test('gallery info hover follows groups replaced, appended, or swapped after indexing', () => {
+  const { context, hoverInfo, prefetchedImages } = loadGallery(3);
+  hoverInfo(artistName(1));
+  context.state.view.artist_groups[1] = { artist: artistName(1), artist_image_url: '/artist-images/replaced.jpg' };
+  hoverInfo(artistName(1));
+  context.state.view.artist_groups.push({ artist: 'Late Artist', artist_image_url: '/artist-images/late.jpg' });
+  hoverInfo('Late Artist');
+  context.state.view = { ...context.state.view, artist_groups: [{ artist: 'Next View', artist_image_url: '/artist-images/next.jpg' }] };
+  hoverInfo('Next View');
+  hoverInfo(artistName(2));
+  assert.deepEqual(prefetchedImages.map(image => image.src), [
+    '/artist-images/1.jpg',
+    '/artist-images/replaced.jpg',
+    '/artist-images/late.jpg',
+    '/artist-images/next.jpg',
+  ]);
 });

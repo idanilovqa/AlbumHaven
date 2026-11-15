@@ -6939,11 +6939,54 @@ let galleryMainScrollFrame = 0;
 let galleryFamilyPanelObserver = null;
 let galleryFamilyDragHandlersBound = false;
 
-function getGalleryMainGroups() {
+function galleryMainGroupLists() {
   const primary = Array.isArray(state.view.primary_artist_groups) ? state.view.primary_artist_groups : [];
   const family = Array.isArray(state.view.family_artist_groups) ? state.view.family_artist_groups : [];
   const fallback = Array.isArray(state.view.artist_groups) ? state.view.artist_groups : [];
-  return primary.length || family.length ? [...primary, ...family] : fallback;
+  return primary.length || family.length ? [primary, family] : [fallback];
+}
+
+function getGalleryMainGroups() {
+  const [first, second] = galleryMainGroupLists();
+  return second ? [...first, ...second] : first;
+}
+
+// First loaded group per artist label, rebuilt only when the view or one of its
+// group lists is replaced or resized, so hover and focus prefetches stay
+// constant work. A hit is rechecked in place because groups can be replaced
+// inside an unchanged list.
+let galleryMainGroupIndex = null;
+
+function galleryMainGroupIndexToken() {
+  const view = state.view;
+  return [
+    view,
+    view.primary_artist_groups, view.primary_artist_groups?.length,
+    view.family_artist_groups, view.family_artist_groups?.length,
+    view.artist_groups, view.artist_groups?.length,
+  ];
+}
+
+function indexGalleryMainGroups() {
+  const byArtist = new Map();
+  for (const list of galleryMainGroupLists()) {
+    list.forEach((group, position) => {
+      const artist = String(group.artist_display || group.artist || '');
+      if (!byArtist.has(artist)) byArtist.set(artist, { group, list, position });
+    });
+  }
+  return byArtist;
+}
+
+function findGalleryMainGroup(artist) {
+  const token = galleryMainGroupIndexToken();
+  const current = galleryMainGroupIndex?.token.every((part, index) => part === token[index]);
+  let entry = current ? galleryMainGroupIndex.byArtist.get(artist) : null;
+  if (entry === null || (entry && entry.list[entry.position] !== entry.group)) {
+    galleryMainGroupIndex = { token, byArtist: indexGalleryMainGroups() };
+    entry = galleryMainGroupIndex.byArtist.get(artist);
+  }
+  return entry?.group;
 }
 
 function galleryMainGroupArtist(group = {}) {
@@ -7627,7 +7670,7 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
 
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
-  const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+  const group = findGalleryMainGroup(artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
@@ -7802,7 +7845,7 @@ function initGalleryMain() {
       const anchor = event.target.closest?.('[data-artist-info-trigger]');
       if (!anchor) return;
       const artist = anchor.dataset.artist;
-      const group = getGalleryMainGroups().find(candidate => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+      const group = findGalleryMainGroup(artist) || {};
       const { imageUrl } = resolveGalleryArtistInfo(group, artist);
       if (!imageUrl || prefetchedPortraits.has(imageUrl)) return;
       prefetchedPortraits.add(imageUrl);

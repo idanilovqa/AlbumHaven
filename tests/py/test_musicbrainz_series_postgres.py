@@ -298,12 +298,13 @@ def test_an_award_ceremony_event_or_tour_type_is_featured_in_and_a_series_type_i
         "Live at Wacken": "featured_in", "World Tour 1998": "featured_in", "Colossus Projects": "series"}
 
 
-def test_more_than_fifty_albums_on_musicbrainz_is_featured_in_and_fifty_is_a_series(monkeypatch):
+def test_fifty_albums_on_musicbrainz_is_featured_in_and_forty_nine_is_a_series(monkeypatch):
     setup_url, _library = _database(monkeypatch)
-    assert _kinds(setup_url, [("Music Genre Tree", "Release group series", 51),
-                              ("Prog Collection", "Release group series", 50),
+    assert _kinds(setup_url, [("Die 50 besten Alben des Jahres 2025", "Release group series", 50),
+                              ("Prog Collection", "Release group series", 49),
                               ("Not yet sized", "Release group series", None)]) == {
-        "Music Genre Tree": "featured_in", "Prog Collection": "series", "Not yet sized": "series"}
+        "Die 50 besten Alben des Jahres 2025": "featured_in", "Prog Collection": "series",
+        "Not yet sized": "series"}
 
 
 def test_a_list_like_name_is_featured_in_and_a_plain_name_is_not(monkeypatch):

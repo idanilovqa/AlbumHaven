@@ -387,8 +387,8 @@ class MusicBrainzAlbumReleaseProcessor:
 
     def _size_new_series(self, observed_at) -> None:
         """A list or an award names far more albums than a real album series (owner
-        2026-11-15): each newly stored series is sized once. A failed lookup is retried
-        after the next job."""
+        2026-11-15; about 50 or more is "Featured In"): each newly stored series is sized
+        once. A failed lookup is retried after the next job."""
         for mbid in self._repository.unsized_series(limit=_SERIES_SIZED_PER_JOB):
             found = self._client.lookup_series(mbid)
             if found.get("classification") != "complete":

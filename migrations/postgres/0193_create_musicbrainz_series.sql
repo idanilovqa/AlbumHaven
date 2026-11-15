@@ -13,12 +13,13 @@ create table if not exists integration.musicbrainz_series (
   disambiguation text check (disambiguation is null or char_length(disambiguation) <= 1024),
   -- How many release groups and releases MusicBrainz lists in the series; null until sized.
   member_count integer check (member_count is null or member_count >= 0),
-  -- The owner's rules, in order: an award, ceremony, event or tour type; more than 50
-  -- members; a list-like name. Everything else is a real series.
+  -- The owner's rules, in order: an award, ceremony, event or tour type; about 50 members
+  -- or more (lists cluster at exactly 50: "Top 50 Albums of 2022"; the largest real series
+  -- on the owner's library has 41); a list-like name. Everything else is a real series.
   computed_kind text not null generated always as (
     case
       when coalesce(series_type, '') ~* '(award|ceremony|event|tour)' then 'featured_in'
-      when member_count > 50 then 'featured_in'
+      when member_count >= 50 then 'featured_in'
       when name ~* '(1001|\mgreatest\M|\mbest\M|\mtop\s+[0-9]+|\messential|\maward|hall of fame)' then 'featured_in'
       else 'series'
     end

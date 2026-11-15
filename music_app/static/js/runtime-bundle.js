@@ -5831,6 +5831,7 @@ const state = {
     anchorPath: '',
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     values: {},
   },
   coverLookup: {
@@ -32588,7 +32589,17 @@ function renderTagEditor(options = {}) {
     els.autoNumberStatus.textContent = String(state.tagEditor.autoNumberStatus || '');
   }
 
-  const existingTrackButtons = options.preserveTrackList
+  const syncTrackRowSelection = (row) => {
+    const isSelected = selectedPathSet.has(String(row.getAttribute('data-tag-editor-track') || ''));
+    row.classList.toggle('is-active', isSelected);
+    row.querySelector?.('.tag-editor-track-select')
+      ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  };
+  // A drag-selection step keeps the mounted list and names the rows it changed.
+  const changedSelectionPaths = options.preserveTrackList && Array.isArray(options.changedSelectionPaths)
+    ? options.changedSelectionPaths
+    : null;
+  const existingTrackButtons = options.preserveTrackList && !changedSelectionPaths
     ? Array.from(els.list.querySelectorAll('[data-tag-editor-track]'))
     : [];
   const canPreserveTrackList = existingTrackButtons.length === tracks.length
@@ -32596,14 +32607,13 @@ function renderTagEditor(options = {}) {
       String(existingTrackButtons[index]?.getAttribute('data-tag-editor-track') || '')
       === String(track.path || '')
     ));
-  if (canPreserveTrackList) {
-    existingTrackButtons.forEach((button) => {
-      const path = String(button.getAttribute('data-tag-editor-track') || '');
-      const isSelected = selectedPathSet.has(path);
-      button.classList.toggle('is-active', isSelected);
-      button.querySelector?.('.tag-editor-track-select')
-        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  if (changedSelectionPaths) {
+    changedSelectionPaths.forEach((path) => {
+      const row = els.list.querySelector(`[data-tag-editor-track="${cssEscape(path)}"]`);
+      if (row) syncTrackRowSelection(row);
     });
+  } else if (canPreserveTrackList) {
+    existingTrackButtons.forEach(syncTrackRowSelection);
   } else {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
@@ -37017,6 +37027,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
@@ -48085,6 +48096,7 @@ function handleUtilityBootstrapMouseDown(event) {
   if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
     state.tagEditor.dragSelecting = true;
     state.tagEditor.dragAnchorPath = path;
+    state.tagEditor.dragHoverPath = path;
   }
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
@@ -48268,9 +48280,19 @@ function handleUtilityBootstrapMouseOver(event) {
   const trackButton = event.target.closest('[data-tag-editor-track]');
   if (!trackButton) return false;
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  // Moves within the hovered track change nothing; a new track changes only
+  // the rows entering or leaving the dragged range.
+  if (path === state.tagEditor.dragHoverPath) return true;
+  state.tagEditor.dragHoverPath = path;
+  const previousPaths = new Set(state.tagEditor.selectedPaths || []);
   const rangePaths = getTagEditorRangePaths(state.tagEditor.dragAnchorPath, path);
   setTagEditorSelectedPaths(rangePaths, state.tagEditor.dragAnchorPath);
-  renderTagEditor({ preserveTrackList: true });
+  const selectedPaths = new Set(state.tagEditor.selectedPaths);
+  const changedSelectionPaths = [
+    ...[...previousPaths].filter(item => !selectedPaths.has(item)),
+    ...[...selectedPaths].filter(item => !previousPaths.has(item)),
+  ];
+  renderTagEditor({ preserveTrackList: true, changedSelectionPaths });
   syncTagEditorAutoNumberControls();
   return true;
 }
@@ -48333,6 +48355,7 @@ function handleUtilityBootstrapMouseUp(event) {
   }
   state.tagEditor.dragSelecting = false;
   state.tagEditor.dragAnchorPath = '';
+  state.tagEditor.dragHoverPath = '';
 }
 
 function toggleUtilityLoopGroupCollapse(groupKey) {

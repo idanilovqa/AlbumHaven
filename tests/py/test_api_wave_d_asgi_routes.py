@@ -3053,6 +3053,67 @@ def test_asgi_local_cover_selection_log_history_failure_never_masks_persistence_
         assert _decode_json(body)["ok"] is True
 
 
+def test_asgi_pasted_cover_save_names_the_backup_of_the_replaced_cover(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Pasted Backup" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    previous_cover = track_path.parent / "cover.jpg"
+    previous_bytes = _jpeg_bytes((200, 30, 30))
+    previous_cover.write_bytes(previous_bytes)
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    invalidated: list[list[Path]] = []
+    asgi_app.state.local_cover_inventory = type(
+        "Inventory", (), {"invalidate_paths": staticmethod(lambda paths: invalidated.append(list(paths)))},
+    )()
+
+    async def fail_if_pasted_save_rebuilds_gallery(*_args, **_kwargs):
+        raise AssertionError("pasted cover save must not rebuild the gallery")
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", fail_if_pasted_save_rebuilds_gallery)
+    monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", lambda *_args, **_kwargs: ([], None))
+    persist_failures = [RuntimeError("database unavailable"), None]
+
+    def persist(*_args, **_kwargs):
+        failure = persist_failures.pop(0)
+        if failure is not None:
+            raise failure
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", persist)
+    monkeypatch.setattr(
+        asgi_routes, "mark_cover_lookup_notifications_action_taken_for_track_paths", lambda *_a, **_k: [],
+    )
+    backup = track_path.parent / "cover-existing-1.jpg"
+
+    with pytest.raises(RuntimeError):
+        _run_asgi_request(
+            asgi_app, "POST", "/utilities/cover-lookup/pasted-image-save",
+            json_body={"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))},
+        )
+    assert previous_cover.read_bytes() == previous_bytes
+    assert not backup.exists(), "a failed save must not leave a backup card behind"
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-image-save",
+        json_body={"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["selected_cover_path"] == str(previous_cover)
+    assert payload["replaced_cover_backup"] == {
+        "path": str(backup),
+        "filename": "cover-existing-1.jpg",
+        "relative_path": "cover-existing-1.jpg",
+        "sort_relative_path": "cover-existing-1.jpg",
+    }
+    assert backup.read_bytes() == previous_bytes
+    assert invalidated[-1] == [previous_cover, backup]
+
+
 def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 
@@ -3202,6 +3263,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     pasted_success_payload = _decode_json(pasted_success_body)
     assert pasted_success_payload["ok"] is True
     assert pasted_success_payload["selected_cover_path"] == str(track_path.parent / "cover.jpg")
+    assert pasted_success_payload["replaced_cover_backup"] is None
     assert "gallery" not in pasted_success_payload
     assert persist_calls[-1]["selected_local_cover_source_path"] == track_path.parent / "cover.jpg"
     assert apply_calls[-1]["selected_local_cover_source_path"] == track_path.parent / "cover.jpg"

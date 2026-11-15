@@ -7173,6 +7173,88 @@ require('node:test')('reopening during a pasted save keeps local selection and d
   await saving;
 });
 
+require('node:test')('pasted save renames the replaced cover card to its backup before reopen', async () => {
+  const album = { key: 'pasted-backup-order', tracks: [{ path: 'N:/Band/Album/01.flac' }] };
+  const root = 'N:/Band/Album';
+  const pasted = {
+    id: 'pasted', data_url: 'data:image/png;base64,new', mime_type: 'image/png',
+    filename: 'pasted.png', width: 300, height: 300,
+  };
+  const png = {
+    path: `${root}/cover.png`, filename: 'cover.png', relative_path: 'cover.png',
+    sort_relative_path: 'cover.png', width: 1000, height: 1000, area: 1000000, depth: 1,
+    is_squareish: true, is_active: false, sha256: 'png',
+  };
+  const previousCover = {
+    path: `${root}/cover.jpg`, filename: 'cover.jpg', relative_path: 'cover.jpg',
+    sort_relative_path: 'cover.jpg', width: 600, height: 600, area: 360000, depth: 1,
+    is_squareish: true, is_active: true, sha256: 'old', cover_revision: 'old',
+  };
+  const context = loadHelper({
+    deepCloneJson: value => JSON.parse(JSON.stringify(value)),
+    getAlbumRequestKey: value => String(value?.key || ''),
+    getAlbumPathSignature: () => 'pasted-backup-order',
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById: () => null },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        selected_cover_path: previousCover.path,
+        cover_revision: 'new',
+        replaced_cover_backup: {
+          path: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg',
+          relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg',
+        },
+        updated_album: { ...album, cover_path: previousCover.path, cover_revision: 'new' },
+      }),
+    }),
+    showToast: () => {},
+  });
+  context.state.coverLookup.tasks = [];
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.state.coverLookup.modal = { album, taskId: '', pastedImages: [pasted] };
+  context.cacheCoverLookupGalleryPayload(album, {
+    ok: true, local_inventory_complete: true, selected_source_path: previousCover.path,
+    active_cover_path: previousCover.path, local_covers: [png, previousCover], other_art: [],
+  });
+  context.renderCoverLookupModal = () => {};
+  context.markAlbumCoverPathsFresh = () => {};
+  context.syncCoverLookupAlbumReferences = () => {};
+  context.refreshCoverLookupAlbumArtwork = () => {};
+  context.clearOptimisticAlbumCovers = () => {};
+  context.renderCoverLookupDrawer = () => {};
+
+  await context.savePastedCoverFromLookup(pasted.id);
+
+  const reopened = context.cachedCoverLookupGalleryPayload(album).local_covers;
+  const expectedPaths = [png.path, `${root}/cover-existing-1.jpg`, previousCover.path];
+  assert.deepEqual(Array.from(reopened, cover => cover.path), expectedPaths);
+  assert.deepEqual(Array.from(reopened, cover => cover.is_active), [false, false, true]);
+  const backupCard = reopened[1];
+  assert.equal(backupCard.filename, 'cover-existing-1.jpg');
+  assert.equal(backupCard.resolution ?? '600x600', '600x600');
+  assert.equal(backupCard.cover_revision, undefined, 'the backup must not reuse cover.jpg URLs');
+  assert.equal(backupCard.preview_url, undefined);
+
+  const authoritative = context.reconcileCoverLookupLocalInventory(album, {
+    ok: true, local_inventory_complete: true, selected_source_path: previousCover.path,
+    active_cover_path: previousCover.path,
+    local_covers: [
+      png,
+      { ...previousCover, path: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg',
+        relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg',
+        is_active: false, cover_revision: undefined },
+      { ...previousCover, width: 300, height: 300, area: 90000, sha256: 'new', cover_revision: 'new' },
+    ],
+    other_art: [],
+  }, true);
+  assert.deepEqual(Array.from(authoritative.local_covers, cover => cover.path), expectedPaths,
+    'authoritative inventory must not move or insert any card');
+  assert.equal(authoritative.local_covers[2].preview_url, '',
+    'once confirmed, the saved card shows the server-served revision, not the pasted data URL');
+  assert.equal(authoritative.local_covers[2].cover_revision, 'new');
+});
+
 require('node:test')('optimistic pasted LOCAL cover gets its final server ranking before inventory refresh', () => {
   const album = {
     key: 'fleet-foxes-pasted',

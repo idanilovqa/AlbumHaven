@@ -5,6 +5,7 @@ from music_app.services.log_history import history_scope_for_request
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
 from threading import Event
 from time import perf_counter
 from uuid import UUID, uuid4
@@ -1190,6 +1191,18 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
     return JSONResponse({"ok": True, "task": task_payload})
 
 
+def _replaced_cover_backup_payload(backup_path: Path | None) -> dict[str, str] | None:
+    """Name the cover-existing-N.jpg that now holds the replaced cover.jpg, so clients rename its card."""
+    if backup_path is None:
+        return None
+    return {
+        "path": str(backup_path),
+        "filename": backup_path.name,
+        "relative_path": backup_path.name,
+        "sort_relative_path": backup_path.name.casefold(),
+    }
+
+
 @router.post("/utilities/cover-lookup/local-select")
 async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     request_started_at = perf_counter()
@@ -1501,6 +1514,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 "ok": True,
                 "selected_cover_path": str(authoritative_cover),
                 "cover_revision": cover_revision,
+                "replaced_cover_backup": _replaced_cover_backup_payload(promotion.reserve_artifact),
                 "updated_albums": updated_albums,
                 "updated_album": updated_albums[0] if updated_albums else None,
                 "updated_problematic_album": updated_problematic_album,
@@ -1749,18 +1763,13 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         library_state["albums"] = albums
     def persist_pasted_cover():
         # Synchronous file write, hash and persistence must not block the loop.
-        authoritative_cover_path = album_context.album_root / "cover.jpg"
-        prior_cover_bytes = (
-            authoritative_cover_path.read_bytes()
-            if authoritative_cover_path.is_file()
-            else None
-        )
         try:
-            saved_cover_path = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
+            promotion = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
         except ValueError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 400)), None
         except Exception as exc:
             return _json_response(({"ok": False, "error": str(exc or "Failed to save pasted image.")}, 500)), None
+        saved_cover_path = promotion.cover_path
         cover_revision = cover_revision_for_path(saved_cover_path)
         try:
             persist_cover_selection_for_tracks(
@@ -1774,13 +1783,11 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
                 explicit_selection=True,
             )
         except Exception:
-            if prior_cover_bytes is None:
-                saved_cover_path.unlink(missing_ok=True)
-            else:
-                saved_cover_path.write_bytes(prior_cover_bytes)
+            rollback_local_image_promotion(promotion)
             raise
         return None, (
             saved_cover_path,
+            promotion.reserve_artifact,
             cover_revision,
             *apply_cover_path_for_tracks(
                 album_context.track_paths,
@@ -1797,11 +1804,12 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     error_response, persisted = await run_in_threadpool(persist_pasted_cover)
     if error_response is not None:
         return error_response
-    saved_cover_path, cover_revision, updated_albums, updated_problematic_album = persisted
+    saved_cover_path, created_backup_path, cover_revision, updated_albums, updated_problematic_album = persisted
+    written_paths = [saved_cover_path, *([created_backup_path] if created_backup_path else [])]
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if inventory_worker is not None:
         try:
-            await run_in_threadpool(inventory_worker.invalidate_paths, [saved_cover_path])
+            await run_in_threadpool(inventory_worker.invalidate_paths, written_paths)
         except Exception:
             logger.exception(
                 "Local cover inventory invalidation failed after pasted cover save committed"
@@ -1813,7 +1821,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             )
             if callable(schedule_retry):
                 try:
-                    await run_in_threadpool(schedule_retry, [saved_cover_path])
+                    await run_in_threadpool(schedule_retry, written_paths)
                 except Exception:
                     logger.exception(
                         "Failed to schedule local cover inventory invalidation retry"
@@ -1847,6 +1855,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             "ok": True,
             "selected_cover_path": str(saved_cover_path),
             "cover_revision": cover_revision,
+            "replaced_cover_backup": _replaced_cover_backup_payload(created_backup_path),
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,

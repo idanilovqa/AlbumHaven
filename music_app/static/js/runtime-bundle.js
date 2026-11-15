@@ -38752,6 +38752,9 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
           width: Number(cover?.width || 0) || previous.width,
           height: Number(cover?.height || 0) || previous.height,
           area: Number(cover?.area || 0) || previous.area,
+          resolution: ['', 'Unknown'].includes(String(cover?.resolution || '').trim())
+            ? previous.resolution || cover?.resolution
+            : cover.resolution,
           relative_path: cover?.relative_path || previous.relative_path,
           sort_relative_path: cover?.sort_relative_path || previous.sort_relative_path,
           is_squareish: typeof cover?.is_squareish === 'boolean'
@@ -38807,7 +38810,8 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
         return {
           ...cover,
           ...incoming,
-          preview_url: String(incoming?.preview_url || '').trim() || cover?.preview_url,
+          // Confirmed: show the server-served revision, not the optimistic data URL.
+          preview_url: String(incoming?.preview_url || '').trim(),
           width,
           height,
           resolution: incomingResolution && incomingResolution !== 'Unknown'
@@ -38857,7 +38861,14 @@ function cacheOptimisticLocalCoverGallery(album, selectedCover) {
     || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
   mutation.selectedPath = path;
   if (!existing) {
-    mutation.addedCovers.set(path, { ...selectedCover, path, is_active: true });
+    mutation.addedCovers.set(path, {
+      ...selectedCover,
+      path,
+      is_active: true,
+      ...(selectedCover?.resolution || (width && height)
+        ? { resolution: selectedCover?.resolution || `${width}x${height}` }
+        : {}),
+    });
     mutation.deletedPaths.delete(path);
   }
   coverLookupLocalInventoryMutations.set(key, mutation);
@@ -38888,6 +38899,33 @@ function cacheOptimisticLocalCoverGallery(album, selectedCover) {
           : {}),
       }, ...previousCovers.map((cover) => ({ ...cover, is_active: false }))],
   });
+}
+
+// A save that replaces cover.jpg keeps its previous bytes as cover-existing-N.jpg.
+// Rename the cached card so reopening shows the final inventory without a late insertion.
+function cacheReplacedLocalCoverBackup(album, replacedPath, backup) {
+  const backupPath = String(backup?.path || '').trim();
+  const gallery = cachedCoverLookupGalleryPayload(album);
+  if (!backupPath || !gallery) return;
+  const isReplaced = cover => coverLookupLocalPathMatches(cover?.path, replacedPath);
+  const replaced = [...(gallery.local_covers || []), ...(gallery.other_art || [])].find(isReplaced);
+  if (!replaced) return;
+  const { preview_url: _preview, cover_revision: _revision, duplicate_of: _duplicate, ...known } = replaced;
+  const card = { ...known, ...backup, path: backupPath, is_active: false };
+  const isOtherArt = card.is_squareish === false;
+  const localCovers = (gallery.local_covers || []).filter(cover => !isReplaced(cover));
+  const otherArt = (gallery.other_art || []).filter(cover => !isReplaced(cover));
+  cacheCoverLookupGalleryPayload(album, {
+    ...gallery,
+    local_covers: isOtherArt ? localCovers : [...localCovers, card],
+    other_art: isOtherArt ? [...otherArt, card] : otherArt,
+  });
+  if (isOtherArt) return;
+  const key = buildCoverLookupGalleryCacheKey(album);
+  const mutation = coverLookupLocalInventoryMutations.get(key)
+    || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
+  mutation.addedCovers.set(backupPath, card);
+  coverLookupLocalInventoryMutations.set(key, mutation);
 }
 
 function cacheOptimisticRemoteCoverGallery(album, selectedMatch, coverPath, taskId) {
@@ -39841,6 +39879,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     const updatedAlbums = Array.isArray(data.updated_albums) && data.updated_albums.length
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
+    cacheReplacedLocalCoverBackup(album, data.selected_cover_path, data.replaced_cover_backup);
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
@@ -40353,6 +40392,7 @@ async function savePastedCoverFromLookup(imageId) {
     const selectedCoverRevision = String(data.cover_revision || updatedAlbum?.cover_revision || '').trim();
     restorePreviousInventory();
     if (selectedCoverPath) {
+      cacheReplacedLocalCoverBackup(album, selectedCoverPath, data.replaced_cover_backup);
       cacheOptimisticLocalCoverGallery(album, {
         path: selectedCoverPath,
         preview_url: pastedItem.data_url,

@@ -4339,7 +4339,7 @@
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
-      "action": "Place floating notifications on the next frame after a layout change; a blocked lane keeps only its newest never-shown toast, so a frame reads the fixed surfaces, the open modal's controls and a constant number of notifications",
+      "action": "Place floating notifications on the next frame after a layout change; a blocked lane keeps only its newest never-shown toast of each severity, so a frame reads the fixed surfaces, the open modal's controls and a constant number of notifications",
       "entrypoints": [
         "js:music_app/static/js/runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement:timer:requestAnimationFrame"
       ],

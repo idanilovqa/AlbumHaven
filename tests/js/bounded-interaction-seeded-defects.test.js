@@ -81,6 +81,17 @@ const DEFECTS = [
     expected: /^js:runtime\/android-bridge-client\.js#afterPaint: \d+ reachable hazard\(s\) need a runtime contract \(.*forEach at music_app\/static\/js\/runtime\/android-bridge-client\.js:\d+/,
   },
   {
+    // A hot path: the startup progress animation reschedules its own frame
+    // until the bar reaches its target.
+    id: 'BI-H13 requestAnimationFrame animation loop that rescans every gallery card each frame',
+    language: 'js',
+    file: 'music_app/static/js/startup-progress.js',
+    anchor: '    if (percent < targetPercent) animationFrame = window.requestAnimationFrame(animate);\n',
+    replacement: "    document.querySelectorAll('.album-card').forEach(card => card.classList.toggle('dimmed', percent < 100));\n"
+      + '    if (percent < targetPercent) animationFrame = window.requestAnimationFrame(animate);\n',
+    expected: /^js:startup-progress\.js#animate: \d+ reachable hazard\(s\) need a runtime contract \(.*querySelectorAll at music_app\/static\/js\/startup-progress\.js:\d+/,
+  },
+  {
     id: 'BI-H13 self-rescheduling setTimeout poller that rescans every loop range',
     language: 'js',
     file: 'music_app/static/js/runtime/loop-range-controls.js',

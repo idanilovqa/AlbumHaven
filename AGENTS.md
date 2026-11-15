@@ -82,15 +82,17 @@ operate, or contribute to the application.
   JavaScript high-frequency or repeating events (`pointermove`, `mousemove`,
   `scroll`, `wheel`, `touchmove`, `input`, `mouseover`, `pointerover`,
   `dragover`, `resize`, `drag`, `pointerrawupdate`, `selectionchange`,
-  `timeupdate`, and channel or worker `message`); `setInterval`;
-  `requestAnimationFrame`; a `setTimeout` whose callback can reach the function
-  that schedules it (a poller), including through a helper that schedules its
-  own callback parameter; Mutation, Resize, Intersection, and Performance
-  observers; workers; and every Python route and background entrypoint
-  (watchers, pollers, schedulers, reconcilers, refresh/publish, thread and
-  executor targets). Otherwise the entry needs a deterministic contract that
-  runs the real code at a small and a production-calibration cardinality and
-  asserts absolute operation budgets and growth
+  `timeupdate`, and channel or worker `message`); `setInterval`; a
+  `requestAnimationFrame` or `setTimeout` whose callback can reach the function
+  that schedules it (an animation loop or a poller), including through a helper
+  that schedules its own callback parameter (a one-shot frame or timeout is
+  analyzed as part of any hot entrypoint that schedules it); Mutation, Resize,
+  Intersection, and Performance observers; workers; and every Python route and
+  background entrypoint (watchers, pollers, schedulers, reconcilers,
+  refresh/publish, thread and executor targets). Otherwise the entry needs a
+  deterministic contract that runs the real code at a small and a
+  production-calibration cardinality and asserts absolute operation budgets and
+  growth
   (`tests/js/helpers/bounded-interaction-counter.js`,
   `tests/py/bounded_interactions.py`). Interactive work never declares
   `library-size`; there are no allowlists, waivers, or baselines.

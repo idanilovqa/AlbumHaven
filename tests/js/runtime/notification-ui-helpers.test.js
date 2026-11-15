@@ -902,3 +902,61 @@ for (const opacity of ['1', '0']) for (const reflowHeight of [230, 650]) {
     context.unregisterFloatingNotification(node);
   });
 }
+
+test('bounded interaction: notification lane observers place only the visible notifications after 500 shown toasts', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (shownToasts) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context } = createContext();
+    const frames = [];
+    let mutations = null;
+    const notification = () => {
+      const node = new CountedElement('DIV', { offsetHeight: 40, rect: { left: 0, top: 0, right: 240, bottom: 40, width: 240, height: 40 } });
+      node.removeAttribute = name => { delete node.attributes[name]; };
+      Object.defineProperty(node, 'offsetWidth', { get: () => { counter.count('itemsVisited'); return 240; } });
+      return node;
+    };
+    const header = new CountedElement('HEADER', { rect: { left: 0, top: 0, right: 1200, bottom: 48, width: 1200, height: 48 } });
+    Object.assign(context.window, { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+    Object.assign(context.document, {
+      body: {}, documentElement: {}, addEventListener() {}, removeEventListener() {},
+      querySelectorAll: () => { counter.count('domQueries'); return [header]; },
+    });
+    Object.assign(context, {
+      requestAnimationFrame: callback => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      cancelAnimationFrame() {},
+      getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+      MutationObserver: class { constructor(callback) { counter.count('observers'); mutations = callback; } observe() {} disconnect() {} },
+      ResizeObserver: class { constructor() { counter.count('observers'); } observe() {} unobserve() {} disconnect() {} },
+    });
+    const flushFrames = () => frames.splice(0).forEach(callback => callback());
+    const visible = [notification(), notification()];
+    visible.forEach(node => context.registerFloatingNotification(node, { lane: 'top-right' }));
+    flushFrames();
+    for (let toast = 0; toast < shownToasts; toast += 1) {
+      const node = notification();
+      context.registerFloatingNotification(node, { lane: 'top-right' });
+      flushFrames();
+      context.unregisterFloatingNotification(node);
+      flushFrames();
+    }
+    const work = await counter.measure(() => {
+      for (let change = 0; change < 10; change += 1) {
+        mutations([{ target: header }]);
+        flushFrames();
+      }
+    });
+    assert.ok(visible.every(node => node.attributes['data-notification-deferred'] === undefined), 'both visible notifications stay placed');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/notification-ui-helpers.js#registerFloatingNotification',
+    small: 5,
+    large: 500,
+    run,
+    budgets: { itemsVisited: 20, domQueries: 10, animationFrames: 10, observers: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

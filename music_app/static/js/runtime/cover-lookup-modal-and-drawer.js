@@ -1410,18 +1410,30 @@ function getCoverLookupTaskElapsedLabel(task, nowMs) {
   return formatCoverLookupTaskElapsedLabel(task, nowMs);
 }
 
+// Tasks are replaced, never edited in place, so one id index per task list serves every
+// poll and elapsed tick against it.
+const coverLookupTaskIndexes = new WeakMap();
+function getCoverLookupTaskById(taskId) {
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  let index = coverLookupTaskIndexes.get(tasks);
+  if (!index) {
+    index = new Map();
+    for (const task of tasks) {
+      const id = String(task?.id || '').trim();
+      if (id && !index.has(id)) index.set(id, task);
+    }
+    coverLookupTaskIndexes.set(tasks, index);
+  }
+  return index.get(String(taskId || '').trim()) || null;
+}
+
 function updateCoverLookupTaskElapsedLabels() {
   const body = document.getElementById('cover-lookup-drawer-body');
   if (!body || typeof body.querySelectorAll !== 'function') return;
-  const tasksById = new Map(
-    (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-      .map((task) => [String(task?.id || '').trim(), task])
-      .filter(([taskId]) => Boolean(taskId)),
-  );
   const nowMs = Date.now();
   body.querySelectorAll('[data-cover-lookup-task-elapsed]').forEach((element) => {
     const taskId = String(element.getAttribute('data-cover-lookup-task-elapsed') || '').trim();
-    const elapsedLabel = getCoverLookupTaskElapsedLabel(tasksById.get(taskId), nowMs);
+    const elapsedLabel = getCoverLookupTaskElapsedLabel(getCoverLookupTaskById(taskId), nowMs);
     element.textContent = elapsedLabel;
     element.hidden = !elapsedLabel;
   });
@@ -2817,14 +2829,7 @@ async function loadCoverLookupTasks(options = {}) {
       renderCoverLookupDrawer({ preserveInteraction: false });
     }
   }
-  const previousActiveTaskIds = activeOnly
-    ? new Set(
-      (state.coverLookup.tasks || [])
-        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
-        .map((task) => String(task?.id || ''))
-        .filter(Boolean),
-    )
-    : new Set();
+  const tasksBeforeRequest = state.coverLookup.tasks;
   try {
     const params = new URLSearchParams({ limit: '50' });
     if (activeOnly) {
@@ -2845,6 +2850,29 @@ async function loadCoverLookupTasks(options = {}) {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
+    // A poll that repeats the answer already applied to these very tasks and counts changes
+    // nothing, so it skips the per-task merge, snapshots and updates over every loaded task.
+    // Reconciliation and remote saves wait on the next answer, so they take the full path.
+    const appliedActiveAnswer = activeOnly ? {
+      answer: JSON.stringify(data),
+      tasks: tasksBeforeRequest,
+      counts: state.coverLookup.notificationCounts,
+      membershipRevision: state.coverLookup.tasksMembershipRevision,
+    } : null;
+    if (appliedActiveAnswer && state.coverLookup.tasks === tasksBeforeRequest
+        && !state.coverLookup.notificationReconciliationPending && !coverLookupPendingRemoteSaves.size
+        && Object.entries(appliedActiveAnswer).every(([key, value]) => lastAppliedActiveCoverLookupAnswer?.[key] === value)) {
+      stopCoverLookupPollingIfIdle();
+      return true;
+    }
+    const previousActiveTaskIds = activeOnly
+      ? new Set(
+        (tasksBeforeRequest || [])
+          .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+          .map((task) => String(task?.id || ''))
+          .filter(Boolean),
+      )
+      : new Set();
     const previousNotificationTotal = Number(state.coverLookup.notificationCounts?.total_count);
     const previousMembershipRevision = String(
       state.coverLookup.tasksMembershipRevision || '',
@@ -3020,6 +3048,14 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (appliedActiveAnswer && !missingActiveTask && !notificationReconciliationPending) {
+      lastAppliedActiveCoverLookupAnswer = {
+        answer: appliedActiveAnswer.answer,
+        tasks: state.coverLookup.tasks,
+        counts: state.coverLookup.notificationCounts,
+        membershipRevision: state.coverLookup.tasksMembershipRevision,
+      };
+    }
     if (missingActiveTask || notificationReconciliationPending) {
       const loadedTaskCount = (state.coverLookup.tasks || []).length;
       const loadedTasksMatchAuthoritativeCount = (
@@ -3059,6 +3095,7 @@ async function loadCoverLookupTasks(options = {}) {
 let coverLookupPollingRequest = null;
 let coverLookupBackgroundPollTicks = 0;
 let coverLookupPollInFlight = false;
+let lastAppliedActiveCoverLookupAnswer = null;
 let coverLookupHistoryRequest = null;
 let coverLookupDrawerScrollRenderTimer = 0;
 
@@ -3131,13 +3168,10 @@ function ensureCoverLookupPolling() {
     try {
       await loadCoverLookupTasksForPolling({ toast: false });
       const snapshot = state.coverLookup.modal.candidateSnapshot;
-      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-        && ['pending', 'running'].includes(String(task?.status || ''))
-      ));
+      const modalTask = getCoverLookupTaskById(state.coverLookup.modal.taskId);
       if (
         modalOpen
-        && !hasMatchingActiveTask
+        && !['pending', 'running'].includes(String(modalTask?.status || ''))
         && ['pending', 'running'].includes(String(snapshot?.status || ''))
       ) {
         await refreshCoverLookupGallery(false);
@@ -3150,8 +3184,8 @@ function ensureCoverLookupPolling() {
 
 function stopCoverLookupPollingIfIdle() {
   const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-  const activeTasks = (state.coverLookup.tasks || []).filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const shouldKeepPolling = Boolean(state.coverLookup.drawerOpen || modalOpen || activeTasks > 0);
+  const shouldKeepPolling = Boolean(state.coverLookup.drawerOpen || modalOpen
+    || (state.coverLookup.tasks || []).some((task) => ['pending', 'running'].includes(String(task?.status || ''))));
   if (shouldKeepPolling) return;
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);

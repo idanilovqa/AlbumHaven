@@ -190,3 +190,37 @@ test('nothing is saved while the copy is read-only', async () => {
   await settle();
   assert.ok(!posted.some(message => message.type === 'save'));
 });
+
+test('bounded interaction: an unreachable copy retries one account check per tick after 1,000 failed retries', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (failedRetries) => {
+    const counter = createInteractionCounter();
+    const { client, env, timers, settle } = setup({
+      marker: 'cache',
+      answer: async () => { counter.count('requests'); throw new TypeError('Failed to fetch'); },
+    });
+    let reconciled = 0;
+    client.onServerAnswer(() => { reconciled += 1; });
+    await settle();
+    for (let retry = 0; retry < failedRetries; retry += 1) await timers.at(-1).callback();
+    const scheduled = timers.length;
+    const work = await counter.measure(async () => {
+      for (let retry = 0; retry < 10; retry += 1) await timers.at(-1).callback();
+      counter.count('timers', timers.length - scheduled);
+    });
+    assert.equal(client.isReadOnly(), true);
+    assert.deepEqual(env.readOnlyCalls, [true], 'the read-only state is set once, not per retry');
+    assert.equal(timers.at(-1).delay, 30000, 'retries back off to the longest delay');
+    assert.equal(env.lastProbe.url, '/app-copy/account');
+    assert.equal(reconciled, 0);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:app-copy.js#confirmAccount',
+    small: 3,
+    large: 1000,
+    run,
+    budgets: { requests: 10, timers: 10, renderCommits: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});

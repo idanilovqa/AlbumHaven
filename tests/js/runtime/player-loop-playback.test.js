@@ -4020,3 +4020,72 @@ test('bounded interaction: global seekbar drag and input stay album-bounded with
     });
   }
 });
+
+test('bounded interaction: mobile player metadata motion measures its three rows after 1,000 track changes', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (trackChanges) => {
+    const counter = createInteractionCounter();
+    const { CountedElement, createElement } = createCountedDom(counter);
+    const ownerDocument = { createElement: tag => Object.assign(createElement(tag), { scrollWidth: 240 }) };
+    const row = () => {
+      const element = new CountedElement('SPAN', { ownerDocument, clientWidth: 100 });
+      element.removeAttribute = name => { delete element.attributes[name]; };
+      element.querySelector = selector => {
+        counter.count('domQueries');
+        return element.children.find(child => child.getAttribute(selector.slice(1, -1)) !== null) || null;
+      };
+      Object.defineProperty(element, 'textContent', {
+        get: () => element.text,
+        set(value) { counter.count('domMutations'); element.children = []; element.text = String(value); },
+      });
+      return element;
+    };
+    const els = { artist: row(), title: row(), albumLink: row() };
+    const frames = [];
+    const listeners = new Map();
+    let observed = null;
+    const { context } = loadHelper({
+      usesMobilePageLayout: () => true,
+      resolveCompactPlayerMetadataRowMotion: ({ scrollWidth, clientWidth }) => {
+        counter.count('itemsVisited');
+        return { overflowing: scrollWidth > clientWidth, distance: scrollWidth - clientWidth, durationMs: 4200 };
+      },
+      ResizeObserver: class {
+        constructor(callback) { counter.count('observers'); observed = callback; }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+    Object.assign(context.window, {
+      addEventListener: (name, listener) => { counter.count('listeners'); listeners.set(name, listener); },
+      removeEventListener() {},
+      requestAnimationFrame: (callback) => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      cancelAnimationFrame() {},
+    });
+    const flushFrames = () => frames.splice(0).forEach(callback => callback());
+    for (let change = 0; change < trackChanges; change += 1) {
+      context.renderGlobalPlayerMetadata(els, { artist: `Artist ${change}`, title: `Title ${change}`, album: `Album ${change}` });
+      flushFrames();
+    }
+    const work = await counter.measure(() => {
+      for (let step = 0; step < 10; step += 1) {
+        listeners.get('resize')();
+        flushFrames();
+        observed([]);
+        flushFrames();
+      }
+    });
+    assert.ok(els.title.classes.has('is-metadata-overflowing'));
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-loop-playback.js#syncGlobalPlayerMetadataMotion',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 60, domMutations: 180, animationFrames: 20, observers: 0, listeners: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

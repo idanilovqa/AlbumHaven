@@ -37,7 +37,7 @@ test('distinct cover writes do not enumerate the entire persistent cache per ent
   });
   const urls = Array.from(
     { length: 24 },
-    (_, index) => `http://127.0.0.1:4173/cover?path=album-${index}&size=480&v=epoch-1`,
+    (_, index) => `http://127.0.0.1:4173/cover/album-${index}?size=480&v=epoch-1`,
   );
 
   await Promise.all(urls.map((url) => previewCache.prefetch(url)));
@@ -125,7 +125,7 @@ function createResponse(id, productionUrl = '') {
 test('shared image loader rejects a resolved preview when modal ownership became stale', async () => {
   const { context } = createContext();
   const image = new context.HTMLImageElement();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=stale-modal&size=480&v=fixture';
+  const productionUrl = 'http://127.0.0.1:4173/cover/stale-modal?size=480&v=fixture';
   let resolvePreview;
   let isCurrent = true;
   context.galleryCoverPreviewCache.resolve = () => new Promise((resolve) => {
@@ -186,7 +186,7 @@ test('remote cover proxy is the only additional same-origin preview cache route'
     '',
   );
   assert.equal(
-    previewCache.normalizeProductionUrl('https://images.example/cover?path=x'),
+    previewCache.normalizeProductionUrl('https://images.example/cover/x'),
     '',
   );
 });
@@ -227,7 +227,7 @@ test('gallery preview cache fetches each production URL once and restores evicte
     locationOrigin: 'http://127.0.0.1:4173',
     maxActiveObjectUrls: 2,
   });
-  const urls = [1, 2, 3].map((index) => `http://127.0.0.1:4173/cover?path=cover-${index}&size=480&v=initial`);
+  const urls = [1, 2, 3].map((index) => `http://127.0.0.1:4173/cover/cover-${index}?size=480&v=initial`);
 
   const first = await previewCache.resolve(urls[0]);
   await previewCache.resolve(urls[1]);
@@ -272,8 +272,8 @@ test('LRU eviction waits for an attached image to finish using its object URL', 
     locationOrigin: 'http://127.0.0.1:4173',
     maxActiveObjectUrls: 1,
   });
-  const firstUrl = 'http://127.0.0.1:4173/cover?path=first&size=480&v=initial';
-  const secondUrl = 'http://127.0.0.1:4173/cover?path=second&size=480&v=initial';
+  const firstUrl = 'http://127.0.0.1:4173/cover/first?size=480&v=initial';
+  const secondUrl = 'http://127.0.0.1:4173/cover/second?size=480&v=initial';
   const image = new context.HTMLImageElement();
   const first = await previewCache.resolve(firstUrl);
 
@@ -289,7 +289,7 @@ test('LRU eviction waits for an attached image to finish using its object URL', 
 
 test('gallery preview cache reports unavailable storage and falls back to the production URL', async () => {
   const { context, warnings } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=fallback&size=480&v=initial';
+  const productionUrl = 'http://127.0.0.1:4173/cover/fallback?size=480&v=initial';
   const previewCache = new context.GalleryCoverPreviewCache({
     cacheStorage: null,
     fetchImpl: async () => createResponse('fallback'),
@@ -308,7 +308,7 @@ test('gallery preview cache reports unavailable storage and falls back to the pr
 
 test('foreground reads the network body once and exposes its object URL before deferred persistence', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=critical&size=480&v=initial';
+  const productionUrl = 'http://127.0.0.1:4173/cover/critical?size=480&v=initial';
   const events = [];
   let bodyReads = 0;
   const response = {
@@ -351,8 +351,8 @@ test('foreground reads the network body once and exposes its object URL before d
 
 test('gallery preview cache assigns a request ID header only to an actual same-origin network fetch', async () => {
   const { context } = createContext();
-  const cachedUrl = 'http://127.0.0.1:4173/cover?path=cached&size=480&v=initial';
-  const networkUrl = 'http://127.0.0.1:4173/cover?path=network&size=480&v=initial';
+  const cachedUrl = 'http://127.0.0.1:4173/cover/cached?size=480&v=initial';
+  const networkUrl = 'http://127.0.0.1:4173/cover/network?size=480&v=initial';
   const fetchCalls = [];
   const cache = {
     async keys() { return []; },
@@ -386,7 +386,7 @@ test('gallery preview cache assigns a request ID header only to an actual same-o
 
 test('gallery preview cache marks family prefetch as background server work', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=family&size=480&v=initial';
+  const productionUrl = 'http://127.0.0.1:4173/cover/family?size=480&v=initial';
   const fetchCalls = [];
   const previewCache = new context.GalleryCoverPreviewCache({
     cacheStorage: {
@@ -416,7 +416,7 @@ test('gallery preview cache marks family prefetch as background server work', as
 
 test('foreground consumer promotes a same-key prefetch before its network request starts', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=promoted&size=480&v=initial';
+  const productionUrl = 'http://127.0.0.1:4173/cover/promoted?size=480&v=initial';
   let releaseCacheOpen;
   const cacheOpenGate = new Promise((resolve) => { releaseCacheOpen = resolve; });
   const fetchPriorities = [];
@@ -453,7 +453,7 @@ test('foreground consumer promotes a same-key prefetch before its network reques
 
 test('foreground consumers promote already-dispatched same-key background HTTP work exactly once', async () => {
   const { context, warnings } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=post-dispatch-promoted&size=480&v=initial';
+  const productionUrl = 'http://127.0.0.1:4173/cover/post-dispatch-promoted?size=480&v=initial';
   const stored = new Map();
   const fetchCalls = [];
   let firstRequestStarted;
@@ -528,7 +528,7 @@ test('foreground consumers promote already-dispatched same-key background HTTP w
 
 test('recordInFlightPreemption records the exact live request once and is idempotent for duplicate calls', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=private%2Fdirect-record&size=480&v=secret';
+  const productionUrl = 'http://127.0.0.1:4173/cover/private%2Fdirect-record?size=480&v=secret';
   const controller = new AbortController();
   let requestId = '';
   const previewCache = new context.GalleryCoverPreviewCache({
@@ -592,7 +592,7 @@ test('recordInFlightPreemption preserves the approved render-generation reason i
     urlApi: { createObjectURL() { return 'blob:unused'; } },
     locationOrigin: 'http://127.0.0.1:4173',
   });
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=private%2Frender-change&size=480&v=secret';
+  const productionUrl = 'http://127.0.0.1:4173/cover/private%2Frender-change?size=480&v=secret';
   const normalizedProductionUrl = previewCache.normalizeProductionUrl(productionUrl);
   const requestId = 'gallery-cover-render-generation-1';
   const liveFetch = {
@@ -645,7 +645,7 @@ test('gallery preview cache records each intentional abort atomically with redac
     locationOrigin: 'http://127.0.0.1:4173',
   });
   const urls = Array.from({ length: 66 }, (_, index) => (
-    `http://127.0.0.1:4173/cover?path=private%2Falbum-${index}&size=480&v=secret-${index}`
+    `http://127.0.0.1:4173/cover/private%2Falbum-${index}?size=480&v=secret-${index}`
   ));
   const pending = urls.map((url) => previewCache.prefetch(url));
   await waitUntil(() => previewCache.liveFetches.size === urls.length);
@@ -673,7 +673,7 @@ test('gallery preview cache records each intentional abort atomically with redac
 
 test('gallery preview cache revokes a blob that resolves after destroy instead of resurrecting active state', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=late&size=480&v=initial';
+  const productionUrl = 'http://127.0.0.1:4173/cover/late?size=480&v=initial';
   const revoked = [];
   let releaseBlob;
   const blobReady = new Promise((resolve) => { releaseBlob = resolve; });
@@ -717,7 +717,7 @@ test('gallery preview cache revokes a blob that resolves after destroy instead o
 
 test('destroy aborts a hung active attempt, cleans ownership, and permits one fresh same-key request', async () => {
   const { context, warnings } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=destroy-hung&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/destroy-hung?size=480&v=epoch-1';
   const fetchCalls = [];
   let firstRequestStarted;
   const firstRequestGate = new Promise((resolve) => { firstRequestStarted = resolve; });
@@ -785,7 +785,7 @@ test('destroy aborts a hung active attempt, cleans ownership, and permits one fr
 
 test('gallery preview cache deletes an invalid cached response and refetches one valid image', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=invalid-cache&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/invalid-cache?size=480&v=epoch-1';
   let fetchCount = 0;
   const deleted = [];
   const cache = {
@@ -823,7 +823,7 @@ test('gallery preview cache deletes an invalid cached response and refetches one
 
 test('aborting a valid cached response during validation preserves it for the next resolve', async () => {
   const { context, warnings } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=cancelled-cache-read&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/cancelled-cache-read?size=480&v=epoch-1';
   const baseKey = storeKey(productionUrl);
   const validationGate = deferredHost();
   const controller = new AbortController();
@@ -884,7 +884,7 @@ test('aborting a valid cached response during validation preserves it for the ne
 
 test('a cached body AbortError without a caller signal remains a cancellation, not invalid content', async () => {
   const { context, warnings } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=cache-body-abort&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/cache-body-abort?size=480&v=epoch-1';
   let blobReads = 0;
   let fetchCount = 0;
   let deleteCount = 0;
@@ -935,7 +935,7 @@ test('a cached body AbortError without a caller signal remains a cancellation, n
 
 test('cache write failure displays the fetched blob without issuing a second cover request', async () => {
   const { context, warnings } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=quota&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/quota?size=480&v=epoch-1';
   const putGate = deferredHost();
   let fetchCount = 0;
   let putStarted = false;
@@ -1000,7 +1000,7 @@ test('background prefetch waits for the durable Cache Storage write without allo
   });
 
   let settled = false;
-  const pending = previewCache.prefetch('http://127.0.0.1:4173/cover?path=background&size=480&v=epoch-1')
+  const pending = previewCache.prefetch('http://127.0.0.1:4173/cover/background?size=480&v=epoch-1')
     .finally(() => { settled = true; });
   while (!putStarted) await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
@@ -1016,7 +1016,7 @@ test('background prefetch waits for the durable Cache Storage write without allo
 test('same-image same-URL requests use tokens so an older completion cannot overwrite the newer request', () => {
   const { context } = createContext();
   const image = new context.HTMLImageElement();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=same&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/same?size=480&v=epoch-1';
   const older = context.beginGalleryCoverImageRequest(image, productionUrl);
   const newer = context.beginGalleryCoverImageRequest(image, productionUrl);
 
@@ -1030,7 +1030,7 @@ test('same-image same-URL requests use tokens so an older completion cannot over
 
 test('per-key invalidation during fetch prevents stale cache.put and object URL creation', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=refreshing&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/refreshing?size=480&v=epoch-1';
   const gate = deferredHost();
   let putCount = 0;
   let objectUrlCount = 0;
@@ -1063,8 +1063,8 @@ test('per-key invalidation during fetch prevents stale cache.put and object URL 
 
 test('a newer cover revision replaces the stable persistent entry without enumerating the cache', async () => {
   const { context } = createContext();
-  const currentUrl = 'http://127.0.0.1:4173/cover?path=pinned&size=480&v=epoch-7';
-  const staleUrl = 'http://127.0.0.1:4173/cover?path=pinned&size=480&v=epoch-6';
+  const currentUrl = 'http://127.0.0.1:4173/cover/pinned?size=480&v=epoch-7';
+  const staleUrl = 'http://127.0.0.1:4173/cover/pinned?size=480&v=epoch-6';
   const baseKey = storeKey(currentUrl);
   const stored = new Map([[baseKey, createResponse('stale', staleUrl)]]);
   let entryKeyScans = 0;
@@ -1093,8 +1093,8 @@ test('a newer cover revision replaces the stable persistent entry without enumer
 
 test('concurrent cover epochs serialize replacement ownership by their unversioned base key', async () => {
   const { context } = createContext();
-  const firstUrl = 'http://127.0.0.1:4173/cover?path=shared-epoch&size=480&v=epoch-1';
-  const secondUrl = 'http://127.0.0.1:4173/cover?path=shared-epoch&size=480&v=epoch-2';
+  const firstUrl = 'http://127.0.0.1:4173/cover/shared-epoch?size=480&v=epoch-1';
+  const secondUrl = 'http://127.0.0.1:4173/cover/shared-epoch?size=480&v=epoch-2';
   const baseKey = storeKey(firstUrl);
   const firstPutGate = deferredHost();
   const stored = new Map();
@@ -1150,8 +1150,8 @@ test('concurrent cover epochs serialize replacement ownership by their unversion
 
 test('a delayed old epoch cannot overwrite a newer epoch whose response completes first', async () => {
   const { context } = createContext();
-  const firstUrl = 'http://127.0.0.1:4173/cover?path=inverted-epoch&size=480&v=epoch-1';
-  const secondUrl = 'http://127.0.0.1:4173/cover?path=inverted-epoch&size=480&v=epoch-2';
+  const firstUrl = 'http://127.0.0.1:4173/cover/inverted-epoch?size=480&v=epoch-1';
+  const secondUrl = 'http://127.0.0.1:4173/cover/inverted-epoch?size=480&v=epoch-2';
   const baseKey = storeKey(firstUrl);
   const firstResponseGate = deferredHost();
   const firstRequestStarted = deferredHost();
@@ -1206,9 +1206,9 @@ test('a delayed old epoch cannot overwrite a newer epoch whose response complete
 
 test('later cover epochs replace the same stable persistent entry', async () => {
   const { context } = createContext();
-  const firstUrl = 'http://127.0.0.1:4173/cover?path=later-epoch&size=480&v=epoch-1';
-  const secondUrl = 'http://127.0.0.1:4173/cover?path=later-epoch&size=480&v=epoch-2';
-  const thirdUrl = 'http://127.0.0.1:4173/cover?path=later-epoch&size=480&v=epoch-3';
+  const firstUrl = 'http://127.0.0.1:4173/cover/later-epoch?size=480&v=epoch-1';
+  const secondUrl = 'http://127.0.0.1:4173/cover/later-epoch?size=480&v=epoch-2';
+  const thirdUrl = 'http://127.0.0.1:4173/cover/later-epoch?size=480&v=epoch-3';
   const baseKey = storeKey(firstUrl);
   const stored = new Map([[baseKey, createResponse('v1', firstUrl)]]);
   const deleted = [];
@@ -1241,7 +1241,7 @@ test('later cover epochs replace the same stable persistent entry', async () => 
 
 test('foreground resolves before cache.put, then invalidation revokes it and deletes the late write before refetch', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=late-put&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/late-put?size=480&v=epoch-1';
   const putGate = deferredHost();
   const stored = new Map();
   const lateDelete = deferredHost();
@@ -1293,7 +1293,7 @@ test('foreground resolves before cache.put, then invalidation revokes it and del
 
 test('aborted background prefetch does not populate Cache Storage', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=aborted&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/aborted?size=480&v=epoch-1';
   let putCount = 0;
   const controller = new AbortController();
   const previewCache = new context.GalleryCoverPreviewCache({
@@ -1330,7 +1330,7 @@ test('aborted background prefetch does not populate Cache Storage', async () => 
 
 test('modal-style abortInFlight prevents a late foreground blob from creating an object URL or cache write', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=modal-abort&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/modal-abort?size=480&v=epoch-1';
   const blobGate = deferredHost();
   let blobStarted = false;
   let putCount = 0;
@@ -1379,7 +1379,7 @@ test('modal-style abortInFlight prevents a late foreground blob from creating an
 
 test('destroy during cache.put deletes the late persistent write', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=destroy-put&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/destroy-put?size=480&v=epoch-1';
   const putGate = deferredHost();
   const putEntered = deferredHost();
   const stored = new Map();
@@ -1411,7 +1411,7 @@ test('destroy during cache.put deletes the late persistent write', async () => {
 
 test('abort during cache.put releases the prefetch caller immediately and cleans the late write', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=abort-put&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/abort-put?size=480&v=epoch-1';
   const putGate = deferredHost();
   const stored = new Map();
   const controller = new AbortController();
@@ -1443,7 +1443,7 @@ test('abort during cache.put releases the prefetch caller immediately and cleans
 
 test('same-key cache writes wait for stale cleanup before the resumed durable write begins', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=same-key-owner&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/same-key-owner?size=480&v=epoch-1';
   const baseKey = storeKey(productionUrl);
   const oldPutGate = deferredHost();
   const newPutGate = deferredHost();
@@ -1520,8 +1520,8 @@ test('same-key cache writes wait for stale cleanup before the resumed durable wr
 
 test('different-key cache writes retain parallel ownership', async () => {
   const { context } = createContext();
-  const firstUrl = 'http://127.0.0.1:4173/cover?path=parallel-a&size=480&v=epoch-1';
-  const secondUrl = 'http://127.0.0.1:4173/cover?path=parallel-b&size=480&v=epoch-1';
+  const firstUrl = 'http://127.0.0.1:4173/cover/parallel-a?size=480&v=epoch-1';
+  const secondUrl = 'http://127.0.0.1:4173/cover/parallel-b?size=480&v=epoch-1';
   const firstBaseKey = storeKey(firstUrl);
   const secondBaseKey = storeKey(secondUrl);
   const gates = new Map([
@@ -1561,7 +1561,7 @@ test('different-key cache writes retain parallel ownership', async () => {
 
 test('a same-key write cancelled before its ownership turn skips cache.put', async () => {
   const { context } = createContext();
-  const productionUrl = 'http://127.0.0.1:4173/cover?path=cancelled-before-turn&size=480&v=epoch-1';
+  const productionUrl = 'http://127.0.0.1:4173/cover/cancelled-before-turn?size=480&v=epoch-1';
   const oldPutGate = deferredHost();
   const oldController = new AbortController();
   const queuedController = new AbortController();
@@ -1640,7 +1640,7 @@ test('stored gallery covers name no file path and the old path-keyed cache is de
     urlApi: { createObjectURL() { return 'blob:cover'; } },
     locationOrigin: 'http://127.0.0.1:4173',
   });
-  const productionUrl = `http://127.0.0.1:4173/cover?path=${encodeURIComponent('C:/Music/Broadcast/cover.jpg')}&size=480&v=epoch-1`;
+  const productionUrl = `http://127.0.0.1:4173/cover/${encodeURIComponent('C:/Music/Broadcast/cover.jpg')}?size=480&v=epoch-1`;
 
   await previewCache.prefetch(productionUrl);
 
@@ -1657,7 +1657,7 @@ test('the gallery cache and the app-copy worker key a cover identically', async 
   const { context } = createContext();
   const { createAppCopyWorker, COPY_HEADER } = require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js'));
   const origin = 'http://127.0.0.1:4173';
-  const coverUrl = `/cover?path=${encodeURIComponent('C:/Music/Mono/cover.jpg')}&size=480&v=process-1`;
+  const coverUrl = '/cover/MonoCoverReference0000?size=480&v=process-1';
   const pages = new Map();
   const caches = {
     async keys() { return [...pages.keys()]; },
@@ -1695,7 +1695,7 @@ test('the gallery cache and the app-copy worker key a cover identically', async 
 test('a cover key is computed synchronously, so a cover load waits on nothing new', () => {
   const { context } = createContext();
   const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });
-  const productionUrl = `http://127.0.0.1:4173/cover?path=${encodeURIComponent('C:/Music/БИ-2/cover.jpg')}&size=480&v=epoch-9`;
+  const productionUrl = `http://127.0.0.1:4173/cover/${encodeURIComponent('C:/Music/БИ-2/cover.jpg')}?size=480&v=epoch-9`;
 
   const key = previewCache.storedCoverKey(productionUrl);
 
@@ -1716,7 +1716,7 @@ test('a new version of a cover reuses its key without hashing again', () => {
   const { context } = createContext();
   const hashes = countCoverHashes(context);
   const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });
-  const urls = Array.from({ length: 50 }, (_, index) => `http://127.0.0.1:4173/cover?path=album-${index}&size=480&v=epoch-1`);
+  const urls = Array.from({ length: 50 }, (_, index) => `http://127.0.0.1:4173/cover/album-${index}?size=480&v=epoch-1`);
 
   const keys = urls.map(url => previewCache.storedCoverKey(url));
   assert.equal(hashes.count, 50);
@@ -1737,7 +1737,7 @@ test('a burst of new covers hashes outside the task that started it', async () =
     urlApi: { createObjectURL(blob) { return `blob:${blob.id}`; } },
     locationOrigin: 'http://127.0.0.1:4173',
   });
-  const urls = Array.from({ length: 40 }, (_, index) => `http://127.0.0.1:4173/cover?path=burst-${index}&size=480&v=1`);
+  const urls = Array.from({ length: 40 }, (_, index) => `http://127.0.0.1:4173/cover/burst-${index}?size=480&v=1`);
 
   const loads = urls.map(url => previewCache.resolve(url));
   // Every microtask of the starting task has run: no cover was hashed inside it.
@@ -1766,7 +1766,7 @@ test('a saved cover shows its new version and never the stale one', async () => 
     urlApi: { createObjectURL(blob) { objectUrls += 1; return `blob:${blob.id}-${objectUrls}`; }, revokeObjectURL() {} },
     locationOrigin: 'http://127.0.0.1:4173',
   });
-  const before = 'http://127.0.0.1:4173/cover?path=saved-album&size=480&v=rev-1';
+  const before = 'http://127.0.0.1:4173/cover/saved-album?size=480&v=rev-1';
   const after = before.replace('rev-1', 'rev-2');
 
   const first = await previewCache.prefetch(before);

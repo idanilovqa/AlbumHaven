@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.10 - 2026-11-15
+
+- Covers are addressed by opaque references (`/cover/<reference>`): no page or payload carries a local cover file path or the music folder any more. Migration 0200 stores the references and 0201 names every stored cover without changing any cover choice.
+- Only images the library names as covers can be fetched; the legacy `/cover?path=` route no longer serves other files under a library root and will be removed in a later release.
+- Cover responses are cached privately by the viewer's browser only.
+
 ## 0.11.9 - 2026-11-15
 
 - Added the append-only migration attestation table (migration 0210) used to reconcile the production migration ledger with the repository without rewriting its history. Fresh databases need no attestations; production applies it only through the owner-approved reconciliation plan.

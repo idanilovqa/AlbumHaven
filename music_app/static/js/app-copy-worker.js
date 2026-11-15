@@ -8,10 +8,11 @@
 // no-store. Signing in or out deletes every copy, as does a page for another account.
 // The copy is only for showing: every write goes to the server.
 //
-// No file path is stored on the device. The server addresses local covers by path
-// (`/cover?path=…`), so a kept page has every `cover_path` and `music_dir` emptied and every cover
-// URL replaced by an opaque key, the SHA-256 of that URL without its version; cover bytes seen online
-// are kept under the same key, least recently seen out first past 200 MB.
+// No file path is stored on the device. The server names covers by opaque reference
+// (`/cover/<reference>`); pages served before that change named them by path (`/cover?path=…`).
+// A kept page has every cover URL replaced by an opaque key, the SHA-256 of that URL without its
+// version, and any leftover `cover_path` or `music_dir` emptied; cover bytes seen online are kept
+// under the same key, least recently seen out first past 200 MB.
 (function appCopyWorker(root) {
   'use strict';
 
@@ -24,8 +25,9 @@
   const MAX_COVER_BYTES = 200 * 1024 * 1024;
   const COVER_KEY_PREFIX = '/__album-haven-cover/';
   const MAX_COVER_FILLS = 120;
-  // A cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`); paths are percent-encoded.
-  const COVER_URL = /\/cover\?path=[^"'\s<>]*/g;
+  // A cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`); legacy paths are
+  // percent-encoded.
+  const COVER_URL = /\/cover(?:\?path=|\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$))[^"'\s<>]*/g;
   const PATH_FIELDS = /("(?:cover_path|music_dir)":\s*)"(?:[^"\\]|\\.)*"/g;
   const PATH_ATTRIBUTES = /(data-cover-path=)"[^"]*"/g;
   const NETWORK_MARKER = '<meta name="album-haven-app-copy" content="network"';
@@ -300,7 +302,7 @@
       }
       if (url.pathname.startsWith('/static/')) return url.searchParams.has('v') ? 'versioned-asset' : 'asset';
       if (url.pathname.startsWith(COVER_KEY_PREFIX)) return 'kept-cover';
-      return url.pathname === '/cover' ? 'cover' : null;
+      return url.pathname === '/cover' || url.pathname.startsWith('/cover/') ? 'cover' : null;
     }
 
     const handlers = {

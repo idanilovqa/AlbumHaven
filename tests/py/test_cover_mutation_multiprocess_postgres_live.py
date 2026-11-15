@@ -212,7 +212,7 @@ def _assert_no_sessions(database: _Database, application_names: list[str]) -> No
     pytest.fail("owned cover-writer database sessions remained after process cleanup", pytrace=False)
 
 
-def _assert_process_pair(database: _Database, tmp_path: Path, *, same_album: bool) -> None:
+def _prepare_writers(database: _Database, tmp_path: Path, *, same_album: bool) -> list[_Writer]:
     scope = _seed_scope(database.setup_url, database.app_url, database.worker_url, database.readonly_url)
     second_scope = scope if same_album else _second_album(scope)
     app_content, worker_content = _image_bytes("red"), _image_bytes("blue")
@@ -236,6 +236,11 @@ def _assert_process_pair(database: _Database, tmp_path: Path, *, same_album: boo
             f"cover-mp-worker-{token}", second_path, worker_content, fence,
         ),
     ]
+    return writers
+
+
+@contextmanager
+def _spawned_writers(database: _Database, writers: list[_Writer]):
     context = multiprocessing.get_context("spawn")
     releases, queues, processes = [], [], []
     try:
@@ -246,6 +251,51 @@ def _assert_process_pair(database: _Database, tmp_path: Path, *, same_album: boo
             processes.append(context.Process(
                 target=_write_in_process, args=(writer, release, messages),
             ))
+        yield releases, queues, processes
+    finally:
+        cleanup_errors = []
+        # A terminated Event waiter cannot acknowledge Condition.notify_all.
+        for release, process in zip(releases, processes):
+            try:
+                if process.pid is not None and process.is_alive():
+                    release.set()
+            except BaseException as error:
+                cleanup_errors.append(type(error).__name__)
+        for process in processes:
+            try:
+                if process.pid is not None:
+                    process.join(10)
+                    if process.is_alive():
+                        process.terminate()
+                        process.join(5)
+                    if process.is_alive():
+                        process.kill()
+                        process.join(5)
+                    if process.is_alive():
+                        cleanup_errors.append("owned cover writer did not exit")
+                    else:
+                        process.close()
+                else:
+                    process.close()
+            except BaseException as error:
+                cleanup_errors.append(type(error).__name__)
+        for messages in queues:
+            try:
+                messages.close()
+                messages.join_thread()
+            except BaseException as error:
+                cleanup_errors.append(type(error).__name__)
+        _assert_no_sessions(database, [writer.application_name for writer in writers])
+        assert not cleanup_errors, cleanup_errors
+
+
+
+def _assert_process_pair(database: _Database, tmp_path: Path, *, same_album: bool) -> None:
+    writers = _prepare_writers(database, tmp_path, same_album=same_album)
+    scope = writers[0].scope
+    first_path, second_path = [writer.artifact_path for writer in writers]
+    app_content, worker_content = [writer.content for writer in writers]
+    with _spawned_writers(database, writers) as (releases, queues, processes):
         processes[0].start()
         _receive(queues[0], "session")
         first_entered = _receive(queues[0], "entered")
@@ -320,36 +370,6 @@ def _assert_process_pair(database: _Database, tmp_path: Path, *, same_album: boo
             assert baseline.selected_cover_revision == hashlib.sha256(expected).hexdigest()
             selection_matches_artifact = baseline.selected_cover_path == str(writer.artifact_path)
             assert selection_matches_artifact
-    finally:
-        cleanup_errors = []
-        for release in releases:
-            release.set()
-        for process in processes:
-            try:
-                if process.pid is not None:
-                    process.join(10)
-                    if process.is_alive():
-                        process.terminate()
-                        process.join(5)
-                    if process.is_alive():
-                        process.kill()
-                        process.join(5)
-                    if process.is_alive():
-                        cleanup_errors.append("owned cover writer did not exit")
-                    else:
-                        process.close()
-                else:
-                    process.close()
-            except BaseException as error:
-                cleanup_errors.append(type(error).__name__)
-        for messages in queues:
-            try:
-                messages.close()
-                messages.join_thread()
-            except BaseException as error:
-                cleanup_errors.append(type(error).__name__)
-        _assert_no_sessions(database, [writer.application_name for writer in writers])
-        assert not cleanup_errors, cleanup_errors
 
 
 def test_same_album_app_and_worker_processes_serialize(_database, tmp_path):
@@ -358,3 +378,73 @@ def test_same_album_app_and_worker_processes_serialize(_database, tmp_path):
 
 def test_different_albums_app_and_worker_processes_enter_concurrently(_database, tmp_path):
     _assert_process_pair(_database, tmp_path, same_album=False)
+
+
+def test_claimed_worker_completes_after_locked_app_process_exits(_database, tmp_path):
+    writers = _prepare_writers(_database, tmp_path, same_album=True)
+    worker_fence = writers[1].fence
+    assert worker_fence is not None
+    scope = writers[0].scope
+    identity = coordinator.CoverMutationIdentity(scope.library_id, scope.album_id)
+    repository = PostgresCoverMutationRepository(database_url=_database.app_url)
+    with _spawned_writers(_database, writers) as (releases, queues, processes):
+        processes[0].start()
+        _receive(queues[0], "session")
+        _receive(queues[0], "entered")
+        processes[1].start()
+        second_session = _receive(queues[1], "session")
+        _assert_waiting_for_album_lock(_database, second_session["pid"], identity)
+
+        artifact_exists = writers[0].artifact_path.exists()
+        assert not artifact_exists
+        assert repository.load_baseline(identity=identity).cover_mutation_revision == 0
+        terminated_at = monotonic_ns()
+        processes[0].terminate()
+        processes[0].join(10)
+        assert not processes[0].is_alive()
+        assert processes[0].exitcode is not None and processes[0].exitcode != 0
+        _assert_no_sessions(_database, [writers[0].application_name])
+
+        second_entered = _receive(queues[1], "entered")
+        assert second_entered["time"] >= terminated_at
+        artifact_exists = writers[0].artifact_path.exists()
+        assert not artifact_exists
+        baseline = repository.load_baseline(identity=identity)
+        assert baseline.cover_mutation_revision == 0
+        assert baseline.selected_cover_revision is None
+        assert baseline.selected_cover_path is None
+
+        releases[1].set()
+        written = _receive(queues[1], "written")
+        committed = _receive(queues[1], "committed")
+        _receive(queues[1], "released")
+        _receive(queues[1], "finished")
+        processes[1].join(10)
+        assert processes[1].exitcode == 0
+        assert processes[0].pid != processes[1].pid
+        expected_revision = hashlib.sha256(writers[1].content).hexdigest()
+        assert written["time"] >= second_entered["time"]
+        assert committed["role"] == "album_haven_worker"
+        assert committed["status"] == "committed"
+        assert committed["revision"] == 1
+        assert committed["previous_selected_revision"] is None
+        assert committed["selected_revision"] == expected_revision
+        assert committed["checkpoint"] == "authority_committed"
+        actual_bytes = writers[1].artifact_path.read_bytes()
+        assert actual_bytes == writers[1].content
+        baseline = repository.load_baseline(identity=identity)
+        assert baseline.cover_mutation_revision == 1
+        assert baseline.selected_cover_revision == expected_revision
+        selection_matches_artifact = baseline.selected_cover_path == str(writers[1].artifact_path)
+        assert selection_matches_artifact
+        with isolatedPostgres._connect(_database.setup_url) as connection:
+            checkpoint = connection.execute(
+                "select checkpoint,artifact_sha256,authority_cover_mutation_revision "
+                "from ops.cover_remote_save_checkpoints where id=%s",
+                (worker_fence["checkpoint_id"],),
+            ).fetchone()
+        assert checkpoint == {
+            "checkpoint": "authority_committed",
+            "artifact_sha256": expected_revision,
+            "authority_cover_mutation_revision": 1,
+        }

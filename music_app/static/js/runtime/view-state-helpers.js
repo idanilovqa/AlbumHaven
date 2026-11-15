@@ -108,6 +108,11 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
   }
 }
 
+// The Series view (MusicBrainz Delivery 2, S6) belongs to unsearched, artist-less browsing.
+function resolveViewSeries(view = {}) {
+  return view.query || view.selected_artist ? '' : String(view.selected_series || '').trim();
+}
+
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
@@ -121,6 +126,7 @@ function buildUrl(view) {
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
+  if (resolveViewSeries(view)) params.set('series', resolveViewSeries(view));
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -153,6 +159,7 @@ function buildApiUrl(view, options = {}) {
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
+  if (resolveViewSeries(view)) params.set('series', resolveViewSeries(view));
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -165,6 +172,8 @@ function buildApiUrl(view, options = {}) {
   (view.visible_library_categories || []).forEach((category) => {
     if (category) params.append('category', category);
   });
+  // A series is one bounded view: never paged, tiered, anchored or filtered like artists.
+  if (resolvedSurface === 'albums' && resolveViewSeries(view)) return `/view-data?${params.toString()}`;
   (view.related_filter_artists || []).forEach((artist) => {
     if (artist) params.append('related_artist', artist);
   });
@@ -203,6 +212,7 @@ function parseUrlStateFromUrl(url, baseOrigin) {
     playlist_id: u.searchParams.get('playlist_id') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
+    selected_series: u.searchParams.get('series') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
     gallery_scope: u.searchParams.get('gallery_scope') || 'all',
     gallery_display_mode: normalizeGalleryDisplayMode(u.searchParams.get('gallery_display')),

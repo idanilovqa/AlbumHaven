@@ -206,8 +206,9 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
             return [_row_mapping(row) for row in connection.execute(sql, params).fetchall()]
 
     def record(self, *, job_id: int, worker_id: str, outcomes: list[dict[str, object]], observed_at: datetime) -> int:
-        """Store the release groups and releases seen, then each compared album's decision.
-        An owner's manual choice is kept; albums no longer present simply have no row."""
+        """Store the release groups and releases seen with the series each is part of, then
+        each compared album's decision. An owner's manual choice is kept; albums no longer
+        present simply have no row."""
         observed = _aware_utc(observed_at)
         groups, releases, albums = {}, {}, []
         for outcome in outcomes:
@@ -221,12 +222,30 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                     connection.execute(_UPSERT_GROUP, _group_params(group, observed))
                 for release in releases.values():
                     connection.execute(_UPSERT_RELEASE, _release_params(release, groups, observed))
+                _replace_series(connection, groups.values(), releases.values(), observed)
                 row = connection.execute(_REPLACE_ALBUMS, {
                     "job_id": _positive_id(job_id), "worker_id": _bounded_text(worker_id, 128, required=True),
                     "job_kind": JOB_KIND, "observed_at": observed, "matcher_version": RELEASE_MATCHER_VERSION,
                     "rows": json.dumps([_album_row(album, releases) for album in albums]),
                 }).fetchone()
         return int(_row_mapping(row).get("stored") or 0)
+
+
+    def unsized_series(self, *, limit: int) -> list[str]:
+        """Series stored without their size yet, oldest first."""
+        with self._connect(self._database_url) as connection:
+            return [str(_row_mapping(row)["mbid"]) for row in connection.execute(
+                "select mbid::text from integration.musicbrainz_series where member_count is null"
+                " order by created_at, mbid limit %(limit)s", {"limit": max(1, int(limit))}).fetchall()]
+
+    def store_series_size(self, *, mbid: str, member_count: int, observed_at: datetime) -> None:
+        """How many release groups and releases MusicBrainz lists in the series; the computed
+        kind follows. An owner's choice of kind is untouched."""
+        with self._connect(self._database_url) as connection:
+            connection.execute(
+                "update integration.musicbrainz_series set member_count = %(count)s, updated_at = %(observed_at)s"
+                " where mbid = %(mbid)s::uuid",
+                {"mbid": mbid, "count": max(0, int(member_count)), "observed_at": _aware_utc(observed_at)})
 
 
 def _date(value: object) -> str | None:
@@ -260,6 +279,33 @@ def _release_params(release: dict[str, object], groups: dict[str, object], obser
             "media": json.dumps(release.get("media") or []), "observed_at": observed}
 
 
+def _series_rows(entity: dict[str, object]) -> list[dict[str, object]]:
+    return [{"mbid": part["mbid"], "name": str(part.get("name") or "")[:1024] or "[untitled]",
+             "type": _text(part.get("type"), 64), "disambiguation": _text(part.get("disambiguation"), 1024),
+             "number": _text(part.get("number"), 64), "ordering_key": part.get("ordering_key")}
+            for part in entity.get("series") or [] if isinstance(part, dict) and part.get("mbid")]
+
+
+def _replace_series(connection, groups, releases, observed: datetime) -> None:
+    """Each looked-up release group and release gets exactly the series MusicBrainz named
+    for it. A lookup made without series relations (no ``series`` key) changes nothing."""
+    looked_up = [(table, column, entity) for table, column, entities in (
+        ("integration.musicbrainz_release_group_series", "release_group_mbid", groups),
+        ("integration.musicbrainz_release_series", "release_mbid", releases)) for entity in entities
+        if isinstance(entity.get("series"), list)]
+    series = {row["mbid"]: row for _table, _column, entity in looked_up for row in _series_rows(entity)}
+    if series:
+        connection.execute(_UPSERT_SERIES, {"series": json.dumps(list(series.values())), "observed_at": observed})
+    for table, column, entity in looked_up:
+        params = {"mbid": entity["id"], "series": json.dumps(_series_rows(entity))}
+        connection.execute(f"delete from {table} where {column} = %(mbid)s::uuid", params)
+        connection.execute(
+            f"insert into {table} ({column}, series_mbid, ordering_number, ordering_key)"
+            " select distinct on (rows.mbid) %(mbid)s::uuid, rows.mbid, rows.number, rows.ordering_key"
+            " from jsonb_to_recordset(%(series)s::jsonb) as rows(mbid uuid, number text, ordering_key integer)",
+            params)
+
+
 def _album_row(album: dict[str, object], releases: dict[str, object]) -> dict[str, object]:
     main = album.get("main_disc") or {}
     original = album.get("original_release_mbid")
@@ -284,6 +330,16 @@ _UPSERT_GROUP = """
     set title = excluded.title, primary_type = excluded.primary_type, secondary_types = excluded.secondary_types,
         first_release_date = excluded.first_release_date, disambiguation = excluded.disambiguation,
         genres = excluded.genres, refreshed_at = excluded.refreshed_at, updated_at = excluded.updated_at;
+"""
+
+_UPSERT_SERIES = """
+    insert into integration.musicbrainz_series (mbid, name, series_type, disambiguation, refreshed_at, created_at,
+                                                updated_at)
+    select rows.mbid, rows.name, rows.type, rows.disambiguation, %(observed_at)s, %(observed_at)s, %(observed_at)s
+    from jsonb_to_recordset(%(series)s::jsonb) as rows(mbid uuid, name text, type text, disambiguation text)
+    on conflict (mbid) do update
+    set name = excluded.name, series_type = excluded.series_type, disambiguation = excluded.disambiguation,
+        refreshed_at = excluded.refreshed_at, updated_at = excluded.updated_at;
 """
 
 _UPSERT_RELEASE = """

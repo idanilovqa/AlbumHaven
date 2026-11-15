@@ -257,6 +257,20 @@ function buildGalleryBarHtml(config = {}) {
     </div>`;
 }
 
+// The Series view's Gallery Bar (approved 2 and 4B). One series: its name and i, then
+// "Album series • N albums" under it; a phone keeps the band header's "• N albums" and no
+// subheader. All series: "Series" with its totals, like the artist gallery.
+function resolveSeriesGalleryBarContent({ series = null, seriesCount = 0, albumCount = 0, mobile = false } = {}) {
+  if (!series) {
+    return { name: 'Series', inlineTotal: '', metadataHtml: '', summary: `${Math.max(0, Number(seriesCount || 0))} series · ${galleryMainPlural(albumCount, 'album')}` };
+  }
+  const total = galleryMainPlural(albumCount, 'album');
+  return mobile
+    ? { name: series.name || '', inlineTotal: total, metadataHtml: '', summary: '' }
+    : { name: series.name || '', inlineTotal: '', summary: '',
+      metadataHtml: `<span class="gallery-bar__summary">${escapeHtml(series.type_label || 'Series')}</span><span class="gallery-bar__artist-total">${escapeHtml(total)}</span>` };
+}
+
 function buildArtistFamilyPanelHtml(config = {}) {
   const combineSwitch = buildGallerySwitchHtml({
     id: 'artist-family-combine-similar',

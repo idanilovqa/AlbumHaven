@@ -610,7 +610,11 @@ function updateGalleryMainChrome() {
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
-  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
+  const series = state.view.series || null;
+  // One series owns its header while scrolling; All series follows the artist gallery.
+  const seriesHeader = !mobileHome && Boolean(String(state.view.selected_series || '').trim())
+    && Boolean(series || context.kind === 'gallery');
+  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : (seriesHeader ? 'series' : context.kind);
   summary.hidden = false;
   if (metadata) {
     metadata.hidden = true;
@@ -625,6 +629,28 @@ function updateGalleryMainChrome() {
     name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
     oldInfo?.remove();
+  } else if (seriesHeader) {
+    const content = resolveSeriesGalleryBarContent({
+      series, seriesCount: model.groups.length, albumCount: model.totals.albumCount,
+      mobile: typeof usesMobilePageLayout === 'function' && usesMobilePageLayout(),
+    });
+    name.textContent = content.name;
+    summary.hidden = !content.summary;
+    summary.textContent = content.summary;
+    if (inlineTotal) {
+      inlineTotal.hidden = !content.inlineTotal;
+      inlineTotal.textContent = content.inlineTotal;
+    }
+    if (metadata) {
+      metadata.hidden = !content.metadataHtml;
+      metadata.innerHTML = content.metadataHtml;
+    }
+    if (!series) oldInfo?.remove();
+    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    else {
+      oldInfo.dataset.artist = series.name;
+      oldInfo.setAttribute('aria-label', `Information about ${series.name}`);
+    }
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
@@ -742,11 +768,22 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
+// A series' i (Series view): its MusicBrainz type, album count and MusicBrainz page, in the
+// artist information surface.
+function renderGallerySeriesInfo(overlay, series) {
+  const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close series information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
+  const link = ButtonComponent.renderExternalServiceLink({ service: 'musicbrainz', href: series.musicbrainz_url, subject: series.name });
+  overlay.setAttribute('aria-label', `Information about ${series.name}`);
+  overlay.innerHTML = `${closeAction}<header><div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div><div><span>${series.kind === 'featured_in' ? 'Featured In' : 'Series'}</span><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(`${series.type_label || 'Series'} • ${galleryMainPlural(series.album_count, 'album')}`)}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
+  return overlay;
+}
+
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
+  if (group.series) return renderGallerySeriesInfo(overlay, group.series);
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
@@ -841,7 +878,27 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// Album details' SERIES link opens that series' gallery (approved 1B and 4A).
+function openSeriesGallery(mbid) {
+  const navigate = () => fetchAndRender(buildUrl({
+    surface_request: 'albums',
+    visible_library_categories: state.view?.visible_library_categories || [],
+    selected_series: mbid,
+  }), true);
+  if (document.getElementById('track-modal')?.hidden === false) {
+    closeTrackModal();
+    // A phone's album page closes through history: open the series once it has.
+    if (typeof hasActiveMobilePage === 'function' && hasActiveMobilePage()) {
+      window.addEventListener('popstate', () => setTimeout(navigate, 0), { once: true });
+      return;
+    }
+  }
+  navigate();
+}
+
 function handleGalleryMainClick(event) {
+  const seriesLink = event.target.closest?.('[data-open-series]');
+  if (seriesLink) { event.preventDefault(); openSeriesGallery(seriesLink.dataset.openSeries); return true; }
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
@@ -983,6 +1040,12 @@ function initGalleryMain() {
   const recentSearch = document.getElementById('recent-search-popover');
   if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
   updateGalleryMainChrome();
+  // The page renders unsearched browsing first; a Series view URL (reload, shared link)
+  // then opens its series.
+  const locationState = parseBrowserUrlState(window.location.href);
+  if (resolveViewSeries(locationState) && !state.view.selected_series) {
+    void fetchAndRender(buildUrl(locationState), false);
+  }
 }
 
 function createGalleryFamilyPaintController(toggle) {

@@ -126,6 +126,10 @@
         {% call action_button('Artist Tree', class_name='shell-navigation-compact-action', id='artist-tree-navigation-button', title='Artist Tree', attributes={'data-toggle-artist-tree-fold': '1', 'aria-controls': 'sidebar-list', 'aria-expanded': 'false'}, presentation='bare') %}
           <svg viewBox="0 0 24 24" aria-hidden="true"><g stroke-width="1.25"><path d="M12 20V5M12 8 9 5V2M9 5 6 3M12 6l3-3V1.5M15 3l3-1M12 12 7 9 5 6M7 9H3l-1-2M5 6V3.5M12 10l5-3 2-3M17 7h4l1-2M19 4V2.5M12 16l-5-3-3-1-2-2M7 13v-2M12 15l5-3 3-1 2-3M17 12V9.5M12 19l-3 3M12 19l3 3M12 20v2M9 22H7M15 22h2"></path></g></svg>
         {% endcall %}
+        {# MusicBrainz series (owner-approved 3A, "Linked sleeves"; the kept "Box set" alternative is in the internal design references). #}
+        {% call action_button('Series', class_name='shell-navigation-compact-action', id='series-tree-navigation-button', title='Series', attributes={'data-open-series-tree': '1', 'aria-controls': 'sidebar-list'}, presentation='bare') %}
+          <svg viewBox="0 0 24 24" aria-hidden="true"><g stroke-width="1.25"><rect x="2.5" y="2.5" width="9" height="9" rx="1.6"></rect><circle cx="7" cy="7" r="1.8"></circle><rect x="12.5" y="12.5" width="9" height="9" rx="1.6"></rect><circle cx="17" cy="17" r="1.8"></circle><rect x="9.6" y="10.9" width="4.8" height="2.2" rx="1.1" transform="rotate(45 12 12)"></rect></g></svg>
+        {% endcall %}
       </nav>
     </aside>
     <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>

@@ -106,8 +106,9 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (button) {
     button.hidden = !canFold || isFolded;
     button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
-    button.setAttribute('aria-label', 'Collapse Artist Tree');
-    button.setAttribute('title', 'Collapse Artist Tree');
+    const label = showsSeriesTree() ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
   }
   if (navigationButton) {
     navigationButton.hidden = !(isFolded || isExpanding);
@@ -158,6 +159,25 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
   fallbackTimer = setTimeout(finish, duration + 50);
   cancelPendingArtistTreeResize = cleanup;
+}
+
+// MusicBrainz Delivery 2, S6: the navigation tree lists series while the Series view is
+// open. A phone's drawer keeps its artists (how a phone reaches the Series list is open).
+function showsSeriesTree(view = state.view) {
+  return Boolean(String(view?.selected_series || '').trim()) && !isArtistsDrawerMobileViewport();
+}
+
+// The folded rail's Series button opens the tree on All series; its Artist Tree button
+// brings the artists back. Either unfolds the tree.
+function openNavigationTree(kind) {
+  if (showsSeriesTree() !== (kind === 'series')) {
+    fetchAndRender(buildUrl({
+      surface_request: 'albums',
+      visible_library_categories: state.view?.visible_library_categories || [],
+      selected_series: kind === 'series' ? 'all' : '',
+    }), true);
+  }
+  if (state.ui.artistTreeFolded) toggleArtistTreeFold();
 }
 
 function toggleArtistTreeFold() {
@@ -228,10 +248,17 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const seriesButton = event.target.closest('[data-open-series-tree="1"]');
+  if (seriesButton) {
+    event.preventDefault();
+    openNavigationTree('series');
+    return true;
+  }
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
-    toggleArtistTreeFold();
+    if (foldButton.id === 'artist-tree-navigation-button' && showsSeriesTree()) openNavigationTree('artists');
+    else toggleArtistTreeFold();
     return true;
   }
 

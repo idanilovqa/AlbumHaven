@@ -1,0 +1,6933 @@
+{
+"cases": {
+"list_series": "d5471f85-4b54-45da-9de7-c9ad9843c4bd",
+"real_series": "520f6fcd-251d-46cd-83a9-0bc725d42333",
+"release_group_in_series": "bbdbb3d2-bd99-4331-ba59-5c8f818c9222",
+"release_group_without_series": "586a4cca-5333-418d-aecb-dddb1fa7397a",
+"release_in_series": "f343e454-cd2e-307e-b252-d7d375ff174f",
+"release_without_series": "135d8915-379c-4b36-bb84-4f6a3171eb2c"
+},
+"responses": {
+"/release-group/586a4cca-5333-418d-aecb-dddb1fa7397a?inc=genres+series-rels&fmt=json": {
+"disambiguation": "",
+"first-release-date": "2008",
+"genres": [
+{
+"count": 1,
+"disambiguation": "",
+"id": "0e3fc579-2d24-4f20-9dae-736e1ec78798",
+"name": "rock"
+},
+{
+"count": 1,
+"disambiguation": "",
+"id": "f729e6f8-30dc-4b81-9ff4-f4e7de82225d",
+"name": "symphonic rock"
+}
+],
+"id": "586a4cca-5333-418d-aecb-dddb1fa7397a",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [],
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Empire & the Rebellion"
+},
+"/release-group/bbdbb3d2-bd99-4331-ba59-5c8f818c9222?inc=genres+series-rels&fmt=json": {
+"disambiguation": "",
+"first-release-date": "2010",
+"genres": [
+{
+"count": 1,
+"disambiguation": "",
+"id": "0e3fc579-2d24-4f20-9dae-736e1ec78798",
+"name": "rock"
+}
+],
+"id": "bbdbb3d2-bd99-4331-ba59-5c8f818c9222",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "18"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"ordering-key": 18,
+"series": {
+"disambiguation": "",
+"id": "520f6fcd-251d-46cd-83a9-0bc725d42333",
+"name": "Colossus Projects",
+"type": "Release group series",
+"type-id": "4c1c4949-7b6c-3a2d-9d54-a50a27e4fa77"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "series",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+}
+],
+"secondary-type-ids": [
+"dd2a21e1-0c00-3729-a7a0-de60b84eb5d1"
+],
+"secondary-types": [
+"Compilation"
+],
+"title": "Iliad, A Grand Piano Extravaganza"
+},
+"/release/135d8915-379c-4b36-bb84-4f6a3171eb2c?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Prog Rock band",
+"id": "28265134-3003-4fa7-9741-5579452ec144",
+"name": "Colossus Project",
+"sort-name": "Colossus Project",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Colossus Project"
+}
+],
+"asin": "B004GRRK4M",
+"barcode": null,
+"country": "FR",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2010",
+"disambiguation": "",
+"id": "135d8915-379c-4b36-bb84-4f6a3171eb2c",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "e51937f7-1e5e-35b3-a3ed-8544b603ee39",
+"position": 1,
+"title": "Iliad Books I-XI",
+"track-count": 13,
+"track-offset": 0,
+"tracks": [
+{
+"artist-credit": [
+{
+"artist": {
+"country": "CA",
+"disambiguation": "Canadian keyboardist",
+"id": "3ddd315e-65d5-4488-8bc3-ef80a204b367",
+"name": "David Myers",
+"sort-name": "Myers, David",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "David Myers"
+}
+],
+"id": "29af5a9f-04bf-4313-b9f8-f857fac6f136",
+"length": 381000,
+"number": "1",
+"position": 1,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "CA",
+"disambiguation": "Canadian keyboardist",
+"id": "3ddd315e-65d5-4488-8bc3-ef80a204b367",
+"name": "David Myers",
+"sort-name": "Myers, David",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "David Myers"
+}
+],
+"disambiguation": "",
+"id": "0589197a-1b7b-4ca6-8d35-fce2555fb56a",
+"length": 381000,
+"title": "Iliad",
+"video": false
+},
+"title": "Iliad"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "BR",
+"disambiguation": "",
+"id": "36b5493d-4352-4e9d-8b2d-5fc108d08ba4",
+"name": "Mikael Mutti",
+"sort-name": "Mutti, Mikael",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Mikael Mutti"
+}
+],
+"id": "9e4d7339-e64b-436d-83e3-52af405a5563",
+"length": 204000,
+"number": "2",
+"position": 2,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "BR",
+"disambiguation": "",
+"id": "36b5493d-4352-4e9d-8b2d-5fc108d08ba4",
+"name": "Mikael Mutti",
+"sort-name": "Mutti, Mikael",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Mikael Mutti"
+}
+],
+"disambiguation": "",
+"id": "861a0ce1-f251-4e46-baa4-0e536f028b13",
+"length": 204000,
+"title": "Proemio (Introduction)",
+"video": false
+},
+"title": "Proemio (Introduction)"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "progressive rock, Italy",
+"id": "884ae654-c1d6-4f0c-bd81-5592ab6f0827",
+"name": "Contrappunto",
+"sort-name": "Contrappunto",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Contrappunto Project"
+}
+],
+"id": "2a4c0703-5b68-41e7-bdba-e99b08532b94",
+"length": 323000,
+"number": "3",
+"position": 3,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "progressive rock, Italy",
+"id": "884ae654-c1d6-4f0c-bd81-5592ab6f0827",
+"name": "Contrappunto",
+"sort-name": "Contrappunto",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Contrappunto Project"
+}
+],
+"disambiguation": "",
+"id": "b26e2807-c762-4b6a-bad1-d7331e2799f6",
+"length": 323000,
+"title": "Book I: Cantami O Musa",
+"video": false
+},
+"title": "Book I: Cantami O Musa"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "FI",
+"disambiguation": "",
+"id": "e0596ef1-f4c1-47e5-82da-a526e9831418",
+"name": "Timo Kajamies",
+"sort-name": "Kajamies, Timo",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Timo Kajamies"
+}
+],
+"id": "39ccf913-c371-4d87-8ce8-1a45e8353b34",
+"length": 299000,
+"number": "4",
+"position": 4,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "FI",
+"disambiguation": "",
+"id": "e0596ef1-f4c1-47e5-82da-a526e9831418",
+"name": "Timo Kajamies",
+"sort-name": "Kajamies, Timo",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Timo Kajamies"
+}
+],
+"disambiguation": "",
+"id": "60d2c527-a3a8-44cf-a382-edf06d5c9acc",
+"length": 299000,
+"title": "Book II: The Departure",
+"video": false
+},
+"title": "Book II: The Departure"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "international organist and pianist",
+"id": "33197105-ab7f-4e98-ada3-e943adec7cd8",
+"name": "Marco Lo Muscio",
+"sort-name": "Marco Lo Muscio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Marco Lo Muscio"
+}
+],
+"id": "60b7a45c-084b-4d3e-85e5-a4f10cc8754b",
+"length": 306000,
+"number": "5",
+"position": 5,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "international organist and pianist",
+"id": "33197105-ab7f-4e98-ada3-e943adec7cd8",
+"name": "Marco Lo Muscio",
+"sort-name": "Marco Lo Muscio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Marco Lo Muscio"
+}
+],
+"disambiguation": "",
+"id": "07e536b7-d666-4b32-ae03-a5f79d6785b7",
+"length": 306000,
+"title": "Book III: Iliade",
+"video": false
+},
+"title": "Book III: Iliade"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "CA",
+"disambiguation": "Canadian Artists, Member of Nathan Mahl",
+"id": "f34f9c19-3253-4ecc-9493-bb6ad6ee7d66",
+"name": "Guy LeBlanc",
+"sort-name": "LeBlanc, Guy",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Guy LeBlanc"
+}
+],
+"id": "f6371b03-4a35-41d9-a051-e22c7dd6dae9",
+"length": 357000,
+"number": "6",
+"position": 6,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "CA",
+"disambiguation": "Canadian Artists, Member of Nathan Mahl",
+"id": "f34f9c19-3253-4ecc-9493-bb6ad6ee7d66",
+"name": "Guy LeBlanc",
+"sort-name": "LeBlanc, Guy",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Guy LeBlanc"
+}
+],
+"disambiguation": "",
+"id": "b75ee357-d663-4435-a916-df2109e29f40",
+"length": 357000,
+"title": "Book IV: Impressions of Incitement",
+"video": false
+},
+"title": "Book IV: Impressions of Incitement"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "FI",
+"disambiguation": "",
+"id": "e0596ef1-f4c1-47e5-82da-a526e9831418",
+"name": "Timo Kajamies",
+"sort-name": "Kajamies, Timo",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Timo Kajamies"
+}
+],
+"id": "399092ff-3cab-4f10-acbf-12e70c5b3ebb",
+"length": 359000,
+"number": "7",
+"position": 7,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "FI",
+"disambiguation": "",
+"id": "e0596ef1-f4c1-47e5-82da-a526e9831418",
+"name": "Timo Kajamies",
+"sort-name": "Kajamies, Timo",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Timo Kajamies"
+}
+],
+"disambiguation": "",
+"id": "fa16d623-9d2c-43fd-9abb-0fa6bbc63661",
+"length": 359000,
+"title": "Book V: Diomed's Prayer",
+"video": false
+},
+"title": "Book V: Diomed's Prayer"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "364c15ae-a5a6-48ca-ab4b-f844a4d34a1b",
+"name": "Andrew Roussak",
+"sort-name": "Roussak, Andrew",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Andrew Roussak"
+}
+],
+"id": "ab98ea11-fb9f-407e-9821-a0d982fce93e",
+"length": 379000,
+"number": "8",
+"position": 8,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "364c15ae-a5a6-48ca-ab4b-f844a4d34a1b",
+"name": "Andrew Roussak",
+"sort-name": "Roussak, Andrew",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Andrew Roussak"
+}
+],
+"disambiguation": "",
+"id": "43e6a049-2d65-4e54-858a-82d2f9aac0ea",
+"length": 379000,
+"title": "Book VI: Swapping the Armour",
+"video": false
+},
+"title": "Book VI: Swapping the Armour"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Keyboard Player",
+"id": "885c2d06-5471-4eda-b817-bc50ffd21715",
+"name": "Attilio Perrone",
+"sort-name": "Perrone, Attilio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Attilio Perrone"
+}
+],
+"id": "4a2d3727-6941-4336-8f89-d1256fe86088",
+"length": 392000,
+"number": "9",
+"position": 9,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Keyboard Player",
+"id": "885c2d06-5471-4eda-b817-bc50ffd21715",
+"name": "Attilio Perrone",
+"sort-name": "Perrone, Attilio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Attilio Perrone"
+}
+],
+"disambiguation": "",
+"id": "300fca6d-19d0-4570-bbf3-f5d66aa0dfac",
+"length": 392000,
+"title": "Book VII: Monomachia",
+"video": false
+},
+"title": "Book VII: Monomachia"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "364c15ae-a5a6-48ca-ab4b-f844a4d34a1b",
+"name": "Andrew Roussak",
+"sort-name": "Roussak, Andrew",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Andrew Roussak"
+}
+],
+"id": "782f991d-53f1-40ac-bcfc-ec2f399d52bb",
+"length": 386000,
+"number": "10",
+"position": 10,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "364c15ae-a5a6-48ca-ab4b-f844a4d34a1b",
+"name": "Andrew Roussak",
+"sort-name": "Roussak, Andrew",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Andrew Roussak"
+}
+],
+"disambiguation": "",
+"id": "658ec6b5-5275-4dd4-94e0-365bd880a764",
+"length": 386000,
+"title": "Book VIII: Divine Withdrawal",
+"video": false
+},
+"title": "Book VIII: Divine Withdrawal"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "progressive rock, Italy",
+"id": "884ae654-c1d6-4f0c-bd81-5592ab6f0827",
+"name": "Contrappunto",
+"sort-name": "Contrappunto",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Contrappunto Project"
+}
+],
+"id": "1c4932d3-da4e-4198-ace6-90137ba99af9",
+"length": 278000,
+"number": "11",
+"position": 11,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "progressive rock, Italy",
+"id": "884ae654-c1d6-4f0c-bd81-5592ab6f0827",
+"name": "Contrappunto",
+"sort-name": "Contrappunto",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Contrappunto Project"
+}
+],
+"disambiguation": "",
+"id": "aecc0e4f-7ca0-4458-aca4-22c8afc32684",
+"length": 278000,
+"title": "Book IX: I dubbi di Achille",
+"video": false
+},
+"title": "Book IX: I dubbi di Achille"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "423ba8b9-ec3c-4118-a039-e517321543e4",
+"name": "Sergey Bolotov",
+"sort-name": "Bolotov, Sergey",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Sergey Bolotov"
+}
+],
+"id": "3a111db5-37b0-41c4-9290-f268e7845bd4",
+"length": 399000,
+"number": "12",
+"position": 12,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "423ba8b9-ec3c-4118-a039-e517321543e4",
+"name": "Sergey Bolotov",
+"sort-name": "Bolotov, Sergey",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Sergey Bolotov"
+}
+],
+"disambiguation": "",
+"id": "a79b6958-5f3b-40ed-85f1-c1b91ed1208e",
+"length": 399000,
+"title": "Book X: Iliad",
+"video": false
+},
+"title": "Book X: Iliad"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "4ad84aac-507d-4370-a7c2-f941df57b62e",
+"name": "Leendert Korstanjje",
+"sort-name": "Korstanjje, Leendert",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Leendert Korstanjje"
+}
+],
+"id": "d2a1d1fe-270f-4275-806c-061f35d77046",
+"length": 218000,
+"number": "13",
+"position": 13,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "4ad84aac-507d-4370-a7c2-f941df57b62e",
+"name": "Leendert Korstanjje",
+"sort-name": "Korstanjje, Leendert",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Leendert Korstanjje"
+}
+],
+"disambiguation": "",
+"id": "2be556a4-cb5b-4a50-8f42-02444dbf6c65",
+"length": 218000,
+"title": "Book XI: The Nekyia",
+"video": false
+},
+"title": "Book XI: The Nekyia"
+}
+]
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "a4d3594d-0283-3ced-9dad-ab37c679633d",
+"position": 2,
+"title": "Iliad Books XII-XXIV",
+"track-count": 14,
+"track-offset": 0,
+"tracks": [
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "4d3da152-0e3a-413a-85ac-b299ae1423ec",
+"name": "Octavio Stampalia",
+"sort-name": "Stampalia, Octavio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Octavio Stampalia"
+}
+],
+"id": "9f070039-2f45-4102-a192-28c252b435af",
+"length": 279000,
+"number": "1",
+"position": 1,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "4d3da152-0e3a-413a-85ac-b299ae1423ec",
+"name": "Octavio Stampalia",
+"sort-name": "Stampalia, Octavio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Octavio Stampalia"
+}
+],
+"disambiguation": "",
+"id": "86208bf7-c806-4207-97a3-481b7b6dd840",
+"length": 279000,
+"title": "Book XII: The Snake",
+"video": false
+},
+"title": "Book XII: The Snake"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "US",
+"disambiguation": "American alternative rock band",
+"id": "836fd4fa-6c82-49fa-88e2-b4fc00739a67",
+"name": "Simon Says",
+"sort-name": "Simon Says",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Simon Says"
+}
+],
+"id": "794fdb98-52eb-4ab2-9cbb-fcbf27bc0408",
+"length": 192000,
+"number": "2",
+"position": 2,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "US",
+"disambiguation": "American alternative rock band",
+"id": "836fd4fa-6c82-49fa-88e2-b4fc00739a67",
+"name": "Simon Says",
+"sort-name": "Simon Says",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Simon Says"
+}
+],
+"disambiguation": "",
+"id": "1d90ffef-01b0-4e47-9073-cc2fe523a048",
+"length": 192000,
+"title": "Book XIII: The Final Venture",
+"video": false
+},
+"title": "Book XIII: The Final Venture"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "CA",
+"disambiguation": "Canadian Artists, Member of Nathan Mahl",
+"id": "f34f9c19-3253-4ecc-9493-bb6ad6ee7d66",
+"name": "Guy LeBlanc",
+"sort-name": "LeBlanc, Guy",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Guy LeBlanc"
+}
+],
+"id": "bcb3fa81-7881-4b35-8e1b-9b341f962611",
+"length": 365000,
+"number": "3",
+"position": 3,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "CA",
+"disambiguation": "Canadian Artists, Member of Nathan Mahl",
+"id": "f34f9c19-3253-4ecc-9493-bb6ad6ee7d66",
+"name": "Guy LeBlanc",
+"sort-name": "LeBlanc, Guy",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Guy LeBlanc"
+}
+],
+"disambiguation": "",
+"id": "4f2bdc76-1e17-4c2f-9655-8717df8a315c",
+"length": 365000,
+"title": "Book XIV: Hera's Game",
+"video": false
+},
+"title": "Book XIV: Hera's Game"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "keyboard player",
+"id": "387583a7-1955-4417-85d5-8c8a00dc7eec",
+"name": "Eduardo García Salueña",
+"sort-name": "Salueña, Eduardo García",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Eduardo García Salueña"
+}
+],
+"id": "a3acb81f-4747-4a20-8f4d-ff6f6bb6c0b8",
+"length": 256000,
+"number": "4",
+"position": 4,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "keyboard player",
+"id": "387583a7-1955-4417-85d5-8c8a00dc7eec",
+"name": "Eduardo García Salueña",
+"sort-name": "Salueña, Eduardo García",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Eduardo García Salueña"
+}
+],
+"disambiguation": "",
+"id": "d316d68e-085c-482d-a238-0aa4c7ec3163",
+"length": 256000,
+"title": "Book XV",
+"video": false
+},
+"title": "Book XV"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "international organist and pianist",
+"id": "33197105-ab7f-4e98-ada3-e943adec7cd8",
+"name": "Marco Lo Muscio",
+"sort-name": "Marco Lo Muscio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Marco Lo Muscio"
+}
+],
+"id": "a5d504e9-9d70-464a-b586-dc605f7680b0",
+"length": 375000,
+"number": "5",
+"position": 5,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "international organist and pianist",
+"id": "33197105-ab7f-4e98-ada3-e943adec7cd8",
+"name": "Marco Lo Muscio",
+"sort-name": "Marco Lo Muscio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Marco Lo Muscio"
+}
+],
+"disambiguation": "",
+"id": "f6941e0a-e256-4d7e-a9e3-9d818e877fa9",
+"length": 375000,
+"title": "Book XVI: Iliade",
+"video": false
+},
+"title": "Book XVI: Iliade"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "",
+"id": "8001e073-520c-4283-a1a0-09e4d2665e4a",
+"name": "Paolo \"Apollo\" Negri",
+"sort-name": "Negri, Paolo \"Apollo\"",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Paolo \"Apollo\" Negri"
+}
+],
+"id": "d670c180-5074-44f9-978f-75bfc4ee7251",
+"length": 267000,
+"number": "6",
+"position": 6,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "",
+"id": "8001e073-520c-4283-a1a0-09e4d2665e4a",
+"name": "Paolo \"Apollo\" Negri",
+"sort-name": "Negri, Paolo \"Apollo\"",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Paolo \"Apollo\" Negri"
+}
+],
+"disambiguation": "",
+"id": "cfc22d2f-6b08-4ebd-88a0-25dca9ab598e",
+"length": 267000,
+"title": "Book XVII: Friendship Never Dies",
+"video": false
+},
+"title": "Book XVII: Friendship Never Dies"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "4ad84aac-507d-4370-a7c2-f941df57b62e",
+"name": "Leendert Korstanjje",
+"sort-name": "Korstanjje, Leendert",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Leendert Korstanjje"
+}
+],
+"id": "4519fd8f-dcdd-4267-9da8-3867f13b02f2",
+"length": 384000,
+"number": "7",
+"position": 7,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "4ad84aac-507d-4370-a7c2-f941df57b62e",
+"name": "Leendert Korstanjje",
+"sort-name": "Korstanjje, Leendert",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Leendert Korstanjje"
+}
+],
+"disambiguation": "",
+"id": "d9389bb5-0541-443e-b11f-0ed47207550d",
+"length": 384000,
+"title": "Book XVIII: The Combat of Amaios",
+"video": false
+},
+"title": "Book XVIII: The Combat of Amaios"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Keyboard Player",
+"id": "885c2d06-5471-4eda-b817-bc50ffd21715",
+"name": "Attilio Perrone",
+"sort-name": "Perrone, Attilio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Attilio Perrone"
+}
+],
+"id": "6d4a3c76-d4fb-4e27-ae51-6bda77ad5f4c",
+"length": 189000,
+"number": "8",
+"position": 8,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Keyboard Player",
+"id": "885c2d06-5471-4eda-b817-bc50ffd21715",
+"name": "Attilio Perrone",
+"sort-name": "Perrone, Attilio",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Attilio Perrone"
+}
+],
+"disambiguation": "",
+"id": "b379e3d3-30d0-4f7f-a623-824d56e4621e",
+"length": 189000,
+"title": "Book XIX: Presagio e scherzo finale",
+"video": false
+},
+"title": "Book XIX: Presagio e scherzo finale"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "",
+"id": "8001e073-520c-4283-a1a0-09e4d2665e4a",
+"name": "Paolo \"Apollo\" Negri",
+"sort-name": "Negri, Paolo \"Apollo\"",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Paolo \"Apollo\" Negri"
+}
+],
+"id": "87580786-a2fc-4656-a78b-109ba55a3540",
+"length": 273000,
+"number": "9",
+"position": 9,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "",
+"id": "8001e073-520c-4283-a1a0-09e4d2665e4a",
+"name": "Paolo \"Apollo\" Negri",
+"sort-name": "Negri, Paolo \"Apollo\"",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Paolo \"Apollo\" Negri"
+}
+],
+"disambiguation": "",
+"id": "7454ae97-3fea-4c44-8b55-9198d1cb93fb",
+"length": 273000,
+"title": "Book XX: Field of God",
+"video": false
+},
+"title": "Book XX: Field of God"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "keyboard player",
+"id": "387583a7-1955-4417-85d5-8c8a00dc7eec",
+"name": "Eduardo García Salueña",
+"sort-name": "Salueña, Eduardo García",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Eduardo García Salueña"
+}
+],
+"id": "ebae95b0-a444-4077-89f0-cfd6556258ad",
+"length": 316000,
+"number": "10",
+"position": 10,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "keyboard player",
+"id": "387583a7-1955-4417-85d5-8c8a00dc7eec",
+"name": "Eduardo García Salueña",
+"sort-name": "Salueña, Eduardo García",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Eduardo García Salueña"
+}
+],
+"disambiguation": "",
+"id": "1d231904-24b1-4b5b-9599-b0375525e44f",
+"length": 316000,
+"title": "Book XXI",
+"video": false
+},
+"title": "Book XXI"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Prog Artist",
+"id": "64fac968-6610-4fa9-976b-9f98e260a9a6",
+"name": "Mauro Mulas",
+"sort-name": "Mulas, Mauro",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Mauro Mulas"
+}
+],
+"id": "7c3c2d3a-dbd9-49c1-9890-d2bacf24aaf0",
+"length": 359000,
+"number": "11",
+"position": 11,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Prog Artist",
+"id": "64fac968-6610-4fa9-976b-9f98e260a9a6",
+"name": "Mauro Mulas",
+"sort-name": "Mulas, Mauro",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Mauro Mulas"
+}
+],
+"disambiguation": "",
+"id": "c3bdbe15-e6fa-4d14-b5ea-0bbc3aae12f2",
+"length": 359000,
+"title": "Book XXII: La Battaglia",
+"video": false
+},
+"title": "Book XXII: La Battaglia"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "US",
+"disambiguation": "American alternative rock band",
+"id": "836fd4fa-6c82-49fa-88e2-b4fc00739a67",
+"name": "Simon Says",
+"sort-name": "Simon Says",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Simon Says"
+}
+],
+"id": "3f78d9bb-e590-4ab8-a7f7-d43ef98dd1df",
+"length": 176000,
+"number": "12",
+"position": 12,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "US",
+"disambiguation": "American alternative rock band",
+"id": "836fd4fa-6c82-49fa-88e2-b4fc00739a67",
+"name": "Simon Says",
+"sort-name": "Simon Says",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Simon Says"
+}
+],
+"disambiguation": "",
+"id": "fa9a5c32-d3ea-4082-8e34-4f48a210c29a",
+"length": 176000,
+"title": "Book XXIII: Battles",
+"video": false
+},
+"title": "Book XXIII: Battles"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Prog Artist",
+"id": "64fac968-6610-4fa9-976b-9f98e260a9a6",
+"name": "Mauro Mulas",
+"sort-name": "Mulas, Mauro",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Mauro Mulas"
+}
+],
+"id": "14d7548a-9b1e-4382-a25c-f57fe4a0b281",
+"length": 380000,
+"number": "13",
+"position": 13,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Prog Artist",
+"id": "64fac968-6610-4fa9-976b-9f98e260a9a6",
+"name": "Mauro Mulas",
+"sort-name": "Mulas, Mauro",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "Mauro Mulas"
+}
+],
+"disambiguation": "",
+"id": "64cbeaba-c096-4623-9601-696170ca3662",
+"length": 380000,
+"title": "Book XXIV: L' Ultima Quiete",
+"video": false
+},
+"title": "Book XXIV: L' Ultima Quiete"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "c2e4e7d1-76c4-470d-9208-0fd14b84da7f",
+"name": "Ivan Rozmansky",
+"sort-name": "Rozmansky, Ivan",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Ivan Rozmansky"
+}
+],
+"id": "252eb800-41f0-4157-a274-3f5f3f41def9",
+"length": 255000,
+"number": "14",
+"position": 14,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": null,
+"disambiguation": "",
+"id": "c2e4e7d1-76c4-470d-9208-0fd14b84da7f",
+"name": "Ivan Rozmansky",
+"sort-name": "Rozmansky, Ivan",
+"type": null,
+"type-id": null
+},
+"joinphrase": "",
+"name": "Ivan Rozmansky"
+}
+],
+"disambiguation": "",
+"id": "a3c10978-c4ed-41d6-b267-bab462767309",
+"length": 255000,
+"title": "Outro",
+"video": false
+},
+"title": "Outro"
+}
+]
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"relations": [],
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "08310658-51eb-3801-80de-5a0739207115",
+"iso-3166-1-codes": [
+"FR"
+],
+"name": "France",
+"sort-name": "France",
+"type": null,
+"type-id": null
+},
+"date": "2010"
+}
+],
+"release-group": {
+"artist-credit": [
+{
+"artist": {
+"country": "IT",
+"disambiguation": "Italian Prog Rock band",
+"id": "28265134-3003-4fa7-9741-5579452ec144",
+"name": "Colossus Project",
+"sort-name": "Colossus Project",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "Colossus Project"
+}
+],
+"disambiguation": "",
+"first-release-date": "2010",
+"id": "bbdbb3d2-bd99-4331-ba59-5c8f818c9222",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"dd2a21e1-0c00-3729-a7a0-de60b84eb5d1"
+],
+"secondary-types": [
+"Compilation"
+],
+"title": "Iliad, A Grand Piano Extravaganza"
+},
+"status": null,
+"status-id": null,
+"text-representation": {
+"language": null,
+"script": null
+},
+"title": "Iliad, A Grand Piano Extravaganza"
+},
+"/release/f343e454-cd2e-307e-b252-d7d375ff174f?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"asin": "B000BONPXY",
+"barcode": "4988002494309",
+"country": "JP",
+"cover-art-archive": {
+"artwork": false,
+"back": false,
+"count": 0,
+"darkened": false,
+"front": false
+},
+"date": "2005-12-16",
+"disambiguation": "",
+"id": "f343e454-cd2e-307e-b252-d7d375ff174f",
+"media": [
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "974bade2-0512-3b67-bc43-08f20032d4e9",
+"position": 1,
+"title": "",
+"track-count": 19,
+"track-offset": 0,
+"tracks": [
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "ea96cc88-6a7b-30f6-8d27-7753a8afb5d9",
+"length": 259000,
+"number": "1",
+"position": 1,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "04433c08-b682-448c-9221-771a79343dd1",
+"length": 259000,
+"title": "お願いダーリン",
+"video": false
+},
+"title": "お願いダーリン"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "cd30b34d-46ee-3b6b-9608-49550c6aaadf",
+"length": 188000,
+"number": "2",
+"position": 2,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "7634b6e1-be6d-4e55-8db6-6a573e3a76d2",
+"length": 190000,
+"title": "男のコになりたい",
+"video": false
+},
+"title": "男のコになりたい"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "6447b450-8733-3b14-8c11-c20d1425f041",
+"length": 220000,
+"number": "3",
+"position": 3,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "48357b01-ae5a-4a3e-8b7b-a9fa74b2389f",
+"length": 222000,
+"title": "渚のファンタシィ",
+"video": false
+},
+"title": "渚のファンタシィ"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "92732692-6bba-307d-965d-c194badd7906",
+"length": 232000,
+"number": "4",
+"position": 4,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "f905162d-14c4-40dc-8296-b0fe6bfbee47",
+"length": 233000,
+"title": "ノ・レ・な・いTeen‐age",
+"video": false
+},
+"title": "ノ・レ・な・いTeen‐age"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "23ab8d3c-567b-3ccd-8b1d-b53bb86d1c34",
+"length": 185000,
+"number": "5",
+"position": 5,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "044390fd-ea93-47e4-a679-1fbed125d930",
+"length": 188000,
+"title": "夢冒険",
+"video": false
+},
+"title": "夢冒険"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "ca9b8fe7-237a-335a-905e-1c2553eb96ec",
+"length": 223000,
+"number": "6",
+"position": 6,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "004ae35e-e410-4f16-9a0d-2b7ab1ca2a59",
+"length": 224346,
+"title": "GUANBARE",
+"video": false
+},
+"title": "GUANBARE"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "9754e4f9-86c1-36ba-a915-50442578a4c2",
+"length": 236000,
+"number": "7",
+"position": 7,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "665a17cb-5789-44f5-aa06-26a8daba31d8",
+"length": 237400,
+"title": "DON’T STOP GENKI",
+"video": false
+},
+"title": "DON’T STOP GENKI"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "c3b2c542-edfe-3e31-a750-0eae815eb5d2",
+"length": 229000,
+"number": "8",
+"position": 8,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "f21220dc-17a6-49fc-b558-df006a26e599",
+"length": 232000,
+"title": "1億のスマイル—PLEASE YOUR SMILE—",
+"video": false
+},
+"title": "1億のスマイル—PLEASE YOUR SMILE—"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "9478a551-c805-3943-a0e2-bf50f588ac3b",
+"length": 180000,
+"number": "9",
+"position": 9,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "05482d6b-fed3-4488-b95e-9c4d9efd660e",
+"length": 183000,
+"title": "のりピー音頭",
+"video": false
+},
+"title": "のりピー音頭"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "f779ded7-da83-3a21-86d8-d95397847526",
+"length": 202000,
+"number": "10",
+"position": 10,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "825d098b-9511-49a8-b387-252c3e1327e7",
+"length": 203000,
+"title": "アクティブ・ハート",
+"video": false
+},
+"title": "アクティブ・ハート"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "85bf1ef4-ae38-3d2e-a5de-e487548fc97c",
+"length": 225000,
+"number": "11",
+"position": 11,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "30096dad-e7fb-4334-9d2e-7306022cc521",
+"length": 227000,
+"title": "HAPPY AGAIN",
+"video": false
+},
+"title": "HAPPY AGAIN"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "c03cd70e-f087-39bb-be38-92798b13f6bc",
+"length": 255000,
+"number": "12",
+"position": 12,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "0f60f0ba-5c4d-4303-b519-0f68b457f662",
+"length": 257000,
+"title": "ホンキをだして",
+"video": false
+},
+"title": "ホンキをだして"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "42d2cd4e-d344-3225-841f-0e527dc610de",
+"length": 223000,
+"number": "13",
+"position": 13,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "39ad47ea-1055-48b0-b486-bef616d03a4d",
+"length": 226000,
+"title": "おとぎの国のBirthday",
+"video": false
+},
+"title": "おとぎの国のBirthday"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "be2f7fba-8fbc-34b6-aa73-c5cd70a7e98b",
+"length": 285000,
+"number": "14",
+"position": 14,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "69af9dd6-2725-4d72-9038-16280d3b606d",
+"length": 288000,
+"title": "Love Letter",
+"video": false
+},
+"title": "Love Letter"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "dbee4524-22a3-3482-b9e1-e2b64d18fe67",
+"length": 286000,
+"number": "15",
+"position": 15,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "7d882991-9e26-4c18-b828-65f77e9e3264",
+"length": 289000,
+"title": "さよならを過ぎて",
+"video": false
+},
+"title": "さよならを過ぎて"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "8a3a81d6-8b28-3982-830a-d362655f5e00",
+"length": 289000,
+"number": "16",
+"position": 16,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "0d648d97-7aec-4de9-a40b-7159e3a02191",
+"length": 292000,
+"title": "All Right",
+"video": false
+},
+"title": "ALL RIGHT"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "d3fe1ca0-8073-35d7-9962-299df8be22b0",
+"length": 263000,
+"number": "17",
+"position": 17,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "be4800eb-567d-44f2-a825-05d495b6c3e9",
+"length": 266000,
+"title": "幸福なんてほしくないわ",
+"video": false
+},
+"title": "幸福なんてほしくないわ"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "189a6553-0cf9-356e-a3b7-fe009272662d",
+"length": 236000,
+"number": "18",
+"position": 18,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "655fbedb-05e8-4691-9522-567f187748dc",
+"length": 239000,
+"title": "ダイヤモンド☆ブルー",
+"video": false
+},
+"title": "ダイヤモンド☆ブルー"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "4ee595d5-93c4-3637-b51c-8ca13f38199b",
+"length": 255000,
+"number": "19",
+"position": 19,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "765943dc-cae4-4009-bf94-4a3a21117f20",
+"length": 255000,
+"title": "ホワイト・ガール",
+"video": false
+},
+"title": "ホワイト・ガール"
+}
+]
+},
+{
+"format": "CD",
+"format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+"id": "e565af9d-a5ad-3efb-8bad-a0787ecfe87a",
+"position": 2,
+"title": "",
+"track-count": 16,
+"track-offset": 0,
+"tracks": [
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "a8d78d8f-c1d4-3d6c-9c70-f7c8120bc45b",
+"length": 271000,
+"number": "1",
+"position": 1,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "f48246d0-dd9b-4829-b832-c8f51705a00f",
+"length": 273000,
+"title": "微笑みを見つけた",
+"video": false
+},
+"title": "微笑みを見つけた"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "e5a74284-4227-3c0f-8610-c7878b369d7f",
+"length": 271000,
+"number": "2",
+"position": 2,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "e43139e3-bfe0-46a5-a3f6-14364435e299",
+"length": 274000,
+"title": "イヴの卵",
+"video": false
+},
+"title": "イヴの卵"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "8434130c-aa44-38fc-91e6-2e0a642781b6",
+"length": 227000,
+"number": "3",
+"position": 3,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "bf5f4955-1c18-45d3-b0c8-edc0f513ab03",
+"length": 229000,
+"title": "雨の気持ち",
+"video": false
+},
+"title": "雨の気持ち"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "1ade03d6-ea1c-3637-a660-b206557f5235",
+"length": 315000,
+"number": "4",
+"position": 4,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "81deef4e-d0c3-4fcd-b6ba-fcd4945f5b8e",
+"length": 316400,
+"title": "きみの存在",
+"video": false
+},
+"title": "きみの存在"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "e948d405-5eca-38e5-ba68-038484f12c6b",
+"length": 299000,
+"number": "5",
+"position": 5,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "6fa3d46a-139d-4cfa-ace9-b23500e18c91",
+"length": 302000,
+"title": "あなたに天使が見える時",
+"video": false
+},
+"title": "あなたに天使が見える時"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "c1d185e9-1d5a-3d42-8694-3e9eab7a1dcb",
+"length": 245000,
+"number": "6",
+"position": 6,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "8ec9fcb0-8ddf-45b8-9f74-89a4005a6b97",
+"length": 248000,
+"title": "モンタージュ",
+"video": false
+},
+"title": "モンタージュ"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "a3528400-cd35-34eb-ba5f-ce4257820c3f",
+"length": 292000,
+"number": "7",
+"position": 7,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "c2e69c28-51f7-4564-aef5-ba7fa7b7965c",
+"length": 294000,
+"title": "涙がとまらない〜HOW! AW! YA!〜",
+"video": false
+},
+"title": "涙がとまらない〜HOW! AW! YA!〜"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "fbec860e-b7bd-374d-95a0-6b0e6636bb36",
+"length": 292000,
+"number": "8",
+"position": 8,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "47d7d90f-4693-4da3-b5bd-105093105816",
+"length": 295000,
+"title": "軽い気持ちのジュリア",
+"video": false
+},
+"title": "軽い気持ちのジュリア"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "71c85340-ac6d-344b-8652-4bd595a069f1",
+"length": 205000,
+"number": "9",
+"position": 9,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "b307baaa-eb50-477c-953b-4cc6a3be3d62",
+"length": 207000,
+"title": "渚のピテカントロプス",
+"video": false
+},
+"title": "渚のピテカントロプス"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "36381930-daec-3ae5-83a0-1b4fc877106c",
+"length": 252000,
+"number": "10",
+"position": 10,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "4c25ee21-6003-4db0-b878-a7a170a0b0e9",
+"length": 254000,
+"title": "たぶんタブー",
+"video": false
+},
+"title": "たぶんタブー"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "142a1854-5de8-3b7e-b32a-b2fbca2b41f1",
+"length": 279000,
+"number": "11",
+"position": 11,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "bca3c17d-3113-4ff7-980d-66856b1136cf",
+"length": 282000,
+"title": "あなたが満ちてゆく",
+"video": false
+},
+"title": "あなたが満ちてゆく"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "1de78458-533d-3de5-a380-e84c0801d6bf",
+"length": 282000,
+"number": "12",
+"position": 12,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "2922fe5b-d722-45e7-973c-4eb5ddf65b25",
+"length": 284000,
+"title": "だいじょうぶ…",
+"video": false
+},
+"title": "だいじょうぶ…"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "d1bc2844-f92c-3772-a144-0aa8c6758c93",
+"length": 311000,
+"number": "13",
+"position": 13,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "d35016e8-f054-4daf-9a49-ad025ca1dfd8",
+"length": 314000,
+"title": "笑顔が忘れられない",
+"video": false
+},
+"title": "笑顔が忘れられない"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "1dd00096-345a-36b6-8d5a-058193e22599",
+"length": 265000,
+"number": "14",
+"position": 14,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "7c580de6-8e21-4405-bbbc-bdfc522d11d4",
+"length": 266600,
+"title": "誘われて…",
+"video": false
+},
+"title": "誘われて…"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"id": "0e18b8d4-64a0-3064-850f-7d277d57059c",
+"length": 311000,
+"number": "15",
+"position": 15,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"id": "303a28fc-535c-4427-b1fc-8d4ecbaff5d1",
+"length": 313000,
+"title": "終わらない物語を",
+"video": false
+},
+"title": "終わらない物語を"
+},
+{
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": " with ",
+"name": "酒井法子"
+},
+{
+"artist": {
+"country": null,
+"disambiguation": "10-piece chorus group",
+"id": "0afb7df7-66d7-42ca-aa57-027f252d5211",
+"name": "L・リーガーズ",
+"sort-name": "L-Leaguers",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "L・リーガーズ"
+}
+],
+"id": "92b4c3bb-5952-3fcc-85df-8a1bfc95aa63",
+"length": 276000,
+"number": "16",
+"position": 16,
+"recording": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": " with ",
+"name": "酒井法子"
+},
+{
+"artist": {
+"country": null,
+"disambiguation": "10-piece chorus group",
+"id": "0afb7df7-66d7-42ca-aa57-027f252d5211",
+"name": "L・リーガーズ",
+"sort-name": "L-Leaguers",
+"type": "Group",
+"type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+},
+"joinphrase": "",
+"name": "L・リーガーズ"
+}
+],
+"disambiguation": "",
+"id": "39d0406c-9833-4051-90a3-b72f1fce56bf",
+"length": 277000,
+"title": "OH OH OH〜We are the Winners〜",
+"video": false
+},
+"title": "OH OH OH〜We are the Winners〜"
+}
+]
+}
+],
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"relations": [
+{
+"attribute-ids": {},
+"attribute-values": {},
+"attributes": [],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"ordering-key": 1,
+"series": {
+"disambiguation": "",
+"id": "eaf64fe2-2c12-44a6-9210-4b717d107c6e",
+"name": "COLEZO! TWIN",
+"type": "Release series",
+"type-id": "52b90f1e-ff62-3bd0-b254-5d91ced5d757"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "series",
+"type": "part of",
+"type-id": "3fa29f01-8e13-3e49-9b0a-ad212aa2f81d"
+}
+],
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "2db42837-c832-3c27-b4a3-08198f75693c",
+"iso-3166-1-codes": [
+"JP"
+],
+"name": "Japan",
+"sort-name": "Japan",
+"type": null,
+"type-id": null
+},
+"date": "2005-12-16"
+}
+],
+"release-group": {
+"artist-credit": [
+{
+"artist": {
+"country": "JP",
+"disambiguation": "",
+"id": "53e56331-5049-4a9f-9195-98bddff6361a",
+"name": "酒井法子",
+"sort-name": "Sakai, Noriko",
+"type": "Person",
+"type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+},
+"joinphrase": "",
+"name": "酒井法子"
+}
+],
+"disambiguation": "",
+"first-release-date": "1995-07-12",
+"id": "3d21c376-2e50-358f-b08f-ca8d465db7f2",
+"primary-type": "Album",
+"primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"secondary-type-ids": [
+"dd2a21e1-0c00-3729-a7a0-de60b84eb5d1"
+],
+"secondary-types": [
+"Compilation"
+],
+"title": "Twin Best"
+},
+"status": "Official",
+"status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+"text-representation": {
+"language": "jpn",
+"script": "Jpan"
+},
+"title": "〈COLEZO! TWIN〉酒井法子"
+},
+"/release?release-group=bbdbb3d2-bd99-4331-ba59-5c8f818c9222&fmt=json&limit=100": {
+"release-count": 1,
+"release-offset": 0,
+"releases": [
+{
+"asin": "B004GRRK4M",
+"barcode": null,
+"country": "FR",
+"cover-art-archive": {
+"artwork": true,
+"back": false,
+"count": 1,
+"darkened": false,
+"front": true
+},
+"date": "2010",
+"disambiguation": "",
+"id": "135d8915-379c-4b36-bb84-4f6a3171eb2c",
+"packaging": null,
+"packaging-id": null,
+"quality": "normal",
+"release-events": [
+{
+"area": {
+"disambiguation": "",
+"id": "08310658-51eb-3801-80de-5a0739207115",
+"iso-3166-1-codes": [
+"FR"
+],
+"name": "France",
+"sort-name": "France",
+"type": null,
+"type-id": null
+},
+"date": "2010"
+}
+],
+"status": null,
+"status-id": null,
+"text-representation": {
+"language": null,
+"script": null
+},
+"title": "Iliad, A Grand Piano Extravaganza"
+}
+]
+},
+"/series/520f6fcd-251d-46cd-83a9-0bc725d42333?inc=release-group-rels+release-rels&fmt=json": {
+"disambiguation": "",
+"id": "520f6fcd-251d-46cd-83a9-0bc725d42333",
+"name": "Colossus Projects",
+"relations": [
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "19"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 19,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2011-05-31",
+"id": "536d68c5-4325-4589-900e-358b62a991f3",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "A Flower Full of Stars: “A Tribute to the Flower Kings”"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "15"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 15,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2010-06-03",
+"id": "57d2976c-ccef-4145-b4e3-911343938fa3",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Cani arrabbiati: “Opening Themes… A Tribute”"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "10"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 10,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2008",
+"id": "bd3a8207-3769-304a-bd9c-35f7b7551fa6",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Dante’s Inferno: The Divine Comedy, Part I"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "16"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 16,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2010-11-08",
+"id": "8a7771f6-2cbe-4d19-8497-3080170d71c4",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Dante’s Paradiso: The Divine Comedy, Part III"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "13"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 13,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2009-10-07",
+"id": "067f3e8c-f76a-4985-a3ee-4d0cdb92ea8d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Dante’s Purgatorio: The Divine Comedy, Part II"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "20"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 20,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2011-12-22",
+"id": "a9dbefd6-85eb-402c-bfb3-dd14487f4a04",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Decameron: Ten Days in 100 Novellas, Part 1"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "22"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 22,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2014-05",
+"id": "66fc3341-478e-4d40-b3b0-37a303c7e04a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Decameron: Ten Days in 100 Novellas, Part II"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "9"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 9,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2008-02-07",
+"id": "0860c0d5-7fef-4a0b-aeb9-5a5d65da7189",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Giallo! One Suite for the Murderer"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "18"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 18,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2010",
+"id": "bbdbb3d2-bd99-4331-ba59-5c8f818c9222",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Iliad, A Grand Piano Extravaganza"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "2"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 2,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2003-07-28",
+"id": "e0bfbd52-6a69-389a-8366-c2a857d418aa",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Kalevala: A Finnish Progressive Rock Epic"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "5"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 5,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2005",
+"id": "367a1c3f-b381-3e77-b5a4-b4d13d109d69",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Odyssey: The Greatest Tale"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "14"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 14,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2009",
+"id": "932cf01c-ea6d-4e53-b188-dc781d851208",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Rökstenen: A Tribute to Swedish Progressive Rock of the 70’s"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "6"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 6,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2006",
+"id": "3ee6548b-87c5-344d-8e2c-3e1b8e5f6f85",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The 7 Samurai: The Ultimate Epic"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "4"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 4,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2005-02-22",
+"id": "0f8f76f2-1913-49bc-a940-09914baf824f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Colossus of Rhodes: The Seventh Progressive Rock Wonder"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "7"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 7,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2007",
+"id": "0639bbc7-fe6b-3a0a-ab38-3d7230ffafae",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Spaghetti Epic 2: The Good, the Bad and the Ugly"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "11"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 11,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2009-02-17",
+"id": "d0e0320b-3b73-4efa-b6a1-1b5786133a8d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Spaghetti Epic 3: The Great Silence"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "3"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 3,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2004-10-14",
+"id": "15971b58-3ba9-40af-a021-8eead9b64019",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Spaghetti Epic: Six Modern Prog Bands for Six ’70 Prog Suites"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "21"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 21,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2012-12",
+"id": "7e5d7506-7351-47c4-a95d-d0101f299654",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Stories of H.P. Lovecraft: A Synphonic Collection"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "17"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 17,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2010-11-25",
+"id": "cb673057-b6c3-4709-a7f3-85361daabdba",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Tales of Edgar Allan Poe: A SyNphonic Collection"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "8"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 8,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2007-07-13",
+"id": "756ab03d-ebc1-4a44-b769-9aa75aee2b29",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Treasure Island by Robert Louis Stevenson"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "12"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 12,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2009",
+"id": "c9a63bf7-1907-4b6e-b55f-d8447a772833",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Tuonen tytär II: A Tribute to Finnish Progressive Rock of the 70s"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "1"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 1,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2000",
+"id": "407bde7d-a79a-4f0e-ac6d-48cd8af8a678",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Tuonen Tytär: A Tribute to Finnish Progressive"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+}
+],
+"type": "Release group series",
+"type-id": "4c1c4949-7b6c-3a2d-9d54-a50a27e4fa77"
+},
+"/series/d5471f85-4b54-45da-9de7-c9ad9843c4bd?inc=release-group-rels+release-rels&fmt=json": {
+"disambiguation": "",
+"id": "d5471f85-4b54-45da-9de7-c9ad9843c4bd",
+"name": "Rolling Stone: The 100 Greatest Metal Albums of All Time",
+"relations": [
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "21"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 21,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-08-25",
+"id": "67553e23-8dad-3792-b6f2-8fedd5650ff3",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "…And Justice for All"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "18"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 18,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1996-09-17",
+"id": "ef1e8130-dd5f-336a-85fa-4936a47342bd",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Ænima"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "63"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 63,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1989-06-01",
+"id": "bfdb97ce-02a2-31de-8a95-43664d771d4c",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Agent Orange"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "20"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 20,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1987-03-22",
+"id": "413bc69f-9391-3fe3-802b-5bf4922f6066",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Among the Living"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "65"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 65,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-06-08",
+"id": "503e5b85-df2a-365a-82e4-32ca30538d8d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Angel Dust"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "57"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 57,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1997-05-19",
+"id": "f55aa89a-d660-3a93-a586-e6455a2f7226",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Anthems to the Welkin at Dusk"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "86"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 86,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2003-05-06",
+"id": "5eeaddca-f939-3ca1-a9c7-45efb8ffe65a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "As the Palaces Burn"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "5"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 5,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1970-02-13",
+"id": "826c9743-a3f0-3479-bf06-8df2e140ef1d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Black Sabbath"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "73"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 73,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1982-04-10",
+"id": "b00fbf7c-ebaf-3ec0-91d6-5eaad124d58f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Blackout"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "55"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 55,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2001-03-12",
+"id": "1f4a9f6f-9621-3e46-977d-8503e8386768",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Blackwater Park"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "84"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 84,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2005-01",
+"id": "1ec5c67e-b185-35c3-9848-61065d281346",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Blessed Black Wings"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "9"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 9,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1980-09-18",
+"id": "1c318024-66cc-32f5-8e06-b06dc511b42c",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Blizzard of Ozz"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "53"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 53,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1993-08-17",
+"id": "8aefda0e-a2c2-3d02-b9da-954e3e258681",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Bloody Kisses"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "41"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 41,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-06-30",
+"id": "816f2753-e709-3b10-ad93-e4c1af7aea6c",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Blues for the Red Sun"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "90"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 90,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-03-10",
+"id": "8c7d82c9-cb5d-371c-8e6b-d2fba0244ca0",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Body Count"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "45"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 45,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1985",
+"id": "08e23bf4-ab01-3d24-9a71-bfcbc1567fe3",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Bonded by Blood"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "3"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 3,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1980-04-14",
+"id": "5bd56af7-2bd6-392e-a815-b39354e3780d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "British Steel"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "60"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 60,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1991",
+"id": "24f055af-fbbf-31a6-a940-bfdb9a82ca4d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Bullhead"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "56"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 56,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1999-09-28",
+"id": "3db16ade-a4ad-3db8-a7b3-943a9c97b6b5",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Calculating Infinity"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "29"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 29,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1993-09-01",
+"id": "b53fdd53-f70c-3580-ad92-04f7fe77b254",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Chaos A.D."
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "100"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 100,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2005-06-06",
+"id": "180560ee-2d9d-33cf-8de7-cdaaba610739",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "City of Evil"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "33"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 33,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-07-06",
+"id": "04785b90-87cb-3d5d-a9a9-7f465e327bb4",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Countdown to Extinction"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "75"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 75,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1993-06-22",
+"id": "2ba9247a-16f2-3410-b4f4-f704d133fcfb",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Covenant"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "23"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 23,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-08-30",
+"id": "d4d49f98-71a5-3d63-9a55-95f39eb79bb7",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Danzig"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "40"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 40,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1994-05-24",
+"id": "982634e8-cd4d-3f7c-9f90-9b6dea315589",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "De Mysteriis Dom Sathanas"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "77"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 77,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1995-05-05",
+"id": "34477fa0-2ee6-4c26-8eba-d3d5e0908811",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Destroy Erase Improve"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "15"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 15,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1981-11-07",
+"id": "5e8dc90d-610e-3d85-8884-a1449d74e6cc",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Diary of a Madman"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "78"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 78,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-06-29",
+"id": "5198a92a-d7b9-347c-927f-4dea160095b4",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Dimension Hatröss"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "26"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 26,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-09-29",
+"id": "92d8f0c4-8c64-3bee-bee1-812a70e77efa",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Dirt"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "99"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 99,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2003-03-04",
+"id": "2187d248-1a3b-35d0-a4ec-bead586ff547",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Fallen"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "39"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 39,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1994-03-18",
+"id": "60b55a8c-fe68-3397-91a3-7444cab57d7b",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Far Beyond Driven"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "59"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 59,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-09",
+"id": "0d648645-15fa-3384-b820-ad8c47908045",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "From Enslavement to Obliteration"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "97"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 97,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2005-09-27",
+"id": "c64e38e7-ea8d-3cda-ba62-1f4b9f899419",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "From Mars to Sirius"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "87"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 87,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1984-07",
+"id": "3920f3dd-1079-3981-ad81-a70a5cef6a07",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Hail to England"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "51"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 51,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1993-10-28",
+"id": "0c151ec8-7252-33b8-bef9-a889872ce10d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Heartwork"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "37"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 37,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1980-04-25",
+"id": "43ac82b5-eceb-3909-a153-3c00ea9c7b9a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Heaven and Hell"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "16"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 16,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1983-05-25",
+"id": "4e7b34de-0d87-356a-a3da-b21f769b7d4d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Holy Diver"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "70"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 70,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1991-10-22",
+"id": "6346903b-4480-3b0f-adef-90fe0b338509",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Human"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "95"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 95,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-07-06",
+"id": "ee30c026-b4f4-3e2a-94cf-7e586f1ccae0",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Images and Words"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "50"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 50,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2001-08-21",
+"id": "082c68eb-d993-36cf-9b32-6663cba2d052",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Iowa"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "13"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 13,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1980-04-14",
+"id": "88a735ad-1f8a-3f96-b410-7e5058dff7f6",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Iron Maiden"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "61"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 61,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2001-09-04",
+"id": "f56e3b38-c620-32f4-9845-2e2115f5e96f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Jane Doe"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "62"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 62,
+"release_group": {
+"disambiguation": "52 minute version",
+"first-release-date": "1996",
+"id": "ae690c03-b02e-4ea9-8cfa-c28e8193259d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Jerusalem"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "35"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 35,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1983-07-25",
+"id": "f44f4f73-a714-31a1-a4b8-bfcaaf311f50",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Kill ’Em All"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "30"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 30,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1994-10-11",
+"id": "aa08a002-2777-39cf-a554-e0988fc68030",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Korn"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "93"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 93,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-03-31",
+"id": "1bdbee32-2410-304e-92d5-463e8e89d639",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "La Sexorcisto: Devil Music, Vol. 1"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "82"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 82,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1990-06",
+"id": "3f5ce50c-78a7-30f8-8a03-34b3d7aea9b9",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Left Hand Path"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "46"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 46,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2004-08-31",
+"id": "7902c486-f670-3336-9850-b4112079d9e6",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Leviathan"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "42"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 42,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1980-10-03",
+"id": "450d4fe3-826d-3552-8de8-4a068371dd32",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Lightning to the Nations"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "69"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 69,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1989-09-05",
+"id": "e0c68e83-bc36-3146-af81-7d595e146b14",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Louder Than Love"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "2"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 2,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1986-03-03",
+"id": "3d00fb45-f8ab-3436-a8e1-b4bfc4d66913",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Master of Puppets"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "34"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 34,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1971-07-21",
+"id": "e51e9779-2edc-3b39-959c-299fdb5ed940",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Master of Reality"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "54"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 54,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-06-23",
+"id": "12f44455-925d-353c-9bdc-fd70885b1bc2",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Meantime"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "96"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 96,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2013-03-22",
+"id": "387431e2-4a5d-4035-9c2b-31e06876c9f6",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Meir"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "17"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 17,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1983",
+"id": "fec621f5-1a4c-3de0-99ee-a70ea75e76c2",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Melissa"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "25"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 25,
+"release_group": {
+"disambiguation": "“The Black Album”",
+"first-release-date": "1991-08-12",
+"id": "e8f70201-8899-3f0c-9e07-5d6495bc8046",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Metallica"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "98"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 98,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2009-05-18",
+"id": "2c33e8a0-b2be-3224-8748-92e1d8ea948e",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Monoliths & Dimensions"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "28"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 28,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1984-06-24",
+"id": "c0787405-1e45-4cb3-b2c4-41cffb1c9ae0",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Morbid Tales"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "7"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 7,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1984-09-15",
+"id": "75eb1e6e-6192-3d30-9149-74fb95cf7ce2",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "No Remorse"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "72"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 72,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2002-09-13",
+"id": "2426e089-b3e2-3513-b43e-f1b73fb54e60",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Oceanic"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "89"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 89,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2004-06-07",
+"id": "84d8f181-8307-360f-bd50-8b6ce1309751",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Once"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "67"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 67,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-05-02",
+"id": "1bdbbbcd-6380-3726-b039-86fe0559f273",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Operation: Mindcrime"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "1"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 1,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1970-09-18",
+"id": "cc053745-c447-3566-8f27-bed5438c9133",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Paranoid"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "8"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 8,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1986-07-20",
+"id": "4eea6bcc-3226-3c0d-a71d-af682a0a1dd8",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Peace Sells… but Who’s Buying?"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "68"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 68,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1994-07-19",
+"id": "ad6ca69e-07f2-397e-a32d-a0cf95f60fb4",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Portrait of an American Family"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "38"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 38,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1984-09-03",
+"id": "60a20bc8-acac-3cbb-99f9-ce458317233a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Powerslave"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "52"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 52,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1983-01-20",
+"id": "d77df681-b779-3d6d-b66a-3bfd15985e3e",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Pyromania"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "24"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 24,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-11-06",
+"id": "1305859b-8937-397f-9c33-39f62eb672fb",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Rage Against the Machine"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "83"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 83,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2007-09-04",
+"id": "0f72f6e7-e59d-3501-94a5-97ff3061176c",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Red Album"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "6"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 6,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1986-10-07",
+"id": "dbf1b3c0-1efb-4e5f-9fe1-4c42b144aa24",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Reign in Blood"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "11"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 11,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1984-07-27",
+"id": "0da580f2-6768-498f-af9d-2becaddf15e0",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Ride the Lightning"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "48"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 48,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1976-06-21",
+"id": "66576223-2647-37df-b6c2-746fc35c1a41",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Rising"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "58"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 58,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1993-10-12",
+"id": "244034ba-2ddc-389b-afe9-4803674e14cd",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "River Runs Red"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "19"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 19,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1990-09-21",
+"id": "19e7c9f3-7c4c-3a56-ba50-4156b39f76ca",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Rust in Peace"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "32"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 32,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1975-07-28",
+"id": "8ef6fc58-d87a-46cf-ab9d-077291784ada",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Sabotage"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "12"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 12,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1982-07-17",
+"id": "40f3885e-7158-3154-826d-676f2b79c6fb",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Screaming for Vengeance"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "31"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 31,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1990-10-09",
+"id": "27e49c6a-c0c6-3e76-b020-e48f4204ac6a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Seasons in the Abyss"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "44"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 44,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1983-09-26",
+"id": "1d53b31a-6fed-3dcd-860f-d49be19a0228",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Shout at the Devil"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "79"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 79,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1995-11-14",
+"id": "675e453b-43c5-3c05-9ac8-dc526471e583",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Slaughter of the Soul"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "47"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 47,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-07-05",
+"id": "74292121-e345-3f10-85ae-013f4e5a8cae",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "South of Heaven"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "43"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 43,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1978-02-10",
+"id": "c035f09e-430c-3510-9a4d-7cb33dd56ed8",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Stained Class"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "76"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 76,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1984-05-10",
+"id": "ce11e17f-1c1f-345e-9c41-e5f0010c3b53",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Stay Hungry"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "64"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 64,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1989-11-13",
+"id": "2c784b05-145c-43f2-aca2-7ce3f4e6daf5",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Streetcleaner"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "94"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 94,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2013-05-28",
+"id": "8a061d0e-fa0c-4571-91ff-8bc3911b6428",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Sunbather"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "92"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 92,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1993-09-09",
+"id": "2b3b9d3a-af4d-3c29-a46f-3179cccf0f7f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Take as Needed for Pain"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "88"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 88,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2004-10-12",
+"id": "4d186339-63d5-3acd-9147-6027c2a7df23",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Terrifyer"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "4"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 4,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1982-03-29",
+"id": "4ebfe175-e7ed-34cd-8e91-67c7e4a53579",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "The Number of the Beast"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "49"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 49,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1996-04-12",
+"id": "fb27225e-e66e-37ea-bc2c-9b7352f1e81f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Through Silver in Blood"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "22"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 22,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1981-11-10",
+"id": "6f4eed9f-7a10-3546-b630-23d0a03f86e7",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Too Fast for Love"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "91"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 91,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1990",
+"id": "61ba11c5-e9dd-3cf3-8809-6dd20280b3a4",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Torture Garden"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "27"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 27,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2001-08-27",
+"id": "f50fbcb4-bfcd-3784-b4c9-44f4793e66b2",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Toxicity"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "85"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 85,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1994-02-17",
+"id": "bc9a4ab3-2ce0-3a49-b48f-3742169d0636",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Transilvanian Hunger"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "81"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 81,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1987-05-11",
+"id": "1c00d633-95b2-3dc4-b57b-91df5d8d476f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Under the Sign of the Black Mark"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "71"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 71,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1988-05-02",
+"id": "8ce498ba-26f5-3ea9-b499-9007212ae269",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Vivid"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "14"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 14,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1972-09-25",
+"id": "8c292627-3459-3852-8ebc-226c12db175d",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Vol 4"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "10"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 10,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1992-02-25",
+"id": "814e0b20-6884-31c5-9d99-d215f048cfd6",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Vulgar Display of Power"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "74"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 74,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1981",
+"id": "3c943530-e44e-3f1a-a847-b3e6d8422c8f",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Welcome to Hell"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "66"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 66,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "2000-04-27",
+"id": "a7d33e96-8e09-3aff-8629-44812a1b8489",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "White Pony"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "36"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 36,
+"release_group": {
+"disambiguation": "",
+"first-release-date": "1980-03-26",
+"id": "36338d76-f764-32fb-b11b-4ea68588865a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "Women and Children First"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "80"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "backward",
+"end": null,
+"ended": false,
+"ordering-key": 80,
+"release_group": {
+"disambiguation": "aka Psalm 69",
+"first-release-date": "1992-07-10",
+"id": "15cfaf82-5a4b-3ee1-bcce-75561055d27a",
+"primary-type": null,
+"primary-type-id": null,
+"secondary-type-ids": [],
+"secondary-types": [],
+"title": "ΚΕΦΑΛΗΞΘ"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "release_group",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+}
+],
+"type": "Release group series",
+"type-id": "4c1c4949-7b6c-3a2d-9d54-a50a27e4fa77"
+}
+}
+}

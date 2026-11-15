@@ -5729,3 +5729,52 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert _decode_json(body)["code"] == "gallery_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
+
+
+def _postgres_selection(seam_id, _config):
+    return type("Selection", (), {"seam_id": seam_id, "effective_backend": "postgres"})()
+
+
+def test_asgi_series_view_reads_the_postgres_series_payload(app, asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    calls = []
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, config):
+            assert config is app.config
+
+        def build_series_payload(self, *, query_params=None):
+            calls.append(query_params.get("series"))
+            return {"selected_series": "all", "artist_groups": [], "album_count": 0}
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "select_runtime_persistence_adapter", _postgres_selection)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/view-data", query={"series": "all", "surface": "albums"})
+    assert status == 200
+    assert _decode_json(body) == {"selected_series": "all", "artist_groups": [], "album_count": 0,
+                                  "inventory_mutation_revision": 0}
+    assert calls == ["all"]
+
+
+def test_asgi_series_view_refuses_search_or_artist_parameters_and_file_backed_libraries(
+    app, asgi_app, monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FailingRepository:
+        def __init__(self, _config):
+            raise AssertionError("A refused series request never reads the library")
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FailingRepository)
+    monkeypatch.setattr(asgi_read_routes, "select_runtime_persistence_adapter", _postgres_selection)
+    for query in ({"series": "all", "q": "colossus"}, {"series": "all", "artist": "X"},
+                  {"series": "all", "surface": "playlists"}):
+        status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/view-data", query=query)
+        assert status == 400
+    monkeypatch.setattr(asgi_read_routes, "select_runtime_persistence_adapter",
+                        lambda seam_id, _config: type("Selection", (), {"effective_backend": "file"})())
+    status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/view-data", query={"series": "all"})
+    assert status == 409

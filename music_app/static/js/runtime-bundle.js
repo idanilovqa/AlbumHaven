@@ -1225,6 +1225,19 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
   );
 }
 
+// The Series view (MusicBrainz Delivery 2, S6) comes only with a series payload: any other
+// view the server sends clears it, while local patches of the current view keep it.
+function resolveRuntimeSeriesFields(source, base) {
+  const owns = (key) => Object.prototype.hasOwnProperty.call(source, key);
+  const replacesView = ['artist_groups', 'selected_artist', 'query'].some(owns);
+  const from = owns('selected_series') ? source : (replacesView ? {} : base);
+  return {
+    selected_series: normalizeRuntimeString(from.selected_series, ''),
+    series: isRuntimePlainObject(from.series) ? { ...from.series } : null,
+    series_sidebar: cloneRuntimeArray(from.series_sidebar, []),
+  };
+}
+
 function normalizeViewPayload(payload, fallbackView = null) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
@@ -1340,6 +1353,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       initialViewPartialFallback,
     ),
     gallery_page: isRuntimePlainObject(source.gallery_page) ? { ...source.gallery_page } : null,
+    ...resolveRuntimeSeriesFields(source, base),
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
@@ -2173,6 +2187,11 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
   }
 }
 
+// The Series view (MusicBrainz Delivery 2, S6) belongs to unsearched, artist-less browsing.
+function resolveViewSeries(view = {}) {
+  return view.query || view.selected_artist ? '' : String(view.selected_series || '').trim();
+}
+
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
@@ -2186,6 +2205,7 @@ function buildUrl(view) {
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
+  if (resolveViewSeries(view)) params.set('series', resolveViewSeries(view));
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -2218,6 +2238,7 @@ function buildApiUrl(view, options = {}) {
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (view.all_artists_active) params.set('all_artists', '1');
+  if (resolveViewSeries(view)) params.set('series', resolveViewSeries(view));
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
   if (galleryDisplayMode !== 'cards') params.set('gallery_display', galleryDisplayMode);
@@ -2230,6 +2251,8 @@ function buildApiUrl(view, options = {}) {
   (view.visible_library_categories || []).forEach((category) => {
     if (category) params.append('category', category);
   });
+  // A series is one bounded view: never paged, tiered, anchored or filtered like artists.
+  if (resolvedSurface === 'albums' && resolveViewSeries(view)) return `/view-data?${params.toString()}`;
   (view.related_filter_artists || []).forEach((artist) => {
     if (artist) params.append('related_artist', artist);
   });
@@ -2268,6 +2291,7 @@ function parseUrlStateFromUrl(url, baseOrigin) {
     playlist_id: u.searchParams.get('playlist_id') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
+    selected_series: u.searchParams.get('series') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
     gallery_scope: u.searchParams.get('gallery_scope') || 'all',
     gallery_display_mode: normalizeGalleryDisplayMode(u.searchParams.get('gallery_display')),
@@ -4314,6 +4338,23 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   return html;
 }
 
+// The Series tree (approved mockup 2): the artist tree's own items, "All series" first.
+function buildSeriesSidebarHtml(view = {}) {
+  const renderItem = window.NavigationTree.renderItem;
+  const series = Array.isArray(view.series_sidebar) ? view.series_sidebar : [];
+  const selected = String(view.selected_series || '');
+  const browse = { surface_request: 'albums', visible_library_categories: view.visible_library_categories };
+  return renderItem({
+    label: 'All series', href: buildUrl({ ...browse, selected_series: 'all' }), key: 'all-series',
+    count: series.length, selected: selected === 'all',
+    attributes: { 'data-nav': '1', 'data-sidebar-all-series': '1' },
+  }) + series.map((item) => renderItem({
+    label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
+    count: item.count, selected: item.mbid === selected,
+    attributes: { 'data-nav': '1', 'data-sidebar-series': item.mbid },
+  })).join('');
+}
+
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
@@ -4828,6 +4869,20 @@ function buildGalleryBarHtml(config = {}) {
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
       <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
     </div>`;
+}
+
+// The Series view's Gallery Bar (approved 2 and 4B). One series: its name and i, then
+// "Album series • N albums" under it; a phone keeps the band header's "• N albums" and no
+// subheader. All series: "Series" with its totals, like the artist gallery.
+function resolveSeriesGalleryBarContent({ series = null, seriesCount = 0, albumCount = 0, mobile = false } = {}) {
+  if (!series) {
+    return { name: 'Series', inlineTotal: '', metadataHtml: '', summary: `${Math.max(0, Number(seriesCount || 0))} series · ${galleryMainPlural(albumCount, 'album')}` };
+  }
+  const total = galleryMainPlural(albumCount, 'album');
+  return mobile
+    ? { name: series.name || '', inlineTotal: total, metadataHtml: '', summary: '' }
+    : { name: series.name || '', inlineTotal: '', summary: '',
+      metadataHtml: `<span class="gallery-bar__summary">${escapeHtml(series.type_label || 'Series')}</span><span class="gallery-bar__artist-total">${escapeHtml(total)}</span>` };
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
@@ -5355,6 +5410,28 @@ function buildMissingAlbumDetailsHtml(config = {}) {
     message,
     actionsHtml: `${removeButton}${keepButton}`,
   });
+}
+
+// The MusicBrainz series the album is part of (owner-approved 1B and 4A): a SERIES block for
+// real series and, in the same style beside it, a FEATURED IN block for the lists, awards
+// and collections that name the album (owner 2026-11-15). Each shows only when it has an
+// entry; every name opens that series' gallery.
+function buildAlbumDetailsSeriesHtml(album) {
+  const series = Array.isArray(album?.musicbrainz_series) ? album.musicbrainz_series.filter((item) => item?.mbid) : [];
+  return [['series', 'Series'], ['featured_in', 'Featured In']].map(([kind, label]) => {
+    const links = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind)
+      .map((item) => `<button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${escapeHtml(item.mbid)}">${escapeHtml(item.name || '')}</button>`).join('');
+    return links ? `<div class="album-details-series" data-album-details-series="${kind}"><div class="section-split-label">${label}</div>${links}</div>` : '';
+  }).join('');
+}
+
+// Desktop: under the cover. Phone: below the track table; the header never grows.
+function syncAlbumDetailsSeries(album, { cover, list, mobile } = {}) {
+  document.querySelectorAll('#track-modal [data-album-details-series]').forEach((block) => block.remove());
+  const html = buildAlbumDetailsSeriesHtml(album);
+  if (!html) return;
+  if (mobile) list?.insertAdjacentHTML('afterend', html);
+  else cover?.insertAdjacentHTML('beforeend', html);
 }
 
 /* Inline album metadata and the pinned Gallery Bar never own visible identity
@@ -6001,10 +6078,35 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+// The Series tree replaces the artists while the Series view is open (approved mockup 2).
+function renderSeriesSidebar(el, view) {
+  const series = typeof showsSeriesTree === 'function' && showsSeriesTree(view);
+  const heading = document.querySelector('.desktop-artists-heading');
+  const label = series ? 'Series' : 'Artists';
+  if (heading && heading.textContent !== label) heading.textContent = label;
+  const fold = document.getElementById('artist-tree-fold-button');
+  const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+  if (fold && fold.getAttribute('aria-label') !== foldLabel) {
+    fold.setAttribute('aria-label', foldLabel);
+    fold.setAttribute('title', foldLabel);
+  }
+  el.dataset.navigationTree = series ? 'series' : 'artists';
+  if (!series) return false;
+  const html = buildSeriesSidebarHtml(view);
+  if (el.dataset.sidebarStructureSignature !== html) {
+    el.innerHTML = html;
+    // The artist tree rebuilds from scratch when it returns.
+    el.dataset.sidebarStructureSignature = html;
+    el.albumHavenSidebarVirtualWindow = null;
+  }
+  return true;
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
+  if (renderSeriesSidebar(el, v)) return;
   const sidebarOverride = Array.isArray(state.gallery.sidebarArtistsOverride) ? state.gallery.sidebarArtistsOverride : null;
   const sidebarShowAllArtistsOverride = Object.prototype.hasOwnProperty.call(state.gallery, 'sidebarShowAllArtistsOverride')
     ? state.gallery.sidebarShowAllArtistsOverride
@@ -7344,7 +7446,11 @@ function updateGalleryMainChrome() {
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
-  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
+  const series = state.view.series || null;
+  // One series owns its header while scrolling; All series follows the artist gallery.
+  const seriesHeader = !mobileHome && Boolean(String(state.view.selected_series || '').trim())
+    && Boolean(series || context.kind === 'gallery');
+  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : (seriesHeader ? 'series' : context.kind);
   summary.hidden = false;
   if (metadata) {
     metadata.hidden = true;
@@ -7359,6 +7465,28 @@ function updateGalleryMainChrome() {
     name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
     oldInfo?.remove();
+  } else if (seriesHeader) {
+    const content = resolveSeriesGalleryBarContent({
+      series, seriesCount: model.groups.length, albumCount: model.totals.albumCount,
+      mobile: typeof usesMobilePageLayout === 'function' && usesMobilePageLayout(),
+    });
+    name.textContent = content.name;
+    summary.hidden = !content.summary;
+    summary.textContent = content.summary;
+    if (inlineTotal) {
+      inlineTotal.hidden = !content.inlineTotal;
+      inlineTotal.textContent = content.inlineTotal;
+    }
+    if (metadata) {
+      metadata.hidden = !content.metadataHtml;
+      metadata.innerHTML = content.metadataHtml;
+    }
+    if (!series) oldInfo?.remove();
+    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    else {
+      oldInfo.dataset.artist = series.name;
+      oldInfo.setAttribute('aria-label', `Information about ${series.name}`);
+    }
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
@@ -7476,11 +7604,22 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
+// A series' i (Series view): its MusicBrainz type, album count and MusicBrainz page, in the
+// artist information surface.
+function renderGallerySeriesInfo(overlay, series) {
+  const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close series information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
+  const link = ButtonComponent.renderExternalServiceLink({ service: 'musicbrainz', href: series.musicbrainz_url, subject: series.name });
+  overlay.setAttribute('aria-label', `Information about ${series.name}`);
+  overlay.innerHTML = `${closeAction}<header><div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div><div><span>${series.kind === 'featured_in' ? 'Featured In' : 'Series'}</span><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(`${series.type_label || 'Series'} • ${galleryMainPlural(series.album_count, 'album')}`)}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
+  return overlay;
+}
+
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
+  if (group.series) return renderGallerySeriesInfo(overlay, group.series);
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
@@ -7575,7 +7714,27 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// Album details' SERIES link opens that series' gallery (approved 1B and 4A).
+function openSeriesGallery(mbid) {
+  const navigate = () => fetchAndRender(buildUrl({
+    surface_request: 'albums',
+    visible_library_categories: state.view?.visible_library_categories || [],
+    selected_series: mbid,
+  }), true);
+  if (document.getElementById('track-modal')?.hidden === false) {
+    closeTrackModal();
+    // A phone's album page closes through history: open the series once it has.
+    if (typeof hasActiveMobilePage === 'function' && hasActiveMobilePage()) {
+      window.addEventListener('popstate', () => setTimeout(navigate, 0), { once: true });
+      return;
+    }
+  }
+  navigate();
+}
+
 function handleGalleryMainClick(event) {
+  const seriesLink = event.target.closest?.('[data-open-series]');
+  if (seriesLink) { event.preventDefault(); openSeriesGallery(seriesLink.dataset.openSeries); return true; }
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
@@ -7717,6 +7876,12 @@ function initGalleryMain() {
   const recentSearch = document.getElementById('recent-search-popover');
   if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
   updateGalleryMainChrome();
+  // The page renders unsearched browsing first; a Series view URL (reload, shared link)
+  // then opens its series.
+  const locationState = parseBrowserUrlState(window.location.href);
+  if (resolveViewSeries(locationState) && !state.view.selected_series) {
+    void fetchAndRender(buildUrl(locationState), false);
+  }
 }
 
 function createGalleryFamilyPaintController(toggle) {
@@ -11435,8 +11600,9 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (button) {
     button.hidden = !canFold || isFolded;
     button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
-    button.setAttribute('aria-label', 'Collapse Artist Tree');
-    button.setAttribute('title', 'Collapse Artist Tree');
+    const label = showsSeriesTree() ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
   }
   if (navigationButton) {
     navigationButton.hidden = !(isFolded || isExpanding);
@@ -11487,6 +11653,25 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
   fallbackTimer = setTimeout(finish, duration + 50);
   cancelPendingArtistTreeResize = cleanup;
+}
+
+// MusicBrainz Delivery 2, S6: the navigation tree lists series while the Series view is
+// open. A phone's drawer keeps its artists (how a phone reaches the Series list is open).
+function showsSeriesTree(view = state.view) {
+  return Boolean(String(view?.selected_series || '').trim()) && !isArtistsDrawerMobileViewport();
+}
+
+// The folded rail's Series button opens the tree on All series; its Artist Tree button
+// brings the artists back. Either unfolds the tree.
+function openNavigationTree(kind) {
+  if (showsSeriesTree() !== (kind === 'series')) {
+    fetchAndRender(buildUrl({
+      surface_request: 'albums',
+      visible_library_categories: state.view?.visible_library_categories || [],
+      selected_series: kind === 'series' ? 'all' : '',
+    }), true);
+  }
+  if (state.ui.artistTreeFolded) toggleArtistTreeFold();
 }
 
 function toggleArtistTreeFold() {
@@ -11557,10 +11742,17 @@ function toggleArtistsDrawer() {
 }
 
 function handleArtistsDrawerClick(event) {
+  const seriesButton = event.target.closest('[data-open-series-tree="1"]');
+  if (seriesButton) {
+    event.preventDefault();
+    openNavigationTree('series');
+    return true;
+  }
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
-    toggleArtistTreeFold();
+    if (foldButton.id === 'artist-tree-navigation-button' && showsSeriesTree()) openNavigationTree('artists');
+    else toggleArtistTreeFold();
     return true;
   }
 
@@ -38981,6 +39173,12 @@ function renderTrackModalRelease(album) {
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
+  if (typeof syncAlbumDetailsSeries === 'function') {
+    syncAlbumDetailsSeries(album, {
+      cover: els.cover, list: els.list,
+      mobile: els.overlay?.classList?.contains('is-mobile-page') && usesMobilePageLayout(),
+    });
+  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -44752,7 +44950,10 @@ function renderArtistGroups(options = {}) {
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {
     ...options,
-    showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
+    // A series shows its albums alone; All series heads each series like an artist.
+    showArtistSectionHeaders: String(state.view.selected_series || '').trim()
+      ? state.view.selected_series === 'all'
+      : !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
   };
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
@@ -52170,6 +52371,7 @@ function shouldShowMobileHome() {
   return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1'
     && !state.ui?.pendingViewTransition
     && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+    && !String(state.view.selected_series || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
 function renderMobileHome() {

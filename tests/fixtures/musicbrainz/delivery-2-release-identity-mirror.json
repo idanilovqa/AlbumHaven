@@ -61,13 +61,14 @@
 }
 ],
 "responses": {
-"/release-group/76ed743a-fd4b-4db9-ab63-94996135cd12?inc=genres&fmt=json": {
+"/release-group/76ed743a-fd4b-4db9-ab63-94996135cd12?inc=genres+series-rels&fmt=json": {
 "disambiguation": "",
 "first-release-date": "2001-03-21",
 "genres": [],
 "id": "76ed743a-fd4b-4db9-ab63-94996135cd12",
 "primary-type": "Other",
 "primary-type-id": "4fc3be2b-de1e-396b-a933-beb8f1607a22",
+"relations": [],
 "secondary-type-ids": [
 "22a628ad-c082-3c4f-b1b6-d41665107b88"
 ],
@@ -568,7 +569,7 @@
 },
 "title": "彼女と彼女の猫 Their standing points MOVIES AND SOUNDTRACK"
 },
-"/release/dc94c5b7-640a-4344-a5b2-a7041f31034e?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/dc94c5b7-640a-4344-a5b2-a7041f31034e?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -921,6 +922,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {

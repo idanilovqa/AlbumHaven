@@ -2684,7 +2684,10 @@ function renderArtistGroups(options = {}) {
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {
     ...options,
-    showArtistSectionHeaders: !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
+    // A series shows its albums alone; All series heads each series like an artist.
+    showArtistSectionHeaders: String(state.view.selected_series || '').trim()
+      ? state.view.selected_series === 'all'
+      : !String(state.view.selected_artist || '').trim() || hasGalleryArtistFamily(),
   };
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },

@@ -165,6 +165,23 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   return html;
 }
 
+// The Series tree (approved mockup 2): the artist tree's own items, "All series" first.
+function buildSeriesSidebarHtml(view = {}) {
+  const renderItem = window.NavigationTree.renderItem;
+  const series = Array.isArray(view.series_sidebar) ? view.series_sidebar : [];
+  const selected = String(view.selected_series || '');
+  const browse = { surface_request: 'albums', visible_library_categories: view.visible_library_categories };
+  return renderItem({
+    label: 'All series', href: buildUrl({ ...browse, selected_series: 'all' }), key: 'all-series',
+    count: series.length, selected: selected === 'all',
+    attributes: { 'data-nav': '1', 'data-sidebar-all-series': '1' },
+  }) + series.map((item) => renderItem({
+    label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
+    count: item.count, selected: item.mbid === selected,
+    attributes: { 'data-nav': '1', 'data-sidebar-series': item.mbid },
+  })).join('');
+}
+
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null

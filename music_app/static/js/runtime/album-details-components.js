@@ -138,6 +138,28 @@ function buildMissingAlbumDetailsHtml(config = {}) {
   });
 }
 
+// The MusicBrainz series the album is part of (owner-approved 1B and 4A): a SERIES block for
+// real series and, in the same style beside it, a FEATURED IN block for the lists, awards
+// and collections that name the album (owner 2026-11-15). Each shows only when it has an
+// entry; every name opens that series' gallery.
+function buildAlbumDetailsSeriesHtml(album) {
+  const series = Array.isArray(album?.musicbrainz_series) ? album.musicbrainz_series.filter((item) => item?.mbid) : [];
+  return [['series', 'Series'], ['featured_in', 'Featured In']].map(([kind, label]) => {
+    const links = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind)
+      .map((item) => `<button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${escapeHtml(item.mbid)}">${escapeHtml(item.name || '')}</button>`).join('');
+    return links ? `<div class="album-details-series" data-album-details-series="${kind}"><div class="section-split-label">${label}</div>${links}</div>` : '';
+  }).join('');
+}
+
+// Desktop: under the cover. Phone: below the track table; the header never grows.
+function syncAlbumDetailsSeries(album, { cover, list, mobile } = {}) {
+  document.querySelectorAll('#track-modal [data-album-details-series]').forEach((block) => block.remove());
+  const html = buildAlbumDetailsSeriesHtml(album);
+  if (!html) return;
+  if (mobile) list?.insertAdjacentHTML('afterend', html);
+  else cover?.insertAdjacentHTML('beforeend', html);
+}
+
 /* Inline album metadata and the pinned Gallery Bar never own visible identity
    simultaneously. A taller wrapped identity must finish scrolling out too. */
 function resolveMobileAlbumHeaderState({ albumPage, hasInlineIdentity, hasCover,

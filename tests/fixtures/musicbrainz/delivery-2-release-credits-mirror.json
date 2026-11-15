@@ -1733,7 +1733,7 @@
 }
 ],
 "responses": {
-"/release-group/067d7c43-6265-348e-a147-436f6b64fb1f?inc=genres&fmt=json": {
+"/release-group/067d7c43-6265-348e-a147-436f6b64fb1f?inc=genres+series-rels&fmt=json": {
 "disambiguation": "1989 film soundtrack",
 "first-release-date": "1989-10-13",
 "genres": [
@@ -1765,6 +1765,64 @@
 "id": "067d7c43-6265-348e-a147-436f6b64fb1f",
 "primary-type": "Album",
 "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "62"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"ordering-key": 44,
+"series": {
+"disambiguation": "soundtrack collection",
+"id": "db63e42a-4e1a-451e-8592-c95b616818bd",
+"name": "Academy Award winners for “Best Original Score”",
+"type": "Release group award",
+"type-id": "133524ac-b9e4-4c6f-becb-774ab963de2f"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "series",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+},
+{
+"attribute-ids": {
+"number": "a59c5830-5ec7-38fe-9a21-c7ea54f6650a"
+},
+"attribute-values": {
+"number": "4"
+},
+"attributes": [
+"number"
+],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"ordering-key": 4,
+"series": {
+"disambiguation": "A collection of deluxe Disney soundtrack albums",
+"id": "94b2e5bf-9079-43c8-8c97-082813c24f8c",
+"name": "Walt Disney Records The Legacy Collection",
+"type": "Release group series",
+"type-id": "4c1c4949-7b6c-3a2d-9d54-a50a27e4fa77"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "series",
+"type": "part of",
+"type-id": "01018437-91d8-36b9-bf89-3f885d53b5bd"
+}
+],
 "secondary-type-ids": [
 "22a628ad-c082-3c4f-b1b6-d41665107b88"
 ],
@@ -1773,7 +1831,7 @@
 ],
 "title": "The Little Mermaid"
 },
-"/release-group/1924d4a3-80cc-3237-8ee3-ab9cae0e9569?inc=genres&fmt=json": {
+"/release-group/1924d4a3-80cc-3237-8ee3-ab9cae0e9569?inc=genres+series-rels&fmt=json": {
 "disambiguation": "",
 "first-release-date": "2005-03-07",
 "genres": [
@@ -1787,11 +1845,12 @@
 "id": "1924d4a3-80cc-3237-8ee3-ab9cae0e9569",
 "primary-type": "Album",
 "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [],
 "secondary-type-ids": [],
 "secondary-types": [],
 "title": "Cosmopolitan Life"
 },
-"/release-group/7170d4ee-5761-3918-8cd5-f220f617a109?inc=genres&fmt=json": {
+"/release-group/7170d4ee-5761-3918-8cd5-f220f617a109?inc=genres+series-rels&fmt=json": {
 "disambiguation": "",
 "first-release-date": "2005-09-13",
 "genres": [
@@ -1811,6 +1870,7 @@
 "id": "7170d4ee-5761-3918-8cd5-f220f617a109",
 "primary-type": "Album",
 "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [],
 "secondary-type-ids": [
 "22a628ad-c082-3c4f-b1b6-d41665107b88"
 ],
@@ -1819,7 +1879,7 @@
 ],
 "title": "Elizabethtown: Music From the Motion Picture"
 },
-"/release-group/c8966036-05d4-3440-a79a-1e485fc64994?inc=genres&fmt=json": {
+"/release-group/c8966036-05d4-3440-a79a-1e485fc64994?inc=genres+series-rels&fmt=json": {
 "disambiguation": "",
 "first-release-date": "1998-10-22",
 "genres": [
@@ -1887,6 +1947,7 @@
 "id": "c8966036-05d4-3440-a79a-1e485fc64994",
 "primary-type": "Album",
 "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [],
 "secondary-type-ids": [
 "22a628ad-c082-3c4f-b1b6-d41665107b88"
 ],
@@ -1895,7 +1956,7 @@
 ],
 "title": "Chat Noir Chat Blanc"
 },
-"/release-group/cd4f312f-76ad-39c2-be38-287627f0d4ce?inc=genres&fmt=json": {
+"/release-group/cd4f312f-76ad-39c2-be38-287627f0d4ce?inc=genres+series-rels&fmt=json": {
 "disambiguation": "",
 "first-release-date": "1984",
 "genres": [
@@ -1921,11 +1982,12 @@
 "id": "cd4f312f-76ad-39c2-be38-287627f0d4ce",
 "primary-type": "Album",
 "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+"relations": [],
 "secondary-type-ids": [],
 "secondary-types": [],
 "title": "Messiah"
 },
-"/release/02b920e6-2af6-43f7-934b-b03322be9cfc?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/02b920e6-2af6-43f7-934b-b03322be9cfc?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -4892,6 +4954,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -4980,7 +5043,7 @@
 },
 "title": "Messiah"
 },
-"/release/130c7791-2b1b-4065-bfde-65228c7d88c6?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/130c7791-2b1b-4065-bfde-65228c7d88c6?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -6055,6 +6118,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -6121,7 +6185,7 @@
 },
 "title": "The Little Mermaid"
 },
-"/release/2f90dac6-b314-47ae-835b-040f3893ec68?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/2f90dac6-b314-47ae-835b-040f3893ec68?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -6430,6 +6494,30 @@
 "packaging": null,
 "packaging-id": null,
 "quality": "normal",
+"relations": [
+{
+"attribute-ids": {},
+"attribute-values": {},
+"attributes": [],
+"begin": null,
+"direction": "forward",
+"end": null,
+"ended": false,
+"ordering-key": 104,
+"series": {
+"disambiguation": "",
+"id": "a1e9b680-9d79-4a3a-b2d0-2da60bd52aeb",
+"name": "MediaMax CDs",
+"type": "Release series",
+"type-id": "52b90f1e-ff62-3bd0-b254-5d91ced5d757"
+},
+"source-credit": "",
+"target-credit": "",
+"target-type": "series",
+"type": "part of",
+"type-id": "3fa29f01-8e13-3e49-9b0a-ad212aa2f81d"
+}
+],
 "release-events": [
 {
 "area": {
@@ -6483,7 +6571,7 @@
 },
 "title": "Elizabethtown: Songs From the Brown Hotel"
 },
-"/release/4dbeb1fe-3777-4972-a592-7ae2976e394a?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/4dbeb1fe-3777-4972-a592-7ae2976e394a?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -10677,6 +10765,7 @@
 "packaging": null,
 "packaging-id": null,
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -10739,7 +10828,7 @@
 },
 "title": "Complete Piano Works"
 },
-"/release/6193749d-3ae0-48fa-af28-adb85d5ed121?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/6193749d-3ae0-48fa-af28-adb85d5ed121?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -11620,6 +11709,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -11673,7 +11763,7 @@
 },
 "title": "Black Cat White Cat"
 },
-"/release/75357d8b-3607-48aa-8f0c-be7c6f0be425?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/75357d8b-3607-48aa-8f0c-be7c6f0be425?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -12748,6 +12838,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -21714,7 +21805,7 @@
 }
 ]
 },
-"/release/c8e0d462-3634-44f5-9025-a93c5f373e1c?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/c8e0d462-3634-44f5-9025-a93c5f373e1c?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -22420,6 +22511,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -22473,7 +22565,7 @@
 },
 "title": "Elizabethtown: Music From the Motion Picture"
 },
-"/release/e0d53f15-6883-4131-bbcd-94d53c8da6bb?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/e0d53f15-6883-4131-bbcd-94d53c8da6bb?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -23179,6 +23271,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -23232,7 +23325,7 @@
 },
 "title": "Tudo Acontece em Elizabethtown (Trilha Sonora Original Do Filme)"
 },
-"/release/e601e060-0991-4dae-a0c8-f7e3a3b0cd06?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/e601e060-0991-4dae-a0c8-f7e3a3b0cd06?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -26188,6 +26281,7 @@
 "packaging": "Fatbox",
 "packaging-id": "57429523-ffe6-3336-9381-32565c142c18",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -26276,7 +26370,7 @@
 },
 "title": "Messiah"
 },
-"/release/f10f2a7e-3b28-4840-b003-83c0c0a3817e?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/f10f2a7e-3b28-4840-b003-83c0c0a3817e?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -27234,6 +27328,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {
@@ -27300,7 +27395,7 @@
 },
 "title": "The Little Mermaid"
 },
-"/release/f181cda6-9502-4aeb-87a3-62a85cf2fa3c?inc=recordings+artist-credits+release-groups&fmt=json": {
+"/release/f181cda6-9502-4aeb-87a3-62a85cf2fa3c?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
 "artist-credit": [
 {
 "artist": {
@@ -28058,6 +28153,7 @@
 "packaging": "Jewel Case",
 "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
 "quality": "normal",
+"relations": [],
 "release-events": [
 {
 "area": {

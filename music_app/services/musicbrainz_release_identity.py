@@ -46,7 +46,9 @@ from music_app.services.musicbrainz_enrichment import (
     retry_delay,
 )
 
-RELEASE_MATCHER_VERSION = 1
+# 2: release groups and releases are looked up with the series they are part of (S6), so
+# decisions stored before that are made again.
+RELEASE_MATCHER_VERSION = 2
 # Per artist group: the shared browses plus, per album, its tracklists and the lookups of
 # the chosen release group and release.
 _BASE_REQUESTS = 40
@@ -57,6 +59,7 @@ _CERTAIN_SIGNALS = frozenset({"track_list", "track_count"})
 # order: (with the local name as the credited name, as a phrase); then the closest releases.
 _CREDIT_SEARCHES = ((True, True), (True, False), (False, True), (False, False))
 _MAX_CREDIT_RELEASES = 3
+_SERIES_SIZED_PER_JOB = 10
 
 DIAGNOSTICS = {
     "no_title_match": "No release of this artist on MusicBrainz has this album's title.",
@@ -379,4 +382,16 @@ class MusicBrainzAlbumReleaseProcessor:
         self._repository.record(job_id=job_id, worker_id=worker_id, outcomes=outcomes, observed_at=observed_at)
         self._repository.finish(job_id=job_id, worker_id=worker_id, state="succeeded", classification="complete",
                                 observed_at=observed_at)
+        self._size_new_series(observed_at)
         return {"processed": True, "state": "succeeded", "job_id": job_id}
+
+    def _size_new_series(self, observed_at) -> None:
+        """A list or an award names far more albums than a real album series (owner
+        2026-11-15): each newly stored series is sized once. A failed lookup is retried
+        after the next job."""
+        for mbid in self._repository.unsized_series(limit=_SERIES_SIZED_PER_JOB):
+            found = self._client.lookup_series(mbid)
+            if found.get("classification") != "complete":
+                return
+            self._repository.store_series_size(mbid=mbid, member_count=found["series"]["member_count"],
+                                               observed_at=observed_at)

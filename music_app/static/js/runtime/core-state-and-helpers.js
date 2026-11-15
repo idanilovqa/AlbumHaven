@@ -532,10 +532,35 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
+// The Series tree replaces the artists while the Series view is open (approved mockup 2).
+function renderSeriesSidebar(el, view) {
+  const series = typeof showsSeriesTree === 'function' && showsSeriesTree(view);
+  const heading = document.querySelector('.desktop-artists-heading');
+  const label = series ? 'Series' : 'Artists';
+  if (heading && heading.textContent !== label) heading.textContent = label;
+  const fold = document.getElementById('artist-tree-fold-button');
+  const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+  if (fold && fold.getAttribute('aria-label') !== foldLabel) {
+    fold.setAttribute('aria-label', foldLabel);
+    fold.setAttribute('title', foldLabel);
+  }
+  el.dataset.navigationTree = series ? 'series' : 'artists';
+  if (!series) return false;
+  const html = buildSeriesSidebarHtml(view);
+  if (el.dataset.sidebarStructureSignature !== html) {
+    el.innerHTML = html;
+    // The artist tree rebuilds from scratch when it returns.
+    el.dataset.sidebarStructureSignature = html;
+    el.albumHavenSidebarVirtualWindow = null;
+  }
+  return true;
+}
+
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
+  if (renderSeriesSidebar(el, v)) return;
   const sidebarOverride = Array.isArray(state.gallery.sidebarArtistsOverride) ? state.gallery.sidebarArtistsOverride : null;
   const sidebarShowAllArtistsOverride = Object.prototype.hasOwnProperty.call(state.gallery, 'sidebarShowAllArtistsOverride')
     ? state.gallery.sidebarShowAllArtistsOverride

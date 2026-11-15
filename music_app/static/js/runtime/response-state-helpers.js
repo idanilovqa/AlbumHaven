@@ -881,6 +881,19 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
   );
 }
 
+// The Series view (MusicBrainz Delivery 2, S6) comes only with a series payload: any other
+// view the server sends clears it, while local patches of the current view keep it.
+function resolveRuntimeSeriesFields(source, base) {
+  const owns = (key) => Object.prototype.hasOwnProperty.call(source, key);
+  const replacesView = ['artist_groups', 'selected_artist', 'query'].some(owns);
+  const from = owns('selected_series') ? source : (replacesView ? {} : base);
+  return {
+    selected_series: normalizeRuntimeString(from.selected_series, ''),
+    series: isRuntimePlainObject(from.series) ? { ...from.series } : null,
+    series_sidebar: cloneRuntimeArray(from.series_sidebar, []),
+  };
+}
+
 function normalizeViewPayload(payload, fallbackView = null) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
@@ -996,6 +1009,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       initialViewPartialFallback,
     ),
     gallery_page: isRuntimePlainObject(source.gallery_page) ? { ...source.gallery_page } : null,
+    ...resolveRuntimeSeriesFields(source, base),
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };

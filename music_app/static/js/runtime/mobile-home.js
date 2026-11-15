@@ -4,6 +4,7 @@ function shouldShowMobileHome() {
   return usesMobilePageLayout() && new URL(window.location.href).searchParams.get('all_artists') !== '1'
     && !state.ui?.pendingViewTransition
     && !state.view.all_artists_active && !String(state.view.query || '').trim() && !String(state.view.selected_artist || '').trim()
+    && !String(state.view.selected_series || '').trim()
     && state.view?.shell_layout?.slots?.main_content?.content_kind !== 'discovery_center_page';
 }
 function renderMobileHome() {

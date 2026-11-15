@@ -589,6 +589,8 @@ def view_data(request: Request) -> JSONResponse:
         library_state.get("inventory_mutation_revision") or 0
     )
     browse_state = resolve_active_scan_browse_state(library_state)
+    if "series" in request.query_params:
+        return _series_view_response(request, request_inventory_mutation_revision)
     default_root_gallery_page = (
         not _should_use_transient_scan_browse_state(library_state, browse_state)
         and _is_postgres_root_album_browse_request(request)
@@ -735,6 +737,26 @@ def view_data(request: Request) -> JSONResponse:
     )
     payload["inventory_mutation_revision"] = request_inventory_mutation_revision
     _log_view_data_request_from_asgi(request, payload, request_started_at)
+    _project_missing_album_actions_for_request(request, payload)
+    return JSONResponse(payload)
+
+
+_SERIES_VIEW_PARAMS = {"series", "surface", "gallery_scope", "gallery_display", "gallery_display_mode",
+                       "gallery_scale_percent", "category"}
+
+
+def _series_view_response(request: Request, inventory_mutation_revision: int) -> JSONResponse:
+    """The Series view (MusicBrainz Delivery 2, S6): ordinary library browsing, from the
+    MusicBrainz data only the Postgres library holds."""
+    if set(request.query_params.keys()) - _SERIES_VIEW_PARAMS \
+            or str(request.query_params.get("surface") or "albums").casefold() != "albums":
+        return JSONResponse({"ok": False, "error": "Invalid series view parameters."}, status_code=400)
+    selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
+    if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
+        return JSONResponse({"ok": False, "error": "Series need the PostgreSQL library."}, status_code=409)
+    payload = PostgresLibraryBrowseRepository(_app_config(request)).build_series_payload(
+        query_params=request.query_params)
+    payload["inventory_mutation_revision"] = inventory_mutation_revision
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(payload)
 

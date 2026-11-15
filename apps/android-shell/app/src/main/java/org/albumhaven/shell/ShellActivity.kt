@@ -128,7 +128,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private lateinit var batteryPrompt: BatteryPrompt
     private lateinit var batteryCard: View
 
-    /** The battery offer's Settings screen while it is open; its answer is read on return. */
+    /** The battery offer's Settings screen while it is open; on return it may lead on to App info. */
     private var batterySettingsOpen: BatterySettings? = null
     private val batteryOffer = Runnable(::offerBattery)
     private val handshakes = HandshakeWatch(originPolicy.channel)
@@ -188,12 +188,10 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         batteryCard = findViewById(R.id.battery_prompt)
         findViewById<TextView>(R.id.battery_prompt_reason).setText(BatteryPrompt.reason(Build.MANUFACTURER))
         findViewById<View>(R.id.battery_prompt_allow).setOnClickListener {
-            if (batterySettingsOpen == null) openBatterySettings(BatterySettings.REQUEST)
+            answerBattery()
+            openBatterySettings(BatterySettings.REQUEST)
         }
-        findViewById<View>(R.id.battery_prompt_decline).setOnClickListener {
-            batteryPrompt.declined()
-            batteryCard.isVisible = false
-        }
+        findViewById<View>(R.id.battery_prompt_decline).setOnClickListener { answerBattery() }
 
         // The system WebView is too old for the bridge; updating this app cannot fix that.
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
@@ -310,7 +308,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     /** Once the library has drawn, with nothing of the shell's own over it or waiting on the user. */
     private fun offerBattery() {
-        if (batteryCard.isVisible || batterySettingsOpen != null || recovery.showing || sandboxWarning.isVisible ||
+        if (batteryCard.isVisible || recovery.showing || sandboxWarning.isVisible ||
             downloadAfterAsking != null || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
             webView.url?.toUri()?.path == SIGN_IN_PATH
         ) return
@@ -327,21 +325,29 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             BatterySettings.REQUEST -> Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
             BatterySettings.APP_INFO -> Settings.ACTION_APPLICATION_DETAILS_SETTINGS
         }
-        try {
+        val opened = try {
             startActivity(Intent(action, "package:$packageName".toUri()))
-            batterySettingsOpen = settings
+            true
         } catch (_: ActivityNotFoundException) {
-            // Without Android's question, App info; without that either, nothing is left to offer.
-            if (settings == BatterySettings.REQUEST) openBatterySettings(BatterySettings.APP_INFO) else returnedFromBatterySettings(settings)
+            false
+        } catch (_: SecurityException) {
+            // Some makers' Settings refuse to open this for another app.
+            false
         }
+        // Without Android's question, App info; without that either, nothing is left to offer.
+        if (opened) batterySettingsOpen = settings else if (settings == BatterySettings.REQUEST) openBatterySettings(BatterySettings.APP_INFO)
+    }
+
+    private fun answerBattery() {
+        batteryPrompt.answered()
+        batteryCard.isVisible = false
     }
 
     private fun returnedFromBatterySettings(opened: BatterySettings) {
         batterySettingsOpen = null
-        batteryCard.isVisible = false
         val state = batteryState()
         Log.i(TAG, "battery_prompt opened=$opened unrestricted=${state.unrestricted}")
-        batteryPrompt.returned(opened, state)?.let(::openBatterySettings)
+        BatteryPrompt.followUp(opened, state)?.let(::openBatterySettings)
     }
 
     override fun onForegroundReady(token: Long) {

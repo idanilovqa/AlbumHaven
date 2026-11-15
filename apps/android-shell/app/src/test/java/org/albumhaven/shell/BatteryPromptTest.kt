@@ -44,35 +44,24 @@ class BatteryPromptTest {
     }
 
     @Test
-    fun noThanksIsNeverOfferedAgain() {
+    fun eitherButtonIsAFinalAnswerFromTheTap() {
         val store = FakeStore()
-        BatteryPrompt(store).declined()
+        // Saved before any Settings screen opens, so the app ending under it changes nothing.
+        BatteryPrompt(store).answered()
         assertTrue(store.batteryPromptAnswered)
         assertFalse(BatteryPrompt(store).shouldOffer(optimized))
+        assertFalse(BatteryPrompt(store).shouldOffer(restricted))
     }
 
     @Test
-    fun anyAnswerInAndroidsDialogIsFinal() {
-        for (after in listOf(unrestricted, optimized)) {
-            val store = FakeStore()
-            assertNull(BatteryPrompt(store).returned(BatterySettings.REQUEST, after))
-            assertTrue(store.batteryPromptAnswered)
-            assertFalse(BatteryPrompt(store).shouldOffer(optimized))
-        }
-    }
-
-    @Test
-    fun allowedButStillRestrictedGoesOnToAppInfoOnce() {
-        val store = FakeStore()
-        val prompt = BatteryPrompt(store)
-        assertEquals(BatterySettings.APP_INFO, prompt.returned(BatterySettings.REQUEST, allowedButRestricted))
-        assertTrue(store.batteryPromptAnswered)
-        assertNull(prompt.returned(BatterySettings.APP_INFO, allowedButRestricted))
-    }
-
-    @Test
-    fun aDeniedRestrictedAppIsNotSentOnToAppInfo() {
-        assertNull(BatteryPrompt(FakeStore()).returned(BatterySettings.REQUEST, restricted))
+    fun onlyAllowedButStillRestrictedGoesOnToAppInfo() {
+        assertEquals(BatterySettings.APP_INFO, BatteryPrompt.followUp(BatterySettings.REQUEST, allowedButRestricted))
+        assertNull(BatteryPrompt.followUp(BatterySettings.REQUEST, unrestricted))
+        assertNull(BatteryPrompt.followUp(BatterySettings.REQUEST, optimized))
+        // Denied: never sent on.
+        assertNull(BatteryPrompt.followUp(BatterySettings.REQUEST, restricted))
+        // App info itself leads nowhere further, whatever was chosen there.
+        assertNull(BatteryPrompt.followUp(BatterySettings.APP_INFO, allowedButRestricted))
     }
 
     @Test

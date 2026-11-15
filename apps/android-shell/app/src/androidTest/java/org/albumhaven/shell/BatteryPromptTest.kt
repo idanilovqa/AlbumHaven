@@ -54,6 +54,7 @@ class BatteryPromptTest {
         setUnrestricted(false)
     }
 
+    /** Proves the manifest's permission: without it Android shows no question for this app at all. */
     @Test
     fun androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny() {
         askAndroid()
@@ -108,6 +109,24 @@ class BatteryPromptTest {
             assertPageShown(scenario)
         }
         launch { scenario -> assertNoOffer(scenario) }
+    }
+
+    /** Battery saving may end the app while Android's question is over it; the tap was the answer. */
+    @Test
+    fun anAnswerSurvivesTheAppEndingUnderAndroidsQuestion() = withLibrary {
+        launch { scenario ->
+            waitForOffer()
+            device.findObject(By.res(packageName, "battery_prompt_allow")).click()
+            assertNotNull(
+                "Android's question",
+                device.wait(Until.findObject(By.text(Pattern.compile(DENY, Pattern.CASE_INSENSITIVE))), DIALOG_WAIT_MS),
+            )
+            // The Activity goes with everything it held, as when Android ends the app.
+            scenario.moveToState(Lifecycle.State.DESTROYED)
+            answerAndroid(DENY)
+        }
+        launch { scenario -> assertNoOffer(scenario) }
+        assertFalse(ignoringOptimizations())
     }
 
     @Test

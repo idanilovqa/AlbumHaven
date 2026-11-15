@@ -1148,6 +1148,38 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
     return JSONResponse({"ok": True, "task": task_payload})
 
 
+async def _selected_cover_inventory_state(
+    config: dict[str, object],
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, object]:
+    """Answer for one album without publishing it into the shared library state.
+
+    An album the in-memory library does not hold is loaded request-locally from
+    Postgres; the shared state keeps whatever its owners published.
+    """
+    file_cache = library_state.get("file_cache") or {}
+    if not str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip() or all(
+        path in file_cache for path in track_paths
+    ):
+        return library_state
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    def load_selected_inventory() -> dict[str, object]:
+        repository = PostgresLibraryBrowseRepository(config)
+        paths = {
+            str(track.get("path") or "").strip()
+            for album in repository.build_album_payloads_by_track_paths(track_paths)
+            for track in album.get("tracks", [])
+            if str(track.get("path") or "").strip()
+        }
+        entries = repository.build_track_file_entries_by_paths(paths)
+        return {**library_state, "file_cache": entries, "albums": build_albums_from_file_cache(entries)}
+
+    return await run_in_threadpool(load_selected_inventory)
+
+
 @router.post("/utilities/cover-lookup/local-select")
 async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     request_started_at = perf_counter()
@@ -1167,28 +1199,9 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    selected_inventory_state = library_state
-    if (
-        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-        and not album_context.track_paths <= set(library_state.get("file_cache") or {})
-    ):
-        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-        from music_app.services.library import build_albums_from_file_cache
-
-        def load_selected_inventory():
-            repository = PostgresLibraryBrowseRepository(config)
-            albums = repository.build_album_payloads_by_track_paths(album_context.track_paths)
-            paths = {
-                str(track.get("path") or "").strip()
-                for selected_album in albums
-                for track in selected_album.get("tracks", [])
-                if str(track.get("path") or "").strip()
-            }
-            entries = repository.build_track_file_entries_by_paths(paths)
-            return {**library_state, "file_cache": entries,
-                    "albums": build_albums_from_file_cache(entries)}
-
-        selected_inventory_state = await run_in_threadpool(load_selected_inventory)
+    selected_inventory_state = await _selected_cover_inventory_state(
+        config, library_state, album_context.track_paths,
+    )
     try:
         authoritative_track_paths = resolve_authoritative_album_track_paths(
             selected_inventory_state,
@@ -1556,29 +1569,9 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    if (
-        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-        and not album_context.track_paths <= set(library_state.get("file_cache") or {})
-    ):
-        from music_app.services.library import build_albums_from_file_cache
-        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-
-        def load_selected_inventory():
-            repository = PostgresLibraryBrowseRepository(config)
-            albums = repository.build_album_payloads_by_track_paths(album_context.track_paths)
-            paths = {
-                str(track.get("path") or "").strip()
-                for selected_album in albums
-                for track in selected_album.get("tracks", [])
-                if str(track.get("path") or "").strip()
-            }
-            entries = repository.build_track_file_entries_by_paths(paths)
-            file_cache = {**(library_state.get("file_cache") or {}), **entries}
-            return file_cache, build_albums_from_file_cache(file_cache)
-
-        file_cache, albums = await run_in_threadpool(load_selected_inventory)
-        library_state["file_cache"] = file_cache
-        library_state["albums"] = albums
+    cover_state = await _selected_cover_inventory_state(
+        config, library_state, album_context.track_paths,
+    )
     authoritative_cover_path = album_context.album_root / "cover.jpg"
     prior_cover_bytes = (
         authoritative_cover_path.read_bytes()
@@ -1613,7 +1606,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         saved_cover_path,
         config=config,
         logger=logger,
-        library_state=library_state,
+        library_state=cover_state,
         cover_revision=cover_revision,
         schedule_cache_update=False,
     )

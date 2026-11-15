@@ -64,6 +64,35 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory bounded-interaction gate
+
+- Every interaction entrypoint (listener, timer, observer, request, route,
+  watcher, poller, background loop) is declared in
+  `tests/ci/bounded-interactions.json`. After adding, moving, or removing one,
+  run `node scripts/ci/validate-bounded-interactions.cjs --sync`, review the
+  entries it registers (action, work class, owned endpoints), then validate.
+  `--sync` never widens a reviewed entry's endpoint ownership.
+- An entry proves boundedness statically only while discovery finds no hazard
+  reachable from it. Otherwise it needs a deterministic contract that runs the
+  real code at a small and a production-calibration cardinality and asserts
+  absolute operation budgets and growth (`tests/js/helpers/bounded-interaction-counter.js`,
+  `tests/py/bounded_interactions.py`). Interactive work never declares
+  `library-size`; there are no allowlists, waivers, or baselines.
+- Before calling an interaction implemented, run
+  `npm run test:bounded-interactions` (or with `--changed-paths <file>` for the
+  owners you changed) at production-calibration cardinality. Record the exact
+  test identities and operation budgets. A functional pass, mocked helper
+  success, cached DOM query, small fixture, or elapsed-time-only result does
+  not prove bounded work. Treat an unbounded path as a correctness defect. Do
+  not defer this gate to full CI or manual acceptance.
+- Implementation summaries report the selected interaction IDs, small and
+  large cardinalities, measured operation counts and work class, the focused
+  command and result, any browser performance target still deferred to CI, and
+  remaining risk.
+- When a new kind of unbounded work escapes the guard, add it to
+  `tests/js/bounded-interaction-seeded-defects.test.js` first, then change
+  discovery until that seeded defect is reported.
+
 ## Mandatory search regression gate
 
 - Immediately run `npm run test:search-regressions` after changing search

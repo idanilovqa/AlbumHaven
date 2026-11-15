@@ -2350,22 +2350,6 @@
       }
     },
     {
-      "id": "js:runtime/gallery-refresh-and-status.js#collectRootGalleryRefresh",
-      "action": "fetchGalleryViewResponse requests installed by collectRootGalleryRefresh",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#collectRootGalleryRefresh:request:fetchGalleryViewResponse"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
       "action": "Navigate Home, to an artist with repeated presses, to a queued search, and to a pending search",
       "entrypoints": [
@@ -2415,7 +2399,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchArtist",
-      "action": "fetchGalleryViewResponse requests installed by fetchArtist",
+      "action": "Recover the root gallery after a catalog change: a continuation conflict and a preserveScroll refresh, at any scroll depth",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchArtist:request:fetchGalleryViewResponse"
       ],
@@ -2426,8 +2410,38 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 100,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 3,
+        "responseRows": 100
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: catalog-change recovery requests one window at any scroll depth",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Reverting restores whole-coverage recovery, whose requests grow with scroll depth (ceil(loaded/50)+2); the guard then rejects it again."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse",
@@ -2474,22 +2488,6 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
-    },
-    {
-      "id": "js:runtime/gallery-refresh-and-status.js#fetchRecoveryResponse",
-      "action": "fetchGalleryViewResponse requests installed by fetchRecoveryResponse",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchRecoveryResponse:request:fetchGalleryViewResponse"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage",

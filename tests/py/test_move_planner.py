@@ -421,3 +421,50 @@ def test_move_availability_contract_probes_one_artist_folder_at_production_artis
         growth=("stat_calls", 0),
     )
     assert small.stat_calls == production.stat_calls
+
+
+def test_move_availability_contract_misses_a_new_artist_without_listing_artist_folders(config, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    genres = ("Electronic", "Jazz", "Rock")
+
+    def run(artist_count: int) -> OperationCounts:
+        scale_root = (Path(config["DATA_DIR"]) / f"miss-{artist_count}").resolve()
+        artist_root = scale_root / "artist-main"
+        genre_root = scale_root / "genre-main"
+        arrivals_root = scale_root / "arrivals"
+        for index in range(artist_count):
+            (artist_root / f"Artist {index:05d}").mkdir(parents=True)
+            (genre_root / genres[index % len(genres)] / f"Artist {index:05d}").mkdir(parents=True)
+        track_path = arrivals_root / "Broadcast" / "Tender Buttons" / "01 - I Found the F.mp3"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        save_library_root_settings(config, {
+            "main_library_roots": [
+                {"id": "genre-main", "path": str(genre_root), "layout_mode": "genre/artist"},
+                {"id": "artist-main", "path": str(artist_root), "layout_mode": "artist"},
+            ],
+            "hoarding_library_roots": [],
+            "new_arrivals_roots": [{"id": "arrivals-1", "path": str(arrivals_root)}],
+            "move_policy": {"preferred_main_write_root": "artist-main"},
+        })
+        album = _make_album(track_paths=[str(track_path)])
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            payload = build_move_availability_payload(album, config)
+        move = payload["actions"]["move_to_library"]
+        assert move["reuses_existing_artist_folder"] is False
+        assert move["destination_path"] == str(artist_root / "Broadcast" / "2004 - Tender Buttons")
+        return counts
+
+    # Listing the genre root is the one enumeration; it never lists a genre's artists.
+    small, production = measure_scale_pair(
+        interaction_id="py:services/move_planner.py#build_move_availability_payload",
+        small=20,
+        large=14_000,
+        run=run,
+        budgets={"filesystem_enumerations": 1, "stat_calls": 21, "open_calls": 0, "media_parses": 0},
+        growth=("stat_calls", 0),
+    )
+    assert small.stat_calls == production.stat_calls

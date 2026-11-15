@@ -359,15 +359,14 @@ def _iter_child_directories(path: Path) -> list[Path]:
 
 
 def _find_child_directory(parent: Path, name: str) -> Path | None:
-    # Probe the one candidate first; only a miss lists this one directory to
-    # match the name case-insensitively.
-    candidate = parent / name
-    if candidate.is_dir():
-        return parent / _on_disk_child_name(candidate)
-    normalized_name = name.casefold()
-    for child in _iter_child_directories(parent):
-        if child.name.casefold() == normalized_name:
-            return child
+    # Probe a fixed set of spellings, never list the parent: a miss (the normal
+    # case for a new artist) would visit every artist folder. A case-insensitive
+    # filesystem matches the first probe under any casing; a case-sensitive one
+    # finds the name in its common casings and otherwise treats it as new.
+    for spelling in dict.fromkeys((name, name.lower(), name.upper(), name.title())):
+        candidate = parent / spelling
+        if candidate.is_dir():
+            return parent / _on_disk_child_name(candidate)
     return None
 
 

@@ -3879,6 +3879,7 @@ function placeFloatingNotifications() {
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
     return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
+  const waitingByLane = new Map();
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
     const availableWidth = `${Math.max(0, viewport.right - viewport.left - 16)}px`;
@@ -3913,6 +3914,12 @@ function placeFloatingNotifications() {
     }
     if (!position) {
       node.setAttribute('data-notification-deferred', '');
+      // A discardable notification that has never been shown waits alone in
+      // its lane: a newer one replaces it, so blocked lanes cannot pile up.
+      if (entry.discard && !entry.presented) {
+        waitingByLane.get(entry.lane)?.discard();
+        waitingByLane.set(entry.lane, entry);
+      }
       continue;
     }
     for (const [key, value] of Object.entries(position)) {
@@ -4104,15 +4111,16 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, onPlaced() {
+  const discard = () => {
+    unregisterFloatingNotification(toast);
+    toast.remove();
+    if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
+  };
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, discard, onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');
-      scheduleBrowserTimeout(() => {
-        unregisterFloatingNotification(toast);
-        toast.remove();
-        if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
-      }, 260);
+      scheduleBrowserTimeout(discard, 260);
     }, duration);
   } });
 }

@@ -4337,7 +4337,7 @@
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
-      "action": "requestAnimationFrame timers installed by scheduleFloatingNotificationPlacement",
+      "action": "Place floating notifications on the next frame after a layout change; a blocked lane keeps only its newest never-shown toast, so a frame reads the fixed surfaces, the open modal's controls and a constant number of notifications",
       "entrypoints": [
         "js:music_app/static/js/runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement:timer:requestAnimationFrame"
       ],
@@ -4348,7 +4348,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 14,
+        "domQueries": 4,
+        "animationFrames": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/notification-ui-helpers.test.js",
+      "testIdentity": "BI a blocked notification lane keeps one waiting toast and constant placement work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the waiting-toast replacement; toasts shown while a modal blocks their lane then accumulate and every placement frame measures all of them again, with no data or API change."
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#showRepairAlert",

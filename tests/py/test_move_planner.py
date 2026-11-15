@@ -384,7 +384,7 @@ def test_move_planner_blocks_new_artist_library_plan_when_preferred_root_require
 
 
 def test_move_availability_contract_probes_one_artist_folder_at_production_artist_count(config, monkeypatch):
-    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.bounded_interactions import OperationCounts
     from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
     def run(artist_count: int) -> OperationCounts:
@@ -412,12 +412,10 @@ def test_move_availability_contract_probes_one_artist_folder_at_production_artis
         assert move["destination_path"] == str(main_root / "Broadcast" / "2004 - Tender Buttons")
         return counts
 
-    small, production = measure_scale_pair(
-        interaction_id="py:services/move_planner.py#build_move_availability_payload",
-        small=20,
-        large=14_000,
-        run=run,
-        budgets={"filesystem_enumerations": 0, "stat_calls": 4, "open_calls": 0, "media_parses": 0},
-        growth=("stat_calls", 0),
-    )
+    # A helper check, not a registry contract: the routes that reach this
+    # planner are proved by their own route contracts.
+    small, production = run(20), run(14_000)
+    for counts in (small, production):
+        assert (counts.filesystem_enumerations, counts.open_calls, counts.media_parses) == (0, 0, 0)
+        assert counts.stat_calls <= 4
     assert small.stat_calls == production.stat_calls

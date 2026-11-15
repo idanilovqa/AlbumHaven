@@ -8257,8 +8257,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
-      "testIdentity": "test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_album_details_route_contract_probes_one_artist_folder_at_production_artist_count",
+      "testIdentity": "test_album_details_route_contract_probes_one_artist_folder_at_production_artist_count",
       "rollback": "Revert fix(move) artist probe to restore the root listing, with its contract."
     },
     {
@@ -10074,8 +10074,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
-      "testIdentity": "test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_fetch_cover_route_contract_probes_one_artist_folder_at_production_artist_count",
+      "testIdentity": "test_fetch_cover_route_contract_probes_one_artist_folder_at_production_artist_count",
       "rollback": "Revert fix(move) artist probe to restore the root listing, with its contract."
     },
     {
@@ -12121,8 +12121,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
-      "testIdentity": "test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_partial_scan_publication_contract_repairs_only_contaminated_albums_at_production_track_count",
+      "testIdentity": "test_partial_scan_publication_contract_repairs_only_contaminated_albums_at_production_track_count",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
@@ -12693,8 +12693,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
-      "testIdentity": "test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at_production_size",
+      "testIdentity": "test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at_production_size",
       "performanceTargets": [
         "utility-problematic-files",
         "problematic-files-focused"
@@ -12783,8 +12783,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
-      "testIdentity": "test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at_production_size",
+      "testIdentity": "test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at_production_size",
       "performanceTargets": [
         "utility-problematic-files",
         "problematic-files-focused"
@@ -12903,8 +12903,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
-      "testIdentity": "test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at_production_size",
+      "testIdentity": "test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at_production_size",
       "performanceTargets": [
         "utility-problematic-files",
         "problematic-files-focused"
@@ -12943,8 +12943,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
-      "testIdentity": "test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_relation_snapshot_contract_republishes_repaired_covers_without_probing_the_library_at_production_track_count",
+      "testIdentity": "test_relation_snapshot_contract_republishes_repaired_covers_without_probing_the_library_at_production_track_count",
       "performanceTargets": [
         "utility-problematic-files",
         "problematic-files-focused"

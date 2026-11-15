@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -240,3 +241,65 @@ def test_targeted_reconciliation_rejects_unrelated_backlog_absorption():
     with pytest.raises(AssertionError, match=r"unrelated_writes=1000 at cardinality 1000"):
         measure_scale_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=True), **contract)
     measure_scale_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=False), **contract)
+
+
+_REGISTERED = {
+    "interactions": [{
+        "id": "py:routes/example.py#items",
+        "proof": "contract",
+        "cardinalities": {"small": 20, "production": 1000},
+        "budgets": {"sql_statements": 2},
+        "growth": {"metric": "sql_statements", "largeMinusSmallMax": 0},
+    }],
+}
+
+
+def _registered_pair(**overrides):
+    arguments = {
+        "interaction_id": "py:routes/example.py#items",
+        "small": 20,
+        "large": 1_000,
+        "run": lambda size: OperationCounts(sql_statements=1),
+        "budgets": {"sql_statements": 2},
+        "growth": ("sql_statements", 0),
+        "registry": _REGISTERED,
+        **overrides,
+    }
+    return measure_scale_pair(**arguments)
+
+
+def test_scale_pair_under_registry_id_matches_the_registered_contract():
+    _registered_pair()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"large": 500}, r"large 500 differs from the registry's 1000"),
+        ({"small": 10}, r"small 10 differs from the registry's 20"),
+        ({"budgets": {"sql_statements": 20}}, r"budgets .* differs from the registry's"),
+        ({"growth": ("sql_statements", 5)}, r"growth \('sql_statements', 5\) differs"),
+        ({"growth": None}, r"growth None differs"),
+    ],
+)
+def test_scale_pair_under_registry_id_rejects_drift_from_the_registry(overrides, message):
+    with pytest.raises(AssertionError, match=message):
+        _registered_pair(**overrides)
+
+
+def test_scale_pair_under_unregistered_id_checks_only_its_own_budgets():
+    _registered_pair(interaction_id="example", large=500, budgets={"sql_statements": 20})
+
+
+def test_scale_pair_uses_the_checked_in_registry_by_default():
+    registry = json.loads((Path(__file__).resolve().parents[1] / "ci" / "bounded-interactions.json").read_text(encoding="utf-8"))
+    contract = next(entry for entry in registry["interactions"] if entry["proof"] == "contract")
+    with pytest.raises(AssertionError, match=r"large \d+ differs from the registry's \d+"):
+        measure_scale_pair(
+            interaction_id=contract["id"],
+            small=contract["cardinalities"]["small"],
+            large=contract["cardinalities"]["production"] + 1,
+            run=lambda size: OperationCounts(),
+            budgets=contract["budgets"],
+            growth=(contract["growth"]["metric"], contract["growth"]["largeMinusSmallMax"]),
+        )

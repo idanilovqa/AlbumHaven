@@ -666,7 +666,7 @@ function updateGalleryMainChrome() {
     // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
     if (romanized) {
-      romanized.textContent = galleryArtistRomanizedLabel(name.textContent);
+      romanized.textContent = galleryRomanizedArtistLabel(name.textContent);
       romanized.hidden = !romanized.textContent;
     }
     summary.hidden = true;

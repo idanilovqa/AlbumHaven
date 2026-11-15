@@ -427,7 +427,7 @@ test('album details show the MusicBrainz release type, else the local tag', () =
 
 test('gallery artist headers show the romanized name in parentheses beside the name, outside it (J3)', () => {
   const context = loadComponents();
-  context.romanizedArtistName = (name) => (name === '天門' ? 'Tenmon' : '');
+  context.romanizedArtistLabel = (name) => (name === '天門' ? '(Tenmon)' : '');
   const bar = context.buildGalleryBarHtml({ contextKind: 'artist', artist: '天門', albumCount: 5 });
   assert.match(bar, /<span data-gallery-context-name>天門<\/span><span class="gallery-artist-romanized" data-gallery-context-romanized>\(Tenmon\)<\/span><button class="gallery-info-button"/);
   assert.match(context.buildFamilyArtistHeaderHtml({ artist: '天門', albumCount: 5 }),

@@ -266,6 +266,6 @@ test('original-script artists show their romanized name in parentheses and re-re
   assert.match(html, /天門 <span class="navigation-tree-label-secondary">\(Tenmon\)<\/span>/);
   assert.equal((html.match(/navigation-tree-label-secondary/g) || []).length, 1);
   assert.notEqual(context.buildSidebarStructureSignature(source), before);
-  assert.equal(context.romanizedArtistName(' 天門 '), 'Tenmon');
-  assert.equal(context.romanizedArtistName('Angra'), '');
+  assert.equal(context.romanizedArtistLabel(' 天門 '), '(Tenmon)');
+  assert.equal(context.romanizedArtistLabel('Angra'), '');
 });

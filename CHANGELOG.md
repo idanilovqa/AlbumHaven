@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.9 - 2026-11-15
+
+- MusicBrainz release identity: each album of an identified artist is matched to its MusicBrainz release group and, when its title, track titles and track count agree, its exact release; unmatched albums keep the reason. Raw release types, genres, the release's discs and track credits are stored (migration 0190).
+- Album details end the main album after the disc MusicBrainz names (original release first, then disc titles), keeping the local guess otherwise, and show the matched release's track artist where a track's artist tag was lost.
+- Matching compares every album's tracks, drops mixed-mode data tracks, and accepts spacing differences and ID3v1-truncated titles.
+- Discogs fallback for artists MusicBrainz does not have: albums proven on Discogs (including one disc of a multi-disc release) keep their Discogs IDs, a barcode or alias found there is re-checked on MusicBrainz, and what MusicBrainz still lacks is flagged for contribution (migration 0191). Runs only with an operator Discogs key.
+
 ## 0.11.8 - 2026-11-14
 
 - A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.

@@ -104,6 +104,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const titleId = escapeHtml(config.titleId || 'track-modal-title');
   const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
   const actionHtml = String(config.actionsHtml || '');
+  const leadingHtml = String(config.leadingHtml || '');
   const qualityAlertHtml = config.poorArtQuality === true
     ? buildSmallAlertHtml({
       severity: 'warning',
@@ -116,7 +117,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity">${leadingHtml}<div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
@@ -212,6 +213,18 @@ function buildLooseTracksHeaderActionsHtml(config = {}) {
       attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
     }),
   ].join('');
+}
+
+function buildLooseTracksPageHeaderHtml(config = {}) {
+  return buildGalleryBarContentsHtml({
+    pageHeading: true,
+    leadingHtml: config.leadingHtml,
+    title: config.title || 'Loose Tracks',
+    titleId: 'non-album-modal-title',
+    summary: config.subtitle,
+    summaryId: 'non-album-modal-subtitle',
+    actionsHtml: config.actionsHtml,
+  });
 }
 
 function buildMissingAlbumDetailsHtml(config = {}) {

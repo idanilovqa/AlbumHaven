@@ -24,6 +24,7 @@ function loadTrackTable() {
 
 function createSelectionHarness(context) {
   const listeners = new Map();
+  const documentListeners = new Map();
   const scrollListeners = new Map();
   const timers = new Map();
   let nextTimer = 1;
@@ -57,6 +58,10 @@ function createSelectionHarness(context) {
     addEventListener(type, handler) { scrollListeners.set(type, handler); },
     removeEventListener(type) { scrollListeners.delete(type); },
   };
+  context.document = {
+    addEventListener(type, handler) { documentListeners.set(type, handler); },
+    removeEventListener(type) { documentListeners.delete(type); },
+  };
   let queryCount = 0;
   const root = {
     addEventListener(type, handler) { listeners.set(type, handler); },
@@ -78,6 +83,16 @@ function createSelectionHarness(context) {
     stopImmediatePropagation() {},
     ...overrides,
   });
+  const dispatchDocument = (type, overrides = {}) => documentListeners.get(type)?.({
+    target: { closest: () => null },
+    pointerId: 1,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 0,
+    clientX: 0,
+    clientY: 0,
+    ...overrides,
+  });
   const runTimers = (delay) => {
     [...timers].forEach(([id, timer]) => {
       if (timer.delay !== delay) return;
@@ -85,7 +100,10 @@ function createSelectionHarness(context) {
       timer.callback();
     });
   };
-  return { root, rows, scrollTarget, scrollListeners, listeners, dispatch, runTimers, queryCount: () => queryCount };
+  return {
+    root, rows, scrollTarget, scrollListeners, listeners, documentListeners,
+    dispatch, dispatchDocument, runTimers, queryCount: () => queryCount,
+  };
 }
 
 test('AlbumTrackTable changes only the inner Play and Pause glyphs to centered shared SVGs', () => {
@@ -241,7 +259,7 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
     totalLength: '4:05',
   });
 
-  assert.match(html, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(html, /--cdt-columns: 36px minmax\(0, 1fr\) minmax\(0, \.9fr\) 20px minmax\(54px, auto\)/);
   assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
   assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
   assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
@@ -328,6 +346,36 @@ test('TrackSelectionController caches rows, suppresses native drag selection, an
   assert.equal(harness.queryCount(), 1, 'clear must reuse the cached row index');
 });
 
+test('TrackSelectionController ends drag when the pointer is released outside the table', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  const controller = new context.TrackSelectionController(harness.root);
+
+  harness.dispatch('pointerdown', harness.rows[0], { buttons: 1 });
+  harness.dispatch('pointermove', harness.rows[1], { buttons: 1, clientY: 20 });
+  harness.dispatchDocument('pointerup');
+  harness.dispatch('pointermove', harness.rows[3], { buttons: 0, clientY: 60 });
+
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two']);
+  assert.equal(controller.gesture, null);
+  assert.equal(harness.queryCount(), 1, 'outside release must not rescan rendered rows');
+});
+
+test('TrackSelectionController stops a stale drag when pointer movement reports no pressed button', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  const controller = new context.TrackSelectionController(harness.root);
+
+  harness.dispatch('pointerdown', harness.rows[0], { buttons: 1 });
+  harness.dispatch('pointermove', harness.rows[1], { buttons: 1, clientY: 20 });
+  harness.dispatch('pointermove', harness.rows[2], { buttons: 0, clientY: 40 });
+  harness.dispatch('pointermove', harness.rows[3], { buttons: 0, clientY: 60 });
+
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['one', 'two']);
+  assert.equal(controller.gesture, null);
+  assert.equal(harness.queryCount(), 1, 'buttonless recovery must not rescan rendered rows');
+});
+
 test('TrackSelectionController deselects an already-selected drag range without rescanning every row', () => {
   const context = loadTrackTable();
   const harness = createSelectionHarness(context);
@@ -401,6 +449,7 @@ test('TrackSelectionController requires a stationary 550 ms touch hold and clean
   controller.destroy();
   assert.deepEqual(changes.at(-1), []);
   assert.equal(harness.listeners.size, 0);
+  assert.equal(harness.documentListeners.size, 0);
   assert.equal(harness.scrollListeners.size, 0);
   for (const row of harness.rows) {
     assert.equal(row.classList.contains('album-track-table__row--selected'), false);

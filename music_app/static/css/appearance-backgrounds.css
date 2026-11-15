@@ -13,7 +13,7 @@
 }
 /* Dark table bodies and headers share the owning panel's exact surface. */
 :root[data-appearance-mode='dark'] :is(.compact-data-table, .compact-data-table-header),
-:root[data-appearance-palette='parchment-pine'] :is(.utility-modal-dialog, .confirm-modal-dialog, .non-album-modal-dialog, .cover-lookup-modal-dialog) :is(.compact-data-table, .compact-data-table-header) {
+:root[data-appearance-palette='parchment-pine'] :is(.utility-modal-dialog, .confirm-modal-dialog, .cover-lookup-modal-dialog) :is(.compact-data-table, .compact-data-table-header) {
   --appearance-table-surface: var(--appearance-panel-background, var(--panel, #101a29));
   --appearance-table-header-tint: 0%;
   background: var(--appearance-table-surface);

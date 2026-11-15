@@ -101,10 +101,20 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
     setProperty(name, value) { rootStyles.set(name, value); },
   };
   const body = createElement();
+  const documentListeners = new Map();
   const document = {
     body,
     documentElement,
     activeElement: null,
+    addEventListener(type, listener) {
+      documentListeners.set(type, listener);
+    },
+    removeEventListener(type, listener) {
+      if (documentListeners.get(type) === listener) documentListeners.delete(type);
+    },
+    dispatchEvent(event) {
+      documentListeners.get(event.type)?.(event);
+    },
     getElementById(id) {
       return {
         'app-shell': appShell,
@@ -229,6 +239,7 @@ test('custom collections mode hydrates the library scope and reuses NavigationTr
   context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
   const renderedOptions = [];
   context.window.NavigationTree = {
+    renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
     renderItem: (options) => {
       renderedOptions.push(options);
       const { label, count, attributes } = options;
@@ -271,6 +282,7 @@ test('custom collections opens immediately from cached state while library hydra
     name: items[0]?.custom_collection_name || 'Night', count: 2,
   }];
   context.window.NavigationTree = {
+    renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
     renderItem: options => options.key === 'all-loose-tracks'
       ? '<button data-open-loose-tracks="1">All Loose Tracks</button>'
       : `<button data-open-custom-collection="${options.key}">${options.key}:2</button>`,
@@ -284,7 +296,7 @@ test('custom collections opens immediately from cached state while library hydra
   assert.doesNotMatch(artistList.innerHTML, /Loading Custom Collections/);
   finishHydration();
   await pending;
-  assert.equal(artistList.innerHTML, '<button data-open-loose-tracks="1">All Loose Tracks</button><div class="gallery-divider__line" role="separator" aria-label="Custom Collections"></div><button data-open-custom-collection="Night">Night:2</button>');
+  assert.equal(artistList.innerHTML, '<button data-open-loose-tracks="1">All Loose Tracks</button><div class="navigation-tree-separator" role="separator" aria-label="Custom Collections"></div><button data-open-custom-collection="Night">Night:2</button>');
 });
 
 test('desktop library mode rail hides after 30 seconds idle, then reveals at the left edge', () => {
@@ -293,17 +305,41 @@ test('desktop library mode rail hides after 30 seconds idle, then reveals at the
   } = loadHelper({ isMobile: false });
   context.syncArtistsDrawerVisibility();
 
+  drawerRail.dispatchEvent({ type: 'pointerenter', target: drawerRail });
+
   const idleTimer = [...pendingTimers.values()].find(callback => callback.delay === 30000);
-  assert.ok(idleTimer, 'expanded desktop navigation must schedule its idle hide');
+  assert.ok(idleTimer, 'a stationary cursor must not cancel the inactivity timer');
   idleTimer();
   assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true);
   assert.equal(modeRailAnchor.hidden, false);
   assert.equal(rootStyles.get('--compact-rail-width'), '261px');
 
   modeRailAnchor.dispatchEvent({ type: 'pointerenter', target: modeRailAnchor });
+  assert.equal(
+    drawerRail.classList.contains('is-library-mode-rail-hidden'),
+    true,
+    'showing the anchor under a stationary cursor must not reopen the rail',
+  );
+  context.document.dispatchEvent({ type: 'pointermove', clientX: 2, clientY: 700 });
+  assert.equal(
+    drawerRail.classList.contains('is-library-mode-rail-hidden'),
+    true,
+    'near the edge must not reveal the rail',
+  );
+  context.document.dispatchEvent({ type: 'pointermove', clientX: 1, clientY: 700 });
   assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), false);
   assert.equal(modeRailAnchor.hidden, true);
   assert.equal(rootStyles.get('--compact-rail-width'), '320px');
+
+  const nextIdleTimer = [...pendingTimers.values()].find(callback => callback.delay === 30000);
+  nextIdleTimer();
+  context.handleArtistsDrawerClick({
+    target: {
+      closest: selector => selector === '[data-reveal-library-mode-rail="1"]' ? modeRailAnchor : null,
+    },
+    preventDefault() {},
+  });
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), false);
 
   artistList.dispatchEvent({ type: 'scroll', target: artistList });
   assert.ok(
@@ -323,19 +359,44 @@ test('folded desktop navigation keeps the library mode rail visible', () => {
   assert.equal(modeRailAnchor.hidden, true);
 });
 
-test('custom collections mode opens with no selected row after a prior collection', async () => {
+test('custom collections mode ignores a stale prior collection when its page is closed', async () => {
   const { context } = loadHelper();
   context.state.ui.nonAlbumCollectionName = 'Night';
   context.hydrateDeferredNonAlbumTracks = async () => {};
   context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
   let renderedOptions = null;
   context.window.NavigationTree = {
+    renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
     renderItem(options) { renderedOptions = options; return '<button>Night</button>'; },
   };
 
   await context.setLibraryNavigationMode('custom-collections');
 
   assert.equal(renderedOptions.selected, false);
+});
+
+test('custom collections mode selects the collection whose page is open', async () => {
+  const { context } = loadHelper();
+  context.state.ui.nonAlbumCollectionName = 'Night';
+  context.state.ui.nonAlbumLibraryWide = true;
+  context.hydrateDeferredNonAlbumTracks = async () => {};
+  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 119 }];
+  const originalQuerySelector = context.document.querySelector.bind(context.document);
+  context.document.querySelector = selector => (
+    selector === '#non-album-modal:not([hidden])'
+      ? { hidden: false }
+      : originalQuerySelector(selector)
+  );
+  const renderedOptions = [];
+  context.window.NavigationTree = {
+    renderSeparator: ({ label }) => `<div role="separator" aria-label="${label}"></div>`,
+    renderItem(options) { renderedOptions.push(options); return '<button></button>'; },
+  };
+
+  await context.setLibraryNavigationMode('custom-collections');
+
+  assert.equal(renderedOptions.find(option => option.key === 'all-loose-tracks').selected, false);
+  assert.equal(renderedOptions.find(option => option.key === 'Night').selected, true);
 });
 
 test('library navigation delegates modes and routes Loose Tracks without per-row listeners', () => {
@@ -447,37 +508,109 @@ test('library navigation uses the approved collection glyph and generic mobile c
   assert.equal(body.classList.contains('artists-drawer-open'), true);
 }
 
-test('mobile mode rail hides to a tappable anchor and reveals from an intentional edge swipe', () => {
+test('mobile mode rail stays visible and never exposes the edge anchor', () => {
   const { context, drawerRail, modeRailAnchor } = loadHelper({ isMobile: true });
   context.state.ui.artistsDrawerOpen = true;
-  context.setMobileLibraryModeRailVisible(false);
+  const visible = context.setMobileLibraryModeRailVisible(false);
 
-  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), true);
-  assert.equal(modeRailAnchor.hidden, false);
-
-  context.installMobileLibraryModeRailGestures();
-  const anchorTarget = {
-    closest: selector => selector === '[data-reveal-library-mode-rail="1"]' ? modeRailAnchor : null,
-  };
-  drawerRail.dispatchEvent({ type: 'pointerdown', target: anchorTarget, pointerType: 'touch', pointerId: 7, clientX: 31, clientY: 80 });
-  drawerRail.dispatchEvent({ type: 'pointermove', target: anchorTarget, pointerType: 'touch', pointerId: 7, clientX: 69, clientY: 84, preventDefault() {} });
-
+  assert.equal(visible, true);
   assert.equal(context.state.ui.mobileLibraryModeRailVisible, true);
   assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), false);
   assert.equal(modeRailAnchor.hidden, true);
 });
 
-test('active artist-tree scrolling defers the mobile mode rail idle hide', () => {
+test('first drawer open selects the button for the tree already displayed', () => {
+  const { context, artistList, navigationHeading } = loadHelper({ isMobile: true });
+  const artistsButton = createElement();
+  artistsButton.setAttribute('data-library-navigation-mode', 'artists');
+  const collectionsButton = createElement();
+  collectionsButton.setAttribute('data-library-navigation-mode', 'custom-collections');
+  context.document.querySelectorAll = selector => selector === '[data-library-navigation-mode]'
+    ? [artistsButton, collectionsButton]
+    : [];
+  artistList.dataset.navigationTree = 'custom-collections';
+
+  context.openArtistsDrawer();
+
+  assert.equal(artistsButton.getAttribute('aria-pressed'), 'false');
+  assert.equal(artistsButton.classList.contains('is-active'), false);
+  assert.equal(collectionsButton.getAttribute('aria-pressed'), 'true');
+  assert.equal(collectionsButton.classList.contains('is-active'), true);
+  assert.equal(navigationHeading.textContent, 'Custom Collections');
+});
+
+test('drawer hamburgers open their owning tree mode', () => {
+  const { context } = loadHelper({ isMobile: true });
+  const modes = [];
+  let toggles = 0;
+  context.setLibraryNavigationMode = async mode => { modes.push(mode); };
+  context.toggleArtistsDrawer = () => { toggles += 1; };
+
+  for (const mode of ['custom-collections', 'artists']) {
+    const trigger = {
+      getAttribute: name => name === 'data-library-navigation-mode' ? mode : null,
+    };
+    context.handleArtistsDrawerClick({
+      target: { closest: selector => selector === '[data-toggle-artists-drawer="1"]' ? trigger : null },
+      preventDefault() {},
+    });
+  }
+
+  assert.deepEqual(modes, ['custom-collections', 'artists']);
+  assert.equal(toggles, 2);
+});
+
+test('drawer hamburger selects the mode of the tree already displayed', () => {
+  const { context, artistList } = loadHelper({ isMobile: true });
+  const modes = [];
+  context.setLibraryNavigationMode = async mode => { modes.push(mode); };
+  context.toggleArtistsDrawer = () => {};
+
+  for (const [displayedMode, staleTriggerMode] of [
+    ['artists', 'custom-collections'],
+    ['custom-collections', 'artists'],
+  ]) {
+    artistList.dataset.navigationTree = displayedMode;
+    const trigger = {
+      getAttribute: name => name === 'data-library-navigation-mode' ? staleTriggerMode : null,
+    };
+    context.handleArtistsDrawerClick({
+      target: { closest: selector => selector === '[data-toggle-artists-drawer="1"]' ? trigger : null },
+      preventDefault() {},
+    });
+  }
+
+  assert.deepEqual(modes, ['artists', 'custom-collections']);
+});
+
+test('switching from mobile Loose Tracks to Artists leaves every artist row unselected', async () => {
+  const { context } = loadHelper({ isMobile: true });
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  const originalQuerySelector = context.document.querySelector.bind(context.document);
+  context.document.querySelector = selector => (
+    selector === '#non-album-modal.is-mobile-page:not([hidden])'
+      ? {}
+      : originalQuerySelector(selector)
+  );
+  let suppressedDuringRender = false;
+  context.renderSidebar = () => {
+    suppressedDuringRender = context.state.ui.suppressSidebarSelection === true;
+  };
+
+  await context.setLibraryNavigationMode('artists');
+
+  assert.equal(suppressedDuringRender, true);
+});
+
+test('mobile artist-tree scrolling does not schedule a mode-rail hide', () => {
   const { context, artistList, pendingTimers } = loadHelper({ isMobile: true });
   context.state.ui.artistsDrawerOpen = true;
   context.setMobileLibraryModeRailVisible(true);
   context.installMobileLibraryModeRailGestures();
-  const [initialTimer] = pendingTimers.keys();
 
   artistList.dispatchEvent({ type: 'scroll' });
 
-  assert.equal(pendingTimers.has(initialTimer), false);
-  assert.equal(pendingTimers.size, 1);
+  assert.equal(pendingTimers.size, 0);
 });
 
 test('returning to desktop clears every mobile-only tree rail state', () => {
@@ -498,7 +631,7 @@ test('returning to desktop clears every mobile-only tree rail state', () => {
   assert.equal(compactNavigation.hidden, true);
 });
 
-test('pointer mode selection releases focus so the mobile rail can hide', () => {
+test('pointer mode selection releases focus while the mobile rail stays visible', () => {
   const { context, drawerRail, modeRailAnchor, pendingTimers } = loadHelper({ isMobile: true });
   context.state.ui.artistsDrawerOpen = true;
   context.setLibraryNavigationMode = async () => 'artists';
@@ -512,10 +645,9 @@ test('pointer mode selection releases focus so the mobile rail can hide', () => 
   });
 
   assert.equal(blurred, 1);
-  assert.equal([...pendingTimers.values()].filter(callback => callback.delay === 3500).length, 1);
-  [...pendingTimers.values()][0]();
-  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), true);
-  assert.equal(modeRailAnchor.hidden, false);
+  assert.equal([...pendingTimers.values()].filter(callback => callback.delay === 3500).length, 0);
+  assert.equal(drawerRail.classList.contains('is-mobile-mode-rail-hidden'), false);
+  assert.equal(modeRailAnchor.hidden, true);
 });
 
 test('navigation tree rows stay on one line and expose the edge anchor chevron', () => {

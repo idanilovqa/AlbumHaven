@@ -12,6 +12,69 @@ test('shared mobile Settings hamburger uses the bare aligned GalleryBar action',
   assert.match(template, /action_button\('Settings sections'[^\n]*presentation='bare'/);
   assert.match(css, /#mobile-page-header:not\(\[data-album-identity-in-body="true"\]\) > :is\([^}]*\.mobile-bar-action\)\s*\{\s*align-self:\s*center;/s);
 });
+
+test('mobile page and Gallery hamburgers declare their NavigationTree owners', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/partials/gallery-bar.html'), 'utf8');
+  assert.match(template, /id='mobile-page-library-button'[^\n]*'data-library-navigation-mode': 'custom-collections'/);
+  assert.match(template, /id='mobile-library-button'[^\n]*'data-library-navigation-mode': 'artists'/);
+  assert.match(template, /id="mobile-page-collection-artwork"[^>]*hidden/);
+});
+
+test('mobile Loose Tracks header uses library navigation only for tree entry', () => {
+  const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/partials/gallery-bar.html'), 'utf8');
+  assert.match(template, /action_button\('Open library navigation'[^\n]*id='mobile-page-library-button'[^\n]*presentation='bare'/);
+
+  const context = load('mobile-navigation.js', {
+    getAlbumRequestKey: () => '',
+    cancelMobileGalleryPinch() {},
+  });
+  const fromTree = context.mobilePageDescriptor('non-album', null, {
+    libraryWide: true,
+    navigationSource: 'library-tree',
+  });
+  const fromArtist = context.mobilePageDescriptor('non-album', null, { libraryWide: false });
+  assert.equal(fromTree.navigationSource, 'library-tree');
+  assert.equal(fromArtist.navigationSource, 'artist');
+});
+
+test('direct Loose Tracks URL restores the library-tree header action', () => {
+  const restored = [];
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: {
+      innerWidth: 390,
+      location: { href: 'https://example.test/loose-tracks?collection=Night' },
+    },
+  });
+  context.restoreMobilePage = descriptor => {
+    calls.push('restore');
+    restored.push(descriptor);
+  };
+  context.setLibraryNavigationMode = mode => calls.push(`mode:${mode}`);
+  context.writeMobilePageHistory = () => {};
+
+  context.restoreMobilePageFromUrl();
+
+  assert.equal(restored[0].navigationSource, 'library-tree');
+  assert.equal(restored[0].collectionName, 'Night');
+  assert.deepEqual(calls, ['restore', 'mode:custom-collections']);
+});
+
+test('restoring Loose Tracks preserves its navigation source', () => {
+  const opened = [];
+  const context = load('mobile-navigation.js', {
+    openNonAlbumModal: options => opened.push(options),
+  });
+
+  context.restoreMobilePage({
+    kind: 'non-album',
+    libraryWide: true,
+    navigationSource: 'library-tree',
+  });
+
+  assert.equal(opened[0].navigationSource, 'library-tree');
+});
 function load(name, globals = {}) {
   const context = vm.createContext({
     window: { innerWidth: 390 },
@@ -188,6 +251,19 @@ test('submitting an open mobile search with an empty draft still reaches gallery
 
   assert.equal(context.handleMobileSearchSubmit(), false);
   assert.deepEqual(closes, [false]);
+});
+
+test('tree navigation retires the current mobile page without rewriting its history entry', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js');
+  context.cleanupMobilePage = descriptor => calls.push(['cleanup', descriptor.kind]);
+  context.syncMobilePageShell = () => calls.push(['sync']);
+  context.writeMobilePageHistory = () => calls.push(['history']);
+  vm.runInContext("mobilePageState.pages.push({ kind: 'non-album' });", context);
+
+  assert.equal(context.prepareMobileGalleryNavigation(), true);
+  assert.deepEqual(calls, [['cleanup', 'non-album'], ['sync']]);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 0);
 });
 
 test('single mobile track-body activation uses the real play control and excludes nested actions', () => {
@@ -809,6 +885,52 @@ test('mobile page presentation round-trips the same surfaces and parent stack wi
   assert.equal(vm.runInContext("mobilePageState.pages.some(page => page.kind === 'album')", context), false);
   assert.equal(closes, 1);
   assert.equal(dismissalWrites, 1);
+});
+
+test('Loose Tracks remains a page while its mobile presentation round-trips through desktop', () => {
+  function node(attributes = {}) {
+    const classes = new Set();
+    return { hidden: false, inert: false, dataset: {}, slot: 'desktop', attributes: { ...attributes },
+      classList: { contains: name => classes.has(name), add: name => classes.add(name), remove: name => classes.delete(name),
+        toggle(name, on) { if (on) classes.add(name); else classes.delete(name); } },
+      getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+      setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; },
+      getClientRects() { return this.hidden ? [] : [{}]; },
+    };
+  }
+  const ids = ['shell-main-surface', 'mobile-page-header', 'mobile-page-outlet', 'mobile-back-button',
+    'mobile-page-library-button', 'mobile-library-button', 'mobile-page-title', 'mobile-page-summary',
+    'mobile-settings-actions', 'mobile-settings-button'];
+  const nodes = Object.fromEntries(ids.map(id => [id, node()]));
+  const looseTracks = nodes['non-album-modal'] = node({ role: 'region', 'aria-label': 'Loose Tracks' });
+  nodes['mobile-page-outlet'].appendChild = surface => { surface.slot = 'mobile'; };
+  const body = node();
+  const context = load('mobile-navigation.js', {
+    document: { body, getElementById: id => nodes[id], querySelectorAll: () => [] },
+    window: { innerWidth: 390, history: {} },
+  });
+  context.syncMobileAlbumHeader = context.syncMobileLoopHeader = () => {};
+  context.looseTracks = looseTracks;
+  vm.runInContext(`
+    mobilePageState.pages.push({ kind: 'non-album', title: 'Loose Tracks', libraryWide: true,
+      navigationSource: 'library-tree' });
+    mobilePageState.originals.set('non-album', { dialog: looseTracks,
+      role: looseTracks.getAttribute('role'), modal: looseTracks.getAttribute('aria-modal'),
+      label: looseTracks.getAttribute('aria-label'),
+      placeholder: { before(element) { element.slot = 'desktop'; } } });
+  `, context);
+
+  for (const width of [390, 1440, 390]) {
+    context.window.innerWidth = width;
+    context.syncMobilePageShell();
+    const mobile = width <= 900;
+    assert.equal(looseTracks.slot, mobile ? 'mobile' : 'desktop');
+    assert.equal(looseTracks.classList.contains('is-mobile-page'), mobile);
+    assert.equal(looseTracks.getAttribute('role'), 'region');
+    assert.equal(looseTracks.getAttribute('aria-modal'), null);
+    assert.equal(looseTracks.hidden, false);
+    assert.equal(looseTracks.inert, false);
+  }
 });
 
 test('canonical mobile parent route distinguishes root Gallery, Home and explicit All Artists through history', () => {

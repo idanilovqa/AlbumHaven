@@ -17,6 +17,263 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+test('opening collection Cover Lookup does not start album gallery or task work', async () => {
+  class TestButton {
+    constructor() { this.hidden = false; this.disabled = false; }
+  }
+  const overlay = { hidden: true, classList: { toggle() {} } };
+  const saveButton = new TestButton();
+  const context = {
+    window: {},
+    state: {
+      ui: { customCollectionArtworkByName: { Night: { image_url: '/night.jpg', filename: 'night.jpg' } } },
+      coverLookup: { tasks: [], modal: { pastedImages: [] } },
+    },
+    HTMLButtonElement: TestButton,
+    URLSearchParams,
+    console,
+    document: {
+      body: { classList: { add() {} } },
+      getElementById: id => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-save-remote-button': saveButton,
+      }[id] || null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  let galleryLoads = 0;
+  let pollingStarts = 0;
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => { galleryLoads += 1; };
+  context.ensureCoverLookupPolling = () => { pollingStarts += 1; };
+
+  await context.openCustomCollectionCoverLookup('Night');
+
+  assert.equal(overlay.hidden, false);
+  assert.equal(context.state.coverLookup.modal.collectionName, 'Night');
+  assert.equal(JSON.stringify(context.state.coverLookup.modal.localCovers), JSON.stringify([
+    { image_url: '/night.jpg', filename: 'night.jpg' },
+  ]));
+  assert.equal(galleryLoads, 0);
+  assert.equal(pollingStarts, 0);
+  assert.equal(saveButton.hidden, false);
+});
+
+test('collection Cover Lookup renders one unlabeled local gallery and only the shared extractor', () => {
+  const body = { innerHTML: '', scrollTop: 0 };
+  const elements = {
+    'cover-lookup-modal': {},
+    'cover-lookup-modal-body': body,
+    'cover-lookup-modal-subtitle': { innerHTML: '' },
+    'cover-lookup-modal-status': { textContent: '', innerHTML: '' },
+    'cover-lookup-find-better-button': { hidden: false, disabled: false },
+    'cover-lookup-save-remote-button': { hidden: false, disabled: false },
+  };
+  const context = {
+    window: {},
+    URLSearchParams,
+    escapeHtml: value => String(value || ''),
+    ButtonComponent: { renderButton: ({ label, attributes = {} }) => `<button ${Object.entries(attributes).map(([key, value]) => `${key}="${value}"`).join(' ')}>${label}</button>` },
+    state: {
+      coverLookup: {
+        tasks: [],
+        modal: {
+          collectionName: 'Night',
+          localCovers: [{ image_url: '/night.jpg', filename: 'night.jpg' }],
+          pastedImages: [],
+          manualImageAttachments: [],
+          manualUrlText: '',
+        },
+      },
+    },
+    document: { activeElement: null, getElementById: id => elements[id] || null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.scheduleDeferredCoverLookupPreviews = () => {};
+
+  context.renderCoverLookupModal();
+
+  assert.match(elements['cover-lookup-modal-subtitle'].innerHTML, /Night/);
+  assert.equal((body.innerHTML.match(/cover-lookup-gallery/g) || []).length, 1);
+  assert.match(body.innerHTML, /data-cover-lookup-file-input/);
+  assert.match(body.innerHTML, /data-add-cover-lookup-remote/);
+  assert.doesNotMatch(body.innerHTML, /LOCAL|MANUAL SEARCH|Google|Yandex|POSSIBLE MATCHES|REMOTE/);
+  assert.equal(elements['cover-lookup-find-better-button'].hidden, true);
+});
+
+test('collection Cover Lookup saves the selected staged image without album mutation work', async () => {
+  const requests = [];
+  const artwork = { image_url: '/api/custom-collections/artwork/image?revision=2', revision: 2 };
+  const context = {
+    window: {},
+    URLSearchParams,
+    console,
+    state: {
+      ui: { customCollectionArtworkByName: {} },
+      coverLookup: {
+        modal: {
+          collectionName: 'Night',
+          pendingPastedImageId: 'chosen',
+          pastedImages: [{ id: 'chosen', data_url: 'data:image/png;base64,AA==', filename: 'night.png' }],
+          orderedCoverSelections: [],
+        },
+      },
+    },
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, artwork }) };
+    },
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  let closed = 0;
+  let rendered = 0;
+  context.closeCoverLookupModal = () => { closed += 1; };
+  context.renderCurrentCustomCollectionArtwork = name => { assert.equal(name, 'Night'); rendered += 1; };
+
+  await context.saveCoverFromLookup();
+
+  assert.deepEqual(requests, [{
+    url: '/api/custom-collections/artwork',
+    body: {
+      collection_name: 'Night',
+      data_url: 'data:image/png;base64,AA==',
+      filename: 'night.png',
+    },
+  }]);
+  assert.equal(context.state.ui.customCollectionArtworkByName.Night.revision, 2);
+  assert.equal(rendered, 1);
+  assert.equal(closed, 1);
+});
+
+test('collection Cover Lookup deletes only its artwork row and keeps the editor open', async () => {
+  const requests = [];
+  const context = {
+    window: {}, URLSearchParams, console,
+    state: {
+      ui: { customCollectionArtworkByName: { Night: { image_url: '/night.jpg' } } },
+      coverLookup: { modal: { collectionName: 'Night', localCovers: [{ image_url: '/night.jpg' }] } },
+    },
+    fetch: async (url, options) => {
+      requests.push({ url, method: options.method, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, deleted: true }) };
+    },
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  let detailRenders = 0;
+  let modalRenders = 0;
+  context.renderCurrentCustomCollectionArtwork = () => { detailRenders += 1; };
+  context.renderCoverLookupModal = () => { modalRenders += 1; };
+
+  await context.deleteCustomCollectionArtwork();
+
+  assert.deepEqual(requests, [{
+    url: '/api/custom-collections/artwork',
+    method: 'DELETE',
+    body: { collection_name: 'Night' },
+  }]);
+  assert.equal(context.state.ui.customCollectionArtworkByName.Night, null);
+  assert.equal(context.state.coverLookup.modal.localCovers.length, 0);
+  assert.equal(detailRenders, 1);
+  assert.equal(modalRenders, 1);
+});
+
+test('collection Cover Lookup extracts linked images without creating a lookup task', async () => {
+  const requests = [];
+  const candidate = { id: 'linked', url: 'https://images.example/night.jpg', source: 'manual' };
+  const input = { value: 'https://example.test/album' };
+  const context = {
+    window: {}, URLSearchParams, console,
+    state: {
+      coverLookup: {
+        tasks: [],
+        modal: {
+          collectionName: 'Night', manualUrlText: input.value, manualImageAttachments: [],
+          manualPendingCount: 0, possibleMatches: [],
+        },
+      },
+    },
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, candidates: [candidate] }) };
+    },
+    document: { getElementById: id => (id === 'cover-lookup-pasted-urls' ? input : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.collectManualCoverLookupUrls = () => ['https://example.test/album'];
+  context.renderCoverLookupModal = () => {};
+
+  await context.addRemoteCoverLinksFromLookup();
+
+  assert.deepEqual(requests, [{
+    url: '/api/custom-collections/artwork/extract',
+    body: { collection_name: 'Night', urls: ['https://example.test/album'] },
+  }]);
+  assert.equal(context.state.coverLookup.modal.possibleMatches[0].id, 'linked');
+  assert.equal(context.state.coverLookup.tasks.length, 0);
+  assert.equal(input.value, '');
+});
+
+test('collection Cover Lookup saves its selected linked image through the bounded remote route', async () => {
+  const requests = [];
+  const artwork = { revision: 4, image_url: '/collection.jpg' };
+  const context = {
+    window: {}, URLSearchParams, console,
+    state: {
+      ui: { customCollectionArtworkByName: {} },
+      coverLookup: { modal: {
+        collectionName: 'Night', selectedRemoteId: 'linked', pendingPastedImageId: '',
+        possibleMatches: [{ id: 'linked', url: 'https://images.example/night.jpg' }],
+        orderedCoverSelections: [], pastedImages: [],
+      } },
+    },
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ ok: true, artwork }) };
+    },
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCurrentCustomCollectionArtwork = () => {};
+  context.closeCoverLookupModal = () => {};
+
+  await context.saveCoverFromLookup();
+
+  assert.deepEqual(requests, [{
+    url: '/api/custom-collections/artwork/remote',
+    body: { collection_name: 'Night', url: 'https://images.example/night.jpg' },
+  }]);
+  assert.equal(context.state.ui.customCollectionArtworkByName.Night.revision, 4);
+});
+
+test('collection Cover Lookup selects a linked candidate without album selection state', () => {
+  const context = {
+    window: {}, URLSearchParams, console,
+    state: { coverLookup: { modal: {
+      collectionName: 'Night', possibleMatches: [{ id: 'linked', url: 'https://images.example/night.jpg' }],
+      pendingPastedImageId: 'old', pendingLocalPath: '', selectedRemoteId: '',
+      orderedCoverSelections: [],
+    } } },
+    document: { getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.renderCoverLookupModal = () => {};
+
+  context.selectRemoteCoverFromLookup('linked');
+
+  assert.equal(context.state.coverLookup.modal.selectedRemoteId, 'linked');
+  assert.equal(context.state.coverLookup.modal.pendingPastedImageId, '');
+  assert.equal(context.state.coverLookup.modal.orderedCoverSelections.length, 0);
+});
+
 test('opening Cover Lookup starts one gallery request without loading notification history', async () => {
   class TestButton {
     constructor() {

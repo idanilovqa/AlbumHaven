@@ -319,7 +319,7 @@ test('populated Loose Tracks paints the shared loading table before building all
   context.document.body.appendChild(overlay);
   context.document.body.appendChild(header);
   context.document.body.appendChild(table);
-  context.buildAlbumDetailsHeaderHtml = () => '<h2>Loose Tracks</h2>';
+  context.buildLooseTracksPageHeaderHtml = () => '<h2>Loose Tracks</h2>';
   let headerActionConfig = null;
   context.buildLooseTracksHeaderActionsHtml = (config) => { headerActionConfig = config; return ''; };
   context.installNonAlbumTrackSelection = () => calls.push('selection');
@@ -350,6 +350,73 @@ test('populated Loose Tracks paints the shared loading table before building all
   assert.match(table.innerHTML, /Loose/);
   assert.doesNotMatch(table.innerHTML, /aria-busy="true"/);
   assert.deepEqual(calls, ['collapsible', 'selection', 'shared-player']);
+});
+
+test('mobile Loose Tracks retires before artist or All Artists tree navigation', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const overlay = new FakeElement('non-album-modal');
+  const listeners = [];
+  const leaves = [];
+  overlay.hidden = false;
+  overlay.classList.toggle = (token, enabled) => {
+    if (enabled) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  overlay.classList.add('is-mobile-page');
+  context.document.body.appendChild(main);
+  context.document.body.appendChild(overlay);
+  context.document.addEventListener = (name, handler, capture) => {
+    if (name === 'click' && capture) listeners.push(handler);
+  };
+  context.document.removeEventListener = () => {};
+  context.document.querySelector = selector => (
+    selector === '#non-album-modal:not([hidden])' ? overlay : null
+  );
+  context.usesMobilePageLayout = () => true;
+  context.prepareMobileGalleryNavigation = () => leaves.push('leave');
+
+  context.setNonAlbumPagePresentation(overlay, true);
+  assert.equal(listeners.length, 1);
+  for (const targetSelector of ['[data-sidebar-artist]', '[data-sidebar-all-artists]']) {
+    listeners[0]({
+      target: {
+        closest: selector => selector.includes(targetSelector) ? {} : null,
+      },
+    });
+  }
+  assert.deepEqual(leaves, ['leave', 'leave']);
+});
+
+test('Loose Tracks remains a non-modal page across mobile and desktop presentation', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const overlay = new FakeElement('non-album-modal');
+  const dialog = new FakeElement('non-album-modal-dialog');
+  overlay.hidden = false;
+  overlay.classList.toggle = (token, enabled) => {
+    if (enabled) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  overlay.classList.add('is-mobile-page');
+  overlay.querySelector = selector => selector === '.non-album-modal-dialog' ? dialog : null;
+  context.document.body.appendChild(main);
+  context.document.body.appendChild(overlay);
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.usesMobilePageLayout = () => true;
+
+  assert.equal(context.setNonAlbumPagePresentation(overlay, true), true);
+  assert.equal(overlay.classList.contains('non-album-modal--page'), true);
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), '');
+
+  overlay.classList.remove('is-mobile-page');
+  context.usesMobilePageLayout = () => false;
+  assert.equal(context.setNonAlbumPagePresentation(overlay, true), true);
+  assert.equal(overlay.classList.contains('non-album-modal--page'), true);
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), '');
 });
 
 test('Loose Tracks disclosure toggles reuse cached sections without scanning track rows', () => {
@@ -557,16 +624,58 @@ test('library loose tracks automatically retry a deferred snapshot and follow in
     return { ok: true, status: 200, json: async () => responses.shift() };
   };
 
-  assert.deepEqual(await context.hydrateLibraryNonAlbumTracks(), []);
+  const hydration = context.hydrateLibraryNonAlbumTracks();
+  while (!timers.length) await Promise.resolve();
   assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
   assert.equal(requested.length, 1);
   assert.equal(timers.length, 1);
   await timers[0].callback();
+  assert.equal((await hydration)[0].title, 'Loose');
   assert.equal(context.state.view.library_non_album_tracks[0].title, 'Loose');
   assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('inventory_revision'), '7');
   assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true);
   context.state.status.inventory_mutation_revision = 8;
   assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+});
+
+test('library loose tracks follow an inventory revision published during deferred startup hydration', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  const timers = [];
+  const responses = [
+    { library_non_album_tracks: [], non_album_tracks_deferred: true },
+    {
+      library_non_album_tracks: [{
+        path: '/music/loose.flac',
+        title: 'Loose',
+        custom_collection_name: 'Night',
+      }],
+      non_album_tracks_deferred: false,
+    },
+  ];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return timers.length;
+  };
+  context.state.status = {};
+  context.state.view = { visible_library_categories: ['main_library'] };
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => responses.shift() };
+  };
+
+  const hydration = context.hydrateLibraryNonAlbumTracks({ resolveLibrary: true });
+  while (!timers.length) await Promise.resolve();
+  context.state.status.inventory_mutation_revision = 8;
+  await timers[0].callback();
+
+  const tracks = await hydration;
+  assert.equal(requested.length, 2);
+  assert.equal(new URL(requested[1], 'http://localhost').searchParams.get('inventory_revision'), '8');
+  assert.equal(tracks[0].custom_collection_name, 'Night');
+  assert.equal(context.state.view.library_non_album_tracks[0].custom_collection_name, 'Night');
 });
 
 test('deferred non-album hydration accepts an equivalent reordered category scope', async () => {
@@ -1026,6 +1135,38 @@ test('library-wide Loose Tracks keep the whole library when a search found no lo
   assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
 });
 
+test('library-wide collections survive an artist view replacement without another request', async () => {
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  let requests = 0;
+  context.fetch = async () => {
+    requests += 1;
+    return { ok: true, status: 200, json: async () => ({
+      library_non_album_tracks: [{
+        path: 'C:/Music/night.mp3',
+        exception_type: 'Custom Collection',
+        custom_collection_name: 'Night',
+      }],
+    }) };
+  };
+
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
+  const hydratedScope = context.state.view.library_non_album_tracks_hydrated_scope;
+  context.state.view = {
+    selected_artist: 'An Artist',
+    visible_library_categories: [],
+    library_non_album_tracks: [],
+    library_non_album_tracks_hydrated_scope: hydratedScope,
+  };
+
+  const tracks = await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
+
+  assert.equal(requests, 1);
+  assert.deepEqual(Array.from(tracks, track => track.custom_collection_name), ['Night']);
+  assert.equal(context.state.view.library_non_album_tracks, tracks);
+});
+
 test('opening library-wide Loose Tracks resolves beyond a completed search probe', () => {
   const start = helperSource.indexOf('function openNonAlbumModal(options = {})');
   const end = helperSource.indexOf('function openNonAlbumTagEditor()', start);
@@ -1033,6 +1174,16 @@ test('opening library-wide Loose Tracks resolves beyond a completed search probe
   assert.match(
     helperSource.slice(start, end),
     /hydrateDeferredNonAlbumTracks\(\{\s*libraryWide,\s*resolveLibrary:\s*true\s*\}\)/,
+  );
+});
+
+test('Loose Tracks tree entry retains library navigation as its mobile parent', () => {
+  const start = helperSource.indexOf('function openLooseTracksPage(options = {})');
+  const end = helperSource.indexOf('function openNonAlbumModal(options = {})', start);
+  assert.ok(start >= 0 && end > start);
+  assert.match(
+    helperSource.slice(start, end),
+    /openNonAlbumModal\(\{[^}]*navigationSource:\s*'library-tree'/s,
   );
 });
 
@@ -1102,13 +1253,100 @@ test('collection detail filters exact assignments and shows paths only to the li
   assert.match(owner, /Night\/a\.flac/);
   const detail = context.buildCustomCollectionDetailMarkup(items, 'Night');
   assert.match(detail, /custom-collection-detail__art/);
-  assert.match(detail, /album-artbox album-artbox--empty/);
-  assert.match(detail, /album-artbox__missing-disc/);
-  assert.match(detail, /album-artbox__missing-slash/);
+  assert.match(detail, /class="custom-collection-detail track-modal-body"/);
+  assert.match(detail, /class="custom-collection-detail__art track-modal-cover" hidden/);
+  assert.match(detail, /class="custom-collection-detail__tracks track-modal-main"/);
+  assert.doesNotMatch(detail, /data-choose-custom-collection-artwork="Night"|class="album-artbox__add"/);
   assert.doesNotMatch(detail, /custom-collection-detail__plus/);
+  const emptyArtwork = context.buildCustomCollectionArtworkMarkup('Night');
+  assert.match(
+    emptyArtwork,
+    /data-custom-collection-artwork-input="Night"><\/span><\/span>$/,
+    'the shared artbox must own the file input its add action opens',
+  );
+  assert.doesNotMatch(detail, /album-artbox__missing-disc|album-artbox__missing-slash/);
+  const readyDetail = context.buildCustomCollectionDetailMarkup(items, 'Night', {
+    image_url: '/api/custom-collections/artwork/image?collection_name=Night&revision=2',
+    revision: 2,
+  });
+  assert.match(readyDetail, /album-artbox album-artbox--ready/);
+  assert.match(readyDetail, /src="\/api\/custom-collections\/artwork\/image\?collection_name=Night(?:&|&amp;)revision=2"/);
+  assert.match(readyDetail, /data-edit-custom-collection-artwork="Night"/);
   const emptyDetail = context.buildCustomCollectionDetailMarkup([], 'Night');
-  assert.match(emptyDetail, /album-artbox album-artbox--empty/);
+  assert.match(emptyDetail, /custom-collection-detail__art track-modal-cover" hidden><\/div>/);
+  assert.doesNotMatch(emptyDetail, /album-artbox album-artbox--add/);
   assert.match(emptyDetail, /No tracks are assigned to this collection\./);
+  const emptyHeaderArt = context.buildCustomCollectionHeaderArtworkMarkup('Night');
+  assert.match(emptyHeaderArt, /custom-collection-header-art/);
+  assert.match(emptyHeaderArt, /album-artbox album-artbox--add/);
+  const readyHeaderArt = context.buildCustomCollectionHeaderArtworkMarkup('Night', {
+    image_url: '/collection-night.jpg',
+  });
+  assert.match(readyHeaderArt, /custom-collection-header-art[^>]*hidden/);
+  assert.doesNotMatch(readyHeaderArt, /album-artbox/);
+});
+
+test('collection artwork uses one metadata read and one explicit file save without rebuilding tracks', async () => {
+  const { context } = loadHelper();
+  const requests = [];
+  context.fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        artwork: {
+          collection_name: 'Night',
+          revision: requests.length,
+          image_url: `/collection-night-${requests.length}.jpg`,
+        },
+      }),
+    };
+  };
+  context.fileToDataUrl = async () => 'data:image/png;base64,AAAA';
+
+  await context.loadCustomCollectionArtwork('Night');
+  await context.saveCustomCollectionArtworkFile('Night', { name: 'night.png' });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].url, /^\/api\/custom-collections\/artwork\?collection_name=Night$/);
+  assert.equal(requests[1].url, '/api/custom-collections/artwork');
+  assert.equal(requests[1].options.method, 'POST');
+  assert.deepEqual(JSON.parse(requests[1].options.body), {
+    collection_name: 'Night',
+    data_url: 'data:image/png;base64,AAAA',
+    filename: 'night.png',
+  });
+  assert.equal(
+    vm.runInContext("state.ui.customCollectionArtworkByName.Night.image_url", context),
+    '/collection-night-2.jpg',
+  );
+});
+
+test('collection artwork swaps between the compact header add control and body artbox', () => {
+  const { context } = loadHelper();
+  const body = { hidden: false, innerHTML: '' };
+  const header = { hidden: true, innerHTML: '' };
+  context.document.querySelector = selector => (
+    selector === '.custom-collection-detail__art' ? body
+      : selector === '.non-album-modal-header .custom-collection-header-art' ? header
+        : null
+  );
+  context.state.ui.nonAlbumCollectionName = 'Night';
+  context.state.ui.customCollectionArtworkByName = { Night: null };
+
+  context.renderCurrentCustomCollectionArtwork('Night');
+  assert.equal(body.hidden, true);
+  assert.equal(body.innerHTML, '');
+  assert.equal(header.hidden, false);
+  assert.match(header.innerHTML, /album-artbox--add/);
+
+  context.state.ui.customCollectionArtworkByName.Night = { image_url: '/night.jpg' };
+  context.renderCurrentCustomCollectionArtwork('Night');
+  assert.equal(body.hidden, false);
+  assert.match(body.innerHTML, /album-artbox--ready/);
+  assert.equal(header.hidden, true);
+  assert.equal(header.innerHTML, '');
 });
 
 test('library-wide Loose Tracks keeps the established lightweight table', () => {
@@ -1226,7 +1464,7 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table(?:\s|")/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /--cdt-columns: 36px minmax\(0, 1fr\) minmax\(0, \.9fr\) 20px minmax\(54px, auto\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);

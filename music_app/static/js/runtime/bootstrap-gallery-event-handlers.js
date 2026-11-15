@@ -330,12 +330,16 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
+    state.ui.suppressSidebarSelection = false;
     const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
     const opensMobileHome = Boolean(
       isLibraryHome
       && typeof usesMobilePageLayout === 'function'
       && usesMobilePageLayout()
     );
+    if (opensMobileHome && typeof prepareMobileGalleryNavigation === 'function') {
+      prepareMobileGalleryNavigation();
+    }
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -432,7 +436,7 @@ function handleGalleryBootstrapClick(event) {
       renderSidebar();
       renderRelated();
       renderLibraryLoader(state.status);
-      Promise.resolve(fetchAndRender(buildApiUrl(nextView), false, {
+      Promise.resolve(fetchAndRender('/home-data', false, {
         preserveScroll: true,
         skipPendingViewTransition: true,
       })).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
@@ -663,6 +667,7 @@ function handleSidebarArtistSelectionClick(event) {
   if (!sidebarArtistLink) return false;
 
   event.preventDefault();
+  state.ui.suppressSidebarSelection = false;
   if (
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible

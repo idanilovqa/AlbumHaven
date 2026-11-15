@@ -67,6 +67,15 @@ test('large artist inventories render a bounded selection-aware window', () => {
   assert.match(html, />6000<\/span>/);
 });
 
+test('suppressed sidebar selection overrides the default All Artists fallback', () => {
+  const coreSource = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'core-state-and-helpers.js'),
+    'utf8',
+  );
+  assert.match(coreSource, /effectiveAllArtistsActive = Boolean\(\s*!state\.ui\.suppressSidebarSelection/s);
+  assert.match(coreSource, /selectedArtistOverride:\s*state\.ui\.suppressSidebarSelection\s*\?\s*''/s);
+});
+
 test('scroll position advances the artist window while preserving canonical order', () => {
   const context = loadHelpers();
   const source = artists(6000);

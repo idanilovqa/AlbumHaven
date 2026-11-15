@@ -77,9 +77,11 @@ const state = {
     pendingSidebarRevealArtist: '',
     pendingSidebarSelectedArtist: '',
     pendingSidebarAllArtistsActive: false,
+    suppressSidebarSelection: false,
     artistsDrawerOpen: false,
     artistTreeFolded: null,
     libraryNavigationMode: 'artists',
+    customCollectionArtworkByName: {},
     pendingAppRefocusSuppression: false,
     suppressNextViewportClick: false,
     suppressClickSequenceUntil: 0,
@@ -374,6 +376,7 @@ const state = {
     appliedTaskUpdateSignatures: {},
     modal: {
       album: null,
+      collectionName: '',
       taskId: '',
       remoteCover: null,
       localCovers: [],
@@ -556,7 +559,13 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.scanPageReturnContext
+  const effectiveView = state.ui.suppressSidebarSelection
+    ? {
+      ...v,
+      selected_artist: '',
+      all_artists_active: false,
+    }
+    : state.ui.scanPageReturnContext
     ? {
       ...v,
       selected_artist: '',
@@ -573,7 +582,8 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.scanPageReturnContext
+    !state.ui.suppressSidebarSelection
+    && !state.ui.scanPageReturnContext
     && effectiveSurface === 'albums'
     && (
       effectiveView.all_artists_active
@@ -597,7 +607,7 @@ function renderSidebar() {
     view: effectiveView,
     usingSidebarOverride: Boolean(sidebarOverride && sidebarOverride.length),
     showAllArtistsOverride: sidebarOverride ? sidebarShowAllArtistsOverride : null,
-    selectedArtistOverride: effectiveView.selected_artist,
+    selectedArtistOverride: state.ui.suppressSidebarSelection ? '' : effectiveView.selected_artist,
     allArtistsActiveOverride: effectiveAllArtistsActive,
     virtualWindow,
   };

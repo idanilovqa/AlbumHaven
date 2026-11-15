@@ -114,6 +114,11 @@ test('shared row escapes labels and preserves selected links and counts', () => 
   assert.doesNotMatch(markup, /role="treeitem"/);
 });
 
+test('shared separator renders accessible palette-owned navigation markup', () => {
+  const markup = harness().renderSeparator({ label: 'Loose <Tracks>' });
+  assert.equal(markup, '<div class="navigation-tree-separator" role="separator" aria-label="Loose &lt;Tracks&gt;"></div>');
+});
+
 test('panel rows retain descriptive metadata without an artwork column',()=>{
   const html=harness().renderItem({variant:'panel',action:true,label:'Loop created',subtitle:'Album Haven',year:'Sep 9, 10:42'});
   assert.match(html,/utility-list-item-meta[^>]*>[\s\S]*utility-list-item-subtitle[^>]*>Album Haven<\/span>[\s\S]*utility-list-item-year[^>]*>Sep 9, 10:42<\/span>/);

@@ -4,11 +4,13 @@ from music_app.services.log_history import history_scope_for_request
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from hashlib import sha256
 import logging
 from pathlib import Path
 from threading import Event
 from time import perf_counter
 from uuid import UUID, uuid4
+from urllib.parse import urlencode
 
 from anyio import from_thread
 from fastapi import APIRouter, HTTPException, Request
@@ -79,6 +81,7 @@ from music_app.services.cover_workflow import (
     begin_prepared_remote_cover_promotion,
     cover_promotion_effect,
     prepare_pasted_cover_bytes,
+    prepare_remote_cover_bytes_for_authoritative_write,
     prepare_local_cover_image,
     decode_image_bytes,
     cover_revision_for_path,
@@ -87,6 +90,9 @@ from music_app.services.cover_workflow import (
     resolve_album_context,
     resolve_album_write_root_from_track_paths,
     validate_local_cover_source,
+)
+from music_app.services.custom_collection_artwork_postgres import (
+    CustomCollectionArtworkRepository,
 )
 from music_app.services.covers import image_dimensions, score_image
 from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
@@ -194,6 +200,194 @@ def _json_response(value: ResponseValue) -> JSONResponse:
 
 def _invalid_payload_response(error: str = "Invalid payload", status_code: int = 400) -> tuple[JsonDict, int]:
     return {"ok": False, "error": error}, status_code
+
+
+def _custom_collection_artwork_payload(row: Mapping[str, object] | None) -> JsonDict | None:
+    if not row:
+        return None
+    name = str(row.get("collection_name") or "").strip()
+    revision = int(row.get("revision") or 0)
+    return {
+        "collection_name": name,
+        "revision": revision,
+        "content_sha256": str(row.get("content_sha256") or ""),
+        "width": int(row.get("width") or 0),
+        "height": int(row.get("height") or 0),
+        "filename": str(row.get("filename") or "collection-cover.jpg"),
+        "updated_at": str(row.get("updated_at") or ""),
+        "image_url": "/api/custom-collections/artwork/image?" + urlencode({
+            "collection_name": name,
+            "revision": revision,
+        }),
+    }
+
+
+def _custom_collection_scope(request: Request) -> tuple[int, int]:
+    actor = request.state.current_actor
+    library_id = int(actor.current_library_id or 0)
+    account_id = int(actor.account_id or 0)
+    if library_id <= 0 or account_id <= 0:
+        raise HTTPException(status_code=403, detail="Current library access is required.")
+    return library_id, account_id
+
+
+@router.get("/api/custom-collections/artwork")
+async def custom_collection_artwork_read(request: Request) -> JSONResponse:
+    library_id, _account_id = _custom_collection_scope(request)
+    collection_name = str(request.query_params.get("collection_name") or "").strip()
+    try:
+        artwork = await run_in_threadpool(
+            CustomCollectionArtworkRepository(_app_config(request)).load,
+            library_id=library_id,
+            collection_name=collection_name,
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    return JSONResponse({"ok": True, "artwork": _custom_collection_artwork_payload(artwork)})
+
+
+@router.get("/api/custom-collections/artwork/image")
+async def custom_collection_artwork_image(request: Request) -> Response:
+    library_id, _account_id = _custom_collection_scope(request)
+    collection_name = str(request.query_params.get("collection_name") or "").strip()
+    requested_revision = str(request.query_params.get("revision") or "").strip()
+    try:
+        artwork = await run_in_threadpool(
+            CustomCollectionArtworkRepository(_app_config(request)).load_image,
+            library_id=library_id,
+            collection_name=collection_name,
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    if not artwork or (requested_revision and requested_revision != str(artwork.get("revision") or "")):
+        return _json_response(({"ok": False, "error": "Collection artwork was not found."}, 404))
+    return Response(
+        content=bytes(artwork["image_bytes"]),
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "ETag": f'"{str(artwork.get("content_sha256") or "")}"',
+        },
+    )
+
+
+@router.post("/api/custom-collections/artwork")
+async def custom_collection_artwork_save(request: Request) -> JSONResponse:
+    library_id, account_id = _custom_collection_scope(request)
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    collection_name = str(payload.get("collection_name") or "").strip()
+    try:
+        image_bytes = prepare_pasted_cover_bytes(str(payload.get("data_url") or ""))
+        decoded = decode_image_bytes(image_bytes)
+        if decoded is None:
+            raise ValueError("Collection artwork could not be decoded.")
+        image, width, height = decoded
+        image.close()
+        artwork = await run_in_threadpool(
+            CustomCollectionArtworkRepository(_app_config(request)).save,
+            library_id=library_id,
+            collection_name=collection_name,
+            account_id=account_id,
+            image_bytes=image_bytes,
+            content_sha256=sha256(image_bytes).hexdigest(),
+            width=width,
+            height=height,
+            filename=Path(str(payload.get("filename") or "collection-cover.jpg")).name,
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    return JSONResponse({"ok": True, "artwork": _custom_collection_artwork_payload(artwork)})
+
+
+@router.delete("/api/custom-collections/artwork")
+async def custom_collection_artwork_delete(request: Request) -> JSONResponse:
+    library_id, _account_id = _custom_collection_scope(request)
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    try:
+        deleted = await run_in_threadpool(
+            CustomCollectionArtworkRepository(_app_config(request)).delete,
+            library_id=library_id,
+            collection_name=str(payload.get("collection_name") or "").strip(),
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    return JSONResponse({"ok": True, "deleted": deleted})
+
+
+@router.post("/api/custom-collections/artwork/extract")
+async def custom_collection_artwork_extract(request: Request) -> JSONResponse:
+    _library_id, _account_id = _custom_collection_scope(request)
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    collection_name = str(payload.get("collection_name") or "").strip()
+    urls = [str(url).strip() for url in list(payload.get("urls") or [])[:8] if str(url).strip()]
+    if not collection_name or not urls:
+        return _json_response(({"ok": False, "error": "Collection name and link are required."}, 400))
+    config = _app_config(request)
+    try:
+        matches = await run_in_threadpool(
+            add_manual_cover_candidates_from_urls,
+            urls,
+            target_artist="",
+            target_album=collection_name,
+            target_edition=None,
+            target_year=None,
+            user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    allowed = ("id", "url", "thumbnail_url", "source", "source_label", "width", "height")
+    candidates = [
+        {key: match[key] for key in allowed if key in match}
+        for match in list(matches or [])[:8]
+        if isinstance(match, Mapping) and str(match.get("url") or "").strip()
+    ]
+    return JSONResponse({"ok": True, "candidates": candidates})
+
+
+@router.post("/api/custom-collections/artwork/remote")
+async def custom_collection_artwork_remote_save(request: Request) -> JSONResponse:
+    library_id, account_id = _custom_collection_scope(request)
+    payload = await _json_payload(request)
+    if payload is None:
+        return _json_response(_invalid_payload_response())
+    collection_name = str(payload.get("collection_name") or "").strip()
+    remote_url = str(payload.get("url") or "").strip()
+    if not collection_name or not remote_url:
+        return _json_response(({"ok": False, "error": "Collection name and image link are required."}, 400))
+    config = _app_config(request)
+    try:
+        raw_bytes, _mime_type = await run_in_threadpool(
+            fetch_remote_cover_bytes,
+            remote_url,
+            config=config,
+            user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        )
+        image_bytes = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes or b"")
+        decoded = decode_image_bytes(image_bytes or b"")
+        if not image_bytes or decoded is None:
+            raise ValueError("Remote collection artwork could not be decoded.")
+        image, width, height = decoded
+        image.close()
+        artwork = await run_in_threadpool(
+            CustomCollectionArtworkRepository(config).save,
+            library_id=library_id,
+            collection_name=collection_name,
+            account_id=account_id,
+            image_bytes=image_bytes,
+            content_sha256=sha256(image_bytes).hexdigest(),
+            width=width,
+            height=height,
+            filename="collection-cover.jpg",
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    return JSONResponse({"ok": True, "artwork": _custom_collection_artwork_payload(artwork)})
 
 
 def _task_not_found_response(task_name: str) -> tuple[JsonDict, int]:

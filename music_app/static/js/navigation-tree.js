@@ -31,6 +31,9 @@
     let index = 0;
     return template.replace(/%s/g, () => slots[index++]);
   }
+  function renderSeparator({ label } = {}) {
+    return '<div class="navigation-tree-separator" role="separator" aria-label="' + escape(label) + '"></div>';
+  }
   function setItemSelected(item, selected) {
     if (!item?.classList) return;
     const settings = item.getAttribute('data-navigation-tree-item') === 'settings' || item.classList.contains('settings-nav-item');
@@ -86,5 +89,5 @@
       if (item.classList.contains('is-selected') !== selected) setItemSelected(item, selected);
     });
   }
-  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), updateItem, setItemSelected, setSelection };
+  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), renderSeparator, updateItem, setItemSelected, setSelection };
 })();

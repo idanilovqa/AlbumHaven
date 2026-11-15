@@ -137,9 +137,9 @@ function buildAlbumTrackTableHtml(config = {}) {
     ];
     const columnTracks = [
       '36px',
-      showPath ? 'minmax(180px, 1fr)' : 'minmax(0, 1fr)',
+      'minmax(0, 1fr)',
       ...optionalColumns.map((column) => String(column.width || 'auto')),
-      ...(showPath ? ['minmax(220px, .9fr)'] : []),
+      ...(showPath ? ['minmax(0, .9fr)'] : []),
       '20px',
       'minmax(54px, auto)',
     ].join(' ');
@@ -207,6 +207,7 @@ var TrackSelectionController = class {
     this.gesture = null;
     this.holdTimer = 0;
     this.suppressClick = false;
+    this.pointerReleaseTarget = root?.ownerDocument || globalThis.document;
     this.rowList = Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
     this.pathList = this.rowList.map(row => this.pathForRow(row)).filter(Boolean);
     this.rowByPath = new Map(this.rowList.map(row => [this.pathForRow(row), row]).filter(([path]) => path));
@@ -224,6 +225,8 @@ var TrackSelectionController = class {
     Object.entries(this.handlers).forEach(([type, handler]) => {
       if (type !== 'scroll') this.root?.addEventListener?.(type, handler, type === 'click');
     });
+    this.pointerReleaseTarget?.addEventListener?.('pointerup', this.handlers.pointerup, true);
+    this.pointerReleaseTarget?.addEventListener?.('pointercancel', this.handlers.pointercancel, true);
     this.scrollTarget?.addEventListener?.('scroll', this.handlers.scroll, { passive: true });
     this.rows().forEach(row => row.setAttribute?.('tabindex', '0'));
   }
@@ -370,6 +373,10 @@ var TrackSelectionController = class {
   handlePointerMove(event) {
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (gesture.pointerType !== 'touch' && event.buttons === 0) {
+      this.handlePointerCancel(event);
+      return;
+    }
     if (gesture.pointerType === 'touch') {
       if (!gesture.held && Math.hypot(Number(event.clientX || 0) - gesture.startX, Number(event.clientY || 0) - gesture.startY) > 8) {
         gesture.cancelled = true;
@@ -470,6 +477,8 @@ var TrackSelectionController = class {
 
   destroy() {
     this.clearHold();
+    this.pointerReleaseTarget?.removeEventListener?.('pointerup', this.handlers.pointerup, true);
+    this.pointerReleaseTarget?.removeEventListener?.('pointercancel', this.handlers.pointercancel, true);
     Object.entries(this.handlers).forEach(([type, handler]) => {
       if (type !== 'scroll') this.root?.removeEventListener?.(type, handler, type === 'click');
     });

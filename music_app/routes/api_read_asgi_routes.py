@@ -1104,7 +1104,7 @@ def _is_postgres_root_album_browse_request(request: Request) -> bool:
         return False
     if str(request.query_params.get("payload_tier") or "").strip().casefold() not in {"", "full"}:
         return False
-    if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
+    if str(request.query_params.get("surface") or "albums").strip().casefold() != "albums":
         return False
     selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
     return selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES
@@ -1115,7 +1115,7 @@ def _is_postgres_root_album_browse_candidate(request: Request) -> bool:
         return False
     if str(request.query_params.get("q") or "").strip():
         return False
-    if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
+    if str(request.query_params.get("surface") or "albums").strip().casefold() != "albums":
         return False
     selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
     return selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES

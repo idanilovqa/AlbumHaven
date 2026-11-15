@@ -174,6 +174,30 @@ async function mountAlbumDetailsComponents(page) {
   });
 }
 
+test('drag selection ends when the pointer is released outside the shared table', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+  await page.locator('#table-host').evaluate((host) => {
+    window.__trackSelectionController = new TrackSelectionController(host);
+  });
+  const rows = page.locator('[data-track-row-path]');
+  const first = await rows.nth(0).boundingBox();
+  const second = await rows.nth(1).boundingBox();
+  const fourth = await rows.nth(3).boundingBox();
+  const table = await page.locator('.album-track-table').boundingBox();
+
+  await page.mouse.move(first.x + first.width / 2, first.y + first.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(second.x + second.width / 2, second.y + second.height / 2);
+  await page.mouse.move(Math.max(1, table.x - 8), second.y + second.height / 2);
+  await page.mouse.up();
+  await page.mouse.move(fourth.x + fourth.width / 2, fourth.y + fourth.height / 2);
+
+  await expect(page.locator('.album-track-table__row--selected')).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveClass(/album-track-table__row--selected/);
+  await expect(rows.nth(1)).toHaveClass(/album-track-table__row--selected/);
+  await expect(rows.nth(3)).not.toHaveClass(/album-track-table__row--selected/);
+});
+
 for (const width of [960, 390]) {
   test(`explicit bonus duration summaries remain visible in the shared frame at ${width}px`, async ({ page }, testInfo) => {
     await mountAlbumDetailsComponents(page);

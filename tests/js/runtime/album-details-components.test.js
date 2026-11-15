@@ -25,6 +25,33 @@ function loadComponents() {
   return context;
 }
 
+test('Loose Tracks header delegates every slot to the shared GalleryBar renderer', () => {
+  const context = loadComponents();
+  let received = null;
+  context.buildGalleryBarContentsHtml = config => {
+    received = config;
+    return '<shared-gallery-bar>';
+  };
+
+  const html = context.buildLooseTracksPageHeaderHtml({
+    title: 'Женя машина',
+    subtitle: '85 tracks',
+    leadingHtml: '<artbox>',
+    actionsHtml: '<actions>',
+  });
+
+  assert.equal(html, '<shared-gallery-bar>');
+  assert.deepEqual(JSON.parse(JSON.stringify(received)), {
+    pageHeading: true,
+    leadingHtml: '<artbox>',
+    title: 'Женя машина',
+    titleId: 'non-album-modal-title',
+    summary: '85 tracks',
+    summaryId: 'non-album-modal-subtitle',
+    actionsHtml: '<actions>',
+  });
+});
+
 test('Album Details consumes only authorized selected-cover presentation slots', () => {
   const context = loadComponents();
   assert.deepEqual(
@@ -352,6 +379,17 @@ test('Loose Tracks main-window header uses bare Edit Tags and a frameless cleara
   assert.doesNotMatch(html, /id="non-album-modal-close"|data-close-non-album-modal/);
   assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
   assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
+});
+
+test('copy header renders shared leading content inside its identity owner', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    variant: 'copy',
+    title: 'Night',
+    leadingHtml: '<span data-compact-artbox="1"></span>',
+  });
+
+  assert.match(html, /album-details-header__identity"><span data-compact-artbox="1"><\/span><div class="album-details-header__copy">/);
 });
 
 test('Loose Tracks disables Edit Tags when the capability bootstrap denies it', () => {

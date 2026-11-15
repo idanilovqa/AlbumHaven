@@ -5,6 +5,9 @@
   --cdt-mobile-min-width: 0;
   min-width: 0;
 }
+.album-track-table .compact-data-table[data-cdt-mobile="grouped"] {
+  --cdt-mobile-columns: 36px minmax(0, 1fr) minmax(54px, auto);
+}
 
 .album-track-table__frame { min-width: 0; }
 .album-track-table__disc { min-width: 0; }

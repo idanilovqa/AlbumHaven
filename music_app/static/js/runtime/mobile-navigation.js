@@ -15,6 +15,7 @@ function mobilePageDescriptor(kind, album = null, options = {}) {
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Loose Tracks' : String(album?.name || 'Album'),
     libraryWide: kind === 'non-album' && options.libraryWide === true,
     collectionName: kind === 'non-album' ? String(options.collectionName || '').trim() : '',
+    navigationSource: kind === 'non-album' && options.navigationSource === 'library-tree' ? 'library-tree' : 'artist',
     subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
@@ -29,7 +30,10 @@ function syncMobilePageShell() {
   header.hidden = !active;
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
-  document.getElementById('mobile-back-button').hidden = !active;
+  const libraryTreePage = active?.kind === 'non-album' && active.navigationSource === 'library-tree';
+  document.getElementById('mobile-back-button').hidden = !active || libraryTreePage;
+  const pageLibraryButton = document.getElementById('mobile-page-library-button');
+  if (pageLibraryButton) pageLibraryButton.hidden = !libraryTreePage;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {
     const element = document.getElementById(MOBILE_PAGE_KINDS[kind]);
@@ -415,6 +419,7 @@ function restoreMobilePage(descriptor) {
   if (descriptor.kind === 'non-album') openNonAlbumModal({
     libraryWide: descriptor.libraryWide === true,
     collectionName: descriptor.collectionName || '',
+    navigationSource: descriptor.navigationSource,
   });
   else if (descriptor.kind === 'album' && album) openTrackModal(album);
   else if (descriptor.kind === 'utilities') {
@@ -451,11 +456,15 @@ function restoreMobilePageFromUrl() {
       title: 'Album',
       libraryWide: looseTracksPath,
       collectionName: url.searchParams.get('collection') || '',
+      navigationSource: looseTracksPath ? 'library-tree' : 'artist',
       tab: url.searchParams.get('utility_tab'),
       utilityDetail: url.searchParams.get('utility_detail') || '',
       loopSongId: url.searchParams.get('loop_song') || '',
       loopFilter: url.searchParams.get('loop_filter') || '',
     });
+    if (looseTracksPath && typeof setLibraryNavigationMode === 'function') {
+      void setLibraryNavigationMode('custom-collections');
+    }
   } finally {
     mobilePageState.restoring = false;
   }
@@ -592,13 +601,18 @@ function syncMobileGalleryControls() {
   document.documentElement.style.setProperty('--mobile-gallery-columns', String(columns));
 
 }
+function prepareMobileGalleryNavigation() {
+  if (!mobilePageState.pages.length) return false;
+  while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
+  syncMobilePageShell();
+  return true;
+}
 function prepareMobileGallerySearch(onConfirmed, skipAppearanceGuard = false) {
   if (!mobilePageState.pages.length) return true;
   if (!skipAppearanceGuard && mobilePageState.pages.some(page => page.kind === 'utilities')
     && typeof confirmBackgroundAppearanceLeave === 'function'
     && !confirmBackgroundAppearanceLeave(onConfirmed)) return false;
-  while (mobilePageState.pages.length) cleanupMobilePage(mobilePageState.pages.pop());
-  syncMobilePageShell();
+  prepareMobileGalleryNavigation();
   // Keep the page behind the new search entry available through browser Back.
   writeMobilePageHistory();
   return true;
@@ -878,19 +892,32 @@ function syncMobileAlbumHeader() {
   const header = document.getElementById('mobile-page-header');
   const context = header?.querySelector('.gallery-bar__context');
   const thumbnail = document.getElementById('mobile-page-cover');
-  if (!header || !context || !thumbnail) return;
+  const collectionAdd = document.getElementById('mobile-page-collection-artwork');
+  if (!header || !context || !thumbnail || !collectionAdd) return;
   const active = mobilePageState.pages.at(-1);
   const outlet = document.getElementById('mobile-page-outlet');
   const cover = document.getElementById('track-modal-cover');
   const identity = document.querySelector('#track-modal .mobile-album-identity');
   const albumPage = active?.kind === 'album' && usesMobilePageLayout();
+  const collectionPage = active?.kind === 'non-album'
+    && Boolean(active.collectionName)
+    && usesMobilePageLayout();
+  const collectionArtwork = collectionPage
+    ? state.ui?.customCollectionArtworkByName?.[active.collectionName] || null
+    : null;
+  const collectionCoverSrc = String(collectionArtwork?.image_url || '').trim();
+  const collectionBodyCover = collectionPage
+    ? document.querySelector('.custom-collection-detail__art:not([hidden])')
+    : null;
   const hasInlineIdentity = albumPage && identity && !identity.hidden;
   const presentation = resolveMobileAlbumHeaderState({
-    albumPage,
+    albumPage: albumPage || Boolean(collectionPage && collectionCoverSrc),
     hasInlineIdentity,
-    hasCover: Boolean(active?.coverSrc),
+    hasCover: albumPage ? Boolean(active?.coverSrc) : Boolean(collectionCoverSrc),
     viewportTop: outlet?.getBoundingClientRect().top,
-    coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
+    coverBottom: albumPage
+      ? cover?.getBoundingClientRect().bottom
+      : collectionBodyCover?.getBoundingClientRect().bottom,
     identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
   });
   header.dataset.inlineAlbumLayout = String(Boolean(hasInlineIdentity));
@@ -913,9 +940,19 @@ function syncMobileAlbumHeader() {
     if (deferToHeader) identity.setAttribute('aria-hidden', 'true');
     else identity.removeAttribute('aria-hidden');
   }
+  const thumbnailSrc = albumPage ? active.coverSrc : collectionCoverSrc;
   thumbnail.hidden = !presentation.showCover;
-  if (presentation.showCover && thumbnail.getAttribute('src') !== active.coverSrc) thumbnail.src = active.coverSrc;
-  if (active?.kind !== 'album') thumbnail.removeAttribute('src');
+  if (presentation.showCover && thumbnail.getAttribute('src') !== thumbnailSrc) thumbnail.src = thumbnailSrc;
+  if (!albumPage && !collectionCoverSrc) thumbnail.removeAttribute('src');
+  const showCollectionAdd = Boolean(collectionPage && !collectionCoverSrc);
+  collectionAdd.hidden = !showCollectionAdd;
+  if (showCollectionAdd && collectionAdd.dataset.collectionName !== active.collectionName) {
+    collectionAdd.dataset.collectionName = active.collectionName;
+    collectionAdd.innerHTML = buildCustomCollectionArtworkMarkup(active.collectionName);
+  } else if (!showCollectionAdd) {
+    collectionAdd.replaceChildren();
+    delete collectionAdd.dataset.collectionName;
+  }
 }
 
 let mobileAlbumThumbnailFrame = 0;

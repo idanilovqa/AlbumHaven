@@ -370,6 +370,7 @@ function hasNonAlbumSearchMatches(options = {}) {
 }
 
 let deferredNonAlbumHydrationRequest = null;
+let libraryNonAlbumHydrationCache = null;
 
 function getDeferredNonAlbumScopeKey(url) {
   const entries = Array.from(url.searchParams.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => (
@@ -443,7 +444,15 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
   const view = state.view || {};
   const scopeKey = getLibraryNonAlbumScopeKey(view);
   if (view.library_non_album_tracks_hydrated_scope === scopeKey) {
-    return Promise.resolve(view.library_non_album_tracks || []);
+    const cached = libraryNonAlbumHydrationCache?.key === scopeKey
+      ? libraryNonAlbumHydrationCache
+      : null;
+    const tracks = view.library_non_album_tracks?.length
+      ? view.library_non_album_tracks
+      : cached?.tracks || view.library_non_album_tracks || [];
+    view.library_non_album_tracks = tracks;
+    if (cached) view.library_non_album_tracks_search_matched = cached.searchMatched;
+    return Promise.resolve(tracks);
   }
   // A search that found no loose tracks only resolves the whole library when
   // Loose Tracks is actually opened; the search indicator never pays for it.
@@ -455,7 +464,7 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     ? payload.library_non_album_tracks
     : Array.isArray(payload?.non_album_tracks) ? payload.non_album_tracks : []);
   const request = { key: requestKey, promise: null };
-  request.promise = (async () => {
+  const response = (async () => {
     const probed = view.library_non_album_search_probe_scope === scopeKey;
     const payload = probed ? null : await fetchLibraryNonAlbumPayload(buildLibraryNonAlbumRequestUrl(view));
     let tracks = libraryTracks(payload);
@@ -484,19 +493,24 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
+    libraryNonAlbumHydrationCache = { key: scopeKey, tracks, searchMatched };
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
-  })().finally(() => {
+  })();
+  request.promise = response.finally(() => {
     if (libraryNonAlbumHydrationRequest !== request) return;
     libraryNonAlbumHydrationRequest = null;
-    if (request.deferred) {
+  }).then((tracks) => {
+    if (!request.deferred) return tracks;
+    return new Promise((resolve, reject) => {
       scheduleBrowserTimeout(() => {
-        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) return;
-        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).catch((error) => {
-          if (typeof warn === 'function') warn(error);
-        });
+        if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
+          hydrateLibraryNonAlbumTracks({ resolveLibrary }).then(resolve, reject);
+          return;
+        }
+        return hydrateLibraryNonAlbumTracks({ resolveLibrary }).then(resolve, reject);
       }, 250);
-    }
+    });
   });
   libraryNonAlbumHydrationRequest = request;
   return request.promise;
@@ -677,16 +691,105 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
   });
 }
 
-function buildCustomCollectionDetailMarkup(items, collectionName) {
+function buildCustomCollectionArtworkMarkup(collectionName, artwork = null) {
   const name = String(collectionName || '').trim();
-  const artbox = buildAlbumArtboxHtml({
-    state: 'empty',
-    label: `${name || 'Custom collection'} artwork`,
+  const label = `${name || 'Custom collection'} artwork`;
+  if (String(artwork?.image_url || '').trim()) {
+    return buildAlbumArtboxHtml({
+      state: 'ready',
+      label,
+      coverHtml: `<img src="${escapeHtml(artwork.image_url)}" alt="${escapeHtml(label)}">`,
+      overlayHtml: ButtonComponent.renderActionButton({
+        ariaLabel: `Edit ${label}`,
+        title: `Edit ${label}`,
+        icon: 'edit',
+        className: 'custom-collection-detail__edit-art',
+        presentation: 'bare',
+        attributes: { 'data-edit-custom-collection-artwork': name },
+      }),
+    });
+  }
+  return buildAlbumArtboxHtml({
+    state: 'add',
+    label,
+    addLabel: 'Add art',
+    addAttributes: { 'data-choose-custom-collection-artwork': name },
+    actionHtml: `<input type="file" accept="image/*" hidden data-custom-collection-artwork-input="${escapeHtml(name)}">`,
   });
+}
+
+function buildCustomCollectionHeaderArtworkMarkup(collectionName, artwork = null) {
+  const name = String(collectionName || '').trim();
+  const hasArtwork = Boolean(String(artwork?.image_url || '').trim());
+  return `<span class="custom-collection-header-art" data-custom-collection-header-art="${escapeHtml(name)}"${hasArtwork ? ' hidden' : ''}>${hasArtwork ? '' : buildCustomCollectionArtworkMarkup(name)}</span>`;
+}
+
+function buildCustomCollectionDetailMarkup(items, collectionName, artwork = null) {
+  const name = String(collectionName || '').trim();
+  const hasArtwork = Boolean(String(artwork?.image_url || '').trim());
+  const artbox = hasArtwork ? buildCustomCollectionArtworkMarkup(name, artwork) : '';
   const tracks = items.length
     ? buildNonAlbumTrackSectionsMarkup(items, { collectionName: name })
     : '<div class="utility-empty-state">No tracks are assigned to this collection.</div>';
-  return `<div class="custom-collection-detail"><div class="custom-collection-detail__art">${artbox}</div><div class="custom-collection-detail__tracks">${tracks}</div></div>`;
+  return `<div class="custom-collection-detail track-modal-body"><div class="custom-collection-detail__art track-modal-cover"${hasArtwork ? '' : ' hidden'}>${artbox}</div><div class="custom-collection-detail__tracks track-modal-main">${tracks}</div></div>`;
+}
+
+let customCollectionArtworkRequest = 0;
+
+function renderCurrentCustomCollectionArtwork(collectionName) {
+  const name = String(collectionName || '').trim();
+  if (String(state.ui?.nonAlbumCollectionName || '').trim() !== name) return;
+  const artwork = state.ui.customCollectionArtworkByName?.[name] || null;
+  const hasArtwork = Boolean(String(artwork?.image_url || '').trim());
+  const host = document.querySelector?.('.custom-collection-detail__art');
+  if (host) {
+    host.hidden = !hasArtwork;
+    host.innerHTML = hasArtwork ? buildCustomCollectionArtworkMarkup(name, artwork) : '';
+  }
+  const headerArt = document.querySelector?.('.non-album-modal-header .custom-collection-header-art');
+  if (headerArt) {
+    headerArt.hidden = hasArtwork;
+    headerArt.innerHTML = hasArtwork ? '' : buildCustomCollectionArtworkMarkup(name);
+  }
+  if (typeof scheduleMobileAlbumThumbnail === 'function') scheduleMobileAlbumThumbnail();
+}
+
+async function loadCustomCollectionArtwork(collectionName) {
+  const name = String(collectionName || '').trim();
+  if (!name) return null;
+  const request = ++customCollectionArtworkRequest;
+  const response = await fetch(
+    `/api/custom-collections/artwork?collection_name=${encodeURIComponent(name)}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load collection artwork.');
+  if (request !== customCollectionArtworkRequest) return data.artwork || null;
+  state.ui.customCollectionArtworkByName ||= {};
+  state.ui.customCollectionArtworkByName[name] = data.artwork || null;
+  renderCurrentCustomCollectionArtwork(name);
+  return data.artwork || null;
+}
+
+async function saveCustomCollectionArtworkFile(collectionName, file) {
+  const name = String(collectionName || '').trim();
+  if (!name || !file) return null;
+  const dataUrl = await fileToDataUrl(file);
+  const response = await fetch('/api/custom-collections/artwork', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      collection_name: name,
+      data_url: dataUrl,
+      filename: String(file.name || 'collection-cover.jpg'),
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to save collection artwork.');
+  state.ui.customCollectionArtworkByName ||= {};
+  state.ui.customCollectionArtworkByName[name] = data.artwork || null;
+  renderCurrentCustomCollectionArtwork(name);
+  return data.artwork || null;
 }
 
 function buildNonAlbumTrackLoadingMarkup() {
@@ -835,36 +938,40 @@ function isCurrentNonAlbumModalRequest(options = {}) {
 }
 
 function closeNonAlbumPageOnTreeNavigation(event) {
-  if (event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')
-      && document.querySelector('#non-album-modal.non-album-modal--page:not([hidden])')) closeNonAlbumModal();
+  if (!event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')) return;
+  const overlay = document.querySelector('#non-album-modal:not([hidden])');
+  if (overlay?.classList.contains('is-mobile-page')) prepareMobileGalleryNavigation?.();
+  else if (overlay?.classList.contains('non-album-modal--page')) closeNonAlbumModal();
 }
 
 function setNonAlbumPagePresentation(overlay, open) {
   const main = document.getElementById('shell-main-surface');
-  const page = open && main && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
-    && !overlay.classList.contains('is-mobile-page');
+  const page = Boolean(open && main);
   overlay.classList?.toggle?.('non-album-modal--page', Boolean(page));
-  if (page && overlay.parentElement !== main) main.appendChild(overlay);
+  if (page && !overlay.classList.contains('is-mobile-page') && overlay.parentElement !== main) {
+    main.appendChild(overlay);
+  }
   if (page && typeof closeGalleryMainSurface === 'function'
       && typeof galleryMainSurfaceController !== 'undefined'
       && galleryMainSurfaceController?.current?.()) closeGalleryMainSurface(false);
   document.removeEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
-  if (page) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
+  if (open) document.addEventListener('click', closeNonAlbumPageOnTreeNavigation, true);
   const dialog = overlay.querySelector?.('.non-album-modal-dialog');
   if (dialog) {
     if (page) {
       dialog.setAttribute('role', 'region');
       dialog.removeAttribute('aria-modal');
-    } else if (!overlay.classList.contains('is-mobile-page')) {
-      dialog.setAttribute('role', 'dialog');
-      dialog.setAttribute('aria-modal', 'true');
     }
   }
   return Boolean(page);
 }
 
 function openLooseTracksPage(options = {}) {
-  openNonAlbumModal({ libraryWide: true, collectionName: options.collectionName || '' });
+  openNonAlbumModal({
+    libraryWide: true,
+    collectionName: options.collectionName || '',
+    navigationSource: 'library-tree',
+  });
 }
 
 function openNonAlbumModal(options = {}) {
@@ -873,6 +980,7 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   const collectionName = String(options.collectionName || '').trim();
+  const collectionArtwork = state.ui.customCollectionArtworkByName?.[collectionName] || null;
   state.ui.nonAlbumLibraryWide = libraryWide;
   state.ui.nonAlbumCollectionName = collectionName;
   const page = setNonAlbumPagePresentation(els.overlay, true);
@@ -884,18 +992,22 @@ function openNonAlbumModal(options = {}) {
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';
   if (els.header) {
-    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
-      variant: 'copy',
+    els.header.innerHTML = buildLooseTracksPageHeaderHtml({
       title: collectionName || 'Loose Tracks',
       subtitle,
-      titleId: 'non-album-modal-title',
-      subtitleId: 'non-album-modal-subtitle',
+      leadingHtml: collectionName
+        ? buildCustomCollectionHeaderArtworkMarkup(collectionName, collectionArtwork)
+        : '',
       actionsHtml: buildLooseTracksHeaderActionsHtml({ showClose: !page }),
     });
   }
   if (typeof presentMobilePage === 'function') {
     presentMobilePage({
-      ...mobilePageDescriptor('non-album', null, { libraryWide, collectionName }),
+      ...mobilePageDescriptor('non-album', null, {
+        libraryWide,
+        collectionName,
+        navigationSource: options.navigationSource,
+      }),
       title: collectionName || 'Loose Tracks',
       subtitle,
     });
@@ -915,12 +1027,21 @@ function openNonAlbumModal(options = {}) {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
       if (!hydrationPending && populated) {
         els.table.innerHTML = collectionName
-          ? buildCustomCollectionDetailMarkup(looseTracks, collectionName)
+          ? buildCustomCollectionDetailMarkup(
+            looseTracks,
+            collectionName,
+            state.ui.customCollectionArtworkByName?.[collectionName] || null,
+          )
           : buildNonAlbumTrackSectionsMarkup(looseTracks);
       }
       installNonAlbumCollapsibleSections(els);
       installNonAlbumTrackSelection(els);
       attachSharedPlayer();
+      if (collectionName && !hydrationPending) {
+        void loadCustomCollectionArtwork(collectionName).catch((error) => {
+          showRepairAlert(error.message || 'Unable to load collection artwork.', 'error');
+        });
+      }
     });
   });
   if (hydrationPending) {
@@ -963,7 +1084,6 @@ function openNonAlbumTagEditor() {
     selected_track_paths: selectedPaths,
     tracks: editableTracks,
   };
-  closeNonAlbumModal();
   openTagEditor(album, { tracksMode: selectedPaths.length ? 'selected' : 'all' });
 }
 

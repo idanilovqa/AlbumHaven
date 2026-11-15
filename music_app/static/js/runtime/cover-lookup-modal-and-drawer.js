@@ -2867,10 +2867,81 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
   </div>`;
 }
 
+function buildCustomCollectionCoverLookupCard(item) {
+  if (!String(item?.image_url || '').trim()) return '';
+  const label = String(item?.filename || 'Collection artwork');
+  return `<div class="cover-lookup-art-card-shell">
+    <div class="cover-lookup-art-card is-active" data-cover-lookup-item-key="collection:current">
+      <span class="cover-lookup-art-preview">
+        <img class="cover-lookup-art-preview-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(label)}">
+        <button class="cover-lookup-art-preview-button" type="button" data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(item.image_url)}" data-cover-alt="${escapeHtml(label)}" aria-label="View full-size ${escapeHtml(label)}">
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 1 0 10.5 4Z" fill="currentColor"></path></svg>
+        </button>
+        <span class="cover-lookup-art-check">&#10003;</span>
+        <button class="cover-lookup-art-delete" type="button" data-delete-custom-collection-artwork="1" aria-label="Delete collection artwork">&#128465;</button>
+      </span>
+      <span class="cover-lookup-art-meta"><span class="cover-lookup-art-name">${escapeHtml(label)}</span><span class="cover-lookup-art-action-label">Current cover</span></span>
+    </div>
+  </div>`;
+}
+
+function buildCustomCollectionCoverLookupComposer(modalState) {
+  const attachments = Array.isArray(modalState.manualImageAttachments)
+    ? modalState.manualImageAttachments : [];
+  const disabled = Boolean(modalState.manualBusy);
+  const extractDisabled = disabled || (!String(modalState.manualUrlText || '').trim() && !attachments.length);
+  return `<div class="cover-lookup-manual-add" data-cover-lookup-scroll-key="manual-add">
+    <div class="cover-lookup-manual-row" data-cover-lookup-drop-zone="1">
+      <div class="cover-lookup-manual-content">
+        <div class="cover-lookup-manual-attachments" ${attachments.length ? '' : 'hidden'}>${attachments.map((item) => `
+          <span class="cover-lookup-manual-attachment" data-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" title="${escapeHtml(item.filename || 'Image')}">
+            <img src="${escapeHtml(item.object_url || item.data_url || '')}" alt="">
+            <button type="button" data-remove-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" aria-label="Remove ${escapeHtml(item.filename || 'image')}">×</button>
+          </span>`).join('')}</div>
+        <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="1" placeholder="Paste an image or a direct image or album link" ${disabled ? 'disabled' : ''}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+      </div>
+      <input type="file" accept="image/*" multiple data-cover-lookup-file-input hidden ${disabled ? 'disabled' : ''}>
+      <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${disabled ? 'disabled' : ''}><span aria-hidden="true">+</span><span>Add image</span></button>
+    </div>
+    <div class="cover-lookup-manual-actions">
+      ${ButtonComponent.renderButton({ label: 'Extract images', variant: 'secondary', className: 'cover-lookup-manual-submit', disabled: extractDisabled, attributes: { 'data-add-cover-lookup-remote': '1' } })}
+      ${modalState.manualStatusText ? `<span class="cover-lookup-manual-status is-${escapeHtml(modalState.manualStatusTone || 'neutral')}" role="${String(modalState.manualStatusTone || '') === 'error' ? 'alert' : 'status'}">${escapeHtml(modalState.manualStatusText)}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderCustomCollectionCoverLookupModal(els, modalState) {
+  const name = String(modalState.collectionName || '').trim();
+  if (els.subtitle) els.subtitle.innerHTML = `<span>${escapeHtml(name)}</span><span class="cover-lookup-modal-subtitle-meta">Custom collection</span>`;
+  if (els.status) els.status.textContent = '';
+  const current = buildCustomCollectionCoverLookupCard(modalState.localCovers?.[0]);
+  const staged = (Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [])
+    .map(item => buildCoverLookupCard(item, 'pasted')).join('');
+  const linked = (Array.isArray(modalState.possibleMatches) ? modalState.possibleMatches : [])
+    .map(item => buildCoverLookupCard(item, 'remote')).join('');
+  replaceCoverLookupModalMarkup(els.body, `<section class="cover-lookup-section">
+    <div class="cover-lookup-gallery">${current}${staged}${linked}${!current && !staged && !linked ? '<div class="cover-lookup-empty">Add an image for this collection.</div>' : ''}</div>
+    ${buildCustomCollectionCoverLookupComposer(modalState)}
+  </section>`);
+  if (els.findBetter) {
+    els.findBetter.hidden = true;
+    els.findBetter.disabled = true;
+  }
+  if (els.saveRemote) {
+    els.saveRemote.hidden = false;
+    els.saveRemote.disabled = !String(modalState.pendingPastedImageId || '');
+  }
+  scheduleDeferredCoverLookupPreviews(els.body);
+}
+
 function renderCoverLookupModal() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || !els.body) return;
   const modalState = state.coverLookup.modal;
+  if (String(modalState.collectionName || '').trim()) {
+    renderCustomCollectionCoverLookupModal(els, modalState);
+    return;
+  }
   const manualInputSession = String(coverLookupModalSession);
   const preserveManualInput = els.pastedUrls?.dataset?.coverLookupSession === manualInputSession;
   const restoreManualInputFocus = preserveManualInput && document.activeElement === els.pastedUrls;
@@ -3744,6 +3815,8 @@ async function openCoverLookupModal(album, options = {}) {
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
   bindCoverLookupOrderedSelectionHold(els.overlay);
   const requestedTaskId = String(options.taskId || '');
+  state.coverLookup.modal.collectionName = '';
+  if (els.findBetter) els.findBetter.hidden = false;
   const albumTrackSignature = buildTrackPathSignature(album);
   const matchingTask = (state.coverLookup.tasks || []).find((task) => (
     requestedTaskId
@@ -3826,6 +3899,40 @@ async function openCoverLookupModal(album, options = {}) {
   }
 }
 
+async function openCustomCollectionCoverLookup(collectionName) {
+  const name = String(collectionName || '').trim();
+  if (!name || (window.AlbumHavenCapabilities
+    && !window.AlbumHavenCapabilities.allows('library.covers.upload'))) return;
+  coverLookupModalSession += 1;
+  const els = getCoverLookupModalElements();
+  if (!els.overlay) return;
+  revokeCoverLookupPastedImageUrls();
+  const artwork = state.ui?.customCollectionArtworkByName?.[name] || null;
+  Object.assign(state.coverLookup.modal, {
+    album: null,
+    collectionName: name,
+    taskId: '',
+    localCovers: artwork ? [artwork] : [],
+    pastedImages: [],
+    manualImageAttachments: [],
+    pendingLocalPath: '',
+    pendingPastedImageId: '',
+    selectedRemoteId: '',
+    orderedCoverSelections: [],
+    possibleMatches: [],
+    manualUrlText: '',
+    manualBusy: false,
+    manualPendingCount: 0,
+    manualStatusText: '',
+    manualStatusTone: 'neutral',
+    saving: false,
+  });
+  els.overlay.classList?.toggle?.('is-mobile-sheet', false);
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  renderCoverLookupModal();
+}
+
 function closeCoverLookupModal() {
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
@@ -3858,6 +3965,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.saving = false;
   state.coverLookup.modal.album = null;
+  state.coverLookup.modal.collectionName = '';
   state.coverLookup.modal.taskId = '';
   state.coverLookup.modal.localCovers = [];
   state.coverLookup.modal.otherArt = [];
@@ -3876,6 +3984,7 @@ function closeCoverLookupModal() {
     els.saveRemote.hidden = false;
     els.saveRemote.disabled = true;
   }
+  if (els.findBetter) els.findBetter.hidden = false;
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   if (!trackModalOpen && !utilityModalOpen) {
@@ -3890,7 +3999,9 @@ function openCoverLookupDeleteConfirm(path) {
   if (!els.overlay || !path || isCoverLookupLocalMutationPending()) return;
   state.coverLookup.modal.pendingDeletePath = String(path || '');
   if (els.text) {
-    els.text.textContent = 'Are you sure you want to delete this local cover art?';
+    els.text.textContent = path === 'custom-collection'
+      ? 'Are you sure you want to delete this collection artwork?'
+      : 'Are you sure you want to delete this local cover art?';
   }
   els.overlay.style.zIndex = '4700';
   els.overlay.hidden = false;
@@ -4181,6 +4292,14 @@ function selectRemoteCoverFromLookup(candidateId) {
   ));
   if (!isSelectableRemoteCoverCandidate(selectedCandidate)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
+  if (String(state.coverLookup.modal.collectionName || '').trim()) {
+    state.coverLookup.modal.pendingLocalPath = '';
+    state.coverLookup.modal.pendingPastedImageId = '';
+    state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
+    state.coverLookup.modal.orderedCoverSelections = [];
+    syncCoverLookupSelectionUi();
+    return;
+  }
   state.coverLookup.modal.pendingLocalPath = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
@@ -4345,6 +4464,38 @@ async function addRemoteCoverLinksFromLookup() {
   const urls = collectManualCoverLookupUrls();
   const attachmentCount = Array.isArray(state.coverLookup.modal.manualImageAttachments)
     ? state.coverLookup.modal.manualImageAttachments.length : 0;
+  const collectionName = String(state.coverLookup.modal.collectionName || '').trim();
+  if (collectionName) {
+    if (!urls.length && !attachmentCount) return;
+    extractCoverLookupPendingAttachments();
+    if (!urls.length) {
+      renderCoverLookupModal();
+      return;
+    }
+    try {
+      state.coverLookup.modal.manualBusy = true;
+      renderCoverLookupModal();
+      const response = await fetch('/api/custom-collections/artwork/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection_name: collectionName, urls }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to extract collection artwork.');
+      state.coverLookup.modal.possibleMatches = Array.isArray(data.candidates) ? data.candidates : [];
+      state.coverLookup.modal.manualUrlText = '';
+      if (input) input.value = '';
+      state.coverLookup.modal.manualStatusText = '';
+      state.coverLookup.modal.manualStatusTone = 'neutral';
+    } catch (error) {
+      state.coverLookup.modal.manualStatusText = "Couldn't extract images.";
+      state.coverLookup.modal.manualStatusTone = 'error';
+    } finally {
+      state.coverLookup.modal.manualBusy = false;
+      renderCoverLookupModal();
+    }
+    return;
+  }
   if (!album || (!urls.length && !attachmentCount)) return;
   extractCoverLookupPendingAttachments();
   if (!urls.length) {
@@ -4465,7 +4616,57 @@ async function savePastedCoverFromLookup(imageId) {
   }
 }
 
+async function saveCustomCollectionCoverFromLookup() {
+  const modal = state.coverLookup.modal;
+  const name = String(modal.collectionName || '').trim();
+  const linked = (modal.possibleMatches || []).find((item) => (
+    String(item?.id || '') === String(modal.selectedRemoteId || '')
+  ));
+  const selected = (modal.pastedImages || []).find((item) => (
+    String(item?.id || '') === String(modal.pendingPastedImageId || '')
+  ));
+  if (!name || (!selected?.data_url && !linked?.url)) return;
+  const response = await fetch(linked ? '/api/custom-collections/artwork/remote' : '/api/custom-collections/artwork', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(linked
+      ? { collection_name: name, url: linked.url }
+      : {
+        collection_name: name,
+        data_url: selected.data_url,
+        filename: String(selected.filename || 'collection-cover.jpg'),
+      }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to save collection artwork.');
+  state.ui.customCollectionArtworkByName ||= {};
+  state.ui.customCollectionArtworkByName[name] = data.artwork || null;
+  renderCurrentCustomCollectionArtwork(name);
+  closeCoverLookupModal();
+}
+
+async function deleteCustomCollectionArtwork() {
+  const name = String(state.coverLookup.modal.collectionName || '').trim();
+  if (!name) return;
+  const response = await fetch('/api/custom-collections/artwork', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ collection_name: name }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to delete collection artwork.');
+  state.ui.customCollectionArtworkByName ||= {};
+  state.ui.customCollectionArtworkByName[name] = null;
+  state.coverLookup.modal.localCovers = [];
+  renderCurrentCustomCollectionArtwork(name);
+  renderCoverLookupModal();
+}
+
 async function saveCoverFromLookup() {
+  if (String(state.coverLookup.modal.collectionName || '').trim()) {
+    await saveCustomCollectionCoverFromLookup();
+    return;
+  }
   if (isCoverLookupLocalMutationPending()) return;
   const orderedSelections = Array.isArray(state.coverLookup.modal.orderedCoverSelections)
     ? state.coverLookup.modal.orderedCoverSelections : [];

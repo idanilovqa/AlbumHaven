@@ -74,6 +74,44 @@ test('desktop page GalleryBar aligns its back control with the title row', async
   expect(geometry.summaryTop).toBeGreaterThanOrEqual(geometry.titleBottom);
 });
 
+test('mobile collection GalleryBar keeps the track count directly under its title', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.route(componentUrl, route => route.fulfill({
+    contentType: 'text/html; charset=utf-8',
+    body: `<!doctype html><html><body style="margin:0">
+      <main class="shell-main-surface has-mobile-page">
+        <header id="mobile-page-header" class="gallery-bar page-gallery-bar mobile-page-header" data-gallery-bar-layout="mobile-primary">
+          <button id="mobile-page-library-button" class="action-button mobile-bar-action" type="button">Menu</button>
+          <span class="custom-collection-header-art"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt=""></span>
+          <div class="gallery-bar__context">
+            <h1 class="gallery-bar__title">Женя машина</h1>
+            <p class="gallery-bar__summary">85 tracks</p>
+          </div>
+          <div class="gallery-bar__actions"></div>
+        </header>
+      </main>
+    </body></html>`,
+  }));
+  await page.goto(componentUrl);
+  for (const stylesheet of ['base.css', 'app-chrome.css', 'button-component.css', 'gallery-main.css', 'runtime/non-album-and-player.css', 'mobile-layout.css']) {
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css', stylesheet) });
+  }
+
+  const geometry = await page.evaluate(() => {
+    const title = document.querySelector('.gallery-bar__title').getBoundingClientRect();
+    const summary = document.querySelector('.gallery-bar__summary').getBoundingClientRect();
+    return {
+      titleLeft: title.left,
+      summaryLeft: summary.left,
+      verticalGap: summary.top - title.bottom,
+    };
+  });
+
+  expect(geometry.summaryLeft).toBe(geometry.titleLeft);
+  expect(geometry.verticalGap).toBeGreaterThanOrEqual(0);
+  expect(geometry.verticalGap).toBeLessThanOrEqual(4);
+});
+
 for (const mode of ['light', 'dark']) {
   test(`${mode} Gallery-bar hover uses its approved surface`, async ({ page }) => {
     await page.route(componentUrl, route => route.fulfill({

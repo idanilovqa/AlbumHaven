@@ -6,6 +6,37 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  const chooseCollectionArtwork = event.target.closest('[data-choose-custom-collection-artwork]');
+  if (chooseCollectionArtwork) {
+    event.preventDefault();
+    chooseCollectionArtwork.closest('.album-artbox')
+      ?.querySelector('[data-custom-collection-artwork-input]')
+      ?.click();
+    return;
+  }
+  const editCollectionArtwork = event.target.closest('[data-edit-custom-collection-artwork]');
+  if (editCollectionArtwork) {
+    event.preventDefault();
+    void openCustomCollectionCoverLookup(
+      editCollectionArtwork.getAttribute('data-edit-custom-collection-artwork'),
+    );
+    return;
+  }
+  if (event.target.closest('[data-delete-custom-collection-artwork]')) {
+    event.preventDefault();
+    openCoverLookupDeleteConfirm('custom-collection');
+    return;
+  }
+  if (
+    String(state.coverLookup.modal.collectionName || '').trim()
+    && event.target.closest('[data-confirm-cover-lookup-delete="1"]')
+  ) {
+    event.preventDefault();
+    void deleteCustomCollectionArtwork()
+      .then(() => closeCoverLookupDeleteConfirm())
+      .catch((error) => showRepairAlert(error.message || 'Unable to delete collection artwork.'));
+    return;
+  }
   const tagEditorView = event.target.closest('#tag-editor-view-tabs [data-in-page-tab]');
   if (tagEditorView) {
     event.preventDefault();
@@ -1283,6 +1314,18 @@ function bindCoverLookupFileInput(coverLookupFiles) {
 }
 
 function handleUtilityBootstrapChange(event) {
+  const collectionArtworkInput = event.target.closest('[data-custom-collection-artwork-input]');
+  if (collectionArtworkInput) {
+    const file = collectionArtworkInput.files?.[0];
+    if (file) {
+      void saveCustomCollectionArtworkFile(
+        collectionArtworkInput.getAttribute('data-custom-collection-artwork-input'),
+        file,
+      ).catch((error) => showRepairAlert(error.message || 'Unable to save collection artwork.'))
+        .finally(() => { collectionArtworkInput.value = ''; });
+    }
+    return;
+  }
   if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   const coverLookupFiles = event.target.closest('[data-cover-lookup-file-input]');
   if (coverLookupFiles) {

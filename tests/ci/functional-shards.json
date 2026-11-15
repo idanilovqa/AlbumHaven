@@ -511,6 +511,27 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+              "case": "FTC-NON-ALBUM-017 returns from Loose Tracks through bounded Home navigation",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+              "case": "FTC-NON-ALBUM-019 direct Custom Collection URL repaints its tree after deferred projection hydration",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-032 hides the expanded view rail after inactivity and restores it only from the left edge",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
               "case": "FTC-GALLERY-032 hydrates version tracks and preserves table playback, selection and fixed modal identity",
               "area": "album-details"

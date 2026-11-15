@@ -2999,8 +2999,13 @@ def test_asgi_full_root_album_browse_uses_postgres_browse_without_flask_bridge(a
         },
     ],
 )
+@pytest.mark.parametrize(
+    "include_surface",
+    [True, False],
+    ids=["explicit-surface", "implicit-albums-surface"],
+)
 def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
-    app, asgi_app, monkeypatch, extra_query
+    app, asgi_app, monkeypatch, extra_query, include_surface
 ):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -3012,7 +3017,7 @@ def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
             raise AssertionError("Queryless Home must not build the full root album payload")
 
         def build_root_startup_preview_payload(self, *, query_params=None, library_state=None):
-            assert query_params.get("surface") == "albums"
+            assert query_params.get("surface") == ("albums" if include_surface else None)
             assert query_params.get("gallery_page_size") == "50"
             for key, value in extra_query.items():
                 assert query_params.get(key) == value
@@ -3047,7 +3052,7 @@ def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
         "GET",
         "/view-data",
         query={
-            "surface": "albums",
+            **({"surface": "albums"} if include_surface else {}),
             **extra_query,
         },
     )

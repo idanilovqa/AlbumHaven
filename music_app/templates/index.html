@@ -120,9 +120,9 @@
           {% call action_button('Close library navigation', class_name='mobile-bar-action', attributes={'data-close-artists-drawer': '1'}, presentation='bare') %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 5-7 7 7 7M3 12h18"/></svg>{% endcall %}
           <h2 id="library-navigation-heading">Artists</h2>
         </div>
-        <div class="library-navigation-body">
-          {% call action_button('Show library views', class_name='mobile-tree-edge-anchor', id='mobile-tree-edge-anchor', attributes={'data-reveal-library-mode-rail': '1', 'hidden': 'hidden'}, presentation='bare') %}<span aria-hidden="true">&rsaquo;</span>{% endcall %}
-          <nav class="library-navigation-mode-rail" aria-label="Library views">
+        <div class="library-navigation-body navigation-tree-shell">
+          {% call action_button('Show library views', class_name='mobile-tree-edge-anchor', id='mobile-tree-edge-anchor', attributes={'data-reveal-library-mode-rail': '1', 'hidden': 'hidden'}, presentation='bare') %}<span class="mobile-tree-edge-anchor__chevron" aria-hidden="true">&rsaquo;</span>{% endcall %}
+          <nav class="library-navigation-mode-rail navigation-tree-mode-bar" aria-label="Library views">
             {% call action_button('Artists', class_name='library-navigation-mode-action is-active', title='Artists', attributes={'data-library-navigation-mode': 'artists', 'aria-pressed': 'true'}, presentation='bare') %}<svg viewBox="0 0 24 24" aria-hidden="true"><g stroke-width="1.25"><path d="M12 20V5M12 8 9 5V2M9 5 6 3M12 6l3-3V1.5M15 3l3-1M12 12 7 9 5 6M7 9H3l-1-2M5 6V3.5M12 10l5-3 2-3M17 7h4l1-2M19 4V2.5M12 16l-5-3-3-1-2-2M7 13v-2M12 15l5-3 3-1 2-3M17 12V9.5M12 19l-3 3M12 19l3 3M12 20v2M9 22H7M15 22h2"></path></g></svg>{% endcall %}
             {% call action_button('Custom Collections', class_name='library-navigation-mode-action', title='Custom Collections', attributes={'data-library-navigation-mode': 'custom-collections', 'aria-pressed': 'false'}, presentation='bare') %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14V3.5c2.7 2.2 5.3 3.4 8.5 4.6V14"/><ellipse cx="3.5" cy="15" rx="3" ry="2.2"/><ellipse cx="11.8" cy="15.5" rx="3" ry="2.2"/><circle cx="15.5" cy="15" r="5.2"/><path d="m19.2 18.7 3.3 3.3"/></svg>{% endcall %}
           </nav>

@@ -186,6 +186,42 @@ test('FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and adv
   await documentResponse;
   await mobile.libraryButton.click();
   await expect(mobile.artistRail).toHaveAttribute('aria-hidden', 'false');
+  const artistsModeButton = mobile.artistRail.getByRole('button', { name: 'Artists', exact: true });
+  await expect(artistsModeButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(artistsModeButton).toHaveClass(/is-active/);
+  const libraryViewsBar = mobile.artistRail.locator('.library-navigation-mode-rail');
+  const libraryViewsAnchor = mobile.artistRail.getByRole('button', { name: 'Show library views' });
+  await expect(libraryViewsBar).toBeVisible();
+  await page.waitForTimeout(3800);
+  await expect(libraryViewsBar).toBeVisible();
+  await expect(libraryViewsAnchor).toBeHidden();
+  const navigationGeometry = await libraryViewsBar.evaluate((bar) => {
+    const box = bar.getBoundingClientRect();
+    const railBox = bar.closest('#shell-navigation-rail').getBoundingClientRect();
+    const listBox = bar.closest('.library-navigation-body').querySelector('#sidebar-list').getBoundingClientRect();
+    return {
+      direction: getComputedStyle(bar).flexDirection,
+      justify: getComputedStyle(bar).justifyContent,
+      separatorImage: getComputedStyle(bar).backgroundImage,
+      top: box.top,
+      bottom: box.bottom,
+      left: box.left,
+      right: box.right,
+      listBottom: listBox.bottom,
+      railLeft: railBox.left,
+      railRight: railBox.right,
+      railBottom: railBox.bottom,
+      railWidth: railBox.width,
+    };
+  });
+  expect(navigationGeometry.direction).toBe('row');
+  expect(navigationGeometry.justify).toBe('flex-start');
+  expect(navigationGeometry.separatorImage).toContain('linear-gradient');
+  expect(navigationGeometry.railWidth).toBe(320);
+  expect(navigationGeometry.listBottom).toBeLessThanOrEqual(navigationGeometry.top);
+  expect(navigationGeometry.left).toBeGreaterThanOrEqual(navigationGeometry.railLeft);
+  expect(navigationGeometry.right).toBeLessThanOrEqual(navigationGeometry.railRight);
+  expect(navigationGeometry.bottom).toBeLessThanOrEqual(navigationGeometry.railBottom);
   await mobile.allArtists.click();
   await expect(mobile.home).toBeHidden();
   await galleryActions.waitForGalleryReady();

@@ -4,6 +4,20 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+test('mobile library-home navigation retires an open Loose Tracks page first', () => {
+  const { context } = createContext();
+  let retirements = 0;
+  context.usesMobilePageLayout = () => true;
+  context.prepareMobileGalleryNavigation = () => {
+    retirements += 1;
+    return true;
+  };
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(retirements, 1);
+});
+
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'bootstrap-gallery-event-handlers.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const viewStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-state-helpers.js');
@@ -677,29 +691,30 @@ test('unselecting the last related artist leaves primary-filter ownership to loc
   }]);
 });
 
-test('openNonAlbumTagEditor hands every displayed loose track to Edit Tags', () => {
+test('openNonAlbumTagEditor keeps its Loose Tracks page mounted and hands every displayed track to Edit Tags', () => {
   const { context } = createContext();
   const tracks = [
     { path: 'C:/Music/A/one.mp3', title: 'One', album_artist: 'A', exception_type: 'Non-album rarity' },
     { path: 'C:/Music/A/two.mp3', title: 'Two', album_artist: 'A', exception_type: 'Interview' },
   ];
   const calls = [];
+  let closes = 0;
   context.state.view.non_album_tracks = tracks;
   context.state.view.selected_artist = 'A';
   vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
-  context.closeNonAlbumModal = () => calls.push({ name: 'close' });
+  context.closeNonAlbumModal = () => { closes += 1; };
   context.openTagEditor = (album, options) => calls.push({ name: 'open', album, options });
 
   context.openNonAlbumTagEditor();
 
-  assert.equal(calls[0].name, 'close');
-  assert.equal(calls[1].name, 'open');
-  assert.deepEqual(Array.from(calls[1].album.tracks), tracks);
-  assert.equal(calls[1].album.name, '');
-  assert.equal(calls[1].album.album_artist, '');
-  assert.equal(calls[1].album.tag_editor_title, 'Non-album tracks');
-  assert.equal(calls[1].album.tag_editor_collection, true);
-  assert.deepEqual({ ...calls[1].options }, { tracksMode: 'all' });
+  assert.equal(closes, 0);
+  assert.equal(calls[0].name, 'open');
+  assert.deepEqual(Array.from(calls[0].album.tracks), tracks);
+  assert.equal(calls[0].album.name, '');
+  assert.equal(calls[0].album.album_artist, '');
+  assert.equal(calls[0].album.tag_editor_title, 'Non-album tracks');
+  assert.equal(calls[0].album.tag_editor_collection, true);
+  assert.deepEqual({ ...calls[0].options }, { tracksMode: 'all' });
 });
 
 test('openNonAlbumTagEditor keeps member paths private while reusing the existing editor', () => {
@@ -1679,14 +1694,26 @@ test('library-home navigation opens Home on mobile instead of All artists', () =
 
   assert.equal(wasPrevented(), true);
   assert.equal(context.document.getElementById('search-input').value, '');
-  assert.equal(calls.buildApiUrl.at(-1).surface.active, 'home');
-  assert.equal(calls.buildApiUrl.at(-1).surface_request, 'home');
-  assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
-  assert.equal(calls.buildApiUrl.at(-1).all_artists_active, false);
+  assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
+  assert.equal(calls.applyViewPayload[0].payload.surface_request, 'home');
+  assert.equal(calls.applyViewPayload[0].payload.selected_artist, '');
+  assert.equal(calls.applyViewPayload[0].payload.all_artists_active, false);
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
   assert.equal(calls.applyViewPayload[0].runtimeOptions.trackSidebarReveal, false);
   assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
+});
+
+test('mobile library-home logo never enters the generic view-data builder', () => {
+  const { context, calls } = createContext();
+  context.usesMobilePageLayout = () => true;
+  context.state.view.surface = { active: 'playlists' };
+  context.state.view.surface_request = 'playlists';
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
+  assert.equal(calls.buildApiUrl.length, 0);
 });
 
 test('library-home cached root refresh requests an authoritative Artist Tree', () => {

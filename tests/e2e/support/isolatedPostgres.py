@@ -47,6 +47,7 @@ _MIGRATION_OWNED_TABLES = frozenset(
         ("app", "deployment_mode_rules"),
         ("app", "e2e_problematic_file_fixture_seeds"),
         ("app", "generated_preview_storage"),
+        ("ops", "schema_migration_attestations"),
         ("ops", "schema_migrations"),
     }
 )

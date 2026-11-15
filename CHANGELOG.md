@@ -4,6 +4,10 @@
 
 - The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target.
 
+## 0.11.9 - 2026-11-15
+
+- Added the append-only migration attestation table (migration 0210) used to reconcile the production migration ledger with the repository without rewriting its history. Fresh databases need no attestations; production applies it only through the owner-approved reconciliation plan.
+
 ## 0.11.8 - 2026-11-14
 
 - A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.

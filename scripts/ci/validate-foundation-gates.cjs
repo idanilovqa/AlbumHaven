@@ -198,6 +198,7 @@ function validateWorkflowContract(workflow) {
     [/cache-dependency-path:\s*package-lock\.json/, 'package-lock.json cache dependency path'],
     [/cache:\s*pip/, 'pip cache'],
     [/npm run test:js:all/, 'complete glob-discovered Node suite'],
+    [/run: node scripts\/ci\/validate-bounded-interactions\.cjs\s*$/m, 'complete bounded interaction inventory validation'],
     [/timeout-minutes:\s*45/, 'bounded timeout'],
     [/write-foundation-version-manifest\.cjs\s+--profile=component/, 'version manifest validation'],
     [/version-manifest/, 'version manifest artifact'],

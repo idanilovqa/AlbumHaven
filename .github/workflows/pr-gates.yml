@@ -271,6 +271,11 @@ jobs:
           PLAYWRIGHT_PYTHON: ${{ env.pythonLocation }}/bin/python
         run: npm run test:js:all
 
+      # Every discovered interaction must be registered and statically clean or
+      # covered by a contract; the contracts themselves run in the JS and Python suites.
+      - name: Validate bounded interaction inventory
+        run: node scripts/ci/validate-bounded-interactions.cjs
+
       # Records web-only, existing-bridge or native-impact for the whole pull request and fails a
       # site the latest or previous stable APK cannot run (docs/android-release-signing.md).
       - name: Classify Android release and enforce release order

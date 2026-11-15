@@ -14331,9 +14331,8 @@ function startPlaybackOwnershipHeartbeat() {
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
-    if (ownership.activeClaim) {
-      if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
-    }
+    // A paused claim, which keeps its token past the lease, still learns when another client plays.
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
     else void handlePlaybackOwnershipEvent();
   }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
 }
@@ -14408,17 +14407,17 @@ async function expirePlaybackClaim(claim) {
   await ownership.pendingOperation;
   if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return;
   // A jump in this document's clock can reach this deadline while the server's lease still runs,
-  // so a playing claim asks the server once; the renewal drops it on refusal or failure.
+  // so a playing claim asks the server once; only a refusal drops it. A paused claim lapses quietly
+  // and keeps its token for the next play to renew.
   if (isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
-  else losePlaybackOwnership();
 }
 
-// As Android's PlaybackClaimOwner: a claim request the server did not answer, as during a network
-// switch, keeps a claim whose lease still runs and retries in 2 s. Only a refusal, or no answer past
-// the lease, gives the claim up; dropping its token earlier made the next play an anonymous acquire
-// the server refuses while this client's own lease runs.
+// Losing the network never stops playback (owner decision, 2026-11-15): a claim request the server
+// did not answer keeps the claim at any age and retries in 2 s. Its token renews the claim even past
+// the lease until another client claims, so only the server's refusal gives it up; dropping it earlier
+// made the next play an anonymous acquire the server refuses while this client's own lease runs.
 function keepUnansweredPlaybackClaim(claim, error) {
-  if (!error?.unanswered || !(claim.leaseDeadline > performance.now())) return false;
+  if (!error?.unanswered) return false;
   const ownership = getPlaybackOwnershipState();
   if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
   ownership.retryTimer = setTimeout(() => {
@@ -14626,6 +14625,10 @@ function initPlaybackOwnershipCoordinator() {
     ownership.channel.addEventListener('message', handlePlaybackOwnershipEvent);
   }
   startPlaybackOwnershipHeartbeat();
+  // Back online, a claim kept through the outage renews at once instead of at its next retry.
+  window.addEventListener?.('online', () => {
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+  });
   void handlePlaybackOwnershipEvent();
 }
 

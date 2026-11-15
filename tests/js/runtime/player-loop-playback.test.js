@@ -3919,3 +3919,104 @@ test('a clicked track shows as playing before streaming starts', async () => {
   await assert.rejects(playing, /did not start/);
   assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');
 });
+
+// Global player with an album queue playing, `loopCount` saved loops loaded,
+// and the real persistence, waveform, and saved-loop refresh collaborators.
+function loadCountedPlayer(counter, loopCount) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const runtimeDir = path.dirname(helperPath);
+  const documentListeners = new Map();
+  const document = {
+    activeElement: null,
+    documentElement: new FakeElement(),
+    querySelector: () => { counter.count('domQueries'); return null; },
+    querySelectorAll: () => { counter.count('domQueries'); return []; },
+    getElementById: () => null,
+    addEventListener(name, handler) {
+      const handlers = documentListeners.get(name) || [];
+      handlers.push(handler);
+      documentListeners.set(name, handlers);
+    },
+    dispatch(name, event = {}) {
+      for (const handler of documentListeners.get(name) || []) handler(event);
+    },
+  };
+  const timelineParent = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineParent, rectangle: { left: 0, width: 600 } });
+  timeline.style = { setProperty: () => counter.count('domMutations') };
+  const time = new FakeElement();
+  const queueTracks = countedCollection(Array.from({ length: 12 }, (_value, index) => ({
+    src: `/track?path=album/${index}.flac`, path: `album/${index}.flac`, title: `Track ${index}`, artist: 'Artist', album: 'Album',
+  })), counter);
+  const currentTrack = queueTracks[3];
+  const loops = countedCollection(Array.from({ length: loopCount }, (_value, index) => ({ id: `loop-${index}` })), counter);
+  const playerElements = { player: new FakeElement(), timeline, time };
+  const { context, audio } = loadHelper({
+    document,
+    timeline,
+    getPlayerDuration: () => 300,
+    getTimelineSecondsFromClientX: clientX => clientX / 2,
+    seekStreamingPlayback: (seconds) => { audio.currentTime = seconds; },
+    setLocalStorageItem: () => counter.count('outputEmissions'),
+    removeLocalStorageItem: () => {},
+    getLocalStorageItem: () => null,
+    PLAYER_STATE_STORAGE_KEY: 'albumhaven.playerState.v1',
+    window: {
+      ButtonComponent: require('../../../music_app/static/js/button-component.js'),
+      innerWidth: 1280,
+      addEventListener: () => {},
+    },
+  });
+  for (const name of ['player-state-persistence-helpers.js', 'player-and-waveform.js', 'player-waveform-peaks.js', 'utility-loop-playback.js']) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeDir, name), 'utf8'), context, { filename: name });
+  }
+  // The streaming engine and mounted player chrome stay injected seams.
+  context.getPlayerElements = () => playerElements;
+  context.getPlayerPlaybackSnapshot = () => ({
+    currentTime: Number(audio.currentTime) || 0, duration: 300, paused: false, ended: false, src: currentTrack.src,
+  });
+  Object.assign(context.state.player, {
+    current: currentTrack,
+    playbackQueue: { tracks: queueTracks, currentIndex: 3 },
+    appearance: { seekbarMode: 'default' },
+  });
+  Object.assign(context.state.utility, { loops, loopsLoaded: true, loopEditors: {} });
+  context.attachPlayerEvents();
+  return { context, document, timeline, timelineParent, time };
+}
+
+test('bounded interaction: global seekbar drag and input stay album-bounded with 1,000 saved loops', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  for (const [event, budgets] of [
+    ['pointermove', { itemsVisited: 0, domQueries: 0, domMutations: 10, outputEmissions: 0 }],
+    ['input', { itemsVisited: 120, domQueries: 10, domMutations: 10, outputEmissions: 10 }],
+  ]) {
+    const run = async (cardinality) => {
+      const counter = createInteractionCounter();
+      const player = loadCountedPlayer(counter, cardinality);
+      player.context.updatePlayerUi();
+      if (event === 'pointermove') {
+        player.timelineParent.dispatch('pointerdown', { target: player.timeline, clientX: 100, preventDefault() {} });
+      }
+      const work = await counter.measure(() => {
+        for (let step = 1; step <= 10; step += 1) {
+          if (event === 'pointermove') player.document.dispatch('pointermove', { clientX: 100 + step * 20, preventDefault() {} });
+          else {
+            player.timeline.value = String(step * 10);
+            player.timeline.dispatch('input');
+          }
+        }
+      });
+      assert.equal(player.time.textContent, event === 'pointermove' ? '2:30 / 5:00' : '1:40 / 5:00');
+      return work;
+    };
+    await measureScalePair({
+      id: `js:runtime/player-loop-playback.js#attachPlayerEvents ${event}`,
+      small: 20,
+      large: 1000,
+      run,
+      budgets,
+      growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    });
+  }
+});

@@ -371,3 +371,81 @@ test('leaving Main elements restores saved colors without persisting its live pr
   assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
   assert.equal(instance.controller.getState().saved.palette_id, 'steelblue');
 });
+
+test('bounded interaction: seekbar editor input stays bounded at the five-set player history limit', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const countedElement = () => {
+      const node = element();
+      let markup = '';
+      Object.defineProperty(node, 'innerHTML', {
+        get: () => markup,
+        set(value) {
+          counter.count('renderCommits');
+          counter.count('markupBytes', String(value).length);
+          markup = String(value);
+        },
+      });
+      const children = new Map();
+      node.querySelector = (selector) => {
+        counter.count('domQueries');
+        if (!children.has(selector)) children.set(selector, countedElement());
+        return children.get(selector);
+      };
+      const { setAttribute } = node;
+      node.setAttribute = (key, value) => { counter.count('domMutations'); setAttribute(key, value); };
+      node.querySelectorAll = () => { counter.count('domQueries'); return []; };
+      const { setProperty } = node.style;
+      node.style.setProperty = (key, value) => { counter.count('domMutations'); setProperty(key, value); };
+      return node;
+    };
+    const initial = preference({
+      revision: 7,
+      interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } },
+      selection_accent: { enabled: true, color: '#34CA78' },
+      player_style_override: api.playerThemes[0].style,
+      player_recent_sets: api.playerThemes.slice(0, cardinality).map(theme => theme.style),
+    });
+    const root = element(), host = element();
+    const document = {
+      documentElement: root, addEventListener() {}, createElement: () => countedElement(),
+      getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
+    };
+    const window = {
+      location: { href: 'https://music.test/', origin: 'https://music.test' },
+      addEventListener() {}, confirm: () => true,
+      fetch: async () => {
+        counter.count('requests');
+        return { ok: true, status: 200, redirected: false, json: async () => ({ ...initial, csrf_token: 'owned-test-session' }) };
+      },
+    };
+    const instance = api.installBrowser(window, document);
+    assert.equal(await instance.load(), true);
+    host.querySelector = (selector) => {
+      if (selector !== '.appearance-background-editor') return element();
+      host.editor ||= countedElement();
+      return host.editor;
+    };
+    instance.mountSeekbar(host);
+    const editor = host.editor;
+    const angle = { value: '0', getAttribute: () => null, hasAttribute: name => name === 'data-player-style-angle' };
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        angle.value = String(step * 9);
+        editor.listeners.get('input')({ target: angle });
+      }
+    });
+    assert.equal(instance.controller.getState().draft.player_style_override.surface.angle, 90);
+    assert.equal(instance.controller.getState().playerRecentSets.length, cardinality);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:appearance-backgrounds.js#mountSeekbar',
+    small: 1,
+    large: 5,
+    run,
+    budgets: { requests: 0, domQueries: 410, domMutations: 650, renderCommits: 30, markupBytes: 24620 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
+  });
+});

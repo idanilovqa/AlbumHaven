@@ -4314,16 +4314,29 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   return html;
 }
 
+// Sidebar artist lists are replaced, never edited in place, so each list's
+// signature is computed once and window scrolls reuse it instead of
+// rescanning every artist.
+const sidebarArtistSignatures = new WeakMap();
+function sidebarArtistSignature(sidebarArtists) {
+  let signature = sidebarArtistSignatures.get(sidebarArtists);
+  if (signature === undefined) {
+    signature = sidebarArtists.map((item) => [
+      String(item?.artist || ''),
+      String(item?.artist_display || item?.artist || ''),
+      String(item?.count ?? ''),
+    ].join('\u001f')).join('\u001e');
+    sidebarArtistSignatures.set(sidebarArtists, signature);
+  }
+  return signature;
+}
+
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
-  const artistSignature = sidebarArtists.map((item) => [
-    String(item?.artist || ''),
-    String(item?.artist_display || item?.artist || ''),
-    String(item?.count ?? ''),
-  ].join('\u001f')).join('\u001e');
+  const artistSignature = sidebarArtistSignature(sidebarArtists);
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
@@ -28763,8 +28776,13 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   });
 }
 
+// Player UI updates refresh the mounted loop waveforms; the saved-loop list is
+// replaced, never edited in place, so the peak cache is pruned once per list.
+let utilityLoopListRetainedForPeaks = null;
 function refreshUtilityLoopStereoWaveforms() {
-  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)
+      && state.utility.loops !== utilityLoopListRetainedForPeaks) {
+    utilityLoopListRetainedForPeaks = state.utility.loops;
     retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
   }
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {
@@ -44780,22 +44798,25 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
-function updatePlayerUi() {
-  const els = getPlayerElements();
-  const playback = getPlayerPlaybackSnapshot();
+function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
-  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
   const displayTrack = mirroredTrack || state.player.current;
-  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
-  const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
-  els.player?.classList?.toggle('is-empty', !hasTrack);
-  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
-  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  return {
+    lockedByAnotherTab,
+    playbackUnavailable,
+    blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
+    displayTrack,
+    hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
+  };
+}
+
+// The seek position and its time label: all that a timeline drag preview changes.
+function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
@@ -44815,6 +44836,19 @@ function updatePlayerUi() {
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
+  return { duration, current };
+}
+
+function updatePlayerUi() {
+  const els = getPlayerElements();
+  const playback = getPlayerPlaybackSnapshot();
+  const status = resolvePlayerUiStatus(playback);
+  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  const { duration, current } = renderPlayerTimelinePosition(els, playback, status);
   els.loopActions?._loopActionController?.update({
     enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
     canCreate: state.loopCreateAllowed === true,
@@ -45891,8 +45925,8 @@ function attachPlayerEvents() {
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
-    if (els.timeline) els.timeline.value = String(next);
-    updatePlayerUi();
+    const playback = getPlayerPlaybackSnapshot();
+    renderPlayerTimelinePosition(getPlayerElements(), playback, resolvePlayerUiStatus(playback));
   });
   document.addEventListener('pointerup', (event) => {
     if (thinSeekGesture) {
@@ -46477,7 +46511,8 @@ function initCompactPlayer() {
     if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
     if (!compactPlayerDrag.didDrag) {
       compactPlayerDrag.didDrag = didCompactPlayerDrag({
-        ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY,
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
       });
       if (compactPlayerDrag.didDrag) els.player.classList.add('is-compact-player-dragging');
     }
@@ -46509,7 +46544,12 @@ function initCompactPlayer() {
   });
   els.cover?.addEventListener('pointermove', event => {
     if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
-    if (!compactPlayerDrag.didDrag) compactPlayerDrag.didDrag = didCompactPlayerDrag({ ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY });
+    if (!compactPlayerDrag.didDrag) {
+      compactPlayerDrag.didDrag = didCompactPlayerDrag({
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
+      });
+    }
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
       y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 105, playerHeight: 105,

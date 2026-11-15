@@ -7527,3 +7527,58 @@ require('node:test')('retry immediately resets the existing card label tone and 
   });
   await retryRequest;
 });
+
+require('node:test')('bounded interaction: Cover Lookup sheet touchmove stays constant with 1,000 candidates', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const eventTarget = (extra = {}) => {
+      const listeners = {};
+      return {
+        ...extra,
+        dataset: {},
+        addEventListener(type, listener) { counter.count('listeners'); listeners[type] = listener; },
+        dispatch(type, event = {}) { listeners[type]?.(event); },
+      };
+    };
+    const candidates = countedCollection(Array.from({ length: cardinality }, (_value, index) => ({
+      key: `candidate-${index}`,
+      url: `https://covers.example.test/${index}.jpg`,
+    })), counter);
+    const header = eventTarget();
+    const body = eventTarget({ scrollTop: 0, children: candidates });
+    const overlay = {
+      classList: { contains: (name) => name === 'is-mobile-sheet' },
+      style: {
+        setProperty() { counter.count('domMutations'); },
+        removeProperty() { counter.count('domMutations'); },
+      },
+      querySelector(selector) {
+        counter.count('domQueries');
+        return selector === '.cover-lookup-modal-header' ? header : body;
+      },
+    };
+    const context = loadHelper();
+    context.state.coverLookup.modal.otherArt = candidates;
+    context.closeCoverLookupModal = () => assert.fail('a drag that has not ended must not close the sheet');
+    context.bindCoverLookupMobileSheetSwipe(overlay);
+    body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+    let prevented = 0;
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        body.dispatch('touchmove', { touches: [{ clientX: 20, clientY: 20 + step * 8 }], preventDefault() { prevented += 1; } });
+      }
+      body.dispatch('touchmove', { touches: [{ clientX: 200, clientY: 30 }], preventDefault() { prevented += 1; } });
+    });
+    assert.equal(prevented, 10, 'vertical sheet drags own the gesture; a sideways move releases it');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#bindTarget',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 0, domMutations: 11, listeners: 0 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
+});

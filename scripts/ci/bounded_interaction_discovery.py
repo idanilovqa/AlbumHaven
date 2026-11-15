@@ -212,6 +212,31 @@ LOOP_NODES = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.D
 ITERATING_LAMBDA_CONSUMERS = {"sorted", "sort", "min", "max", "map", "filter", "any", "all", "sum"}
 
 
+def _is_constant_literal(node: ast.AST) -> bool:
+    """A literal tuple, list or set of constants, or ``range`` over constants."""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
+        return bool(node.args) and not node.keywords and all(isinstance(arg, ast.Constant) for arg in node.args)
+    return isinstance(node, (ast.Tuple, ast.List, ast.Set)) and all(isinstance(item, ast.Constant) for item in node.elts)
+
+
+def _loop_source(node: ast.AST) -> ast.AST | None:
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return node.iter
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return node.generators[0].iter
+    return None
+
+
+def _iterates_literal(node: ast.AST) -> bool:
+    """A loop over a literal of constants, such as ``for ext in (".png", ".jpg")``,
+    runs a fixed number of times: work inside it is not repeated per item."""
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return _is_constant_literal(node.iter)
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return all(_is_constant_literal(generator.iter) for generator in node.generators)
+    return False
+
+
 @dataclass
 class BodyFacts:
     calls: list[tuple[ast.Call, bool]]
@@ -235,8 +260,10 @@ def _facts(definition: Definition) -> BodyFacts:
     has_while = False
     lambda_loops: dict[int, bool] = {}
     stack = [(child, False) for child in ast.iter_child_nodes(definition.node)]
+    evaluated_once: dict[int, bool] = {}
     while stack:
         node, in_loop = stack.pop()
+        in_loop = evaluated_once.pop(id(node), in_loop)
         if isinstance(node, ast.Lambda):
             if id(node) not in lambda_loops:
                 continue
@@ -262,7 +289,12 @@ def _facts(definition: Definition) -> BodyFacts:
             )
         if isinstance(node, NESTED_SCOPES):
             continue
-        child_in_loop = in_loop or isinstance(node, LOOP_NODES)
+        child_in_loop = in_loop or (isinstance(node, LOOP_NODES) and not _iterates_literal(node))
+        # The iterable of a `for` (or of a comprehension's first `for`) is
+        # evaluated once, before the loop repeats anything.
+        source = _loop_source(node)
+        if source is not None:
+            evaluated_once[id(source)] = in_loop
         for name in node._fields:
             value = getattr(node, name, None)
             if isinstance(value, list):

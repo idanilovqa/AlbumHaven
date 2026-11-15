@@ -331,6 +331,45 @@ def cycle(paths):
     assert [(item["operation"], item["function"]) for item in hazards] == [("Path.exists", "ping")]
 
 
+def test_a_loop_iterable_runs_once_and_a_loop_over_constants_does_not_repeat_per_item(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/read.py", """
+def tags(path):
+    with path.open("rb") as handle:
+        return {"size": handle.tell()}
+
+def variant(base):
+    for extension in (".png", ".webp", ".jpg"):
+        if base.with_suffix(extension).exists():
+            return extension
+    return [attempt for attempt in range(2) if base.is_file()]
+
+@router.get("/one")
+def one(path):
+    for key, value in tags(path).items():
+        print(key, value)
+    return [name for name in sorted(tags(path)) if name]
+
+@router.get("/variant")
+def variant_route(base):
+    return variant(base)
+
+@router.get("/each")
+def each(paths, roots):
+    for path in paths:
+        tags(path)
+    for extension in (".png", ".jpg"):
+        for root in roots:
+            variant(root)
+    return [tags(path) for path in paths]
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert sorted((item["entrypoint"].split("#")[1].split(":")[0], item["operation"], item["function"]) for item in hazards) == [
+        ("each", "Path.exists", "variant"),
+        ("each", "Path.is_file", "variant"),
+        ("each", "Path.open", "tags"),
+    ]
+
+
 def test_single_file_probes_are_bounded_but_per_item_probes_are_reported(tmp_path: Path):
     _write(tmp_path, "music_app/services/files.py", """
 def size(path):

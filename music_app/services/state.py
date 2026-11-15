@@ -1435,8 +1435,9 @@ def request_library_hydration_for_state(
 
     Interactive readers never hydrate the library: an unpublished inventory
     queues the single background hydration owner and the caller answers with
-    a pending state. A settled attempt (an empty or unreadable snapshot) is
-    not retried by readers; scans publish the inventory from then on.
+    a pending state. An attempt that completed without albums settles, and
+    scans publish the inventory from then on; a failed attempt is retried by
+    the next reader.
     """
     if (
         library_state.get("albums")

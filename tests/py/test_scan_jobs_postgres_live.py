@@ -1596,7 +1596,10 @@ def test_live_claim_fence_publishes_once_for_the_exact_attempt(
         ).fetchone()["publication_attempt"] == claimed.attempt
 
 
-def _commit_fixture_explicit_user_cover(database_url, library_id, album):
+def _commit_fixture_explicit_user_cover(
+    database_url, library_id, album, *, expected_inventory_revision=0,
+    expected_cover_mutation_revision=4, expected_selected_cover_revision="affected-4",
+):
     from music_app.services.cover_mutation_coordinator import CoverMutationIdentity, CoverMutationStatus, CoverSelectionCommit
     from music_app.services.cover_mutations_postgres import PostgresCoverMutationRepository
 
@@ -1605,8 +1608,9 @@ def _commit_fixture_explicit_user_cover(database_url, library_id, album):
         database_url=database_url, connect_to_database=isolatedPostgres._connect,
     ).commit_selection(request=CoverSelectionCommit(
         identity=CoverMutationIdentity(library_id, album.album_id), track_paths=(album.path,),
-        expected_inventory_revision=0, expected_cover_mutation_revision=4,
-        expected_selected_cover_revision="affected-4", selected_cover_path=selected_path,
+        expected_inventory_revision=expected_inventory_revision,
+        expected_cover_mutation_revision=expected_cover_mutation_revision,
+        expected_selected_cover_revision=expected_selected_cover_revision, selected_cover_path=selected_path,
         promoted_cover_revision="user-5", selected_origin="user", explicit_selection=True,
         clear_selection=False, remote_cover=None, artifact_sha256="b" * 64,
         local_cover_width=1280, local_cover_height=1280,
@@ -1614,7 +1618,7 @@ def _commit_fixture_explicit_user_cover(database_url, library_id, album):
         lease_token=None, task_id=None, checkpoint_revision=None,
     ))
     assert result.status is CoverMutationStatus.COMMITTED
-    assert result.cover_mutation_revision == 5
+    assert result.cover_mutation_revision == expected_cover_mutation_revision + 1
     return selected_path
 
 
@@ -2101,6 +2105,210 @@ def _scan_cover_owned_snapshot(scope):
     }
     with isolatedPostgres._connect(scope.setup_url) as connection:
         return {name: connection.execute(query, (scope.library_id,)).fetchall() for name, query in queries.items()}
+
+
+@pytest.mark.parametrize("scan_cover_successor_case", ["full_scan", "targeted_reconciliation"], indirect=True)
+def test_live_scan_publication_before_actual_user_commit_preserves_both_mutations_and_replay(scan_cover_successor_case):
+    scope = scan_cover_successor_case
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        initial_inventory_revision = connection.execute(
+            "select coalesce((metadata->>'inventory_mutation_revision')::bigint,0) as revision "
+            "from library.libraries where id=%s", (scope.library_id,),
+        ).fetchone()["revision"]
+    published = scope.publish()
+
+    assert published["publication_won"] is True
+    assert published["inventory_mutation_revision"] == initial_inventory_revision + 1
+    assert published["cover_publication_stale"] is False
+    assert published["cover_mutation_revision"] == 4
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        scanned_album = connection.execute(
+            "select metadata from library.local_albums where id=%s", (scope.affected.album_id,),
+        ).fetchone()["metadata"]
+        assert scanned_album["noncover_marker"] == "published"
+        assert connection.execute(
+            "select title from library.local_tracks where id=%s", (scope.affected.track_id,),
+        ).fetchone()["title"] == "After"
+        assert connection.execute(
+            "select coalesce((metadata->>'inventory_mutation_revision')::bigint,0) as revision "
+            "from library.libraries where id=%s", (scope.library_id,),
+        ).fetchone()["revision"] == published["inventory_mutation_revision"]
+    selected_path = _commit_fixture_explicit_user_cover(
+        scope.runtime_url, scope.library_id, scope.affected,
+        expected_inventory_revision=published["inventory_mutation_revision"],
+        expected_cover_mutation_revision=published["cover_mutation_revision"],
+        expected_selected_cover_revision=scanned_album["cover_revision"],
+    )
+    expected_cover = {
+        "cover_path": selected_path, "cover_revision": "user-5",
+        "cover_selection_origin": "user", "cover_selection_provenance": "explicit",
+        "local_cover_width": 1280, "local_cover_height": 1280,
+    }
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        album = connection.execute(
+            "select cover_path,metadata from library.local_albums where id=%s", (scope.affected.album_id,),
+        ).fetchone()
+        file_entry = connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' as entry from library.local_track_files where private_path=%s",
+            (scope.affected.path,),
+        ).fetchone()["entry"]
+        assert album["cover_path"] == selected_path
+        assert all(album["metadata"][key] == value for key, value in expected_cover.items())
+        assert all(file_entry[key] == value for key, value in expected_cover.items())
+        assert album["metadata"]["noncover_marker"] == "published"
+        assert file_entry["title"] == "After"
+        assert connection.execute(
+            "select title from library.local_tracks where id=%s", (scope.affected.track_id,),
+        ).fetchone()["title"] == "After"
+        assert connection.execute(
+            "select coalesce((metadata->>'inventory_mutation_revision')::bigint,0) as revision "
+            "from library.libraries where id=%s", (scope.library_id,),
+        ).fetchone()["revision"] == published["inventory_mutation_revision"]
+        assert connection.execute(
+            "select library.read_cover_mutation_revision(%s) as revision", (scope.library_id,),
+        ).fetchone()["revision"] == published["cover_mutation_revision"] + 1
+    after_user_commit = _scan_cover_owned_snapshot(scope)
+
+    replay = scope.publish()
+
+    for field in ("inventory_mutation_revision", "cover_publication_stale", "cover_mutation_revision"):
+        assert replay[field] == published[field]
+    assert _scan_cover_owned_snapshot(scope) == after_user_commit
+
+
+@pytest.mark.parametrize("scan_cover_successor_case", ["targeted_reconciliation"], indirect=True)
+@pytest.mark.parametrize("invalid", [
+    "non-array", "duplicate-album", "duplicate-path", "unsupported-key", "path-disagreement",
+    "outside-library-album", "missing-path", "inactive-root", "foreign-root", "wrong-album", "wrong-library",
+])
+def test_live_scan_observation_rejects_malformed_or_unowned_identity_without_mutation(
+    scan_cover_successor_case, invalid,
+):
+    from types import SimpleNamespace
+
+    import psycopg
+
+    scope = scan_cover_successor_case
+    requested_library_id = scope.library_id
+    captured_revision = scope.intent.captured_cover_mutation_revision
+    foreign_scope = None
+    observation = {
+        "album_id": scope.affected.album_id, "cover_path": str(scope.affected.folder / "rejected.jpg"),
+        "cover_state": {"cover_revision": "rejected", "cover_selection_origin": "automatic"},
+        "track_paths": [scope.affected.path],
+    }
+    observations = [observation]
+    if invalid == "non-array":
+        observations = {"invalid": True}
+    if invalid == "duplicate-album":
+        observations = [observation, observation]
+    if invalid == "duplicate-path":
+        observation["track_paths"] *= 2
+    if invalid == "unsupported-key":
+        observation["cover_state"]["unsupported"] = "rejected"
+    if invalid == "path-disagreement":
+        observation["cover_state"]["cover_path"] = str(scope.affected.folder / "different.jpg")
+    if invalid == "missing-path":
+        observation["track_paths"] = [str(scope.affected.folder / "missing.flac")]
+    if invalid == "wrong-album":
+        observation["track_paths"] = [scope.unrelated.path]
+    if invalid == "inactive-root":
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute("update library.library_roots set is_active=false where id=%s", (scope.affected.root_id,))
+    if invalid in ("outside-library-album", "foreign-root", "wrong-library"):
+        _, foreign_library_id = _seed_scope(scope.setup_url, f"foreign-observation-{scope.accepted.intent_id}")
+        foreign_scope = SimpleNamespace(setup_url=scope.setup_url, library_id=foreign_library_id)
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            if invalid == "wrong-library":
+                requested_library_id = foreign_library_id
+                captured_revision = connection.execute(
+                    "select library.read_cover_mutation_revision(%s) as revision", (foreign_library_id,),
+                ).fetchone()["revision"]
+            elif invalid == "outside-library-album":
+                observation["album_id"] = connection.execute(
+                    "insert into library.local_albums(library_id,album_key,title) "
+                    "values(%s,'foreign','Foreign') returning id", (foreign_library_id,),
+                ).fetchone()["id"]
+            else:
+                foreign_root_id = connection.execute(
+                    "select id from library.library_roots where library_id=%s order by id limit 1", (foreign_library_id,),
+                ).fetchone()["id"]
+                connection.execute(
+                    "update library.local_track_files set library_root_id=%s where private_path=%s",
+                    (foreign_root_id, scope.affected.path),
+                )
+    before = _scan_cover_owned_snapshot(scope)
+    foreign_before = _scan_cover_owned_snapshot(foreign_scope) if foreign_scope else None
+    error = "observed cover identity does not belong to requested library and album"
+    if invalid == "non-array":
+        error = "observed covers must be a JSON array"
+    if invalid in ("duplicate-album", "duplicate-path"):
+        error = "observed cover identities must be unique"
+    if invalid in ("unsupported-key", "path-disagreement"):
+        error = "observed cover contains an invalid shape or unsupported key"
+
+    with pytest.raises(psycopg.errors.RaiseException, match=error):
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute(
+                "select * from library.apply_scanned_cover_observations(%s,%s,%s::jsonb,now())",
+                (requested_library_id, captured_revision, json.dumps(observations)),
+            ).fetchone()
+
+    assert _scan_cover_owned_snapshot(scope) == before
+    if foreign_scope:
+        assert _scan_cover_owned_snapshot(foreign_scope) == foreign_before
+
+
+@pytest.mark.parametrize("scan_cover_successor_case", ["targeted_reconciliation"], indirect=True)
+def test_live_scan_observation_path_identity_cannot_resolve_multiple_files(scan_cover_successor_case):
+    import psycopg
+
+    scope = scan_cover_successor_case
+    before = _scan_cover_owned_snapshot(scope)
+
+    with pytest.raises(psycopg.errors.UniqueViolation) as rejected:
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute(
+                "insert into library.local_track_files(track_id,library_root_id,private_path,metadata) "
+                "values(%s,%s,%s,'{}'::jsonb)",
+                (scope.unrelated.track_id, scope.unrelated.root_id, scope.affected.path),
+            )
+
+    assert rejected.value.diag.constraint_name == "local_track_files_private_path_idx"
+    assert _scan_cover_owned_snapshot(scope) == before
+
+
+@pytest.mark.parametrize("scan_cover_successor_case", ["targeted_reconciliation"], indirect=True)
+@pytest.mark.parametrize("observation", ["metadata-only", "identical-cover"])
+def test_live_matching_scan_observation_noop_reports_zero_changed_albums(scan_cover_successor_case, observation):
+    scope = scan_cover_successor_case
+    observations = []
+    if observation == "identical-cover":
+        observations = [{
+            "album_id": scope.affected.album_id, "cover_path": scope.affected.cover["cover_path"],
+            "cover_state": {key: value for key, value in scope.affected.cover.items() if key != "cover_path"},
+            "track_paths": [scope.affected.path],
+        }]
+    before = _scan_cover_owned_snapshot(scope)
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        if observation == "metadata-only":
+            connection.execute(
+                "update library.local_albums set metadata=metadata || %s::jsonb where id=%s",
+                (json.dumps({"noncover_marker": "metadata-only"}), scope.affected.album_id),
+            )
+        result = connection.execute(
+            "select * from library.apply_scanned_cover_observations(%s,%s,%s::jsonb,now())",
+            (scope.library_id, scope.intent.captured_cover_mutation_revision, json.dumps(observations)),
+        ).fetchone()
+
+    assert result == {"cover_publication_stale": False, "cover_mutation_revision": 4, "changed_album_count": 0}
+    after = _scan_cover_owned_snapshot(scope)
+    if observation == "metadata-only":
+        for album in before["albums"]:
+            if album["value"]["id"] == scope.affected.album_id:
+                album["value"]["metadata"]["noncover_marker"] = "metadata-only"
+    assert after == before
 
 
 @pytest.mark.parametrize("scan_cover_successor_case", ["full_scan", "targeted_reconciliation"], indirect=True)

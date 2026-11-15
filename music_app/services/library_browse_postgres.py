@@ -9021,8 +9021,8 @@ def _artist_musicbrainz_projection_joins_sql(
 
 def _album_genre_sql(album_id: str) -> str:
     """The gallery card's genre pill (owner-approved A2): the matched MusicBrainz release
-    group's most-voted genre, else the album artist's first MusicBrainz genre. Primary-key
-    lookups only; the artist lookup runs only when the release group has no genre."""
+    group's most-voted genre, else the album artist's first MusicBrainz genre. Keyed lookups
+    per album; the artist lookup runs only when the release group has no genre."""
     return f"""(
           select coalesce(
             (

@@ -489,3 +489,5 @@ def test_latin_and_cyrillic_names_get_no_romanized_name():
     # Nothing Latin to show.
     assert romanized_name("天門", _artist("天門", "天門")) is None
     assert romanized_name("天門", None) is None
+    # The name already carries its Latin form.
+    assert romanized_name("ナイトメア Nightmare", _artist("ナイトメア", aliases=[{"name": "Nightmare", "locale": "en", "primary": True}])) is None

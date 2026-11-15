@@ -87,4 +87,6 @@ def romanized_name(local_name: object, artist: JsonDict | None) -> str | None:
         *(alias["name"] for alias in aliases if not alias.get("primary") and alias.get("locale")),
         (f"{first} {last}" if separator and first else sort_name) if _letters_of(sort_name, "LATIN") else "",
     ]
-    return next((str(candidate).strip() for candidate in candidates if str(candidate or "").strip()), None)
+    latin = next((str(candidate).strip() for candidate in candidates if str(candidate or "").strip()), None)
+    # A name that already carries its Latin form ("ナイトメア Nightmare") needs no second one.
+    return latin if latin and latin.casefold() not in name.casefold() else None

@@ -1,10 +1,11 @@
 """Static inventory of backend interaction entrypoints and reachable hazards.
 
-Discovery proves coverage, not boundedness. Direct filesystem enumeration in an
-interactive entrypoint is rejected outright; filesystem/media work reached
-through helpers is reported so the registry can demand a runtime contract; and
-any interactive path that reaches a registered library-scale operation is
-rejected at any depth.
+Discovery proves coverage, not boundedness. Entrypoints are routes, background
+owners found by name, and every thread or executor target. Direct filesystem
+enumeration in an interactive entrypoint is rejected outright; filesystem/media
+work reached through helpers, and any call chain past the depth limit, is
+reported so the registry can demand a runtime contract; and any interactive
+path that reaches a registered library-scale operation is rejected at any depth.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import logging
 import sys
 from collections import deque
 from dataclasses import dataclass, field
@@ -36,10 +38,31 @@ ENUMERATION_CALLS = {
     ("glob", "iglob"): "glob.iglob",
 }
 ENUMERATION_METHODS = {"rglob": "Path.rglob", "glob": "Path.glob", "iterdir": "Path.iterdir"}
-PROBE_METHODS = {"stat": "Path.stat", "lstat": "Path.stat", "read_bytes": "Path.read_bytes", "read_text": "Path.read_text"}
+PROBE_METHODS = {
+    "stat": "Path.stat",
+    "lstat": "Path.stat",
+    "read_bytes": "Path.read_bytes",
+    "read_text": "Path.read_text",
+    "exists": "Path.exists",
+    "is_dir": "Path.is_dir",
+    "is_file": "Path.is_file",
+    "open": "Path.open",
+}
 MEDIA_CALLS = {"MutagenFile": "mutagen.File"}
-SYNCHRONOUS_DISPATCH = {"run_in_threadpool", "to_thread"}
+# Dispatchers whose callable runs before the caller continues: the callable is
+# the first argument, or the second for `loop.run_in_executor(executor, fn)`.
+SYNCHRONOUS_DISPATCH = {"run_in_threadpool": 0, "to_thread": 0, "run_in_executor": 1}
 MAX_CALL_DEPTH = 8
+# Method names of builtin containers, strings, paths, files, loggers, DB-API
+# connections and cursors, threads, futures, and locks. Such a call on a
+# receiver of unknown type is far more likely a library call than one of
+# several app classes, so it is followed only when one app class defines it.
+PROTOCOL_METHODS = frozenset({
+    *(name for kind in (dict, list, set, str, bytes, Path, logging.Logger) for name in dir(kind) if not name.startswith("_")),
+    "acquire", "cancel", "close", "commit", "cursor", "done", "execute", "executemany", "fetchall", "fetchmany",
+    "fetchone", "flush", "is_set", "open", "put", "read", "readline", "release", "result", "rollback", "run",
+    "send", "start", "submit", "wait", "write",
+})
 
 
 @dataclass
@@ -127,12 +150,12 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
 class Index:
     def __init__(self, modules: list[Module]):
         self.modules = {module.name: module for module in modules}
-        seen: dict[str, list[Definition]] = {}
+        self.methods_by_name: dict[str, list[Definition]] = {}
         for module in modules:
             for methods in module.methods.values():
                 for name, definition in methods.items():
-                    seen.setdefault(name, []).append(definition)
-        self.unique_methods = {name: defs[0] for name, defs in seen.items() if len(defs) == 1 and not name.startswith("__")}
+                    if not name.startswith("__"):
+                        self.methods_by_name.setdefault(name, []).append(definition)
 
     def module_function(self, module_name: str, name: str) -> Definition | None:
         module = self.modules.get(module_name)
@@ -145,16 +168,20 @@ class Index:
             return self.module_function(imported[0], imported[1])
         return None
 
-    def resolve(self, call_target: ast.AST, owner: Definition) -> Definition | None:
+    def resolve(self, call_target: ast.AST, owner: Definition) -> list[Definition]:
+        """Definitions a call may run. A method call on an unknown receiver may
+        run any app method of that name; all candidates are followed, except
+        that an ambiguous builtin protocol name (see PROTOCOL_METHODS) is not."""
         module = self.modules[owner.module]
         if isinstance(call_target, ast.Name):
             name = call_target.id
             if name in module.functions:
-                return module.functions[name]
+                return [module.functions[name]]
             imported = module.imports.get(name)
             if imported and imported[1]:
-                return self.module_function(imported[0], imported[1])
-            return None
+                found = self.module_function(imported[0], imported[1])
+                return [found] if found else []
+            return []
         if isinstance(call_target, ast.Attribute):
             value = call_target.value
             attr = call_target.attr
@@ -162,15 +189,16 @@ class Index:
                 if value.id in {"self", "cls"} and owner.class_name:
                     method = module.methods.get(owner.class_name, {}).get(attr)
                     if method:
-                        return method
+                        return [method]
                 imported = module.imports.get(value.id)
                 if imported:
                     target_module = imported[0] if imported[1] is None else f"{imported[0]}.{imported[1]}"
                     found = self.module_function(target_module, attr)
                     if found:
-                        return found
-            return self.unique_methods.get(attr)
-        return None
+                        return [found]
+            candidates = self.methods_by_name.get(attr, [])
+            return [] if len(candidates) > 1 and attr in PROTOCOL_METHODS else candidates
+        return []
 
 
 NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -213,8 +241,10 @@ def _facts(definition: Definition) -> BodyFacts:
         if isinstance(node, ast.Call):
             calls.append((node, in_loop))
             consumer = _call_name(node)[1]
-            if consumer in ITERATING_LAMBDA_CONSUMERS or consumer in SYNCHRONOUS_DISPATCH:
-                for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+            awaited_submit = _awaited_submit(node)
+            synchronous = [node] if consumer in ITERATING_LAMBDA_CONSUMERS or consumer in SYNCHRONOUS_DISPATCH else []
+            for call in [*synchronous, *([awaited_submit] if awaited_submit else [])]:
+                for argument in [*call.args, *(keyword.value for keyword in call.keywords)]:
                     if isinstance(argument, ast.Lambda):
                         lambda_loops[id(argument)] = consumer in ITERATING_LAMBDA_CONSUMERS
         elif isinstance(node, ast.While):
@@ -250,6 +280,40 @@ def _call_name(node: ast.Call) -> tuple[str, str]:
         base = func.value.id if isinstance(func.value, ast.Name) else ""
         return base, func.attr
     return "", ""
+
+
+def _awaited_submit(node: ast.Call) -> ast.Call | None:
+    """`pool.submit(fn, ...)` when it is immediately waited on with `.result()`."""
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr == "result" and isinstance(func.value, ast.Call):
+        if _call_name(func.value)[1] == "submit":
+            return func.value
+    return None
+
+
+def _launched_callable(node: ast.Call) -> tuple[str, ast.AST] | None:
+    """The callable a thread or executor runs in the background, with its trigger."""
+    _, name = _call_name(node)
+    if name in {"Thread", "Timer"}:
+        for keyword in node.keywords:
+            if keyword.arg in {"target", "function"}:
+                return "thread", keyword.value
+        # Thread(group, target) and Timer(interval, function).
+        return ("thread", node.args[1]) if len(node.args) > 1 else None
+    if name == "submit" and node.args:
+        return "executor", node.args[0]
+    if name == "run_in_executor" and len(node.args) > 1:
+        return "executor", node.args[1]
+    return None
+
+
+def _callable_target(node: ast.AST) -> ast.AST | None:
+    """Unwraps `functools.partial(fn, ...)` and `lambda: fn(...)` to `fn`."""
+    if isinstance(node, ast.Call) and _call_name(node)[1] == "partial" and node.args:
+        return _callable_target(node.args[0])
+    if isinstance(node, ast.Lambda):
+        return node.body.func if isinstance(node.body, ast.Call) else None
+    return node
 
 
 ENUMERATIONS = frozenset({*ENUMERATION_CALLS.values(), *ENUMERATION_METHODS.values()})
@@ -295,24 +359,51 @@ def _direct_hazards(definition: Definition, looped: bool) -> list[dict[str, obje
     return hazards
 
 
-def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool]]:
-    found = []
-    facts = _facts(definition)
+def _resolver(definition: Definition, index: Index):
+    nested = _facts(definition).nested
 
-    def resolve(target: ast.AST) -> Definition | None:
-        if isinstance(target, ast.Name) and target.id in facts.nested:
-            return facts.nested[target.id]
+    def resolve(target: ast.AST | None) -> list[Definition]:
+        if target is None:
+            return []
+        if isinstance(target, ast.Name) and target.id in nested:
+            return [nested[target.id]]
         return index.resolve(target, definition)
 
-    for node, in_loop in facts.calls:
-        target = resolve(node.func)
-        if target is not None:
-            found.append((target, in_loop))
+    return resolve
+
+
+def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool]]:
+    found = []
+    resolve = _resolver(definition, index)
+    for node, in_loop in _facts(definition).calls:
+        found.extend((target, in_loop) for target in resolve(node.func))
         _, name = _call_name(node)
-        if name in SYNCHRONOUS_DISPATCH and node.args:
-            dispatched = resolve(node.args[0])
-            if dispatched is not None:
-                found.append((dispatched, in_loop))
+        position = SYNCHRONOUS_DISPATCH.get(name)
+        dispatched = node.args[position] if position is not None and len(node.args) > position else None
+        submit = _awaited_submit(node)
+        if submit is not None and submit.args:
+            dispatched = submit.args[0]
+        if dispatched is not None:
+            found.extend((target, in_loop) for target in resolve(_callable_target(dispatched)))
+    return found
+
+
+def _launched_entrypoints(module: Module, index: Index) -> list[tuple[str, Definition]]:
+    """Background entrypoints found by how they start: thread and executor targets."""
+    found = []
+    pending = [*module.functions.values(), *(definition for methods in module.methods.values() for definition in methods.values())]
+    while pending:
+        definition = pending.pop()
+        facts = _facts(definition)
+        pending.extend(facts.nested.values())
+        resolve = _resolver(definition, index)
+        awaited = {id(submit) for node, _ in facts.calls if (submit := _awaited_submit(node)) is not None}
+        for node, _ in facts.calls:
+            launched = None if id(node) in awaited else _launched_callable(node)
+            if launched is None:
+                continue
+            trigger, target = launched
+            found.extend((trigger, callee) for callee in resolve(_callable_target(target)))
     return found
 
 
@@ -365,6 +456,20 @@ def _entrypoints(module: Module) -> list[tuple[dict[str, object], Definition]]:
     return found
 
 
+def _all_entrypoints(modules: list[Module], index: Index) -> list[tuple[dict[str, object], Definition]]:
+    """Routes and name-matched background owners, plus any thread or executor
+    target not already discovered under its own name."""
+    found = [item for module in modules if module.path.startswith(ENTRYPOINT_ROOTS) for item in _entrypoints(module)]
+    known = {id(definition.node) for _, definition in found}
+    for module in modules:
+        for trigger, definition in _launched_entrypoints(module, index):
+            if id(definition.node) in known:
+                continue
+            known.add(id(definition.node))
+            found.append((_entry(definition, "background", trigger, definition.node.lineno), definition))
+    return found
+
+
 def _entry(definition: Definition, kind: str, trigger: str, line: int) -> dict[str, object]:
     return {
         "key": f"{definition.key}:{kind}:{trigger}",
@@ -399,49 +504,60 @@ def analyze_python_repository(
     hazards: list[dict[str, object]] = []
     hazard_cache: dict[tuple[int, bool], list[dict[str, object]]] = {}
     callee_cache: dict[int, list[tuple[Definition, bool]]] = {}
-    for module in modules:
-        if not module.path.startswith(ENTRYPOINT_ROOTS):
-            continue
-        for entry, definition in _entrypoints(module):
-            entrypoints.append(entry)
-            interactive = entry["kind"] == "route"
-            queue = deque([(definition, [], False)])
-            seen = set()
-            while queue:
-                current, via, looped = queue.popleft()
-                if (id(current.node), looped) in seen or len(via) > MAX_CALL_DEPTH:
-                    continue
-                seen.add((id(current.node), looped))
-                depth = "direct" if not via else "indirect"
-                if interactive and current.key in library_scale:
-                    hazards.append({
-                        "rule": "BI-04",
-                        "operation": f"library-scale:{current.key}",
-                        "path": current.path,
-                        "function": current.qualname,
-                        "line": current.node.lineno,
-                        "entrypoint": entry["key"],
-                        "depth": depth,
-                        "via": via,
-                        "reject": True,
-                    })
-                    continue
-                cache_key = (id(current.node), looped)
-                if cache_key not in hazard_cache:
-                    hazard_cache[cache_key] = _direct_hazards(current, looped)
-                for hazard in hazard_cache[cache_key]:
-                    record = {key: value for key, value in hazard.items() if key != "enumeration"}
-                    hazards.append({
-                        **record,
-                        "entrypoint": entry["key"],
-                        "depth": depth,
-                        "via": via,
-                        "reject": interactive and depth == "direct" and bool(hazard["enumeration"]),
-                    })
-                if id(current.node) not in callee_cache:
-                    callee_cache[id(current.node)] = _callees(current, index)
-                for callee, call_in_loop in callee_cache[id(current.node)]:
-                    queue.append((callee, [*via, callee.qualname], looped or call_in_loop))
+    for entry, definition in _all_entrypoints(modules, index):
+        entrypoints.append(entry)
+        interactive = entry["kind"] == "route"
+        queue = deque([(definition, [], False)])
+        seen = set()
+        while queue:
+            current, via, looped = queue.popleft()
+            if (id(current.node), looped) in seen:
+                continue
+            seen.add((id(current.node), looped))
+            depth = "direct" if not via else "indirect"
+            if interactive and current.key in library_scale:
+                hazards.append({
+                    "rule": "BI-04",
+                    "operation": f"library-scale:{current.key}",
+                    "path": current.path,
+                    "function": current.qualname,
+                    "line": current.node.lineno,
+                    "entrypoint": entry["key"],
+                    "depth": depth,
+                    "via": via,
+                    "reject": True,
+                })
+                continue
+            if len(via) > MAX_CALL_DEPTH:
+                # A chain past the depth limit is not proven bounded.
+                hazards.append({
+                    "rule": "BI-04",
+                    "operation": "call-depth-exceeded",
+                    "path": current.path,
+                    "function": current.qualname,
+                    "line": current.node.lineno,
+                    "entrypoint": entry["key"],
+                    "depth": depth,
+                    "via": via,
+                    "reject": False,
+                })
+                continue
+            cache_key = (id(current.node), looped)
+            if cache_key not in hazard_cache:
+                hazard_cache[cache_key] = _direct_hazards(current, looped)
+            for hazard in hazard_cache[cache_key]:
+                record = {key: value for key, value in hazard.items() if key != "enumeration"}
+                hazards.append({
+                    **record,
+                    "entrypoint": entry["key"],
+                    "depth": depth,
+                    "via": via,
+                    "reject": interactive and depth == "direct" and bool(hazard["enumeration"]),
+                })
+            if id(current.node) not in callee_cache:
+                callee_cache[id(current.node)] = _callees(current, index)
+            for callee, call_in_loop in callee_cache[id(current.node)]:
+                queue.append((callee, [*via, callee.qualname], looped or call_in_loop))
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
         hazard["key"] = f"{hazard['entrypoint']}:{hazard['rule']}:{hazard['operation']}@{hazard['path']}#{hazard['function']}"

@@ -157,6 +157,143 @@ async def inline(state):
     assert rejected == ["py:music_app/routes/read.py#inline:route:GET /inline"]
 
 
+def test_thread_and_executor_targets_are_background_entrypoints(tmp_path: Path):
+    _write(tmp_path, "music_app/services/workers.py", """
+import functools
+import threading
+
+def rebuild_everything():
+    pass
+
+def warm_cache(config):
+    pass
+
+def probe(path):
+    pass
+
+def delayed():
+    pass
+
+def watch_folders():
+    pass
+
+def awaited():
+    pass
+
+def start(pool, loop, config):
+    threading.Thread(target=rebuild_everything, daemon=True).start()
+    pool.submit(functools.partial(warm_cache, config))
+    loop.run_in_executor(None, lambda: probe(config))
+    threading.Timer(5, delayed).start()
+    threading.Thread(target=watch_folders).start()
+    return pool.submit(awaited).result()
+""")
+    keys = [item["key"].split("#")[1] for item in discovery.discover_python_entrypoints(tmp_path)]
+    assert keys == [
+        "delayed:background:thread",
+        "probe:background:executor",
+        "rebuild_everything:background:thread",
+        "warm_cache:background:executor",
+        "watch_folders:watcher:name",
+    ]
+
+
+def test_awaited_executor_work_is_followed_synchronously(tmp_path: Path):
+    _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
+    _write(tmp_path, "music_app/routes/read.py", """
+import asyncio
+from music_app.services.relations import build_relation_views
+
+@router.get("/pooled")
+def pooled(state, pool):
+    return pool.submit(build_relation_views, state).result()
+
+@router.get("/pooled-lambda")
+def pooled_lambda(state, pool):
+    return pool.submit(lambda: build_relation_views(state)).result()
+
+@router.get("/executor")
+async def executor(state):
+    return await asyncio.get_running_loop().run_in_executor(None, build_relation_views, state)
+
+@router.post("/queued")
+def queued(state, pool):
+    pool.submit(build_relation_views, state)
+""")
+    analysis = discovery.analyze_python_repository(
+        tmp_path,
+        library_scale_operations=["py:music_app/services/relations.py#build_relation_views"],
+    )
+    rejected = sorted(item["entrypoint"].split("#")[1] for item in analysis["hazards"] if item["reject"])
+    assert rejected == [
+        "executor:route:GET /executor",
+        "pooled:route:GET /pooled",
+        "pooled_lambda:route:GET /pooled-lambda",
+    ]
+
+
+def test_existence_and_open_probes_count_only_per_item(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/read.py", """
+@router.get("/one")
+def one(path):
+    return path.exists() and path.is_dir() and path.is_file() and path.open()
+
+@router.get("/many")
+def many(paths):
+    return [path for path in paths if path.exists() and path.is_dir() and path.is_file() and path.open()]
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert sorted((item["entrypoint"].split("#")[1], item["operation"]) for item in hazards) == [
+        ("many:route:GET /many", "Path.exists"),
+        ("many:route:GET /many", "Path.is_dir"),
+        ("many:route:GET /many", "Path.is_file"),
+        ("many:route:GET /many", "Path.open"),
+    ]
+
+
+def test_a_method_name_defined_by_several_classes_follows_every_candidate(tmp_path: Path):
+    _write(tmp_path, "music_app/services/indexes.py", """
+import os
+
+class FolderIndex:
+    def collect(self, root):
+        return list(os.walk(root))
+
+    def get(self, root):
+        return list(os.walk(root))
+
+class MemoryIndex:
+    def collect(self, root):
+        return []
+
+    def get(self, root):
+        return []
+""")
+    _write(tmp_path, "music_app/routes/read.py", """
+@router.get("/collect")
+def collect(request, root):
+    return request.app.state.index.collect(root)
+
+@router.get("/lookup")
+def lookup(request, root):
+    return request.query_params.get(root)
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    # `get` is also a dict method: an ambiguous builtin protocol name is not followed.
+    assert [(item["entrypoint"].split("#")[1], item["operation"], item["via"]) for item in hazards] == [
+        ("collect:route:GET /collect", "os.walk", ["FolderIndex.collect"]),
+    ]
+
+
+def test_a_call_chain_deeper_than_the_limit_is_a_hazard(tmp_path: Path):
+    chain = "\n".join(f"def step{level}():\n    step{level + 1}()\n" for level in range(1, 10))
+    _write(tmp_path, "music_app/routes/read.py", f"{chain}\ndef step10():\n    pass\n\n@router.get('/deep')\ndef deep():\n    step1()\n")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert [(item["operation"], item["function"], item["reject"]) for item in hazards] == [
+        ("call-depth-exceeded", "step9", False),
+    ]
+
+
 def test_single_file_probes_are_bounded_but_per_item_probes_are_reported(tmp_path: Path):
     _write(tmp_path, "music_app/services/files.py", """
 def size(path):

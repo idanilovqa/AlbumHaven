@@ -1160,6 +1160,7 @@ def test_hydrate_library_state_worker_uses_explicit_dependencies_without_flask_c
         },
     )]
     assert library_state["hydrate_in_progress"] is False
+    assert library_state["hydration_settled"] is True
     assert library_state["last_error"] is None
     assert logger.exception_messages == []
 
@@ -1235,6 +1236,68 @@ def test_hydrate_library_state_worker_records_and_logs_exceptions_without_flask_
     assert library_state["last_error"] == "disk hydrate failed"
     assert logger.exception_messages == [("Background library hydration failed", ())]
 
+
+class _RecordingHydrateExecutor:
+    def __init__(self):
+        self.queued = []
+
+    def submit(self, function, *args, **kwargs):
+        self.queued.append((function, args, kwargs))
+
+
+def test_request_library_hydration_queues_one_background_owner_and_never_hydrates_inline(config, logger, monkeypatch):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    monkeypatch.setattr(
+        state_module,
+        "hydrate_library_state_for_config",
+        lambda *_args, **_kwargs: pytest.fail("readers must not hydrate inline"),
+    )
+    library_state = {"albums": [], "scan_in_progress": False, "hydrate_in_progress": False, "hydration_settled": False}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+
+    assert executor.queued == [(
+        state_module._hydrate_library_state_worker,
+        (library_state, config, logger),
+        {"ensure_relations": False, "validate_cache": False},
+    )]
+    assert library_state["hydrate_in_progress"] is True
+
+
+@pytest.mark.parametrize("published_state", [
+    {"albums": ["album"]},
+    {"scan_in_progress": True},
+    {"hydration_settled": True},
+])
+def test_request_library_hydration_reads_published_state_without_queueing(config, logger, monkeypatch, published_state):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    library_state = {"albums": [], "hydrate_in_progress": False, **published_state}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is True
+    assert executor.queued == []
+
+
+def test_request_library_hydration_retries_after_a_failed_background_attempt(config, logger, monkeypatch):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    monkeypatch.setattr(
+        state_module,
+        "hydrate_library_state_for_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    library_state = {"albums": [], "hydrate_in_progress": False, "hydration_settled": False, "last_error": None}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    function, args, kwargs = executor.queued.pop()
+    function(*args, **kwargs)
+
+    assert library_state["hydration_settled"] is False
+    assert library_state["hydrate_in_progress"] is False
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    assert len(executor.queued) == 1
 
 def test_hydrate_library_state_for_config_returns_false_when_runtime_persistence_adapter_is_unavailable(monkeypatch):
     library_state = {"albums": [], "last_error": None}

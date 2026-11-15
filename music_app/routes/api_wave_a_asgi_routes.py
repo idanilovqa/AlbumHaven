@@ -18,7 +18,10 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from config import PERSISTENCE_BACKEND_POSTGRES
-from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
+from music_app.routes.api_read_asgi_routes import (
+    _build_status_payload_from_state,
+    library_hydration_pending_response,
+)
 from music_app.routes.api_edit_helpers import (
     _apply_repairs_worker,
     _build_affected_album_dicts,
@@ -93,7 +96,6 @@ from music_app.services.repair_previews import (
     build_problematic_albums_payload as _build_problematic_albums_payload,
 )
 from music_app.services.state import (
-    hydrate_library_state_for_config,
     invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
     schedule_relation_projection_rebuild,
@@ -381,24 +383,6 @@ def _current_rules_payload(request: Request | None = None, mutation_seam_id: str
         load_ignored_repair_keys=load_ignored_repair_keys,
         album_to_dict=album_to_dict,
         **explicit_dependencies,
-    )
-
-
-def hydrate_cached_library_for_rules(
-    library_state: dict[str, object] | None = None,
-    config: dict[str, object] | None = None,
-    logger=None,
-) -> None:
-    if library_state is None or config is None:
-        raise ValueError("library_state and config must be provided together")
-    if library_state.get("albums") or library_state.get("scan_in_progress"):
-        return
-    hydrate_library_state_for_config(
-        library_state,
-        config,
-        ensure_relations=False,
-        validate_cache=False,
-        logger_for_prewarm=logger,
     )
 
 
@@ -1601,7 +1585,8 @@ async def mark_album_version(request: Request) -> JSONResponse:
     if mutation_error:
         return _json_response(({"ok": False, "error": mutation_error}, 400))
 
-    hydrate_cached_library_for_rules(library_state, config, logger)
+    if (pending := library_hydration_pending_response(library_state, config, logger)) is not None:
+        return pending
     all_albums = {
         str(getattr(album, "key", "") or ""): album
         for album in list(library_state.get("albums", []))

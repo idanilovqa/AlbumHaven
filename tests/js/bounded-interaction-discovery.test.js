@@ -71,10 +71,121 @@ test('does not flag iteration over a locally built delta or string helpers', () 
   assert.deepEqual(hazards, []);
 });
 
-test('ignores broad work in low-frequency handlers', () => {
-  assert.deepEqual(findJavaScriptHazards(`
+test('reports broad work in low-frequency handlers for a contract without rejecting it', () => {
+  const hazards = findJavaScriptHazards(`
     root.addEventListener('click', () => { document.querySelectorAll('.row').forEach(update); });
+  `, FILE);
+  assert.deepEqual(operations(hazards), [['BI-01', 'querySelectorAll'], ['BI-01', 'forEach']]);
+  assert.ok(hazards.every(hazard => !hazard.reject));
+});
+
+test('per-event work bounded once per event is a hazard only on high-frequency events', () => {
+  const hazards = findJavaScriptHazards(`
+    root.addEventListener('click', () => {
+      localStorage.getItem('k');
+      JSON.parse(text);
+      root.innerHTML = '<p></p>';
+      return fetch('/api/save');
+    });
+  `, FILE);
+  assert.deepEqual(hazards, []);
+});
+
+for (const trigger of ['mouseover', 'pointerover', 'dragover', 'resize']) {
+  test(`rejects direct broad work inside a ${trigger} handler`, () => {
+    const hazards = findJavaScriptHazards(`root.addEventListener('${trigger}', () => { document.querySelectorAll('.row'); });`, FILE);
+    assert.deepEqual(hazards.map(hazard => [hazard.operation, hazard.reject]), [['querySelectorAll', true]]);
+  });
+}
+
+test('computes reachable hazards for timers, observers, worker messages, and request owners', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function scanRows() { document.querySelectorAll('.row').forEach(row => row.remove()); }
+    function startPoll() { setInterval(scanRows, 1000); }
+    function watchSize(node) { new ResizeObserver(() => scanRows()).observe(node); }
+    function listen(worker) { worker.onmessage = () => scanRows(); }
+    async function save() { await fetch('/api/save'); state.rows.forEach(row => row.saved = true); }
+  ` });
+  const byEntrypoint = new Map();
+  for (const hazard of hazards) byEntrypoint.set(hazard.entrypoint.split('#')[1], [...(byEntrypoint.get(hazard.entrypoint.split('#')[1]) || []), hazard]);
+  assert.deepEqual([...byEntrypoint.keys()].sort(), [
+    'listen:event:message', 'save:request:fetch', 'startPoll:timer:setInterval', 'watchSize:observer:ResizeObserver',
+  ]);
+  assert.ok(hazards.every(hazard => !hazard.reject));
+  assert.deepEqual(byEntrypoint.get('save:request:fetch').map(hazard => [hazard.operation, hazard.depth]), [['forEach', 'direct']]);
+  // The timer's callback is scanRows itself, so its hazards are direct.
+  assert.deepEqual(byEntrypoint.get('startPoll:timer:setInterval').map(hazard => [hazard.operation, hazard.depth]), [
+    ['forEach', 'direct'], ['querySelectorAll', 'direct'],
+  ]);
+  assert.deepEqual(byEntrypoint.get('watchSize:observer:ResizeObserver').map(hazard => hazard.via), [['scanRows'], ['scanRows']]);
+});
+
+test('resolves calls on global singletons, window functions, instance fields, and optional chains', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    class Grid { render() { document.querySelectorAll('.card'); } }
+    class Panel {
+      constructor(root) { this.grid = new Grid(); root.addEventListener('scroll', () => this.grid?.render()); }
+    }
+    const virtualGrid = new Grid();
+    window.panelGrid = new Grid();
+    function rescan() { document.querySelectorAll('.row'); }
+    function install(root) {
+      root.addEventListener('wheel', () => virtualGrid?.render?.());
+      root.addEventListener('touchmove', () => window.rescan());
+      root.addEventListener('pointermove', () => window.panelGrid.render());
+      root.addEventListener('mousemove', () => rescan.call(null));
+    }
+  ` });
+  const reached = hazards.map(hazard => `${hazard.entrypoint.split('#')[1]} via ${hazard.via.join('>')}`).sort();
+  assert.deepEqual(reached, [
+    'Panel.constructor:event:scroll via Grid.render',
+    'install:event:mousemove via rescan',
+    'install:event:pointermove via Grid.render',
+    'install:event:touchmove via rescan',
+    'install:event:wheel via Grid.render',
+  ]);
+});
+
+test('a call chain deeper than the depth limit is a hazard, never a silent pass', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const chain = [1, 2, 3, 4, 5, 6, 7].map(level => `function step${level}() { step${level + 1}(); }`).join('\n');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `${chain}\nfunction step8() {}\nroot.addEventListener('click', () => step1());` });
+  assert.deepEqual(hazards.map(hazard => [hazard.operation, hazard.via.at(-1), hazard.reject]), [['call-depth-exceeded', 'step7', false]]);
+});
+
+test('lookup and copy methods and indexed loops over shared collections are hazards', () => {
+  const hazards = findJavaScriptHazards(`
+    root.addEventListener('scroll', (event) => {
+      state.rows.includes(event.target);
+      state.rows.indexOf(event.target);
+      state.rows.slice(0, 10);
+      state.rows.join(',');
+      state.rows.findLast(Boolean);
+      for (let index = 0; index < state.rows.length; index += 1) state.rows[index].seen = true;
+    });
+    root.addEventListener('wheel', () => { let cursor = 0; while (cursor < this.items.length) cursor += 1; });
+  `, FILE);
+  assert.deepEqual(hazards.map(hazard => hazard.operation), ['includes', 'indexOf', 'slice', 'join', 'findLast', 'indexed-loop', 'indexed-loop']);
+});
+
+test('lookups and indexed loops over owned collections and primitives are not hazards', () => {
+  assert.deepEqual(findJavaScriptHazards(`
+    root.addEventListener('scroll', (event) => {
+      const owned = [1, 2];
+      owned.includes(2);
+      for (let index = 0; index < owned.length; index += 1) owned[index] += 1;
+      String(event.target.dataset.path).slice(1).includes('/');
+    });
   `, FILE), []);
+});
+
+test('a template hole that only appends a query string keeps the literal request path', () => {
+  const [request] = discoverJavaScriptSource('function load(qs) { return fetch(`/view-data${qs ? `?${qs}` : \'\'}`); }', FILE);
+  assert.deepEqual(request.targets.map(item => item.target), ['/view-data?${}']);
+  const [pathHole] = discoverJavaScriptSource('function load(id) { return fetch(`/albums/${id}`); }', FILE);
+  assert.deepEqual(pathHole.targets.map(item => item.target), ['/albums/${}']);
 });
 
 test('flags a dedicated Home action routed through generic view-data', () => {

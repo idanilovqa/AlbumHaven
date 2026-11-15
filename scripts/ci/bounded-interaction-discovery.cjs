@@ -2,9 +2,10 @@
 
 // Static inventory of frontend interaction entrypoints and the bounded-work
 // hazards reachable from them. Discovery proves coverage, not boundedness:
-// direct hazards inside a high-frequency handler are rejected outright, while
-// hazards reached through helpers are reported so the registry can require a
-// deterministic runtime contract for that entry.
+// hazards are computed for every entrypoint (listener, timer, observer, worker
+// message, request owner). Direct hazards inside a high-frequency handler are
+// rejected outright; every other reachable hazard is reported so the registry
+// can require a deterministic runtime contract for that entry.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -13,17 +14,25 @@ const acorn = require('acorn');
 const JS_ROOT = 'music_app/static/js';
 const EXCLUDED_JS = [/(^|\/)runtime-bundle\.js$/, /(^|\/)vendor\//, /(^|\/)dist\//, /\.min\.js$/];
 
-const HIGH_FREQUENCY_EVENTS = new Set(['pointermove', 'mousemove', 'scroll', 'wheel', 'touchmove', 'input']);
+const HIGH_FREQUENCY_EVENTS = new Set([
+  'pointermove', 'mousemove', 'scroll', 'wheel', 'touchmove', 'input', 'mouseover', 'pointerover', 'dragover', 'resize',
+]);
 const TIMER_CALLS = new Set(['setInterval', 'setTimeout', 'requestAnimationFrame']);
 const DEFERRED_CALLBACK_CALLS = new Set(['setTimeout', 'requestAnimationFrame', 'queueMicrotask', 'requestIdleCallback']);
 const OBSERVERS = new Set(['MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'PerformanceObserver']);
 const MAX_RESOLUTION_DEPTH = 8;
 const GLOBAL_OBJECTS = new Set(['window', 'globalThis', 'global', 'self']);
-const ITERATION_METHODS = new Set(['forEach', 'map', 'filter', 'reduce', 'sort', 'find', 'findIndex', 'some', 'every', 'flatMap']);
+const ITERATION_METHODS = new Set([
+  'forEach', 'map', 'filter', 'reduce', 'sort', 'find', 'findIndex', 'findLast', 'some', 'every', 'flatMap',
+  'includes', 'indexOf', 'join', 'slice',
+]);
+const LOOP_BOUND_OPERATORS = new Set(['<', '<=', '>', '>=', '!==', '!=']);
 const DOM_COLLECTION_QUERIES = new Set(['querySelectorAll', 'getElementsByClassName', 'getElementsByTagName', 'getElementsByName']);
 const OBJECT_ENUMERATION = new Set(['keys', 'values', 'entries']);
 const STORAGE_OBJECTS = new Set(['localStorage', 'sessionStorage']);
 const STRING_METHODS = new Set(['split', 'trim', 'toLowerCase', 'toUpperCase', 'replace', 'replaceAll', 'match', 'matchAll']);
+// Global calls that return a primitive, never a shared collection.
+const PRIMITIVE_RESULTS = new Set(['String', 'Number', 'Boolean', 'encodeURIComponent', 'decodeURIComponent', 'parseInt', 'parseFloat']);
 const MARKUP_PROPERTIES = new Set(['innerHTML', 'outerHTML']);
 const GENERIC_ENDPOINTS = ['/view-data'];
 const DEDICATED_SURFACES = new Map([['home', '/home-data']]);
@@ -88,10 +97,23 @@ function calleeName(call) {
   return '';
 }
 
+// True for a template hole that renders either nothing or a query string, as in
+// `/view-data${qs ? `?${qs}` : ''}`: the request path does not depend on it.
+function isQuerySuffix(node) {
+  if (node?.type === 'ConditionalExpression') return isQuerySuffix(node.consequent) && isQuerySuffix(node.alternate);
+  if (node?.type === 'LogicalExpression' && node.operator === '&&') return isQuerySuffix(node.right);
+  if (node?.type === 'Literal') return node.value === '' || (typeof node.value === 'string' && node.value.startsWith('?'));
+  return node?.type === 'TemplateLiteral' && node.quasis[0].value.cooked.startsWith('?');
+}
+
 function stringValue(node) {
   if (node?.type === 'Literal' && typeof node.value === 'string') return node.value;
-  if (node?.type === 'TemplateLiteral') return node.quasis.map(quasi => quasi.value.cooked).join('${}');
-  return null;
+  if (node?.type !== 'TemplateLiteral') return null;
+  return node.quasis.map((quasi, index) => {
+    const hole = node.expressions[index];
+    if (!hole) return quasi.value.cooked;
+    return `${quasi.value.cooked}${isQuerySuffix(hole) ? '?${}' : '${}'}`;
+  }).join('');
 }
 
 // Each named function, variable-assigned function, or class method owns the
@@ -138,19 +160,24 @@ function ownerOf(file, node) {
   return file.owners.get(node) || { owner: '<top-level>', className: '', scope: null };
 }
 
-// Global function and class-method definitions. Runtime scripts share one
-// global scope through the runtime bundle, so name resolution is cross-file.
+// Global function and class-method definitions plus the classes of known
+// instances: global singletons (`const virtualGrid = new VirtualArtistGrid()`,
+// `window.x = new C()`) and instance fields (`this.grid = new C()`). Runtime
+// scripts share one global scope through the runtime bundle, so name
+// resolution is cross-file.
 function indexDefinitions(files) {
   const functions = new Map();
   const methods = new Map();
+  const instances = new Map();
   const add = (map, name, def) => {
     if (!name) return;
     if (!map.has(name)) map.set(name, []);
     map.get(name).push(def);
   };
+  const constructed = node => (node?.type === 'NewExpression' && node.callee.type === 'Identifier' ? node.callee.name : '');
   for (const file of files) {
     walkAst(file.ast, (node) => {
-      const { className } = ownerOf(file, node);
+      const { className, scope } = ownerOf(file, node);
       if (node.type === 'FunctionDeclaration' && node.id) {
         add(functions, node.id.name, { file, node, name: node.id.name });
       } else if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier' && isFunction(node.init)) {
@@ -158,23 +185,48 @@ function indexDefinitions(files) {
       } else if (node.type === 'MethodDefinition' || (node.type === 'PropertyDefinition' && isFunction(node.value))) {
         const name = propertyName(node.key);
         add(methods, `${className}.${name}`, { file, node: node.value, name: `${className}.${name}` });
+      } else if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier' && !scope && constructed(node.init)) {
+        add(instances, node.id.name, constructed(node.init));
+      } else if (node.type === 'AssignmentExpression' && constructed(node.right) && node.left.type === 'MemberExpression') {
+        const target = node.left.object;
+        if (GLOBAL_OBJECTS.has(target.name)) add(instances, memberProperty(node.left), constructed(node.right));
+        else if (target.type === 'ThisExpression' && className) add(instances, `${className}#${memberProperty(node.left)}`, constructed(node.right));
       }
     });
   }
-  return { functions, methods };
+  return { functions, methods, instances };
 }
 
-function resolveCallable(node, context, index) {
+function unwrapChain(node) {
+  return node?.type === 'ChainExpression' ? node.expression : node;
+}
+
+// Classes a call receiver is known to hold: a global singleton, `window.x`, or
+// a field assigned from a constructor on the enclosing class.
+function receiverClasses(receiver, context, index) {
+  const node = unwrapChain(receiver);
+  if (node?.type === 'Identifier') return index.instances.get(node.name) || [];
+  if (node?.type !== 'MemberExpression') return [];
+  if (GLOBAL_OBJECTS.has(node.object.name)) return index.instances.get(memberProperty(node)) || [];
+  if (node.object.type === 'ThisExpression') return index.instances.get(`${context.className}#${memberProperty(node)}`) || [];
+  return [];
+}
+
+function resolveCallable(target, context, index) {
+  const node = unwrapChain(target);
   if (!node) return [];
   if (isFunction(node)) return [{ file: context.file, node, name: '<inline>' }];
   if (node.type === 'Identifier') return index.functions.get(node.name) || [];
-  if (node.type === 'MemberExpression' && node.object.type === 'ThisExpression') {
-    return index.methods.get(`${context.className}.${memberProperty(node)}`) || [];
-  }
   if (node.type === 'CallExpression' && memberProperty(node.callee) === 'bind') {
     return resolveCallable(node.callee.object, context, index);
   }
-  return [];
+  if (node.type !== 'MemberExpression') return [];
+  const property = memberProperty(node);
+  // `fn.call(...)` and `fn.apply(...)` run `fn`.
+  if (property === 'call' || property === 'apply') return resolveCallable(node.object, context, index);
+  if (node.object.type === 'ThisExpression') return index.methods.get(`${context.className}.${property}`) || [];
+  if (GLOBAL_OBJECTS.has(node.object.name)) return index.functions.get(property) || [];
+  return receiverClasses(node.object, context, index).flatMap(className => index.methods.get(`${className}.${property}`) || []);
 }
 
 // Classifies local bindings so iteration over freshly built local collections
@@ -214,6 +266,7 @@ function isSharedCollection(node, bindings) {
       const name = calleeName(current);
       if (DOM_COLLECTION_QUERIES.has(name)) return true;
       if (STRING_METHODS.has(name)) return false;
+      if (current.callee.type === 'Identifier' && PRIMITIVE_RESULTS.has(name)) return false;
       if (current.callee.type === 'MemberExpression') {
         current = current.callee.object;
         continue;
@@ -239,8 +292,19 @@ function isSharedCollection(node, bindings) {
   return false;
 }
 
-function hazardAt(rule, operation, node, file) {
-  return { rule, operation, path: file.path, line: node.loc.start.line, position: node.start };
+// `scale` hazards grow with a shared collection (rows, library state, DOM
+// lists) and need a contract wherever they are reachable. The others (a
+// request, storage access, JSON, markup) are bounded once per event and are
+// hazards only on high-frequency events, where they repeat per frame.
+function hazardAt(rule, operation, node, file, scale = true) {
+  return { rule, operation, path: file.path, line: node.loc.start.line, position: node.start, scale };
+}
+
+// True for `i < shared.length` style loop bounds.
+function isSharedLengthBound(test, bindings) {
+  if (test?.type === 'LogicalExpression') return isSharedLengthBound(test.left, bindings) || isSharedLengthBound(test.right, bindings);
+  if (test?.type !== 'BinaryExpression' || !LOOP_BOUND_OPERATORS.has(test.operator)) return false;
+  return [test.left, test.right].some(side => memberProperty(side) === 'length' && isSharedCollection(side.object, bindings));
 }
 
 // Direct hazards inside one function body (nested inline callbacks included,
@@ -268,22 +332,25 @@ function computeFunctionHazards(fnNode, file) {
       } else if (OBJECT_ENUMERATION.has(name) && callee.object?.name === 'Object' && node.arguments[0] && isSharedCollection(node.arguments[0], bindings)) {
         hazards.push(hazardAt('BI-01', `Object.${name}`, at, file));
       } else if ((name === 'stringify' || name === 'parse') && callee.object?.name === 'JSON') {
-        hazards.push(hazardAt('BI-13', `JSON.${name}`, at, file));
+        const scale = name === 'stringify' && Boolean(node.arguments[0]) && isSharedCollection(node.arguments[0], bindings);
+        hazards.push(hazardAt('BI-13', `JSON.${name}`, at, file, scale));
       } else if (name === 'fetch' && callee.type === 'Identifier') {
-        hazards.push(hazardAt('BI-03', name, at, file));
+        hazards.push(hazardAt('BI-03', name, at, file, false));
       } else if (callee.type === 'MemberExpression' && STORAGE_OBJECTS.has(callee.object?.name)) {
-        hazards.push(hazardAt('BI-01', `${callee.object.name}.${name}`, at, file));
+        hazards.push(hazardAt('BI-01', `${callee.object.name}.${name}`, at, file, false));
       } else if (name === 'insertAdjacentHTML') {
-        hazards.push(hazardAt('BI-02', name, at, file));
+        hazards.push(hazardAt('BI-02', name, at, file, false));
       }
     } else if (node.type === 'NewExpression' && ['Set', 'Map'].includes(node.callee?.name) && node.arguments[0] && isSharedCollection(node.arguments[0], bindings)) {
       hazards.push(hazardAt('BI-01', `new ${node.callee.name}`, node, file));
     } else if ((node.type === 'ForOfStatement' || node.type === 'ForInStatement') && isSharedCollection(node.right, bindings)) {
       hazards.push(hazardAt('BI-01', node.type === 'ForOfStatement' ? 'for-of' : 'for-in', node, file));
+    } else if (['ForStatement', 'WhileStatement', 'DoWhileStatement'].includes(node.type) && isSharedLengthBound(node.test, bindings)) {
+      hazards.push(hazardAt('BI-01', 'indexed-loop', node, file));
     } else if (node.type === 'SpreadElement' && isSharedCollection(node.argument, bindings)) {
       hazards.push(hazardAt('BI-01', 'spread', node, file));
     } else if (node.type === 'AssignmentExpression' && MARKUP_PROPERTIES.has(memberProperty(node.left))) {
-      hazards.push(hazardAt('BI-02', memberProperty(node.left), node.left.property, file));
+      hazards.push(hazardAt('BI-02', memberProperty(node.left), node.left.property, file, false));
     }
   });
   return hazards.sort((a, b) => a.position - b.position);
@@ -302,6 +369,8 @@ function calledFunctions(fnNode, context, index) {
   return callees;
 }
 
+// A call chain deeper than MAX_CALL_DEPTH is not proven bounded: the first
+// function past the limit is reported as a hazard instead of silently ignored.
 function reachableHazards(handler, context, index) {
   const direct = functionHazards(handler.node, handler.file).map(hazard => ({ ...hazard, via: [] }));
   const indirect = [];
@@ -309,13 +378,24 @@ function reachableHazards(handler, context, index) {
   const queue = calledFunctions(handler.node, context, index).map(def => ({ def, via: [def.name] }));
   while (queue.length) {
     const { def, via } = queue.shift();
-    if (seen.has(def.node) || via.length > MAX_CALL_DEPTH) continue;
+    if (seen.has(def.node)) continue;
     seen.add(def.node);
+    if (via.length > MAX_CALL_DEPTH) {
+      indirect.push({ ...hazardAt('BI-01', 'call-depth-exceeded', def.node, def.file), via });
+      continue;
+    }
     for (const hazard of functionHazards(def.node, def.file)) indirect.push({ ...hazard, via });
     const defContext = { file: def.file, className: ownerOf(def.file, def.node).className };
     for (const next of calledFunctions(def.node, defContext, index)) queue.push({ def: next, via: [...via, next.name] });
   }
   return { direct, indirect };
+}
+
+// The function that runs when the entrypoint fires: a listener, timer, or
+// observer callback, or the function that owns a request.
+function entrypointHandler(found, file) {
+  if (found.kind === 'request') return ownerOf(file, found.node).scope;
+  return found.handler;
 }
 
 
@@ -445,10 +525,11 @@ function entry(file, node, kind, trigger) {
     kind,
     trigger,
     line: node.loc.start.line,
+    node,
   };
 }
 
-// Entry points plus the handler node for high-frequency events.
+// Entry points plus the callback node each one runs.
 function fileEntrypoints(file, index, helpers) {
   const found = [];
   walkAst(file.ast, (node) => {
@@ -458,7 +539,7 @@ function fileEntrypoints(file, index, helpers) {
         const trigger = stringValue(node.arguments[0]);
         if (trigger) found.push({ ...entry(file, node, 'event', trigger), handler: node.arguments[1] });
       } else if (TIMER_CALLS.has(name) && (node.callee.type === 'Identifier' || GLOBAL_OBJECTS.has(node.callee.object?.name))) {
-        found.push(entry(file, node, 'timer', name));
+        found.push({ ...entry(file, node, 'timer', name), handler: node.arguments[0] });
       } else if (node.callee.type === 'Identifier' && helpers.has(name)) {
         const call = entry(file, node, 'request', name);
         const { scope } = ownerOf(file, node);
@@ -468,7 +549,7 @@ function fileEntrypoints(file, index, helpers) {
       }
     } else if (node.type === 'NewExpression') {
       const name = node.callee?.name;
-      if (OBSERVERS.has(name)) found.push(entry(file, node, 'observer', name));
+      if (OBSERVERS.has(name)) found.push({ ...entry(file, node, 'observer', name), handler: node.arguments[0] });
       if (name === 'Worker' || name === 'SharedWorker') found.push(entry(file, node, 'worker', name));
     } else if (node.type === 'Property' && HIGH_FREQUENCY_EVENTS.has(propertyName(node.key)) && isFunction(node.value)) {
       // Handler maps such as `{ pointermove: event => ... }` installed in a loop.
@@ -552,7 +633,7 @@ function dedupeEntrypoints(entries) {
   return [...byKey.values()];
 }
 
-function publicEntry({ handler, ...rest }) {
+function publicEntry({ handler, node, ...rest }) {
   return rest;
 }
 
@@ -568,15 +649,19 @@ function analyzeFiles(files) {
   for (const file of files) {
     for (const found of fileEntrypoints(file, index, helpers)) {
       entrypoints.push(publicEntry(found));
-      if (found.kind !== 'event' || !HIGH_FREQUENCY_EVENTS.has(found.trigger) || !found.handler) continue;
-      const context = { file, className: ownerOf(file, found.handler).className };
-      for (const handler of resolveCallable(found.handler, context, index)) {
+      const callback = entrypointHandler(found, file);
+      if (!callback) continue;
+      const highFrequency = found.kind === 'event' && HIGH_FREQUENCY_EVENTS.has(found.trigger);
+      const context = { file, className: ownerOf(file, callback).className };
+      for (const handler of resolveCallable(callback, context, index)) {
         const handlerContext = { file: handler.file, className: ownerOf(handler.file, handler.node).className };
         const { direct, indirect } = reachableHazards(handler, handlerContext, index);
-        // Broad work directly inside a high-frequency handler is rejected; work
-        // reached through helpers requires a runtime contract.
-        for (const hazard of direct) hazards.push({ ...hazard, entrypoint: found.key, depth: 'direct', reject: true });
-        for (const hazard of indirect) hazards.push({ ...hazard, entrypoint: found.key, depth: 'indirect', reject: false });
+        // Broad work directly inside a high-frequency handler is rejected; any
+        // other reachable hazard requires a runtime contract. Work bounded once
+        // per event matters only when the event repeats per frame.
+        const counted = hazard => highFrequency || hazard.scale;
+        for (const hazard of direct.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'direct', reject: highFrequency });
+        for (const hazard of indirect.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'indirect', reject: false });
       }
     }
     hazards.push(...routeOwnershipHazards(file).map(hazard => ({ ...hazard, entrypoint: hazard.key, depth: 'direct', via: [], reject: true })));
@@ -590,11 +675,16 @@ function analyzeFiles(files) {
   return { entrypoints: dedupeEntrypoints(entrypoints), hazards: [...uniqueHazards.values()] };
 }
 
+// Direct hazards in one source, once per source position even when several
+// entrypoints (a listener and the request it owns) reach the same code.
 function findJavaScriptHazards(source, filePath) {
   const { hazards } = analyzeFiles([parseFile(source, filePath)]);
-  return hazards
-    .filter(hazard => hazard.depth === 'direct')
-    .sort((a, b) => a.line - b.line || a.position - b.position || a.rule.localeCompare(b.rule));
+  const unique = new Map();
+  for (const hazard of hazards.filter(item => item.depth === 'direct')) {
+    const id = `${hazard.position}:${hazard.rule}:${hazard.operation}`;
+    if (!unique.has(id) || hazard.reject) unique.set(id, hazard);
+  }
+  return [...unique.values()].sort((a, b) => a.line - b.line || a.position - b.position || a.rule.localeCompare(b.rule));
 }
 
 function listJavaScriptFiles(root) {

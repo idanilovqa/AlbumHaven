@@ -261,6 +261,10 @@ function indexGalleryAlbums(groupsList, albumIndex) {
   return albumIndex;
 }
 
+function artistSectionGroupKey(group) {
+  return String(group?.display_artist_key || group?.artist || '');
+}
+
 function rebuildAlbumIndex(groupsList) {
   state.gallery.albumIndex = indexGalleryAlbums(groupsList, new Map());
 }
@@ -1282,7 +1286,7 @@ class VirtualArtistGrid {
   // Keys an artist section by type, artist and occurrence, carrying over the
   // row measurements of the section it replaces.
   keyArtistSection(section, previousSectionsByMeasurementKey) {
-    const artistKey = String(section.group?.display_artist_key || section.group?.artist || '');
+    const artistKey = artistSectionGroupKey(section.group);
     const measurementArtistKey = `${section.sectionType}\u0000${artistKey}`;
     const occurrence = Number(this._sectionOccurrences.get(measurementArtistKey) || 0);
     this._sectionOccurrences.set(measurementArtistKey, occurrence + 1);
@@ -1305,14 +1309,14 @@ class VirtualArtistGrid {
   appendGroups(groups, replacedGroups = []) {
     const sections = this._sections;
     const firstReplaced = sections.length - replacedGroups.length;
-    const sectionShows = (section, group) => section?.kind === 'artist' && section.sectionType === 'all'
-      && String(section.group?.display_artist_key || section.group?.artist || '')
-        === String(group?.display_artist_key || group?.artist || '');
+    const last = sections[sections.length - 1];
     if (
       this._deferredSetGroups || !this._rowLayout || firstReplaced < 0
       || !this.hasMeasurableScrollSurface()
-      || (sections.length && !sectionShows(sections[sections.length - 1], replacedGroups.at(-1) || sections[sections.length - 1].group))
-      || replacedGroups.some((group, offset) => !sectionShows(sections[firstReplaced + offset], group))
+      || (last && (last.kind !== 'artist' || last.sectionType !== 'all'))
+      || replacedGroups.some((group, offset) => (
+        artistSectionGroupKey(sections[firstReplaced + offset].group) !== artistSectionGroupKey(group)
+      ))
     ) return false;
     // Only a replaced section can move mounted content; earlier sections keep their place.
     const anchor = replacedGroups.length ? this.captureScrollAnchor() : null;
@@ -1344,7 +1348,8 @@ class VirtualArtistGrid {
       const artist = String(group?.artist || '');
       if (!this.artistSectionByName.has(artist)) this.artistSectionByName.set(artist, section);
     });
-    indexGalleryAlbums(groups, state.gallery.albumIndex ??= new Map());
+    state.gallery.albumIndex ??= new Map();
+    indexGalleryAlbums(groups, state.gallery.albumIndex);
     this.render(false, { preserveExistingChildren: true });
     if (anchor?.albumKey || anchor?.sectionKey) this.restoreOwnedScrollAnchor(anchor);
     return true;

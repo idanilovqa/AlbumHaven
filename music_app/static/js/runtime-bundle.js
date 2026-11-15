@@ -1764,6 +1764,17 @@ function rememberCurrentRuntimeAlbumCoverAuthority(view = state.view) {
   return state.ui.tagEditAlbumCoverAuthority;
 }
 
+// Fills cover fields an incoming view lacks from the authority retained for
+// the current cover mutation revision; a stale authority is dropped.
+function applyRetainedRuntimeAlbumCoverAuthority(view) {
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (retainedCoverAuthority?.coverMutationRevision === Number(state.ui.albumCoverMutationRevision || 0)) {
+    preserveMissingRuntimeAlbumCoverAuthority(view, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
+}
+
 function findRememberedRuntimeAlbumCoverAuthority(album) {
   const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
   if (
@@ -1806,19 +1817,10 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
-  let retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
   if (options.preserveMissingAlbumCoverAuthority === true) {
-    retainedCoverAuthority = rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
+    rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
   }
-  if (
-    retainedCoverAuthority
-    && retainedCoverAuthority.coverMutationRevision
-      === Number(state.ui.albumCoverMutationRevision || 0)
-  ) {
-    preserveMissingRuntimeAlbumCoverAuthority(nextView, retainedCoverAuthority.albumsByKey);
-  } else if (retainedCoverAuthority) {
-    delete state.ui.tagEditAlbumCoverAuthority;
-  }
+  applyRetainedRuntimeAlbumCoverAuthority(nextView);
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -1988,15 +1990,10 @@ function commitViewPayload(previousView, nextView, options = {}) {
 // retained cover authority, and the loaded group list is extended in place
 // instead of being copied. `mergedLastGroup` replaces the last loaded group
 // when the page continues that artist. Returns the mounted page groups.
-function appendRootGalleryViewPage({ mergedLastGroup = null, appendedGroups = [], galleryPage }) {
+function commitRootGalleryContinuation({ mergedLastGroup = null, appendedGroups = [], galleryPage }) {
   const previousView = state.view;
   const page = { artist_groups: [...(mergedLastGroup ? [mergedLastGroup] : []), ...appendedGroups].map(compactRuntimeArtistGroupPayload) };
-  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
-  if (retainedCoverAuthority?.coverMutationRevision === Number(state.ui.albumCoverMutationRevision || 0)) {
-    preserveMissingRuntimeAlbumCoverAuthority(page, retainedCoverAuthority.albumsByKey);
-  } else if (retainedCoverAuthority) {
-    delete state.ui.tagEditAlbumCoverAuthority;
-  }
+  applyRetainedRuntimeAlbumCoverAuthority(page);
   const groups = previousView.artist_groups;
   if (mergedLastGroup) groups[groups.length - 1] = page.artist_groups[0];
   groups.push(...page.artist_groups.slice(mergedLastGroup ? 1 : 0));
@@ -18817,9 +18814,9 @@ function cancelRootGalleryPageRequest() {
 
 function mergeRootGalleryPageGroups(existing, incoming) {
   const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
-  const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
+  const byArtist = new Map(groups.map(group => [rootGalleryGroupKey(group), group]));
   for (const incomingGroup of incoming || []) {
-    const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
+    const artistKey = rootGalleryGroupKey(incomingGroup);
     let group = byArtist.get(artistKey);
     if (!group) {
       group = { ...incomingGroup, albums: [] };
@@ -18892,7 +18889,7 @@ function appendRootGalleryPage(artistGroups, galleryPage, renderOptions) {
   const lastGroup = continuation.continued ? groups[groups.length - 1] : null;
   const replacedGroups = lastGroup ? buildGalleryMainRootPageGroups([lastGroup]) : [];
   const chromeWasCurrent = isGalleryMainChromeCurrent();
-  const pageGroups = buildGalleryMainRootPageGroups(appendRootGalleryViewPage({
+  const pageGroups = buildGalleryMainRootPageGroups(commitRootGalleryContinuation({
     mergedLastGroup: lastGroup && mergeRootGalleryPageGroups([lastGroup], [continuation.continued])[0],
     appendedGroups: continuation.added,
     galleryPage,
@@ -42662,6 +42659,10 @@ function indexGalleryAlbums(groupsList, albumIndex) {
   return albumIndex;
 }
 
+function artistSectionGroupKey(group) {
+  return String(group?.display_artist_key || group?.artist || '');
+}
+
 function rebuildAlbumIndex(groupsList) {
   state.gallery.albumIndex = indexGalleryAlbums(groupsList, new Map());
 }
@@ -43683,7 +43684,7 @@ class VirtualArtistGrid {
   // Keys an artist section by type, artist and occurrence, carrying over the
   // row measurements of the section it replaces.
   keyArtistSection(section, previousSectionsByMeasurementKey) {
-    const artistKey = String(section.group?.display_artist_key || section.group?.artist || '');
+    const artistKey = artistSectionGroupKey(section.group);
     const measurementArtistKey = `${section.sectionType}\u0000${artistKey}`;
     const occurrence = Number(this._sectionOccurrences.get(measurementArtistKey) || 0);
     this._sectionOccurrences.set(measurementArtistKey, occurrence + 1);
@@ -43706,14 +43707,14 @@ class VirtualArtistGrid {
   appendGroups(groups, replacedGroups = []) {
     const sections = this._sections;
     const firstReplaced = sections.length - replacedGroups.length;
-    const sectionShows = (section, group) => section?.kind === 'artist' && section.sectionType === 'all'
-      && String(section.group?.display_artist_key || section.group?.artist || '')
-        === String(group?.display_artist_key || group?.artist || '');
+    const last = sections[sections.length - 1];
     if (
       this._deferredSetGroups || !this._rowLayout || firstReplaced < 0
       || !this.hasMeasurableScrollSurface()
-      || (sections.length && !sectionShows(sections[sections.length - 1], replacedGroups.at(-1) || sections[sections.length - 1].group))
-      || replacedGroups.some((group, offset) => !sectionShows(sections[firstReplaced + offset], group))
+      || (last && (last.kind !== 'artist' || last.sectionType !== 'all'))
+      || replacedGroups.some((group, offset) => (
+        artistSectionGroupKey(sections[firstReplaced + offset].group) !== artistSectionGroupKey(group)
+      ))
     ) return false;
     // Only a replaced section can move mounted content; earlier sections keep their place.
     const anchor = replacedGroups.length ? this.captureScrollAnchor() : null;
@@ -43745,7 +43746,8 @@ class VirtualArtistGrid {
       const artist = String(group?.artist || '');
       if (!this.artistSectionByName.has(artist)) this.artistSectionByName.set(artist, section);
     });
-    indexGalleryAlbums(groups, state.gallery.albumIndex ??= new Map());
+    state.gallery.albumIndex ??= new Map();
+    indexGalleryAlbums(groups, state.gallery.albumIndex);
     this.render(false, { preserveExistingChildren: true });
     if (anchor?.albumKey || anchor?.sectionKey) this.restoreOwnedScrollAnchor(anchor);
     return true;

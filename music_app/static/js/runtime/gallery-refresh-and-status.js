@@ -21,9 +21,9 @@ function cancelRootGalleryPageRequest() {
 
 function mergeRootGalleryPageGroups(existing, incoming) {
   const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
-  const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
+  const byArtist = new Map(groups.map(group => [rootGalleryGroupKey(group), group]));
   for (const incomingGroup of incoming || []) {
-    const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
+    const artistKey = rootGalleryGroupKey(incomingGroup);
     let group = byArtist.get(artistKey);
     if (!group) {
       group = { ...incomingGroup, albums: [] };
@@ -96,7 +96,7 @@ function appendRootGalleryPage(artistGroups, galleryPage, renderOptions) {
   const lastGroup = continuation.continued ? groups[groups.length - 1] : null;
   const replacedGroups = lastGroup ? buildGalleryMainRootPageGroups([lastGroup]) : [];
   const chromeWasCurrent = isGalleryMainChromeCurrent();
-  const pageGroups = buildGalleryMainRootPageGroups(appendRootGalleryViewPage({
+  const pageGroups = buildGalleryMainRootPageGroups(commitRootGalleryContinuation({
     mergedLastGroup: lastGroup && mergeRootGalleryPageGroups([lastGroup], [continuation.continued])[0],
     appendedGroups: continuation.added,
     galleryPage,

@@ -38689,11 +38689,32 @@ function sortCoverLookupLocalCovers(covers) {
   }) : [];
 }
 
+function suppressRedundantGeneratedCoverBackups(covers, selectedPath = '') {
+  if (!Array.isArray(covers)) return [];
+  const isGeneratedBackup = cover => /(?:^|[\\/])cover-existing-\d+\.jpg$/i.test(
+    String(cover?.path || ''),
+  );
+  const ordinaryHashes = new Set(covers.filter(cover => !isGeneratedBackup(cover))
+    .map(cover => String(cover?.sha256 || '').trim()).filter(Boolean));
+  return covers.filter(cover => !(
+    isGeneratedBackup(cover)
+    && !cover?.is_active
+    && !coverLookupLocalPathMatches(cover?.path, selectedPath)
+    && ordinaryHashes.has(String(cover?.sha256 || '').trim())
+  ));
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
   const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
   gallery = Array.isArray(gallery.local_covers)
-    ? { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) }
+    ? {
+      ...gallery,
+      local_covers: sortCoverLookupLocalCovers(suppressRedundantGeneratedCoverBackups(
+        gallery.local_covers,
+        gallery.selected_source_path,
+      )),
+    }
     : gallery;
   coverLookupGalleryCache.delete(key);
   coverLookupGalleryCache.set(key, JSON.parse(JSON.stringify(gallery)));
@@ -38711,6 +38732,54 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   const key = buildCoverLookupGalleryCacheKey(album);
   const mutation = coverLookupLocalInventoryMutations.get(key);
   if (!Array.isArray(gallery?.local_covers)) return gallery;
+  if (gallery.local_inventory_complete === false) {
+    const cached = cachedCoverLookupGalleryPayload(album);
+    if (Array.isArray(cached?.local_covers)) {
+      const incomingLocal = gallery.local_covers;
+      const incomingOther = Array.isArray(gallery.other_art) ? gallery.other_art : [];
+      const incoming = [...incomingLocal, ...incomingOther];
+      const matchesIncoming = path => incoming.some(
+        cover => coverLookupLocalPathMatches(cover?.path, path),
+      );
+      const mergeKnownMetadata = (cover, known) => {
+        const previous = known.find(
+          item => coverLookupLocalPathMatches(item?.path, cover?.path),
+        );
+        if (!previous) return cover;
+        return {
+          ...previous,
+          ...cover,
+          width: Number(cover?.width || 0) || previous.width,
+          height: Number(cover?.height || 0) || previous.height,
+          area: Number(cover?.area || 0) || previous.area,
+          relative_path: cover?.relative_path || previous.relative_path,
+          sort_relative_path: cover?.sort_relative_path || previous.sort_relative_path,
+          is_squareish: typeof cover?.is_squareish === 'boolean'
+            ? cover.is_squareish : previous.is_squareish,
+        };
+      };
+      gallery = {
+        ...gallery,
+        local_covers: [
+          ...cached.local_covers.filter(cover => !matchesIncoming(cover?.path)),
+          ...incomingLocal.map(cover => mergeKnownMetadata(cover, cached.local_covers)),
+        ],
+        other_art: [
+          ...(Array.isArray(cached.other_art) ? cached.other_art : [])
+            .filter(cover => !matchesIncoming(cover?.path)),
+          ...incomingOther.map(cover => mergeKnownMetadata(cover, cached.other_art || [])),
+        ],
+      };
+    }
+    confirmLocalInventory = false;
+  }
+  gallery = {
+    ...gallery,
+    local_covers: suppressRedundantGeneratedCoverBackups(
+      gallery.local_covers,
+      gallery.selected_source_path,
+    ),
+  };
   if (!mutation) return { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) };
   let localCovers = gallery.local_covers.slice();
   let otherArt = Array.isArray(gallery.other_art) ? gallery.other_art.slice() : [];

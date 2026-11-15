@@ -207,6 +207,73 @@ def test_cover_gallery_hashes_local_duplicates_without_hashlib_file_digest(
     assert candidates[str(duplicate_cover)]["duplicate_of"] == str(active_cover)
 
 
+def test_cover_gallery_hides_only_redundant_generated_backup(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = album_root / "image.jpg"
+    original_cover = album_root / "cover.jpg"
+    redundant_backup = album_root / "cover-existing-2.jpg"
+    unique_backup = album_root / "cover-existing-3.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (20, 60, 120))
+    _write_jpeg(original_cover, (120, 40, 40))
+    redundant_backup.write_bytes(original_cover.read_bytes())
+    _write_jpeg(unique_backup, (40, 120, 40))
+    active_revision = hashlib.sha256(active_cover.read_bytes()).hexdigest()
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={
+            str(track_path): {
+                "cover_path": str(active_cover),
+                "cover_revision": active_revision,
+                "selected_local_cover_source_path": str(active_cover),
+            }
+        },
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    paths = {item["path"] for item in payload["local_covers"]}
+    assert paths == {str(active_cover), str(original_cover), str(unique_backup)}
+
+
+def test_cover_gallery_keeps_selected_generated_backup(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    active_cover = album_root / "cover.jpg"
+    selected_backup = album_root / "cover-existing-2.jpg"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (120, 40, 40))
+    selected_backup.write_bytes(active_cover.read_bytes())
+    revision = hashlib.sha256(active_cover.read_bytes()).hexdigest()
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={
+            str(track_path): {
+                "cover_path": str(active_cover),
+                "cover_revision": revision,
+                "selected_local_cover_source_path": str(selected_backup),
+            }
+        },
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert payload["selected_source_path"] == str(selected_backup)
+    assert {item["path"] for item in payload["local_covers"]} == {
+        str(active_cover),
+        str(selected_backup),
+    }
+
+
 def test_cover_gallery_prefers_persisted_selected_local_source_when_duplicate_hashes_match(
     tmp_path: Path,
 ):

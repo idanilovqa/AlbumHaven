@@ -7308,6 +7308,71 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
   );
 });
 
+require('node:test')('an incomplete LOCAL inventory cannot replace or reorder the known cached cards', () => {
+  const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Fleet Foxes/01.flac' }] };
+  const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
+  const knownCovers = [
+    { path: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg', is_squareish: true, area: 900, depth: 1 },
+    { path: 'N:/Fleet Foxes/cover.jpg', filename: 'cover.jpg', is_squareish: true, area: 400, depth: 1, is_active: true },
+    { path: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg', is_squareish: true, area: 100, depth: 1 },
+  ];
+  context.state.coverLookup.modal.album = album;
+  context.applyCoverLookupGalleryPayload({
+    ok: true,
+    local_inventory_complete: true,
+    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    local_covers: knownCovers,
+    other_art: [],
+  });
+
+  context.applyCoverLookupGalleryPayload({
+    ok: true,
+    local_inventory_complete: false,
+    local_inventory_available: true,
+    local_inventory_pending: true,
+    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    local_covers: [knownCovers[1]],
+    other_art: [],
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.path),
+    knownCovers.map(cover => cover.path),
+  );
+});
+
+require('node:test')('cached LOCAL inventory suppresses only redundant generated backups', () => {
+  const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Fleet Foxes/01.flac' }] };
+  const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
+  context.cacheCoverLookupGalleryPayload(album, {
+    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    local_covers: [
+      { path: 'N:/Fleet Foxes/cover.png', sha256: 'original' },
+      { path: 'N:/Fleet Foxes/cover-existing-1.jpg', sha256: 'original' },
+      { path: 'N:/Fleet Foxes/cover.jpg', sha256: 'selected', is_active: true },
+      { path: 'N:/Fleet Foxes/cover-existing-2.jpg', sha256: 'unique' },
+    ],
+  });
+
+  assert.deepEqual(
+    Array.from(context.cachedCoverLookupGalleryPayload(album).local_covers, cover => cover.path),
+    [
+      'N:/Fleet Foxes/cover-existing-2.jpg',
+      'N:/Fleet Foxes/cover.jpg',
+      'N:/Fleet Foxes/cover.png',
+    ],
+  );
+
+  context.cacheCoverLookupGalleryPayload(album, {
+    selected_source_path: 'N:/Fleet Foxes/cover-existing-1.jpg',
+    local_covers: [
+      { path: 'N:/Fleet Foxes/cover.jpg', sha256: 'same', is_active: true },
+      { path: 'N:/Fleet Foxes/cover-existing-1.jpg', sha256: 'same' },
+    ],
+  });
+  assert.equal(context.cachedCoverLookupGalleryPayload(album).local_covers.length, 2);
+});
+
 require('node:test')('deleting the selected LOCAL cover selects the first remainder and enables Save', async () => {
   class TestButton {
     constructor() { this.disabled = true; this.attributes = {}; }

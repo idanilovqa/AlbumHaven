@@ -242,6 +242,57 @@ def _file_sha256(path: Path, *, cancel_requested=None) -> str:
     return digest.hexdigest()
 
 
+def _redundant_generated_cover_backup_paths(
+    candidates: list[dict[str, object]],
+    selected_source_path: str | None,
+) -> set[str]:
+    def is_generated_backup(item: Mapping[str, object]) -> bool:
+        name = Path(str(item.get("path") or "")).name.casefold()
+        suffix = name.removeprefix("cover-existing-").removesuffix(".jpg")
+        return name.startswith("cover-existing-") and name.endswith(".jpg") and suffix.isdigit()
+
+    backups = [candidate for candidate in candidates if is_generated_backup(candidate)]
+    if not backups:
+        return set()
+
+    sizes: dict[str, int] = {}
+    digests: dict[str, str] = {}
+
+    def size(item: Mapping[str, object]) -> int:
+        path = str(item.get("path") or "")
+        if path not in sizes:
+            try:
+                sizes[path] = Path(path).stat().st_size
+            except OSError:
+                sizes[path] = -1
+        return sizes[path]
+
+    def digest(item: Mapping[str, object]) -> str:
+        path = str(item.get("path") or "")
+        if path not in digests:
+            try:
+                digests[path] = str(item.get("sha256") or _file_sha256(Path(path)))
+            except OSError:
+                digests[path] = ""
+        return digests[path]
+
+    backup_sizes = {size(candidate) for candidate in backups}
+    ordinary_hashes = {
+        digest(candidate)
+        for candidate in candidates
+        if not is_generated_backup(candidate) and size(candidate) in backup_sizes
+    }
+    return {
+        str(candidate["path"])
+        for candidate in candidates
+        if is_generated_backup(candidate)
+        and not candidate.get("is_active")
+        and str(candidate["path"]) != str(selected_source_path or "")
+        and digest(candidate) in ordinary_hashes
+        and digest(candidate)
+    }
+
+
 def _matching_local_cover_sources(
     candidates: list[dict[str, object]], active_path: Path, revision: str | None,
 ) -> Iterator[str]:
@@ -386,6 +437,14 @@ def serialize_cover_gallery_payload(
             )
             or selected_source_path
         )
+        redundant_backups = _redundant_generated_cover_backup_paths(
+            local_candidates,
+            selected_source_path,
+        )
+        local_candidates = [
+            candidate for candidate in local_candidates
+            if str(candidate["path"]) not in redundant_backups
+        ]
     if active_cover_path and not active_cover_revision and not active_remote_cover:
         if local_inventory is not None:
             active_hash = next((item.get("sha256") for item in local_candidates if item.get("is_active")), None)

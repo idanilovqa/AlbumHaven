@@ -273,6 +273,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await lookup.saveRemoteButton.click();
     await saveRequestPromise;
     await expect(lookup.drawer).toBeVisible();
+    const firstReopenOrderObservation = await lookup.startLocalCoverOrderObservation();
     await trackModalActions.openCoverLookup();
     await expect(lookup.modal).toBeVisible();
     const immediateLocalCard = lookup.activeLocalCoverCard;
@@ -285,6 +286,12 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     );
     expect(immediateLocalEvidence.sha256).toBe(stagedCoverEvidence.sha256);
     expect(immediateLocalEvidence.src).not.toBe(previousSelectedIdentity);
+    const firstReopenOrders = await lookup.finishLocalCoverOrderObservation(firstReopenOrderObservation);
+    expect(firstReopenOrders.length).toBeGreaterThan(0);
+    for (const sample of firstReopenOrders) {
+      expect(new Set(sample.paths).size).toBe(sample.paths.length);
+      expect(sample.activeIndexes).toEqual([sample.paths.length - 1]);
+    }
     const immediateDeleteButtons = lookup.localCoverCards.locator('[data-delete-local-cover]');
     await expect(immediateDeleteButtons).toHaveCount(await lookup.localCoverCards.count());
     for (let index = 0; index < await immediateDeleteButtons.count(); index += 1) {
@@ -307,8 +314,10 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
 
+    const secondReopenOrderObservation = await lookup.startLocalCoverOrderObservation();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
+    const secondReopenOrders = await lookup.finishLocalCoverOrderObservation(secondReopenOrderObservation);
     const authoritativeLocalCard = lookup.activeLocalCoverCard;
     await expect(authoritativeLocalCard).toHaveClass(/\bis-active\b/);
     await expect(authoritativeLocalCard).toContainText('cover.jpg');
@@ -328,6 +337,12 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       candidate.image.sha256 === authoritativeLocalEvidence.sha256
     ))).toHaveLength(1);
     expect(authoritativeCandidates.map((candidate) => candidate.name)).not.toContain(pickerName);
+    const authoritativePaths = authoritativeCandidates.map(candidate => candidate.sourcePath);
+    expect(secondReopenOrders.length).toBeGreaterThan(0);
+    for (const sample of secondReopenOrders) {
+      expect(sample.paths).toEqual(authoritativePaths);
+      expect(sample.activeIndexes).toEqual([sample.paths.length - 1]);
+    }
     await coverLookupActions.closeModal();
     await expect(lookup.modal).toBeHidden();
     // The notification must update while Album Details remains open.

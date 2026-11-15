@@ -595,6 +595,47 @@ export class CoverLookup extends BasePage {
     }, expectedCount);
   }
 
+  async startLocalCoverOrderObservation() {
+    // parity-check: allow-read-only-measurement-evaluate -- record every rendered LOCAL order without driving app state.
+    return this.modalBody.evaluateHandle((body) => {
+      const observation = { samples: [] };
+      const sample = () => {
+        const modal = body.closest('#cover-lookup-modal');
+        if (!modal || modal.hidden) return;
+        const localSection = Array.from(body.querySelectorAll('.cover-lookup-section')).find((section) => (
+          /^LOCAL(?:\s|В·|$)/.test(String(section.querySelector('.cover-lookup-section-title')?.textContent || '').trim())
+        ));
+        const cards = Array.from(
+          localSection?.querySelector(':scope > .cover-lookup-gallery')
+            ?.querySelectorAll('[data-select-local-cover]') || [],
+        );
+        if (!cards.length) return;
+        observation.samples.push({
+          paths: cards.map(card => String(card.getAttribute('data-select-local-cover') || '').trim()),
+          activeIndexes: cards.flatMap((card, index) => (
+            card.hasAttribute('data-cover-lookup-local-active') ? [index] : []
+          )),
+        });
+      };
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(body, { childList: true, subtree: true });
+      sample();
+      return observation;
+    });
+  }
+
+  async finishLocalCoverOrderObservation(handle) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- stop and read the rendered LOCAL order observer.
+      return await handle.evaluate((observation) => {
+        observation.observer.disconnect();
+        return observation.samples;
+      });
+    } finally {
+      await handle.dispose();
+    }
+  }
+
   remotePreviewById(candidateId) {
     return this.remoteCoverCardById(candidateId).locator('.cover-lookup-art-preview');
   }

@@ -7434,21 +7434,21 @@
       "proof": "contract",
       "cardinalities": {
         "small": 20,
-        "production": 1000
+        "production": 160000
       },
       "budgets": {
-        "filesystem_enumerations": 1,
-        "stat_calls": 96,
-        "open_calls": 11,
-        "media_parses": 10
+        "builder_calls": 0,
+        "returned_rows": 6,
+        "sql_statements": 29,
+        "invalidations": 1
       },
       "growth": {
-        "metric": "stat_calls",
+        "metric": "returned_rows",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_move_executor.py::test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_library_size tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
-      "testIdentity": "test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_library_size",
-      "rollback": "Revert the fix(move) commits, with their contracts."
+      "command": "python -m pytest tests/py/test_move_executor.py::test_move_album_contract_publishes_only_the_moved_album_at_production_track_count tests/py/test_move_executor.py::test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_library_size tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
+      "testIdentity": "test_move_album_contract_publishes_only_the_moved_album_at_production_track_count",
+      "rollback": "Revert the fix(move) commits, with their contracts. Reverting the targeted move publication restores the synchronous full relation rebuild, which the guard rejects."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#utilities_repair_album",

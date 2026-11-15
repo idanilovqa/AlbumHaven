@@ -273,3 +273,64 @@ def test_single_legacy_foreign_cover_without_provenance_is_preserved(tmp_path):
 
     assert clear_ambiguous_folder_covers(cache) == {}
     assert cache[str(track)]["cover_path"] == str(legacy_cover)
+
+
+def test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count(tmp_path, monkeypatch):
+    from music_app.services import covers
+    from music_app.services.library import build_albums_from_file_cache
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    tracks_per_album = 160
+    album_root = tmp_path / "Artist" / "Real Album"
+    random_root = tmp_path / "Random songs"
+    (album_root / "CD1").mkdir(parents=True)
+    random_root.mkdir()
+    good = album_root / "cover.png"
+    unrelated = random_root / "cover.png"
+    Image.new("RGB", (1600, 1600), "red").save(good)
+    Image.new("RGB", (200, 200), "blue").save(unrelated)
+    # The stray copy duplicates one of the real album's two tracks.
+    contaminated = {
+        str(path): {
+            "path": str(path), "title": title, "album": "Real Album", "album_artist": "Artist",
+            "cover_path": str(unrelated), "cover_selection_origin": "automatic",
+        }
+        for path, title in (
+            (album_root / "CD1" / "1.mp3", "One"),
+            (album_root / "CD1" / "2.mp3", "Two"),
+            (random_root / "copied-song.mp3", "One"),
+        )
+    }
+
+    def run(album_count: int) -> OperationCounts:
+        file_cache = dict(contaminated)
+        for album_index in range(album_count):
+            folder = tmp_path / "library" / f"Artist {album_index:04d}" / "Album"
+            for track_index in range(tracks_per_album):
+                track_path = str(folder / f"{track_index:03d}.mp3")
+                file_cache[track_path] = {
+                    "path": track_path,
+                    "album": f"Album {album_index}",
+                    "album_artist": f"Artist {album_index}",
+                    "title": f"Track {track_index}",
+                    "track_number": track_index + 1,
+                    "cover_path": str(folder / "cover.jpg"),
+                }
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            albums = build_albums_from_file_cache(file_cache)
+        (repaired,) = [album for album in albums if album.name == "Real Album" and Path(album.cover_path or "").is_relative_to(album_root)]
+        assert Path(repaired.cover_path) == good
+        assert len(albums) >= album_count + 1
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:services/library.py#build_albums_from_file_cache",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 2, "stat_calls": 8, "open_calls": 0, "media_parses": 1},
+        growth=("stat_calls", 0),
+    )
+    assert small.filesystem_enumerations == production.filesystem_enumerations

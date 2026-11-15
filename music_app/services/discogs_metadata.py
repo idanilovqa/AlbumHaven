@@ -1,16 +1,23 @@
 """Discogs database reads for the MusicBrainz fallback (Delivery 2, S3).
 
 Discogs is used only when MusicBrainz lacks an artist or release, and never for anything
-MusicBrainz already answers. Requests go through the existing Discogs transport (key and
-secret from the operator's configuration, its rate-limit handling, Album Haven's user
-agent). Each method returns plain projections of the fields the fallback reads.
+MusicBrainz already answers. Requests use the operator's Discogs key and secret, are paced
+under Discogs' rate limit, and keep a 404 apart from an outage. Each method returns plain
+projections of the fields the fallback reads.
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
+
+from config import Config
+from music_app.services.cover_provider_discogs import discogs_auth_headers
 
 JsonDict = dict[str, object]
 # ``get_json(path, params) -> dict | None``; None is a provider failure (rate limit,
@@ -28,14 +35,6 @@ def discogs_get_json(path: str, params: dict[str, object], *, user_agent: str, c
     """One authenticated Discogs database request that keeps a 404 apart from an outage
     (the cover providers' transport reports both as no payload). None for network errors,
     rate limits and server errors, which the job retries later."""
-    import json
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    from config import Config
-    from music_app.services.cover_provider_discogs import discogs_auth_headers
-
     config = config or Config
     with _PACE:
         # Discogs allows 60 authenticated requests a minute.
@@ -54,6 +53,8 @@ def discogs_get_json(path: str, params: dict[str, object], *, user_agent: str, c
         return {NOT_FOUND: True} if error.code == 404 else None
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return None
+
+
 _DURATION = re.compile(r"^(?:(\d+):)?(\d{1,3}):(\d{2})$")
 _TRAILING_NUMBER = re.compile(r"\s+\(\d+\)$")
 

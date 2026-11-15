@@ -7362,11 +7362,39 @@ const idleStatus = {
   watcher_health: { state: 'ok', problems: [] },
 };
 
+const MUSICBRAINZ_STATUS_URL = '/api/musicbrainz/artists/status';
+
+// The artist status route's revision contract: the body names every artist
+// needing attention, and a request holding the current revision gets a bodiless 304.
+function musicBrainzStatusServer(artistCount, counter) {
+  const artists = Array.from({ length: artistCount }, (_, index) => ({
+    local_artist_id: index, local_artist_name: viewportArtist(index), gallery_artist: viewportArtist(index),
+    match_state: null, problem_occurrence_id: index, unresolved_reason: 'MBID: Multiple matches',
+  }));
+  const body = JSON.stringify({ artists });
+  const revision = `"${artistCount}-${body.length}"`;
+  return (options = {}) => {
+    const unchanged = options.headers?.['If-None-Match'] === revision;
+    counter.count('responseBytes', unchanged ? 0 : body.length);
+    counter.count('responseRows', unchanged ? 0 : artists.length);
+    return Promise.resolve({
+      ok: !unchanged,
+      status: unchanged ? 304 : 200,
+      headers: { get: name => (name.toLowerCase() === 'etag' ? revision : null) },
+      json: async () => JSON.parse(body),
+    });
+  };
+}
+
 // The status poller with the real status indicator and owner-only MusicBrainz
 // repair state for every library artist.
 function statusPollGallery(artistCount) {
-  const gallery = timedGallery(artistCount, () => jsonResponse(idleStatus));
+  let artistStatus = null;
+  const gallery = timedGallery(artistCount, (url, options) => (url === MUSICBRAINZ_STATUS_URL
+    ? artistStatus(options)
+    : jsonResponse(idleStatus)));
   const { context, counter } = gallery;
+  artistStatus = musicBrainzStatusServer(artistCount, counter);
   for (const name of ['gallery-main-components.js', 'status-ui-helpers.js']) {
     const sourcePath = path.join(path.dirname(helperPath), name);
     vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
@@ -7375,23 +7403,33 @@ function statusPollGallery(artistCount) {
   // The indicator's menu and hover snapshot need a real document; count their presentation instead.
   context.syncStatusContextMenu = () => counter.count('domMutations');
   context.ensureStatusIndicatorHoverSnapshotBehavior = () => {};
+  context.virtualGrid = { render: () => counter.count('renderCommits') };
   const musicBrainz = vm.runInContext('galleryArtistMusicBrainzStatus', context);
-  musicBrainz.byArtist = new Map(Array.from({ length: artistCount }, (_, index) => [viewportArtist(index).toLowerCase(), {
-    problem: { occurrence_id: String(index), label: 'Artist match needs review' },
-    get state() { counter.count('itemsVisited'); return ''; },
-  }]));
-  musicBrainz.loadedAt = Date.now();
-  return gallery;
+  // Any walk over the held per-artist state is counted.
+  const countArtistStates = () => {
+    musicBrainz.byArtist = new Map(Array.from(musicBrainz.byArtist, ([key, value]) => [key, {
+      problem: value.problem,
+      get state() { counter.count('itemsVisited'); return value.state; },
+    }]));
+  };
+  return { ...gallery, countArtistStates, musicBrainz };
 }
 
 test('BI an unchanged status poll does no presentation or library work at production scale', async () => {
   const unchangedPoll = async (artistCount) => {
-    const { capture, context, counter, fireNext, scheduled } = statusPollGallery(artistCount);
+    const { capture, context, countArtistStates, counter, fireNext, musicBrainz, scheduled } = statusPollGallery(artistCount);
     context.scheduleStatusPoll(0);
     await fireNext();
     assert.equal(context.state.status.inventory_mutation_revision, 7, 'the first poll applies the status');
+    assert.equal(musicBrainz.byArtist.size, artistCount, 'the first artist status read loads every artist');
+    countArtistStates();
+    musicBrainz.loadedAt = 0; // The artist status refresh interval has elapsed.
     const counts = await counter.measure(fireNext);
-    assert.deepEqual(capture.urls(), ['/status', '/status']);
+    assert.deepEqual(capture.urls(), ['/status', MUSICBRAINZ_STATUS_URL, '/status', MUSICBRAINZ_STATUS_URL]);
+    const [, first, , repeated] = capture.requests;
+    assert.equal(first.options.headers['If-None-Match'], undefined);
+    assert.equal(repeated.options.headers['If-None-Match'], musicBrainz.revision, 'the poll sends its held revision');
+    assert.equal(musicBrainz.byArtist.size, artistCount, 'an unchanged answer keeps the held status');
     assert.equal(scheduled.length, 1, 'the poll schedules its next read');
     return counts;
   };
@@ -7400,8 +7438,8 @@ test('BI an unchanged status poll does no presentation or library work at produc
     small: 20,
     large: 14000,
     run: unchangedPoll,
-    budgets: { requests: 1, itemsVisited: 0, renderCommits: 0, domMutations: 0, timers: 1 },
-    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    budgets: { requests: 2, responseBytes: 0, responseRows: 0, itemsVisited: 0, renderCommits: 0, domMutations: 0, timers: 1 },
+    growth: { metric: 'responseBytes', largeMinusSmallMax: 0 },
   });
   assert.deepEqual(large, small);
 });

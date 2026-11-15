@@ -3615,7 +3615,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#scheduleStatusPoll",
-      "action": "Reschedule the self-rescheduling library status poll; an unchanged status does no presentation or library work",
+      "action": "Reschedule the self-rescheduling library status poll; an unchanged status does no presentation or library work, and an unchanged MusicBrainz artist status is a bodiless revision match",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#scheduleStatusPoll:timer:scheduleBrowserTimeout"
       ],
@@ -3635,20 +3635,22 @@
         "production": 14000
       },
       "budgets": {
-        "requests": 1,
+        "requests": 2,
+        "responseBytes": 0,
+        "responseRows": 0,
         "itemsVisited": 0,
         "renderCommits": 0,
         "domMutations": 0,
         "timers": 1
       },
       "growth": {
-        "metric": "itemsVisited",
+        "metric": "responseBytes",
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
       "testIdentity": "BI an unchanged status poll does no presentation or library work at production scale",
       "performanceTargets": [],
-      "rollback": "Revert the stored MusicBrainz pending flag; every status poll then walks every owner-only artist repair state again, with no data or API change."
+      "rollback": "Revert the stored MusicBrainz pending flag and the artist status revision; every status poll then walks every owner-only artist repair state again and every due artist status read downloads every artist, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",

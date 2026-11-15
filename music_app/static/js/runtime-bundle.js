@@ -4717,7 +4717,7 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
 const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
-const galleryArtistMusicBrainzStatus = { byArtist: new Map(), pending: false, signature: '[]', loadedAt: 0, promise: null };
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), pending: false, signature: '[]', revision: '', loadedAt: 0, promise: null };
 
 function galleryArtistMusicBrainzStatusKey(artist) {
   return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
@@ -4738,6 +4738,7 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
     galleryArtistMusicBrainzStatus.byArtist.clear();
     galleryArtistMusicBrainzStatus.pending = false;
     galleryArtistMusicBrainzStatus.signature = '[]';
+    galleryArtistMusicBrainzStatus.revision = '';
     return Promise.resolve(false);
   }
   if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
@@ -4748,10 +4749,20 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
   if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
     return Promise.resolve(false);
   }
-  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })
-    .then((response) => (response.ok ? response.json() : null))
+  // The held revision lets the server answer an unchanged status with a bodiless 304.
+  const { revision } = galleryArtistMusicBrainzStatus;
+  let nextRevision = '';
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', {
+    headers: { Accept: 'application/json', ...(revision ? { 'If-None-Match': revision } : {}) },
+  })
+    .then((response) => {
+      if (!response.ok) return null;
+      nextRevision = response.headers?.get?.('ETag') || '';
+      return response.json();
+    })
     .then((payload) => {
       if (!Array.isArray(payload?.artists)) return false;
+      galleryArtistMusicBrainzStatus.revision = nextRevision;
       const next = new Map();
       for (const row of payload.artists) {
         // Keyed by the canonical Gallery artist, so alias-combined groups match.

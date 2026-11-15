@@ -7949,6 +7949,7 @@ def _selected_artist_album_payloads(
                 "open_directory_paths": [],
                 "preview_only": False,
                 "artist_relationship": _album_artist_relationship([row_payload]),
+                **_album_genre_payload(row_payload),
             }
             albums[album_identity] = album
             track_ids_by_album[album_identity] = set()
@@ -8125,6 +8126,7 @@ def _root_album_browse_album_payloads(
             "total_duration_display": format_duration(duration_seconds),
             "preview_only": True,
             "artist_relationship": _album_artist_relationship([row_payload]),
+            **_album_genre_payload(row_payload),
         }
         if include_total_duration_seconds:
             album_payload["total_duration_seconds"] = duration_seconds
@@ -8155,6 +8157,12 @@ def _root_album_browse_album_payloads(
             str(album.get("key") or "").casefold(),
         ),
     )
+
+
+def _album_genre_payload(row_payload: Mapping[str, object]) -> dict[str, str]:
+    """The card's genre pill, sent only when the album has one (see ``_album_genre_sql``)."""
+    genre = str(row_payload.get("album_genre") or "").strip()
+    return {"musicbrainz_genre": genre} if genre else {}
 
 
 def _album_artist_relationship(rows: Iterable[object]) -> str:
@@ -9011,6 +9019,37 @@ def _artist_musicbrainz_projection_joins_sql(
     """.strip()
 
 
+def _album_genre_sql(album_id: str) -> str:
+    """The gallery card's genre pill (owner-approved A2): the matched MusicBrainz release
+    group's most-voted genre, else the album artist's first MusicBrainz genre. Primary-key
+    lookups only; the artist lookup runs only when the release group has no genre."""
+    return f"""(
+          select coalesce(
+            (
+              select release_group.genres -> 0 ->> 'name'
+              from library.local_album_musicbrainz_releases genre_decision
+              join integration.musicbrainz_release_groups release_group
+                on release_group.mbid = genre_decision.release_group_mbid
+              where genre_decision.library_id = genre_album.library_id
+                and genre_decision.album_key = genre_album.album_key
+                and coalesce((release_group.genres -> 0 ->> 'count')::integer, 0) >= 0
+            ),
+            (
+              select display_genres.tag_name
+              from library.local_artist_musicbrainz_matches genre_match
+              join integration.musicbrainz_artist_display_genres display_genres
+                on display_genres.artist_mbid = genre_match.artist_mbid
+               and display_genres.display_rank = 1
+              where genre_match.library_id = genre_album.library_id
+                and genre_match.local_artist_id = genre_album.artist_id
+                and genre_match.state = 'matched'
+            )
+          )
+          from library.local_albums genre_album
+          where genre_album.id = {album_id}
+        ) as album_genre"""
+
+
 def _root_gallery_page_rows_sql() -> str:
     query = _root_album_browse_sql()
     original = _eligible_album_tracks_cte_sql()
@@ -9101,7 +9140,8 @@ def _selected_artist_sql() -> str:
             library.local_albums.title as album_title,
             library.local_albums.release_year as album_release_year,
             library.local_albums.cover_path as album_cover_path,
-            library.local_albums.metadata as album_metadata
+            library.local_albums.metadata as album_metadata,
+            {_album_genre_sql("library.local_albums.id")}
           from target_artists
           join library.local_album_featured_artists
             on library.local_album_featured_artists.library_id = target_artists.library_id
@@ -9121,6 +9161,7 @@ def _selected_artist_sql() -> str:
           selected_artist_albums.album_release_year,
           selected_artist_albums.album_cover_path,
           selected_artist_albums.album_metadata,
+          selected_artist_albums.album_genre,
           artist_match.artist_mbid::text as artist_mbid,
           musicbrainz_artist.canonical_name as artist_canonical_name,
           musicbrainz_artist.preferred_native_name as artist_native_name,
@@ -9463,6 +9504,7 @@ def _root_album_browse_sql() -> str:
           album_rows.album_release_year,
           album_rows.album_cover_path,
           album_rows.album_metadata,
+          {_album_genre_sql("album_rows.album_id")},
           {_artist_musicbrainz_projection_columns_sql()}
           case
             when cover_candidate_snapshots.album_id is null then null
@@ -9781,6 +9823,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             matched_album_rows.album_release_year,
             matched_album_rows.album_cover_path,
             matched_album_rows.album_metadata,
+            {_album_genre_sql("matched_album_rows.album_id")},
             {_artist_musicbrainz_projection_columns_sql()}
             coalesce(track_rollups.track_count, 0) as track_count,
             coalesce(
@@ -10189,6 +10232,7 @@ def _selected_artist_preview_sql(
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
           matched_album_rows.album_metadata,
+          {_album_genre_sql("matched_album_rows.album_id")},
           {_artist_musicbrainz_projection_columns_sql()}
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
@@ -10296,6 +10340,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
           matched_album_rows.album_metadata,
+          {_album_genre_sql("matched_album_rows.album_id")},
           {_artist_musicbrainz_projection_columns_sql()}
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
@@ -10809,6 +10854,7 @@ def _search_preview_sql(
               matched_album_rows.album_release_year,
                matched_album_rows.album_cover_path,
                matched_album_rows.album_metadata,
+               {_album_genre_sql("matched_album_rows.album_id")},
                {_artist_musicbrainz_projection_columns_sql()}
                matched_album_rows.album_featured_artists,
               array[]::text[] as album_featured_artist_names,
@@ -10843,6 +10889,7 @@ def _search_preview_sql(
               library.local_albums.release_year as album_release_year,
                library.local_albums.cover_path as album_cover_path,
                library.local_albums.metadata as album_metadata,
+               null::text as album_genre,
                null::text as artist_mbid,
                null::text as artist_canonical_name,
                null::text as artist_native_name,

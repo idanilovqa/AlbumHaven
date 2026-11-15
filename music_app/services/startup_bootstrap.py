@@ -131,6 +131,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "release_date": source_album.get("release_date"),
         "display_year": source_album.get("display_year") or album_display_year(source_album),
         "edition": source_album.get("edition"),
+        **({"musicbrainz_genre": source_album["musicbrainz_genre"]} if source_album.get("musicbrainz_genre") else {}),
         "root_provenance": dict(root_provenance) if isinstance(root_provenance, dict) else {},
         "library_root_category": source_album.get("library_root_category"),
         "album_rating": source_album.get("album_rating"),

@@ -146,3 +146,20 @@ test('hover year omits unknown values and safely renders supplied release years'
   assert.doesNotMatch(cards, /gallery-card__hover-year|gallery-card__year-frame|data-gallery-release-year/);
   assert.match(cards, /<span data-gallery-metadata-text>2005<\/span><\/div>/);
 });
+
+test('GalleryCardInfo shows the MusicBrainz genre pill beside artist and year (approved A2)', () => {
+  const context = loadGalleryCard();
+  const withGenre = context.buildGalleryCardInfoHtml({ title: 'Angels Cry', artist: 'Angra', year: '1993', trackCount: 10, genre: 'power metal' });
+  assert.match(withGenre,
+    /<div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>Angra · 1993<\/span><\/div><span class="ui-metadata-pill ui-metadata-pill--genre">power metal<\/span><\/div>/);
+  const escaped = context.buildGalleryCardInfoHtml({ title: 'X', artist: 'Y', genre: '<b>' });
+  assert.match(escaped, /ui-metadata-pill--genre">&lt;b&gt;</);
+  const without = context.buildGalleryCardInfoHtml({ title: 'Angels Cry', artist: 'Angra', year: '1993', trackCount: 10 });
+  assert.doesNotMatch(without, /ui-metadata-pill/);
+});
+
+test('album cards pass the payload genre and re-render when it changes', () => {
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js'), 'utf8');
+  assert.match(source, /genre: album\?\.musicbrainz_genre/);
+  assert.match(source, /String\(album\?\.musicbrainz_genre \|\| ''\)/);
+});

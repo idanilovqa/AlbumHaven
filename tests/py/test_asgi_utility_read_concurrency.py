@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from threading import Event, Timer
 import time
 
@@ -9,12 +10,45 @@ import pytest
 from tests.py.asgi_testing import run_asgi_request_async
 
 
+def test_problematic_read_paths_have_no_legacy_projector_or_prewarm_fallback():
+    from music_app.routes import api_read_asgi_routes
+    from music_app.services import library_browse_postgres
+
+    route_source = "\n".join(
+        inspect.getsource(owner)
+        for owner in (
+            api_read_asgi_routes.utilities_problematic_files,
+            api_read_asgi_routes.utilities_problematic_file_detail_query,
+            api_read_asgi_routes.utilities_problematic_file_detail,
+        )
+    )
+    for forbidden in (
+        "build_problematic_files_payload",
+        "build_problematic_albums_payload",
+        "build_problematic_album_detail_payload",
+        "_hydrate_cached_library_for_asgi",
+        "_is_postgres_utility_projection_request",
+    ):
+        assert forbidden not in route_source
+
+    browse_source = inspect.getsource(
+        library_browse_postgres.PostgresLibraryBrowseRepository
+    )
+    for forbidden in (
+        "def build_problematic_files_payload(",
+        "def _build_problematic_files_payload_uncached(",
+        "def _build_problematic_files_payload_from_rows(",
+        "self.build_problematic_files_payload()",
+    ):
+        assert forbidden not in browse_source
+
+
 @pytest.mark.parametrize(
     ("module_name", "selector_name", "path"),
     (
         (
             "music_app.routes.api_read_asgi_routes",
-            "_is_postgres_utility_projection_request",
+            None,
             "/utilities/problematic-files",
         ),
         (
@@ -28,7 +62,7 @@ def test_blocking_postgres_utility_reads_do_not_block_the_asgi_event_loop(
     asgi_app,
     monkeypatch,
     module_name: str,
-    selector_name: str,
+    selector_name: str | None,
     path: str,
 ):
     module = __import__(module_name, fromlist=["unused"])
@@ -54,7 +88,8 @@ def test_blocking_postgres_utility_reads_do_not_block_the_asgi_event_loop(
             self._block()
             return {"ok": True, "rules": [], "ignored_version_keys": []}
 
-    monkeypatch.setattr(module, selector_name, lambda *_args, **_kwargs: True)
+    if selector_name is not None:
+        monkeypatch.setattr(module, selector_name, lambda *_args, **_kwargs: True)
     monkeypatch.setattr(module, "PostgresLibraryBrowseRepository", BlockingPostgresBrowseRepository)
 
     async def exercise_concurrent_status_request() -> tuple[float, int, int]:

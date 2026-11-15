@@ -532,7 +532,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
 
-    assert migration_names[-8:] == [
+    assert migration_names[-9:] == [
         "0121_preserve_full_scan_progress_on_restart.sql",
         "0122_close_cover_consistency.sql",
         "0123_preserve_newer_watcher_incident_presentation.sql",
@@ -541,6 +541,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         "0126_acknowledge_mixed_version_library_warnings.sql",
         "0127_restore_authoritative_exception_clear.sql",
         "0128_create_problematic_files_projection.sql",
+        "0129_restore_incomplete_album_contract.sql",
     ]
 
 
@@ -787,7 +788,28 @@ def test_0128_reason_identity_and_audit_leases_use_exact_database_owned_state():
     assert "display_reason, category_reason" in sql
     assert "category_reason as identity_three" in page
     assert "fact.identity_three" in page
-    assert page.count('collate "c"') == 15
+    reason_key = ", ".join(
+        f'reason_fact.{column} collate "c"'
+        for column in ("item_key", "normalized_reason", "display_reason", "category_reason")
+    )
+    search_key = ", ".join(
+        f'search_fact.{column} collate "c"'
+        for column in ("item_key", "fact_kind", "semantic_child_identity")
+    )
+    assert f"and ( {reason_key} ) > (" in page
+    assert f"order by {reason_key}" in page
+    assert f"and ( {search_key}, ''::text collate \"c\" ) > (" in page
+    assert f"order by {search_key}" in page
+    for parameter in (
+        "p_after_fact_type", "p_after_item_key", "p_after_identity_one",
+        "p_after_identity_two", "p_after_identity_three",
+    ):
+        assert f"coalesce({parameter}, '') collate \"c\"" in page
+    assert (
+        'order by fact.fact_type collate "c", fact.item_key collate "c", '
+        'fact.identity_one collate "c", fact.identity_two collate "c", '
+        'fact.identity_three collate "c"'
+    ) in page
     assert "category_reason" in publish.split(
         "into projected_reason_fact_count", 1
     )[0]
@@ -1359,7 +1381,12 @@ def test_0128_stages_only_bounded_normalized_search_chunk_facts():
     assert "fact.fact_kind in ('track_title', 'private_path')" not in search_stage
     assert "fact.fact_value ->> 'normalized_text'" in search_stage
     assert "least(greatest(p_limit, 1), 100)" in search_stage
-    assert "order by fact.projection_id, fact.fact_kind, " in search_stage
+    semantic_key = (
+        'fact.projection_id collate "c", fact.fact_kind collate "c", '
+        'fact.semantic_child_identity collate "c"'
+    )
+    assert f"order by {semantic_key}" in search_stage
+    assert f"( {semantic_key} ) > (" in search_stage
     assert "fact.semantic_child_identity" in search_stage
     assert "problematic_projection_item_staging" in search_stage
     assert "problematic_projection_search_fact_staging" in search_stage
@@ -3544,7 +3571,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-89:] == [
+    assert migration_names[-90:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -3634,6 +3661,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0126_acknowledge_mixed_version_library_warnings.sql",
         "0127_restore_authoritative_exception_clear.sql",
         "0128_create_problematic_files_projection.sql",
+        "0129_restore_incomplete_album_contract.sql",
     ]
 
 
@@ -7905,7 +7933,8 @@ def test_problematic_projection_stages_duplicate_companion_topology():
     assert re.search(
         r"\(\s*lookup\.semantic_child_identity\s*,\s*candidate_file\.id\s*\)\s*>\s*"
         r"\(\s*split_part\(state\.child_identity, ':', 1\)\s*,\s*"
-        r"split_part\(state\.child_identity, ':', 2\)::bigint\s*\)",
+        r"\(case when state\.child_kind = 'duplicate_companion' then "
+        r"split_part\(state\.child_identity, ':', 2\) else '0' end\)::bigint\s*\)",
         companion_sql,
     )
     assert "order by lookup.semantic_child_identity, candidate_file.id" in companion_sql
@@ -7920,9 +7949,28 @@ def test_problematic_projection_stages_duplicate_companion_topology():
         "<> lookup.fact_value ->> 'physical_album_container'"
     ) in companion_sql
     assert "where not exists (" in companion_sql
+    assert "candidate_root.is_active is true" in companion_sql
+    assert "container_track.id = container_member.track_id" in companion_sql
+    assert "container_track.library_id = p_library_id" in companion_sql
+    assert "container_root.id = container_member.library_root_id" in companion_sql
+    assert "container_root.library_id = p_library_id" in companion_sql
+    assert "container_root.is_active is true" in companion_sql
+    assert "container_member.scan_cache_stale is false" in companion_sql
     assert (
-        "container_member.library_root_id = candidate_file.library_root_id"
+        "pg_catalog.md5(library.problematic_physical_album_container( "
+        "container_member.private_path )) in ( "
+        "pg_catalog.md5(lookup.fact_value ->> 'physical_album_container'), "
+        "pg_catalog.md5(library.problematic_physical_album_container( "
+        "candidate_file.private_path )) )"
     ) in companion_sql
+    assert (
+        "library.problematic_physical_album_container( "
+        "container_member.private_path ) in ( "
+        "lookup.fact_value ->> 'physical_album_container', "
+        "library.problematic_physical_album_container(candidate_file.private_path) )"
+    ) in companion_sql
+    assert "container_member.library_root_id = candidate_file.library_root_id" not in companion_sql
+    assert "limit least(p_limit, p_child_limit, 100)" in companion_sql
     for field in (
         "companion_file_id",
         "companion_private_path",
@@ -7970,7 +8018,12 @@ def test_problematic_projection_fact_read_uses_semantic_keyset_and_hard_batch_ca
     assert "fact.projection_id" in loader
     assert "fact.fact_kind" in loader
     assert "fact.semantic_child_identity" in loader
-    assert "order by fact.projection_id, fact.fact_kind, fact.semantic_child_identity" in loader
+    semantic_key = (
+        'fact.projection_id collate "c", fact.fact_kind collate "c", '
+        'fact.semantic_child_identity collate "c"'
+    )
+    assert f"order by {semantic_key}" in loader
+    assert f"( {semantic_key} ) > (" in loader
     assert "limit least(greatest(p_limit, 1), 100)" in loader
 
 

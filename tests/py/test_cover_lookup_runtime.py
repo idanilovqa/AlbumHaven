@@ -3099,7 +3099,7 @@ def test_request_owned_download_publishes_promoted_digest_to_every_runtime_surfa
 
     monkeypatch.setattr(cover_lookup_runtime, "download_remote_cover_to_folder", download)
     monkeypatch.setattr(api_cover_helpers, "schedule_cache_updates_save_for_config", lambda *_a, **_k: None)
-    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **_k: {"albums": []})
+    monkeypatch.setattr(api_cover_helpers, "find_problematic_album_by_track_paths", lambda *_a, **_k: None)
     updates = []
     monkeypatch.setattr(cover_lookup_runtime, "update_cover_lookup_task", lambda task_id, **kwargs:
         _capture_task_update(updates, task_id, expected_config=config, **kwargs))

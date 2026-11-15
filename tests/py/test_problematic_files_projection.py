@@ -45,6 +45,46 @@ def _row(*, year: object, title: str, path: str, track_number: int | None = 1):
     }
 
 
+def test_raw_owner_separation_does_not_change_an_unmarked_peer_in_either_order():
+    from music_app.services.problematic_files_projection import project_problematic_albums
+
+    first = _row(year=2001, title="A", path="/music/a/01.flac")
+    first.update(album_id=71, album_key="aaa", artist_id=1, track_key="owner-a-track", album_release_year=2001,
+                 separate_release_keys=["aaa"], separate_release=True)
+    second = _row(year=2001, title="B", path="/music/b/01.flac")
+    second.update(album_id=72, album_key="zzz", artist_id=2, track_id=2002, track_key="owner-b-track",
+                  album_release_year=2001, separate_release_keys=["aaa"], separate_release=False)
+    rows = [first, second]
+
+    def signature(albums):
+        return {
+            album["_persisted_album_id"]: (
+                album["key"], tuple(sorted(track["path"] for track in album["tracks"])),
+            )
+            for album in albums
+        }
+
+    published = [project_problematic_albums([deepcopy(row)])[0] for row in rows]
+    assert published[0]["key"].endswith("::year::2001")
+    assert published[1]["key"] == "zzz"
+    expected = signature(published)
+    semantic_base = published[0]["key"].removesuffix("::year::2001")
+    semantic_rows = deepcopy(rows)
+    for row in semantic_rows:
+        row.update(separate_release_keys=[semantic_base], separate_release=False)
+    for order in (semantic_rows, list(reversed(semantic_rows))):
+        semantic = project_problematic_albums(deepcopy(order))
+        assert len(semantic) == 1
+        assert semantic[0]["key"] == published[0]["key"]
+        assert {track["path"] for track in semantic[0]["tracks"]} == {"/music/a/01.flac", "/music/b/01.flac"}
+    observed = []
+    for order in (rows, list(reversed(rows))):
+        inputs = deepcopy(order)
+        observed.append(signature(project_problematic_albums(inputs)))
+        assert all(row["separate_release_keys"] == ["aaa"] for row in inputs)
+    assert observed == [expected, expected]
+
+
 def _persist_semantic_facts(accumulator, entries):
     """Mirror the fact table's semantic upsert and repository read order."""
     persisted = {}
@@ -1754,6 +1794,61 @@ def test_incremental_reducer_does_not_infer_gap_from_later_problem_row():
     )
 
 
+@pytest.mark.parametrize("track_numbers", [(2, 1), (3, 1, 2)])
+def test_incremental_reducer_omits_resolved_provisional_track_order(track_numbers):
+    from music_app.services.problematic_files_projection import (
+        ProblematicGroupAccumulator,
+        project_problematic_files,
+    )
+
+    rows = []
+    for number in track_numbers:
+        row = _row(
+            year=2004, title=f"Track {number}",
+            path=rf"D:\Music\Healthy\{number:02}.flac", track_number=number,
+        )
+        row.update(
+            track_id=number, track_key=f"healthy-track-{number}",
+            album_cover_path=r"D:\Music\Healthy\cover.jpg",
+        )
+        rows.append(row)
+
+    assert project_problematic_files(rows) == []
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    assert list(accumulator.finalize(facts)) == []
+
+
+def test_incremental_track_order_excludes_exception_tracks_like_eager_projection():
+    from music_app.services.problematic_files_projection import (
+        ProblematicGroupAccumulator,
+        project_problematic_files,
+    )
+
+    rows = []
+    for number in (1, 2):
+        row = _row(
+            year=2004, title=f"Track {number}",
+            path=rf"D:\Music\Healthy\{number:02}.flac", track_number=number,
+        )
+        row.update(
+            track_id=number, track_key=f"healthy-track-{number}",
+            album_cover_path=r"D:\Music\Healthy\cover.jpg",
+        )
+        if number == 1:
+            row["file_entry"]["exception_type"] = "Non-album rarity"
+        rows.append(row)
+
+    expected = project_problematic_files(rows)
+    assert len(expected) == 1
+    assert expected[0]["problem_reasons"] == ["Incomplete track order: Disc 1 missing 1"]
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    actual = list(accumulator.finalize(facts))
+    assert len(actual) == 1
+    assert actual[0]["summary"]["problem_reasons"] == expected[0]["problem_reasons"]
+
+
 def test_incremental_projection_keeps_search_facts_outside_bounded_summary():
     from music_app.services.problematic_files_projection import (
         ProblematicGroupAccumulator,
@@ -3146,6 +3241,59 @@ def test_legacy_and_hashed_ignored_repair_facts_can_interleave():
         assert hashed_key in membership
     finally:
         membership.close()
+
+
+@pytest.mark.parametrize("paths", [
+    ("/music/A.flac", "/music/a.flac"),
+    ("/music/a  b.flac", "/music/a b.flac"),
+    ("/music/Ａ.flac", "/music/A.flac"),
+])
+def test_group_accumulator_preserves_normalization_colliding_locators(paths):
+    from music_app.services.problematic_files_projection import (
+        ProblematicGroupAccumulator,
+    )
+
+    facts = list(ProblematicGroupAccumulator().consume(
+        (index, {"album_key": "loose-source::fixture",
+                 "file_private_path": path,
+                 "source_child_identity": str(index), "file_entry": {}})
+        for index, path in enumerate(paths, 1)
+    ))
+    locators = {payload["semantic_child_identity"]: payload["normalized_text"]
+                for _stage_id, kind, payload in facts
+                if kind == "private_path_locator"}
+    assert set(locators.values()) == set(paths)
+
+
+def test_group_accumulator_emits_exact_private_path_locator():
+    from music_app.services.problematic_files_projection import (
+        ProblematicGroupAccumulator,
+    )
+
+    private_path = "C:/Música/Loose/曲.flac"
+    facts = list(
+        ProblematicGroupAccumulator().consume(
+            (
+                (
+                    1,
+                    {
+                        "album_key": "loose-source::fixture",
+                        "file_private_path": private_path,
+                        "source_child_identity": "1",
+                        "file_entry": {},
+                    },
+                ),
+            )
+        )
+    )
+
+    locators = [
+        payload
+        for _stage_id, fact_kind, payload in facts
+        if fact_kind == "private_path_locator"
+    ]
+    assert len(locators) == 1
+    assert locators[0]["normalized_text"] == private_path
 
 
 def test_legacy_ignored_repair_ingestion_defers_spool_merge(monkeypatch):

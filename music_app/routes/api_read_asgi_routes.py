@@ -15,10 +15,6 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from music_app.routes.api_edit_helpers import (
-    build_problematic_album_detail_payload,
-    build_problematic_albums_payload,
-)
 from music_app.services.app_logging import log_app_event
 from music_app.services.log_history import (
     load_log_history_revision,
@@ -1436,98 +1432,85 @@ def utilities_problematic_files(
     filter: str = Query(default=""),
     sort: str = Query(default="album"),
 ) -> JSONResponse:
-    if _is_postgres_utility_projection_request(request):
-        repository = PostgresLibraryBrowseRepository(_app_config(request))
-        try:
-            payload = repository.build_problematic_files_page(
-                limit=limit,
-                cursor=cursor,
-                filter=filter,
-                sort=sort,
-            )
-        except ProblematicProjectionPending:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Problematic Files projection is rebuilding.",
-                    "error_code": "problematic_projection_pending",
-                },
-                status_code=503,
-                headers={"Retry-After": "1", "Cache-Control": "no-store"},
-            )
-        except ProblematicProjectionCursorExpiredError:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Problematic Files page expired; restart from the first page.",
-                    "error_code": "problematic_projection_cursor_expired",
-                },
-                status_code=409,
-                headers={"Cache-Control": "no-store"},
-            )
-        except ProblematicProjectionCursorError:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Invalid Problematic Files cursor.",
-                    "error_code": "invalid_problematic_projection_cursor",
-                },
-                status_code=400,
-                headers={"Cache-Control": "no-store"},
-            )
-        except ProblematicProjectionRequestError:
-            return JSONResponse(
-                {
-                    "ok": False,
-                    "error": "Invalid Problematic Files request.",
-                    "error_code": "invalid_problematic_files_request",
-                },
-                status_code=400,
-                headers={"Cache-Control": "no-store"},
-            )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(_attach_library_watch_health(request, payload))
-    _hydrate_cached_library_for_asgi(request)
-    payload = build_problematic_albums_payload(
-        config=_app_config(request),
-        library_state=_library_state(request),
-        logger=_app_logger(request),
-    )
+    repository = PostgresLibraryBrowseRepository(_app_config(request))
+    try:
+        payload = repository.build_problematic_files_page(
+            limit=limit,
+            cursor=cursor,
+            filter=filter,
+            sort=sort,
+        )
+    except ProblematicProjectionPending:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Problematic Files projection is rebuilding.",
+                "error_code": "problematic_projection_pending",
+            },
+            status_code=503,
+            headers={"Retry-After": "1", "Cache-Control": "no-store"},
+        )
+    except ProblematicProjectionCursorExpiredError:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Problematic Files page expired; restart from the first page.",
+                "error_code": "problematic_projection_cursor_expired",
+            },
+            status_code=409,
+            headers={"Cache-Control": "no-store"},
+        )
+    except ProblematicProjectionCursorError:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Invalid Problematic Files cursor.",
+                "error_code": "invalid_problematic_projection_cursor",
+            },
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    except ProblematicProjectionRequestError:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Invalid Problematic Files request.",
+                "error_code": "invalid_problematic_files_request",
+            },
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(_attach_library_watch_health(request, payload))
 
 
 @router.get("/utilities/problematic-files/detail")
 def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
+    projection_id = str(request.query_params.get("projection_id", "") or "")
     album_key = str(request.query_params.get("album_key", "") or "")
     track_path = str(request.query_params.get("track_path", "") or "")
-    if not album_key and not track_path:
-        return JSONResponse({"ok": False, "error": "Missing album_key."}, status_code=400)
-    if album_key and track_path:
+    selectors = {
+        name: value
+        for name, value in (
+            ("projection_id", projection_id),
+            ("album_key", album_key),
+            ("track_path", track_path),
+        )
+        if value.strip()
+    }
+    if len(selectors) != 1:
         return JSONResponse(
-            {"ok": False, "error": "Provide exactly one of album_key or track_path."},
+            {
+                "ok": False,
+                "error": "Provide exactly one projection_id, album_key, or track_path.",
+            },
             status_code=400,
         )
-    if _is_postgres_utility_projection_request(request):
-        repository = PostgresLibraryBrowseRepository(_app_config(request))
-        payload = (
-            repository.build_problematic_file_detail_payload(album_key)
-            if album_key
-            else repository.build_problematic_album_payload_by_track_paths({track_path})
-        )
-        if payload is None:
-            return JSONResponse(
-                {"ok": False, "error": "Problematic album not found."},
-                status_code=404,
-            )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
-    _hydrate_cached_library_for_asgi(request)
-    payload = build_problematic_album_detail_payload(
-        album_key,
-        config=_app_config(request),
-        library_state=_library_state(request),
-        logger=_app_logger(request),
+    repository = PostgresLibraryBrowseRepository(_app_config(request))
+    payload = (
+        repository.build_problematic_album_payload_by_track_paths({track_path})
+        if "track_path" in selectors
+        else repository.build_problematic_file_detail_payload(**selectors)
     )
     if payload is None:
         return JSONResponse(
@@ -1540,21 +1523,16 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
 
 @router.get("/utilities/problematic-files/{album_key:path}")
 def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONResponse:
-    if _is_postgres_utility_projection_request(request):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_problematic_file_detail_payload(album_key)
-        if payload is None:
-            return JSONResponse(
-                {"ok": False, "error": "Problematic album not found."},
-                status_code=404,
-            )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
-    _hydrate_cached_library_for_asgi(request)
-    payload = build_problematic_album_detail_payload(
-        album_key,
-        config=_app_config(request),
-        library_state=_library_state(request),
-        logger=_app_logger(request),
+    normalized_album_key = str(album_key or "").strip()
+    if not normalized_album_key:
+        return JSONResponse(
+            {"ok": False, "error": "Provide a non-empty album_key."},
+            status_code=400,
+        )
+    payload = PostgresLibraryBrowseRepository(
+        _app_config(request)
+    ).build_problematic_file_detail_payload(
+        album_key=normalized_album_key,
     )
     if payload is None:
         return JSONResponse(
@@ -1563,11 +1541,6 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
         )
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse(payload)
-
-
-def _is_postgres_utility_projection_request(request: Request) -> bool:
-    selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
-    return selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES
 
 
 @router.get("/utilities/loops")

@@ -4,9 +4,10 @@ import base64
 import importlib
 import json
 import os
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -98,13 +99,30 @@ def _plan_nodes(plan: object) -> tuple[dict[str, object], ...]:
     return tuple(nodes)
 
 
-def _explain(connection, sql: str, params: object = None) -> dict[str, object]:
+def _explain(
+    connection, sql: str, params: object = None, *,
+    planner: str = "forced-index-eligibility",
+) -> dict[str, object]:
     connection.execute("set local enable_seqscan = off")
     row = connection.execute(
         f"explain (format json) {sql}",
         params,
     ).fetchone()
+    print(json.dumps({"planner": planner, "query_plan": row["QUERY PLAN"][0]}, sort_keys=True))
     return row["QUERY PLAN"][0]["Plan"]
+
+
+def _reader_plan_variants(as_loaded, connection, sql: str, params: dict[str, object]):
+    connection.execute("set local enable_seqscan = on")
+    rows = connection.execute(sql, params).fetchall()
+    expected_total = 100 if params["query"] or params["reasons"] else 10000
+    assert len(rows) == 26 and rows[0]["filtered_total"] == expected_total
+    natural = connection.execute(
+        f"explain (analyze, buffers, format json) {sql}", params,
+    ).fetchone()["QUERY PLAN"][0]
+    print(json.dumps({"planner": "maintained-fixture-default", "query": params["query"], "query_plan": natural}, sort_keys=True))
+    forced = _explain(connection, sql, params)
+    return as_loaded.get(params["query"], natural)["Plan"], natural["Plan"], forced
 
 
 def _assert_plan_uses_index(plan: object, index_name: str) -> None:
@@ -174,7 +192,7 @@ def _reader_plan_params(
         "anchor_item_key": anchor_item_key,
         "has_position": anchor_item_key is not None,
         "include_filtered_total": anchor_item_key is None,
-        "carried_total": 0 if anchor_item_key is not None else None,
+        "carried_total": 10000 if anchor_item_key is not None else None,
         "fetch_limit": 26,
     }
 
@@ -249,11 +267,60 @@ def live_projection_database():
         _prepare_live_projection_database(setup_url, app_url)
 
 
+def _projection_invalidation_state(connection, library_id):
+    return connection.execute(
+        "select source_generation, verified, updated_at, ctid::text, "
+        "source_xid_fence::text, (select count(*) from ops.jobs "
+        "where kind = 'problematic_files_projection' and library_id = %s) job_count "
+        "from ops.problematic_projection_state where library_id = %s",
+        (library_id, library_id),
+    ).fetchone()
+
+
+@pytest.fixture
+def live_featured_invalidation_source(live_projection_database):
+    from tests.e2e.support import isolatedPostgres
+
+    database = live_projection_database
+    key = f"task9a-invalidation-{uuid4()}"
+    with isolatedPostgres._connect(database.setup_url) as connection:
+        artist_id = connection.execute(
+            "insert into library.local_artists(library_id, artist_key, name) "
+            "values (%s, %s, 'Invalidation artist') returning id",
+            (database.library_id, key),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums(library_id, artist_id, album_key, title) "
+            "values (%s, %s, %s, 'Invalidation album') returning id",
+            (database.library_id, artist_id, key),
+        ).fetchone()["id"]
+        featured = connection.execute(
+            "insert into library.local_album_featured_artists"
+            "(library_id, album_id, artist_id, featured_kind) "
+            "values (%s, %s, %s, 'owner') returning last_seen_at",
+            (database.library_id, album_id, artist_id),
+        ).fetchone()
+    return SimpleNamespace(
+        database=database, artist_id=artist_id, album_id=album_id,
+        last_seen_at=featured["last_seen_at"],
+    )
+
+
 @pytest.fixture(scope="module")
 def live_reader_plan_database():
     connection = _live_plan_connection()
     revision = UUID("00000000-0000-0000-0000-000000000009")
     try:
+        owner = connection.execute(
+            "select account_id from app.bootstrap_owners "
+            "where owner_key = 'local-bootstrap-owner'"
+        ).fetchone()
+        if owner is None:
+            from tests.e2e.support import isolatedPostgres
+
+            isolatedPostgres.seed_bootstrap_owner_and_library(
+                os.environ["DATABASE_MIGRATOR_URL"]
+            )
         library_id, _current_revision = _live_projection_identity(connection)
         connection.execute(
             """
@@ -298,21 +365,105 @@ def live_reader_plan_database():
         )
         connection.execute(
             """
+            insert into ops.problematic_projection_reason_facts(
+                library_id, revision, item_key,
+                normalized_reason, display_reason, category_reason
+            )
+            select library_id, revision, item_key, reasons[1], reasons[1], reasons[1]
+            from ops.problematic_projection_items
+            where library_id = %s and revision = %s
+            """,
+            (library_id, revision),
+        )
+        connection.execute(
+            """
+            insert into ops.problematic_projection_search_facts(
+                library_id, revision, item_key, fact_kind,
+                semantic_child_identity, normalized_text
+            )
+            select library_id, revision, item_key, 'track_title_search', item_key,
+                   case when value %% 100 = 0
+                        then 'childneedle unique ' || value
+                        else 'ordinary row ' || value end
+            from ops.problematic_projection_items
+            cross join lateral (
+                select split_part(item_key, '-', 3)::integer as value
+            ) numbered
+            where library_id = %s and revision = %s
+            """,
+            (library_id, revision),
+        )
+        from music_app.services.problematic_projection_integrity import (
+            _fingerprint_text, _reason_fact_fingerprint, _search_fact_fingerprint,
+        )
+
+        reason_fingerprint = 0
+        search_fingerprint = 0
+        for value in range(1, 10001):
+            item_key = f"plan-item-{value:06d}"
+            reason = "missing cover" if value % 100 == 0 else "other"
+            search_text = f"childneedle unique {value}" if value % 100 == 0 else f"ordinary row {value}"
+            reason_fingerprint ^= _reason_fact_fingerprint(item_key, reason, reason, reason)
+            search_fingerprint ^= _search_fact_fingerprint(
+                item_key, "track_title_search", item_key, search_text,
+            )
+        connection.execute(
+            """
+            update ops.problematic_projection_headers
+            set reason_fingerprint = %s::bit(256), search_fingerprint = %s::bit(256)
+            where library_id = %s and revision = %s
+            """,
+            (_fingerprint_text(reason_fingerprint), _fingerprint_text(search_fingerprint),
+             library_id, revision),
+        )
+        connection.execute(
+            """
             insert into ops.problematic_projection_state(
                 library_id, committed_revision, committed_total,
-                reason_facets, verified
-            ) values (%s, %s, 10000,
+                source_generation, rebuild_epoch, reason_facets, verified
+            ) values (%s, %s, 10000, 1, 1,
                       '{"missing cover":100,"other":9900}'::jsonb, true)
             on conflict (library_id) do update set
                 committed_revision = excluded.committed_revision,
                 committed_total = excluded.committed_total,
+                source_generation = excluded.source_generation,
+                rebuild_epoch = excluded.rebuild_epoch,
                 reason_facets = excluded.reason_facets,
                 verified = excluded.verified
             """,
             (library_id, revision),
         )
         connection.execute("analyze ops.problematic_projection_items")
-        yield connection, library_id, revision
+        connection.execute("analyze ops.problematic_projection_reason_facts")
+        connection.execute("analyze ops.problematic_projection_search_facts")
+        module = importlib.import_module("music_app.services.problematic_projection_postgres")
+        first_page = connection.execute(
+            module._read_page_sql(),
+            _reader_plan_params(library_id=library_id, revision=revision),
+        ).fetchall()
+        assert len(first_page) == 26 and first_page[0]["filtered_total"] == 10000
+        as_loaded = {}
+        for query in ("premiere", "childneedle"):
+            params = _reader_plan_params(library_id=library_id, revision=revision, query=query)
+            rows = connection.execute(module._read_page_sql(), params).fetchall()
+            assert len(rows) == 26 and rows[0]["filtered_total"] == 100
+            as_loaded[query] = connection.execute(
+                f"explain (analyze, buffers, format json) {module._read_page_sql()}", params,
+            ).fetchone()["QUERY PLAN"][0]
+            print(json.dumps({"planner": "as-loaded-fixture-default", "query": query,
+                              "rows": len(rows), "filtered_total": rows[0]["filtered_total"],
+                              "query_plan": as_loaded[query]}, sort_keys=True))
+        for index_name in (
+            "ops.problematic_projection_items_search_idx",
+            "ops.problematic_projection_search_facts_text_idx",
+        ):
+            cleaned = connection.execute(
+                "select pg_catalog.gin_clean_pending_list(%s::regclass) as pages", (index_name,),
+            ).fetchone()["pages"]
+            print(json.dumps({"gin_index": index_name, "pending_pages_cleaned": cleaned}))
+        connection.execute("analyze ops.problematic_projection_items")
+        connection.execute("analyze ops.problematic_projection_search_facts")
+        yield connection, library_id, revision, as_loaded
     finally:
         connection.rollback()
         connection.close()
@@ -1438,6 +1589,14 @@ def test_live_source_staging_bounds_metadata_and_row_relevant_ignores(
                     row_count=persisted.row_count + fact_stage_count,
                     now=now,
                 )
+            if chunk.complete:
+                repository.complete_claimed_source_group(
+                    claim=claim,
+                    build=build,
+                    group_key=chunk.group_key,
+                    source_cursor=chunk.cursor,
+                    now=now,
+                )
         row = next(
             (
                 source_row
@@ -1817,6 +1976,217 @@ def test_live_invalidation_fails_closed_for_ambiguous_canonical_library(
         assert getattr(error.value, "sqlstate", None) == "55000"
 
 
+@pytest.mark.parametrize("statement", ["empty-insert", "empty-delete", "conflict-unconsumed"])
+def test_live_featured_noop_statements_preserve_projection_state(
+    live_featured_invalidation_source, statement,
+):
+    from tests.e2e.support import isolatedPostgres
+
+    source = live_featured_invalidation_source
+    library_id = source.database.library_id
+    with isolatedPostgres._connect(source.database.setup_url) as connection:
+        before = _projection_invalidation_state(connection, library_id)
+        if statement == "empty-delete":
+            changed = connection.execute(
+                "delete from library.local_album_featured_artists "
+                "where library_id = %s and album_id = %s and artist_id = %s and false",
+                (library_id, source.album_id, source.artist_id),
+            )
+        else:
+            suffix = "where false" if statement == "empty-insert" else (
+                "on conflict (library_id, album_id, artist_id, featured_kind) "
+                "do update set last_seen_at = "
+                "library.local_album_featured_artists.last_seen_at + interval '1 second'"
+            )
+            changed = connection.execute(
+                "insert into library.local_album_featured_artists"
+                "(library_id, album_id, artist_id, featured_kind) "
+                "select %s, %s, %s, 'owner' " + suffix,
+                (library_id, source.album_id, source.artist_id),
+            )
+        assert changed.rowcount == (1 if statement == "conflict-unconsumed" else 0)
+        if statement == "conflict-unconsumed":
+            last_seen = connection.execute(
+                "select last_seen_at from library.local_album_featured_artists "
+                "where library_id = %s and album_id = %s and artist_id = %s "
+                "and featured_kind = 'owner'",
+                (library_id, source.album_id, source.artist_id),
+            ).fetchone()["last_seen_at"]
+            assert last_seen == source.last_seen_at + timedelta(seconds=1)
+        assert _projection_invalidation_state(connection, library_id) == before
+
+
+def test_live_featured_insert_delete_invalidate_without_enqueuing(
+    live_featured_invalidation_source,
+):
+    from tests.e2e.support import isolatedPostgres
+
+    source = live_featured_invalidation_source
+    library_id = source.database.library_id
+    for statement in ("insert", "delete"):
+        with isolatedPostgres._connect(source.database.setup_url) as connection:
+            before = _projection_invalidation_state(connection, library_id)
+            if statement == "insert":
+                changed = connection.execute(
+                    "insert into library.local_album_featured_artists"
+                    "(library_id, album_id, artist_id, featured_kind) "
+                    "values (%s, %s, %s, 'featured_member')",
+                    (library_id, source.album_id, source.artist_id),
+                )
+            else:
+                changed = connection.execute(
+                    "delete from library.local_album_featured_artists "
+                    "where library_id = %s and album_id = %s and artist_id = %s "
+                    "and featured_kind = 'featured_member'",
+                    (library_id, source.album_id, source.artist_id),
+                )
+            assert changed.rowcount == 1
+            after = _projection_invalidation_state(connection, library_id)
+            assert after["source_generation"] == before["source_generation"] + 1
+            assert after["source_xid_fence"] != before["source_xid_fence"]
+            assert after["verified"] is False
+            assert after["ctid"] != before["ctid"]
+            assert after["job_count"] == before["job_count"]
+
+
+def test_live_invalidation_coalesces_physical_writes_within_transaction(
+    live_projection_database,
+):
+    from tests.e2e.support import isolatedPostgres
+
+    database = live_projection_database
+    for _ in range(2):
+        with isolatedPostgres._connect(database.setup_url) as connection:
+            before = _projection_invalidation_state(connection, database.library_id)
+            connection.execute(
+                "select ops.invalidate_problematic_projection_library(%s)",
+                (database.library_id,),
+            )
+            first = _projection_invalidation_state(connection, database.library_id)
+            assert first["source_generation"] == before["source_generation"] + 1
+            assert first["source_xid_fence"] != before["source_xid_fence"]
+            assert first["ctid"] != before["ctid"]
+            assert first["verified"] is False
+            assert first["job_count"] == before["job_count"]
+            connection.execute(
+                "select ops.invalidate_problematic_projection_library(%s)",
+                (database.library_id,),
+            )
+            assert _projection_invalidation_state(connection, database.library_id) == first
+
+
+def test_live_publication_same_fence_mutation_invalidates_again(live_projection_database):
+    from music_app.services.jobs.models import JobState, JobTransitionResult
+    from music_app.services.jobs.repository_postgres import PostgresJobRepository
+    from music_app.services.problematic_projection_postgres import (
+        PostgresProblematicProjectionRepository,
+    )
+    from tests.e2e.support import isolatedPostgres
+
+    database = live_projection_database
+    with isolatedPostgres._connect(database.setup_url) as connection:
+        repository = PostgresProblematicProjectionRepository(
+            database_url=database.worker_url,
+            connect_to_database=lambda _url: nullcontext(connection),
+        )
+        jobs = PostgresJobRepository(
+            database_url=database.worker_url,
+            connect_to_database=lambda _url: nullcontext(connection),
+        )
+        connection.execute(
+            "select ops.invalidate_problematic_projection_library(%s)",
+            (database.library_id,),
+        )
+        queued = repository.enqueue_rebuild(
+            library_id=database.library_id, requested_by="same-fence-publication",
+        )
+        now = datetime.now(timezone.utc)
+        claim = jobs.claim(
+            worker_id="same-fence-worker", now=now, lease_seconds=60,
+            kinds=("problematic_files_projection",),
+        )
+        assert claim is not None and claim.job_id == queued["job_id"]
+        build = repository.prepare_claimed_build(claim=claim, now=now)
+        assert repository.publish_claimed_snapshot(claim=claim, build=build, now=now)
+        assert jobs.finish(
+            claim, JobTransitionResult(JobState.SUCCEEDED, "same_fence_published"),
+            now=now,
+        )
+        published = _projection_invalidation_state(connection, database.library_id)
+        assert published["verified"] is True
+        assert published["source_xid_fence"] == connection.execute(
+            "select pg_current_xact_id()::text xid"
+        ).fetchone()["xid"]
+        changed = connection.execute(
+            "insert into library.local_artists(library_id, artist_key, name) "
+            "values (%s, %s, 'After publication')",
+            (database.library_id, f"task9a-same-fence-{uuid4()}"),
+        )
+        assert changed.rowcount == 1
+        invalidated = _projection_invalidation_state(connection, database.library_id)
+        assert invalidated["source_generation"] == published["source_generation"]
+        assert invalidated["source_xid_fence"] == published["source_xid_fence"]
+        assert invalidated["verified"] is False
+        assert invalidated["ctid"] != published["ctid"]
+        assert invalidated["job_count"] == published["job_count"]
+
+
+@pytest.mark.parametrize("authority", ["missing", "ambiguous"])
+@pytest.mark.parametrize("statement", ["empty-insert", "empty-delete"])
+def test_live_empty_featured_statements_fail_closed_without_canonical_authority(
+    live_featured_invalidation_source, authority, statement,
+):
+    from tests.e2e.support import isolatedPostgres
+
+    source = live_featured_invalidation_source
+    library_id = source.database.library_id
+    with isolatedPostgres._connect(source.database.setup_url) as connection:
+        before = _projection_invalidation_state(connection, library_id)
+        owner_account_id = connection.execute(
+            "select owner_account_id from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["owner_account_id"]
+        if authority == "missing":
+            connection.execute(
+                "alter table app.bootstrap_owners disable trigger invalidate_problematic_projection"
+            )
+            connection.execute(
+                "delete from app.bootstrap_owners where owner_key = 'local-bootstrap-owner'"
+            )
+            connection.execute(
+                "alter table app.bootstrap_owners enable trigger invalidate_problematic_projection"
+            )
+        else:
+            connection.execute(
+                "alter table library.libraries disable trigger invalidate_problematic_projection"
+            )
+            connection.execute(
+                "insert into library.libraries(owner_account_id, name, library_kind) "
+                "values (%s, 'Ambiguous empty featured statement', 'local')",
+                (owner_account_id,),
+            )
+            connection.execute(
+                "alter table library.libraries enable trigger invalidate_problematic_projection"
+            )
+        with pytest.raises(Exception) as error:
+            if statement == "empty-insert":
+                connection.execute(
+                    "insert into library.local_album_featured_artists"
+                    "(library_id, album_id, artist_id, featured_kind) "
+                    "select %s, %s, %s, 'owner' where false",
+                    (library_id, source.album_id, source.artist_id),
+                )
+            else:
+                connection.execute(
+                    "delete from library.local_album_featured_artists "
+                    "where library_id = %s and album_id = %s and artist_id = %s and false",
+                    (library_id, source.album_id, source.artist_id),
+                )
+        assert getattr(error.value, "sqlstate", None) == "55000"
+        connection.rollback()
+        assert _projection_invalidation_state(connection, library_id) == before
+
+
 def test_repository_prepares_and_validates_claimed_build(cursor_api):
     revision = UUID("00000000-0000-0000-0000-000000000012")
     build_row = {
@@ -1906,6 +2276,43 @@ def test_real_repository_and_handler_acknowledge_a_committed_publish_replay(
     assert len(connections) == 2
     assert "ops.prepare_claimed_problematic_projection" in connections[0].calls[0][0]
     assert "ops.publish_claimed_problematic_projection" in connections[1].calls[0][0]
+
+
+@pytest.mark.parametrize("source_kind,source_identity", [("album", "100"), ("loose_source", "101"), ("missing_album", "102")])
+def test_repository_resumes_between_groups_without_reusing_child_cursor(
+    cursor_api, source_kind, source_identity,
+):
+    repository, _ = _repository(cursor_api, ({
+        "library_id": 17, "source_generation": 12, "rebuild_epoch": 8,
+        "revision": UUID("00000000-0000-0000-0000-000000000015"),
+        "source_kind": source_kind, "source_identity": source_identity,
+        "child_kind": None, "child_identity": None,
+        "group_kind": None, "group_identity": None, "committed": False,
+    },))
+    build = repository.prepare_claimed_build(claim=_claim(), now=_now())
+    assert build.source_cursor is None
+    assert build.source_group_key is None
+    assert build.committed is False
+
+
+@pytest.mark.parametrize("changes", [
+    {"source_kind": None}, {"source_identity": None},
+    {"source_kind": "invalid"}, {"source_identity": "not-an-id"},
+    {"child_kind": "file"}, {"child_identity": "4"},
+    {"group_kind": "album", "group_identity": "100"},
+])
+def test_repository_rejects_malformed_between_group_watermark(cursor_api, changes):
+    row = {
+        "library_id": 17, "source_generation": 12, "rebuild_epoch": 8,
+        "revision": UUID("00000000-0000-0000-0000-000000000015"),
+        "source_kind": "album", "source_identity": "100",
+        "child_kind": None, "child_identity": None,
+        "group_kind": None, "group_identity": None, "committed": False,
+    }
+    row.update(changes)
+    repository, _ = _repository(cursor_api, (row,))
+    with pytest.raises(cursor_api.ProblematicProjectionIntegrityError):
+        repository.prepare_claimed_build(claim=_claim(), now=_now())
 
 
 def test_repository_rejects_mismatched_persisted_build_group(cursor_api):
@@ -2009,10 +2416,14 @@ def test_projection_identity_validation_rejects_malformed_numeric_domain_values(
         cursor_api._validate_group_key((kind, identity))
 
 
-def test_repository_loads_empty_terminal_source_page(cursor_api):
+@pytest.mark.parametrize("complete", [False, True])
+def test_repository_loads_empty_terminal_source_page(cursor_api, complete):
     repository, _connections = _repository(
         cursor_api,
-        ({"group_kind": None, "page_complete": True},),
+        ({"group_kind": None, "group_identity": None,
+          "source_kind": None, "source_identity": None,
+          "child_kind": None, "child_identity": None,
+          "rows": [], "group_complete": False, "page_complete": complete},),
     )
     build = cursor_api.ProblematicProjectionBuild(17, 12, 8, "rev", None)
 
@@ -2020,7 +2431,30 @@ def test_repository_loads_empty_terminal_source_page(cursor_api):
         claim=_claim(), build=build, limit=32, child_limit=100, now=_now()
     )
 
-    assert page == cursor_api.ProblematicProjectionSourcePage((), True)
+    assert page == cursor_api.ProblematicProjectionSourcePage((), complete)
+
+
+@pytest.mark.parametrize("override,mixed", [
+    ({"group_identity": "1"}, False),
+    ({"child_kind": "file"}, False),
+    ({"rows": [{"track_id": 1}]}, False),
+    ({"page_complete": 1}, False),
+    ({"group_complete": True}, False),
+    ({}, True),
+])
+def test_repository_rejects_malformed_empty_source_page(cursor_api, override, mixed):
+    sentinel = {"group_kind": None, "group_identity": None,
+                "source_kind": None, "source_identity": None,
+                "child_kind": None, "child_identity": None,
+                "rows": [], "group_complete": False, "page_complete": False,
+                **override}
+    rows = (sentinel, {"group_kind": "album", "group_identity": "1"}) if mixed else (sentinel,)
+    repository, _connections = _repository(cursor_api, rows)
+    build = cursor_api.ProblematicProjectionBuild(17, 12, 8, "rev", None)
+    with pytest.raises(cursor_api.ProblematicProjectionIntegrityError, match="invalid empty source page"):
+        repository.load_claimed_source_page(
+            claim=_claim(), build=build, limit=32, child_limit=100, now=_now(),
+        )
 
 
 def test_repository_rejects_claimed_source_page_over_hard_row_limit(cursor_api):
@@ -3660,6 +4094,7 @@ def test_read_page_search_materializes_trigram_candidates_before_keyset(
     candidate_sql = sql[candidate_start:candidate_end]
 
     assert "search_text like %(query_pattern)s" in candidate_sql
+    assert "search_fact.fact_kind <> 'private_path_locator'" in candidate_sql
     assert "sort_title" not in candidate_sql
     assert candidate_end < sql.index("order by candidate.sort_title")
 
@@ -4307,6 +4742,9 @@ def test_projection_search_facts_are_relational_bounded_and_publication_owned(
     assert "fact_kind text not null" in table
     assert "semantic_child_identity text not null" in table
     assert "normalized_text text not null" in table
+    assert "fact_kind = 'private_path_locator'" in table
+    assert "octet_length(normalized_text) <= 65536" in table
+    assert "fact_kind <> 'private_path_locator'" in table
     assert "octet_length(normalized_text) <= 32768" in table
     assert (
         "primary key (library_id, revision, item_key, fact_kind, "
@@ -4318,11 +4756,13 @@ def test_projection_search_facts_are_relational_bounded_and_publication_owned(
     assert (
         "problematic_projection_search_facts_text_idx "
         "on ops.problematic_projection_search_facts using gin "
-        "(normalized_text library.gin_trgm_ops)"
+        "(normalized_text library.gin_trgm_ops) "
+        "where fact_kind <> 'private_path_locator'"
     ) in migration
     assert "insert into ops.problematic_projection_search_facts" in publish
     assert "from ops.problematic_projection_search_fact_staging" in publish
     assert "ops.problematic_projection_search_facts" in read_sql
+    assert "search_fact.fact_kind <> 'private_path_locator'" in read_sql
     assert "search_fact.normalized_text like %(query_pattern)s" in read_sql
 
 
@@ -4816,7 +5256,8 @@ def test_live_claimed_search_fact_pipeline_pages_replays_publishes_audits_and_in
             """
             select item_key
               from ops.problematic_projection_search_facts
-            where normalized_text like %(pattern)s
+            where fact_kind <> 'private_path_locator'
+              and normalized_text like %(pattern)s
             """,
             {"pattern": "%tail%"},
         )
@@ -5041,21 +5482,26 @@ def test_explain_unfiltered_keyset_uses_album_sort_projection_index(
     cursor_api,
     live_reader_plan_database,
 ):
-    connection, library_id, revision = live_reader_plan_database
-    plan = _explain(
+    connection, library_id, revision, as_loaded = live_reader_plan_database
+    natural, maintained, plan = _reader_plan_variants(
+        as_loaded,
         connection,
         cursor_api._read_page_sql(),
         _reader_plan_params(library_id=library_id, revision=revision),
     )
 
     _assert_plan_uses_index(plan, "problematic_projection_items_album_sort_idx")
+    _assert_plan_uses_index(maintained, "problematic_projection_items_album_sort_idx")
     _assert_reader_plan_is_projection_only(plan)
+    _assert_reader_plan_is_projection_only(natural)
+    _assert_reader_plan_is_projection_only(maintained)
+    assert natural["Actual Rows"] == 26
 
 
 def test_explain_integrity_keyset_uses_c_collated_fact_indexes(
     live_reader_plan_database,
 ):
-    connection, library_id, revision = live_reader_plan_database
+    connection, library_id, revision, as_loaded = live_reader_plan_database
     connection.execute(
         """
         insert into ops.problematic_projection_reason_facts(
@@ -5492,6 +5938,76 @@ def test_live_integrity_audit_uses_exact_reason_facts_and_enqueues_once(
         assert jobs == 0
 
 
+def test_live_projection_worker_publishes_missing_album_with_duplicate_identity(
+    live_projection_database,
+):
+    from config import build_worker_config
+    from music_app.services.problematic_projection_postgres import PostgresProblematicProjectionRepository
+    from scripts.run_jobs_worker import _build_worker
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = live_projection_database
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        root_id = connection.execute(
+            "insert into library.library_roots(library_id, root_path, root_kind) "
+            "values (%s, 'C:\\missing-projection', 'main') returning id",
+            (fixture.library_id,),
+        ).fetchone()["id"]
+        artist_id = connection.execute(
+            "insert into library.local_artists(library_id, artist_key, name) "
+            "values (%s, 'missing-projection-artist', 'Missing Projection Artist') returning id",
+            (fixture.library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums(library_id, artist_id, album_key, title, release_year) "
+            "values (%s, %s, 'missing-projection-album', 'Missing Projection Album', 2026) returning id",
+            (fixture.library_id, artist_id),
+        ).fetchone()["id"]
+        track_id = connection.execute(
+            "insert into library.local_tracks(library_id, album_id, artist_id, track_key, title, track_number) "
+            "values (%s, %s, %s, 'missing-projection-track', 'Missing Track', 1) returning id",
+            (fixture.library_id, album_id, artist_id),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.local_track_files(track_id, library_root_id, private_path, metadata) "
+            "values (%s, %s, %s, %s::jsonb)",
+            (track_id, root_id, r"C:\missing-projection\album\01.flac", json.dumps({
+                "scan_cache": {
+                    "stale": True,
+                    "stale_marked_at": "2026-10-01T00:00:00Z",
+                    "file_entry": {
+                        "album": "Missing Projection Album", "album_artist": "Missing Projection Artist",
+                        "artist": "Missing Projection Artist", "title": "Missing Track", "year": 2026,
+                        "track_number": 1, "disc_number": 1,
+                    },
+                },
+            })),
+        )
+
+    reader = PostgresProblematicProjectionRepository(database_url=fixture.app_url)
+    reader.enqueue_rebuild(library_id=fixture.library_id, requested_by="missing-projection-regression")
+    worker = _build_worker(build_worker_config(), worker_id="missing-projection-regression")
+    try:
+        assert worker.run_once()
+    finally:
+        worker.close()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        state = connection.execute(
+            "select verified from ops.problematic_projection_state where library_id=%s",
+            (fixture.library_id,),
+        ).fetchone()
+        orphan_count = connection.execute(
+            "select (select count(*) from ops.problematic_projection_group_facts) + "
+            "(select count(*) from ops.problematic_projection_source_staging) as count"
+        ).fetchone()["count"]
+    assert state == {"verified": True}
+    page = reader.read_page(library_id=fixture.library_id, limit=50)
+    assert len(page.items) == 1
+    assert page.items[0]["inventory_status"] == "missing"
+    assert page.items[0]["problem_reasons"] == ["Album not found"]
+    assert orphan_count == 0
+
+
 def test_live_terminal_failure_before_prepare_enqueues_replacement(
     live_projection_database,
 ):
@@ -5574,8 +6090,9 @@ def test_explain_reason_filter_uses_reason_projection_index(
     cursor_api,
     live_reader_plan_database,
 ):
-    connection, library_id, revision = live_reader_plan_database
-    plan = _explain(
+    connection, library_id, revision, as_loaded = live_reader_plan_database
+    natural, maintained, plan = _reader_plan_variants(
+        as_loaded,
         connection,
         cursor_api._read_page_sql(),
         _reader_plan_params(
@@ -5585,16 +6102,21 @@ def test_explain_reason_filter_uses_reason_projection_index(
         ),
     )
 
-    _assert_plan_uses_index(plan, "problematic_projection_items_reasons_idx")
+    _assert_plan_uses_index(plan, "problematic_projection_reason_facts_filter_idx")
+    _assert_plan_uses_index(maintained, "problematic_projection_reason_facts_filter_idx")
     _assert_reader_plan_is_projection_only(plan)
+    _assert_reader_plan_is_projection_only(natural)
+    _assert_reader_plan_is_projection_only(maintained)
+    assert natural["Actual Rows"] == 26
 
 
 def test_explain_search_filter_uses_search_projection_index(
     cursor_api,
     live_reader_plan_database,
 ):
-    connection, library_id, revision = live_reader_plan_database
-    plan = _explain(
+    connection, library_id, revision, as_loaded = live_reader_plan_database
+    natural, maintained, plan = _reader_plan_variants(
+        as_loaded,
         connection,
         cursor_api._read_page_sql(),
         _reader_plan_params(
@@ -5605,15 +6127,42 @@ def test_explain_search_filter_uses_search_projection_index(
     )
 
     _assert_plan_uses_index(plan, "problematic_projection_items_search_idx")
+    _assert_plan_uses_index(maintained, "problematic_projection_items_search_idx")
     _assert_reader_plan_is_projection_only(plan)
+    _assert_reader_plan_is_projection_only(natural)
+    _assert_reader_plan_is_projection_only(maintained)
+    assert natural["Actual Rows"] == 26
+
+
+def test_explain_search_filter_relational_tail_uses_search_projection_index(
+    cursor_api,
+    live_reader_plan_database,
+):
+    connection, library_id, revision, as_loaded = live_reader_plan_database
+    natural, maintained, plan = _reader_plan_variants(
+        as_loaded,
+        connection,
+        cursor_api._read_page_sql(),
+        _reader_plan_params(
+            library_id=library_id, revision=revision, query="childneedle",
+        ),
+    )
+
+    _assert_plan_uses_index(plan, "problematic_projection_search_facts_text_idx")
+    _assert_plan_uses_index(maintained, "problematic_projection_search_facts_text_idx")
+    _assert_reader_plan_is_projection_only(plan)
+    _assert_reader_plan_is_projection_only(natural)
+    _assert_reader_plan_is_projection_only(maintained)
+    assert natural["Actual Rows"] == 26
 
 
 def test_explain_continuation_uses_album_sort_projection_index(
     cursor_api,
     live_reader_plan_database,
 ):
-    connection, library_id, revision = live_reader_plan_database
-    plan = _explain(
+    connection, library_id, revision, as_loaded = live_reader_plan_database
+    natural, maintained, plan = _reader_plan_variants(
+        as_loaded,
         connection,
         cursor_api._read_page_sql(),
         _reader_plan_params(
@@ -5624,4 +6173,8 @@ def test_explain_continuation_uses_album_sort_projection_index(
     )
 
     _assert_plan_uses_index(plan, "problematic_projection_items_album_sort_idx")
+    _assert_plan_uses_index(maintained, "problematic_projection_items_album_sort_idx")
     _assert_reader_plan_is_projection_only(plan)
+    _assert_reader_plan_is_projection_only(natural)
+    _assert_reader_plan_is_projection_only(maintained)
+    assert natural["Actual Rows"] == 26

@@ -1,10 +1,133 @@
 import ast
 from pathlib import Path
 import re
+import shutil
+import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER_PATH = REPO_ROOT / "scripts" / "ci" / "run-phase8-task9-projection.ps1"
+
+
+@pytest.fixture(params=["pwsh", "powershell"])
+def lease_shell(request):
+    executable = shutil.which(request.param)
+    if executable is None:
+        pytest.skip(f"{request.param} is not installed")
+    return executable
+
+
+def _run_port_lease_case(lease_shell, tmp_path, case):
+    harness = tmp_path / "port-lease-case.ps1"
+    harness.write_text(
+        r"""
+param([string]$RunnerPath, [string]$RegistryRoot)
+$ErrorActionPreference = 'Stop'
+$tokens = $null
+$parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $RunnerPath, [ref]$tokens, [ref]$parseErrors
+)
+if ($parseErrors.Count) { throw 'Runner did not parse' }
+$functionNames = @(
+    'Invoke-WithTask9PortLeaseLock', 'Read-Task9PortLeases',
+    'Write-Task9PortLeases', 'Test-Task9PortLeaseOwner',
+    'Test-Task9PortBlockOverlap', 'Acquire-Task9PerformancePortLease',
+    'Release-Task9PerformancePortLease'
+)
+foreach ($name in $functionNames) {
+    $definition = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $name
+    }, $true))
+    if ($definition.Count -ne 1) { throw "Missing or ambiguous function: $name" }
+    Invoke-Expression $definition[0].Extent.Text
+}
+$portLeaseRoot = $RegistryRoot
+$portLeaseRegistry = Join-Path $portLeaseRoot 'leases.json'
+$portLeaseLock = Join-Path $portLeaseRoot 'leases.lock'
+$runId = 'owned-test-run'
+$ownerStartTimeUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('O')
+New-Item -ItemType Directory -Path $portLeaseRoot -Force | Out-Null
+$unrelated = [pscustomobject]@{
+    runId = 'unrelated-live-run'; pid = $PID; basePort = 20000; portCount = 16
+    processStartTimeUtc = $ownerStartTimeUtc
+}
+"""
+        + case,
+        encoding="utf-8-sig",
+    )
+    result = subprocess.run(
+        [lease_shell, "-NoProfile", "-NonInteractive", "-File", str(harness),
+         str(RUNNER_PATH), str(tmp_path / "registry")],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_port_lease_json_roundtrip_preserves_live_owner(lease_shell, tmp_path):
+    _run_port_lease_case(lease_shell, tmp_path, r"""
+Write-Task9PortLeases @($unrelated)
+$loaded = @(Read-Task9PortLeases)
+if ($loaded.Count -ne 1 -or -not (Test-Task9PortLeaseOwner $loaded[0])) {
+    throw 'JSON roundtrip rejected a live lease owner'
+}
+if ($loaded[0].processStartTimeUtc -isnot [string] -or
+    $loaded[0].processStartTimeUtc -cne $ownerStartTimeUtc) {
+    throw 'JSON roundtrip changed the canonical UTC start time'
+}
+""")
+
+
+def test_port_lease_replaces_existing_registry(lease_shell, tmp_path):
+    _run_port_lease_case(lease_shell, tmp_path, r"""
+Write-Task9PortLeases @($unrelated)
+Write-Task9PortLeases @()
+if (@(Read-Task9PortLeases).Count -ne 0) {
+    throw 'Replacing the registry did not persist the empty lease set'
+}
+""")
+
+
+def test_port_lease_acquire_release_preserves_other_live_owner(lease_shell, tmp_path):
+    _run_port_lease_case(lease_shell, tmp_path, r"""
+function New-Task9PortProbes([int]$BasePort, [int]$BlockSize) {
+    for ($index = 0; $index -lt $BlockSize; $index++) {
+        $probe = [pscustomobject]@{}
+        $probe | Add-Member ScriptMethod Stop { $script:probeStops++ }
+        $probe
+    }
+}
+$script:probeStops = 0
+$dead = [pscustomobject]@{
+    runId = 'dead-run'; pid = [int]::MaxValue; basePort = 20016; portCount = 16
+    processStartTimeUtc = $ownerStartTimeUtc
+}
+$reused = [pscustomobject]@{
+    runId = 'reused-pid-run'; pid = $PID; basePort = 20032; portCount = 16
+    processStartTimeUtc = ([datetime]$ownerStartTimeUtc).AddSeconds(-1).ToString('O')
+}
+Write-Task9PortLeases @($unrelated, $dead, $reused)
+$owned = Acquire-Task9PerformancePortLease
+$loaded = @(Read-Task9PortLeases)
+if ($owned.basePort -ne 20016 -or $loaded.Count -ne 2 -or
+    $script:probeStops -ne 16) {
+    throw 'Acquisition lost a live lease or retained a dead/reused owner'
+}
+Release-Task9PerformancePortLease $owned
+$remaining = @(Read-Task9PortLeases)
+if ($remaining.Count -ne 1 -or
+    $remaining[0].runId -cne $unrelated.runId -or
+    -not (Test-Task9PortLeaseOwner $remaining[0])) {
+    throw 'Release changed an unrelated live lease'
+}
+""")
 
 
 def test_hard_coded_pytest_node_ids_reference_existing_test_symbols():

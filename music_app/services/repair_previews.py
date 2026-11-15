@@ -15,7 +15,6 @@ from music_app.services.metadata import build_text_repairs_for_entry
 from music_app.services.problematic_albums import (
     build_problematic_album_detail_payload as _build_problematic_album_detail_payload,
     build_problematic_albums_payload as _build_problematic_albums_payload,
-    find_problematic_album_by_track_paths as _service_find_problematic_album_by_track_paths,
 )
 from music_app.services.problematic_files_projection import _track_number_problem
 from music_app.services.utils import title_case_tag_value
@@ -531,11 +530,10 @@ def find_problematic_album_by_track_paths(
     library_state: dict[str, object] | None = None,
     logger=None,
 ) -> dict[str, object] | None:
-    return _service_find_problematic_album_by_track_paths(
-        track_paths,
-        build_problematic_albums_payload=lambda: build_problematic_albums_payload(
-            config=config,
-            library_state=library_state,
-            logger=logger,
-        ),
+    if not track_paths:
+        return None
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    return PostgresLibraryBrowseRepository(config).build_problematic_album_payload_by_track_paths(
+        track_paths
     )

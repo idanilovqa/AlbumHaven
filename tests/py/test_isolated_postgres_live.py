@@ -14,6 +14,7 @@ import pytest
 from argon2 import PasswordHasher
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.problematic_projection_support import publish_problematic_fixture
 
 
 _NON_ALBUM_ROOT_IO_BLOCK_CEILING = 40_000
@@ -72,7 +73,7 @@ def test_live_watcher_preparation_preserves_unknown_and_empty_physical_sizes(mon
 
         def empty_problem_albums():
             repository = PostgresLibraryBrowseRepository({**config, "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url})
-            return {item["name"] for item in repository.build_problematic_files_payload()["items"]
+            return {item["name"] for item in publish_problematic_fixture(repository)["items"]
                     if "Empty audio file" in item["problem_reasons"]}
 
         assert sizes() == {str(unknown): None, str(empty): 0}
@@ -123,7 +124,11 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
                     "library_root_category": "main_library" if root == 0 else "hoard", "exception_type": exception}
 
         def seed(*entries):
-            adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
+            seed_adapter = PostgresScanCacheAdapter(
+                {**config, "ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+                connect=isolatedPostgres._connect,
+            )
+            seed_adapter.save_snapshot(Path("unused-watcher-repair.json"), {item["path"]: item for item in entries},
                                   "watcher-repair", 1.0, observed_library_root_ids={root["id"] for root in roots})
 
         yield SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, config=config, roots=roots, adapter=adapter, entry=entry, seed=seed)
@@ -146,7 +151,7 @@ def test_live_spotify_quota_problem_is_durable_and_clears_after_recovery(watcher
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         album = connection.execute("select id, album_key from library.local_albums where title = 'Quota Album'").fetchone()
     repository = PostgresLibraryBrowseRepository(fixture.config)
-    initial = repository.build_problematic_files_payload()
+    initial = publish_problematic_fixture(repository)
     assert all("Spotify cover search quota exceeded" not in item["problem_reasons"] for item in initial["items"])
 
     persist_cover_provider_outcomes(fixture.config, album_id=album["id"], album_key=album["album_key"], outcomes={
@@ -159,7 +164,7 @@ def test_live_spotify_quota_problem_is_durable_and_clears_after_recovery(watcher
     assert outcome["status"] == "failed"
     assert outcome["metadata"]["category"] == "rate_limit_quota"
     assert any(row["spotify_cover_quota_exceeded"] for row in repository._load_problematic_file_rows())
-    payload = repository.build_problematic_files_payload()
+    payload = publish_problematic_fixture(repository)
     item = next(item for item in payload["items"] if item["name"] == "Quota Album")
     assert "Spotify cover search quota exceeded" in item["problem_reasons"]
     assert ("Missing cover art" in item["problem_reasons"]) is missing_cover
@@ -169,7 +174,7 @@ def test_live_spotify_quota_problem_is_durable_and_clears_after_recovery(watcher
     persist_cover_provider_outcomes(fixture.config, album_id=album["id"], album_key=album["album_key"], outcomes={
         "search_spotify": {"category": "no_candidate"},
     })
-    recovered = repository.build_problematic_files_payload()
+    recovered = publish_problematic_fixture(repository)
     assert all("Spotify cover search quota exceeded" not in item["problem_reasons"] for item in recovered["items"])
     if missing_cover:
         item = next(item for item in recovered["items"] if item["name"] == "Quota Album")
@@ -283,7 +288,7 @@ def test_live_problematic_files_retains_source_album_after_rarity_override(watch
     fixture = watcher_repair_inventory
     first = fixture.entry("Owner/Rarity Source/01.flac", album="Rarity Source")
     second = fixture.entry("Owner/Rarity Source/02.flac", album="Rarity Source")
-    first["track_number"] = 2
+    second["track_number"] = 2
     cover = Path(first["path"]).with_name("cover.jpg")
     cover.write_bytes(b"existing-test-cover")
     for entry in (first, second):
@@ -298,7 +303,7 @@ def test_live_problematic_files_retains_source_album_after_rarity_override(watch
         connect=isolatedPostgres._connect,
     )
 
-    assert all(item["name"] != "Rarity Source" for item in repository.build_problematic_files_payload()["items"])
+    assert all(item["name"] != "Rarity Source" for item in publish_problematic_fixture(repository)["items"])
 
     set_track_exception_override(fixture.config, first["path"], "Non-album rarity")
     persist_structural_tag_edit_for_config(
@@ -313,9 +318,10 @@ def test_live_problematic_files_retains_source_album_after_rarity_override(watch
 
     item = next(
         item
-        for item in repository.build_problematic_files_payload()["items"]
+        for item in publish_problematic_fixture(repository)["items"]
         if item["name"] == "Rarity Source"
     )
+    assert "Incomplete track order: Disc 1 missing 1" in item["problem_reasons"]
     detail = repository.build_problematic_file_detail_payload(item["key"])
     assert detail is not None
     assert first["path"] in detail["track_paths"]

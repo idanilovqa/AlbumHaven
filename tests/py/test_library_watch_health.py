@@ -561,10 +561,17 @@ def test_problematic_files_endpoint_includes_path_free_operational_health_when_a
         "_hydrate_cached_library_for_asgi",
         lambda _request: None,
     )
+    class FakeProblematicRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_page(self, **_kwargs):
+            return {"count": 0, "items": [], "initial_detail": None}
+
     monkeypatch.setattr(
         api_read_asgi_routes,
-        "build_problematic_albums_payload",
-        lambda **_kwargs: {"count": 0, "items": [], "initial_detail": None},
+        "PostgresLibraryBrowseRepository",
+        FakeProblematicRepository,
     )
     monkeypatch.setattr(
         api_read_asgi_routes,

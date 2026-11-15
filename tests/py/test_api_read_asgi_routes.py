@@ -4657,209 +4657,6 @@ def test_asgi_album_details_preserves_album_setup_and_viewer_opinions_without_fl
     assert album_payload["gallery_list_block"]["summary"]["album_popularity"]["is_visible"] is True
 
 
-def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fallback_without_flask_bridge(
-    app,
-    asgi_app,
-    monkeypatch,
-):
-    from music_app.routes import api_read_asgi_routes as asgi_read_routes
-    loops_path = Path(app.config["DATA_DIR"]) / "loops" / "loops.json"
-    loops_path.parent.mkdir(parents=True, exist_ok=True)
-    loops_path.write_text(
-        json.dumps({"loops": [{"id": "loop-1", "name": "Intro loop"}]}),
-        encoding="utf-8",
-    )
-    asgi_config = {
-        **app.config,
-        "ASGI_CONFIG_MARKER": "explicit-problematic-fallback-config",
-    }
-    asgi_library_state = {
-        **app.library_state,
-        "albums": [{"key": "from-asgi-state"}],
-        "file_cache": {"from-asgi-state": {"path": "from-asgi-state"}},
-    }
-    asgi_logger = SimpleNamespace(name="problematic-fallback-logger")
-    asgi_app.state.config = asgi_config
-    asgi_app.state.library_state = asgi_library_state
-    asgi_app.state.logger = asgi_logger
-    asgi_app.state.library_watch_health_service = SimpleNamespace(
-        load_problems=lambda: [],
-    )
-
-    detail_calls: list[str] = []
-    fallback_calls: list[tuple[str, dict[str, object], dict[str, object], object]] = []
-
-    def fail_flask_app(_request):
-        raise AssertionError("ASGI problematic-files fallback must not read through the Flask bridge")
-
-    def fail_test_request_context(*_args, **_kwargs):
-        raise AssertionError("ASGI problematic-files fallback must not enter Flask test_request_context")
-
-    def fake_build_problematic_albums_payload(
-        *,
-        config=None,
-        library_state=None,
-        logger=None,
-    ) -> dict[str, object]:
-        fallback_calls.append(("list", config, library_state, logger))
-        return {
-            "count": 1,
-            "context_music_dir": str(config["MUSIC_DIR"]),
-            "state_album_count": len(library_state["albums"]),
-            "logger_name": logger.name,
-        }
-
-    def fake_build_problematic_album_detail_payload(
-        album_key: str,
-        *,
-        config=None,
-        library_state=None,
-        logger=None,
-    ) -> dict[str, object] | None:
-        detail_calls.append(album_key)
-        fallback_calls.append((album_key, config, library_state, logger))
-        if album_key == "missing":
-            return None
-        return {
-            "key": album_key,
-            "config_marker": config["ASGI_CONFIG_MARKER"],
-            "state_album_count": len(library_state["albums"]),
-            "logger_name": logger.name,
-            "detail_loaded": True,
-        }
-
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "build_problematic_albums_payload",
-        fake_build_problematic_albums_payload,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "build_problematic_album_detail_payload",
-        fake_build_problematic_album_detail_payload,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "load_loops",
-        lambda config, **_scope: [{"id": "loop-1", "name": "Intro loop"}],
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "load_log_history_snapshot",
-        lambda config, **_scope: {
-            "items": [{"id": "entry-1", "message": "Refresh started"}],
-            "revision": "test-process:4",
-        },
-    )
-    assert not hasattr(asgi_read_routes, "_flask_app")
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "select_runtime_persistence_adapter",
-        lambda seam_id, config: type(
-            "Selection",
-            (),
-            {"seam_id": seam_id, "effective_backend": "unavailable"},
-        )(),
-    )
-
-    list_status, _list_headers, list_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files",
-    )
-    path_detail_status, _path_detail_headers, path_detail_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/artist/album",
-    )
-    query_detail_status, _query_detail_headers, query_detail_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/detail",
-        query={"album_key": "query-album"},
-    )
-    missing_key_status, _missing_key_headers, missing_key_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/detail",
-    )
-    missing_album_status, _missing_album_headers, missing_album_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/missing",
-    )
-    loops_status, _loops_headers, loops_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/loops",
-    )
-    log_status, log_headers, log_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/log-history",
-    )
-
-    assert list_status == 200
-    assert _decode_json(list_body) == {
-        "count": 1,
-        "context_music_dir": str(asgi_config["MUSIC_DIR"]),
-        "state_album_count": 1,
-        "logger_name": "problematic-fallback-logger",
-        "watcher_health": {"state": "healthy", "problems": []},
-        "operational_items": [],
-        "operational_count": 0,
-    }
-    assert path_detail_status == 200
-    assert _decode_json(path_detail_body) == {
-        "key": "artist/album",
-        "config_marker": "explicit-problematic-fallback-config",
-        "state_album_count": 1,
-        "logger_name": "problematic-fallback-logger",
-        "detail_loaded": True,
-    }
-    assert query_detail_status == 200
-    assert _decode_json(query_detail_body) == {
-        "key": "query-album",
-        "config_marker": "explicit-problematic-fallback-config",
-        "state_album_count": 1,
-        "logger_name": "problematic-fallback-logger",
-        "detail_loaded": True,
-    }
-    assert missing_key_status == 400
-    assert _decode_json(missing_key_body) == {"ok": False, "error": "Missing album_key."}
-    assert missing_album_status == 404
-    assert _decode_json(missing_album_body) == {
-        "ok": False,
-        "error": "Problematic album not found.",
-    }
-    assert loops_status == 200
-    assert _decode_json(loops_body) == {
-        "ok": True,
-        "loops": [{"id": "loop-1", "name": "Intro loop", "cover_url": ""}],
-        "allowed_actions": {
-            "library.loops.read": True,
-            "library.loops.create": True,
-            "library.loops.delete": True,
-            "library.loops.reorder": True,
-        },
-    }
-    assert log_status == 200
-    assert _decode_json(log_body) == {
-        "ok": True,
-        "items": [{"id": "entry-1", "message": "Refresh started"}],
-        "revision": "test-process:4",
-        "allowed_actions": {"library.logs.read": True, "library.logs.export": True},
-    }
-    assert log_headers["cache-control"] == "no-store"
-    assert detail_calls == ["artist/album", "query-album", "missing"]
-    assert fallback_calls == [
-        ("list", asgi_config, asgi_library_state, asgi_logger),
-        ("artist/album", asgi_config, asgi_library_state, asgi_logger),
-        ("query-album", asgi_config, asgi_library_state, asgi_logger),
-        ("missing", asgi_config, asgi_library_state, asgi_logger),
-    ]
-
-
 def test_asgi_loops_and_log_history_use_asgi_config_without_flask_bridge(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -5018,8 +4815,6 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.delenv("ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY", raising=False)
     monkeypatch.delenv("ALBUM_HAVEN_E2E_PROBLEMATIC_FIXTURE_PATH", raising=False)
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_runtime_fallback)
-    monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
-    monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
     asgi_app.state.library_watch_health_service = SimpleNamespace(
         load_problems=lambda: [],
@@ -5118,7 +4913,10 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "view_data_source": "postgres_library_browse",
     }
     assert missing_key_status == 400
-    assert _decode_json(missing_key_body) == {"ok": False, "error": "Missing album_key."}
+    assert _decode_json(missing_key_body) == {
+        "ok": False,
+        "error": "Provide exactly one projection_id, album_key, or track_path.",
+    }
     assert missing_album_status == 404
     assert _decode_json(missing_album_body) == {
         "ok": False,
@@ -5214,12 +5012,6 @@ def test_problematic_projection_route_maps_typed_reader_failures(
     monkeypatch.setattr(
         asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository
     )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "_is_postgres_utility_projection_request",
-        lambda _request: True,
-    )
-
     status, headers, body = _run_asgi_request(
         asgi_app,
         "GET",
@@ -5245,12 +5037,6 @@ def test_problematic_projection_route_rejects_nfkc_expanded_query_before_storage
         "postgresql://album_haven_app@localhost/unused"
     )
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "_is_postgres_utility_projection_request",
-        lambda _request: True,
-    )
-
     status, headers, body = _run_asgi_request(
         asgi_app,
         "GET",
@@ -5263,6 +5049,128 @@ def test_problematic_projection_route_rejects_nfkc_expanded_query_before_storage
     assert {str(key).lower(): str(value) for key, value in headers.items()}[
         "cache-control"
     ] == "no-store"
+
+
+def test_problematic_detail_route_passes_opaque_projection_id_unchanged(
+    app,
+    monkeypatch,
+):
+    asgi_app = _make_asgi_app()
+    calls = []
+    projection_id = "h1:Vf8Yp5xA5N7b3Qn2dG4uL6rS9mK1cT0wE2jH8aB4zXQ"
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_file_detail_payload(self, **selectors):
+            calls.append(selectors)
+            return {
+                "projection_id": selectors["projection_id"],
+                "detail_loaded": True,
+                "tracks": [{"path": "C:/Música/Björk/01 - Jóga.flac"}],
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/app"
+    )
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakePostgresRepository,
+    )
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query={"projection_id": projection_id},
+    )
+
+    assert status == 200
+    assert calls == [{"projection_id": projection_id}]
+    assert _decode_json(body)["tracks"] == [
+        {"path": "C:/Música/Björk/01 - Jóga.flac"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        {},
+        {"projection_id": "   "},
+        {"projection_id": "h1:item", "album_key": "legacy"},
+        {"projection_id": "h1:item", "track_path": "/music/01.flac"},
+        {"album_key": "legacy", "track_path": "/music/01.flac"},
+        {
+            "projection_id": "h1:item",
+            "album_key": "legacy",
+            "track_path": "/music/01.flac",
+        },
+    ],
+)
+def test_problematic_detail_route_requires_exactly_one_selector(
+    app,
+    monkeypatch,
+    query,
+):
+    asgi_app = _make_asgi_app()
+
+    class FailIfCalledRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_file_detail_payload(self, **_selectors):
+            pytest.fail("invalid detail selector reached album detail storage")
+
+        def build_problematic_album_payload_by_track_paths(self, _paths):
+            pytest.fail("invalid detail selector reached track detail storage")
+
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FailIfCalledRepository,
+    )
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query=query,
+    )
+
+    assert status == 400
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Provide exactly one projection_id, album_key, or track_path.",
+    }
+
+
+def test_problematic_detail_path_rejects_whitespace_selector(app, monkeypatch):
+    class FailIfCalledRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_file_detail_payload(self, **_selectors):
+            pytest.fail("whitespace detail selector reached storage")
+
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FailIfCalledRepository,
+    )
+
+    response = asgi_read_routes.utilities_problematic_file_detail(
+        SimpleNamespace(),
+        "   ",
+    )
+
+    assert response.status_code == 400
+    assert _decode_json(response.body) == {
+        "ok": False,
+        "error": "Provide a non-empty album_key.",
+    }
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

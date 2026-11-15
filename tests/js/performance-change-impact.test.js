@@ -151,11 +151,17 @@ test('Problematic Files dependencies require both real-app performance targets',
   }
 });
 
-test('Problematic Files shared client owners require both real-app performance targets', () => {
+test('Problematic Files shared owners require both real-app performance targets', () => {
   for (const changedPath of [
+    'music_app/services/library_inventory_postgres.py',
+    'music_app/services/repair_previews.py',
+    'music_app/routes/api_cover_helpers.py',
+    'music_app/routes/api_wave_a_asgi_routes.py',
     'music_app/static/js/runtime/bootstrap-utility-event-handlers.js',
     'music_app/static/js/runtime/track-modal-and-gallery.js',
+    'music_app/static/js/runtime/utility-loop-playback.js',
   ]) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
     const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
     assert.ok(targets.includes('utility-problematic-files'), changedPath);
     assert.ok(targets.includes('problematic-files-focused'), changedPath);

@@ -1465,8 +1465,8 @@ def test_local_delete_preserves_authoritative_selection_when_runtime_cache_is_st
     )
     monkeypatch.setattr(
         api_cover_helpers,
-        "build_problematic_albums_payload",
-        lambda **_kwargs: {"albums": []},
+        "find_problematic_album_by_track_paths",
+        lambda *_args, **_kwargs: None,
     )
     album_payload = _album_payload(track_path)
     if linked_remote:
@@ -1537,7 +1537,7 @@ def test_pasted_cover_publishes_promoted_digest_to_every_runtime_surface(app, mo
 
     monkeypatch.setattr(routes, "execute_cover_mutation_for_config", execute)
     monkeypatch.setattr(api_cover_helpers, "schedule_cache_updates_save_for_config", lambda *_a, **_k: None)
-    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **_k: {"albums": []})
+    monkeypatch.setattr(api_cover_helpers, "find_problematic_album_by_track_paths", lambda *_a, **_k: None)
     status, _headers, body = _run_asgi_request(
         _make_wave_d_app(app), "POST", "/utilities/cover-lookup/pasted-image-save",
         json_body={"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))},
@@ -2354,7 +2354,7 @@ def test_asgi_local_cover_selection_response_and_runtime_preserve_explicit_autho
         return {"album_rows_updated": 1, "track_file_rows_updated": 1}
     monkeypatch.setattr(api_cover_helpers, "persist_cover_selection_for_tracks_for_config", persist_selection)
     _install_cover_mutation_test_executor(monkeypatch, asgi_routes)
-    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **_kwargs: {"albums": []})
+    monkeypatch.setattr(api_cover_helpers, "find_problematic_album_by_track_paths", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
     status, _headers, body = _run_asgi_request(
         asgi_app, "POST", "/utilities/cover-lookup/local-select",
@@ -5033,7 +5033,7 @@ def test_local_cover_selection_uses_postgres_inventory_with_empty_runtime_state(
 def test_postgres_local_cover_commit_updates_live_runtime_not_inventory_snapshot(app, monkeypatch, partial_cache):
     from music_app.routes import api_wave_d_asgi_routes as routes
     from music_app.routes import api_cover_helpers
-    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **kwargs: {"items": []})
+    monkeypatch.setattr(api_cover_helpers, "find_problematic_album_by_track_paths", lambda *_args, **_kwargs: None)
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()

@@ -70,9 +70,6 @@ from music_app.services.manual_versions import load_manual_version_links, save_m
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
 from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
-from music_app.services.problematic_albums import (
-    find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
-)
 from music_app.services.problem_exclusions import (
     create_problem_exclusions,
     revert_problem_exclusion,
@@ -90,9 +87,6 @@ from music_app.services.save_tasks import (
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
     PostgresTagEditIntentRepository,
-)
-from music_app.services.repair_previews import (
-    build_problematic_albums_payload as _build_problematic_albums_payload,
 )
 from music_app.services.state import (
     hydrate_library_state_for_config,
@@ -940,17 +934,12 @@ def _asgi_problematic_album_by_track_paths_finder(request: Request):
     library_state = _library_state(request)
     logger = _asgi_logger(request)
 
-    def build_payload() -> JsonDict:
-        return _build_problematic_albums_payload(
+    def find_problematic_album(track_paths: TrackPathSet) -> JsonDict | None:
+        return _find_problematic_album_by_track_paths(
+            track_paths,
             config=config,
             library_state=library_state,
             logger=logger,
-        )
-
-    def find_problematic_album(track_paths: TrackPathSet) -> JsonDict | None:
-        return _find_problematic_album_by_track_paths_in_payload(
-            track_paths,
-            build_problematic_albums_payload=build_payload,
         )
 
     return find_problematic_album

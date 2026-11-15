@@ -13,6 +13,7 @@ from time import perf_counter, sleep
 from typing import Any
 
 from music_app.services.artist_family_postgres import (
+    artist_family_projection_matches_in_transaction,
     replace_artist_family_projection_in_transaction,
 )
 from music_app.services.cache import serialize_relation_views
@@ -425,6 +426,28 @@ def relation_projection_readiness_stale_reason(scan_cache: object) -> str:
     )
 
 
+def relation_projection_matches_source(
+    connection: Any, native_snapshot: object, source_fingerprint: str,
+) -> bool:
+    """Validate a caller-loaded native snapshot and current persisted family edges."""
+    if not isinstance(native_snapshot, Mapping):
+        return False
+    metadata = native_snapshot.get(RELATION_PROJECTION_METADATA_KEY)
+    if not isinstance(metadata, Mapping) or metadata.get("status") not in ("ready", "stale"):
+        return False
+    candidate = {**native_snapshot, RELATION_PROJECTION_METADATA_KEY: {**metadata, "status": "ready"}}
+    if (relation_projection_stale_reason(candidate)
+            or metadata["built_from_fingerprint"] != source_fingerprint):
+        return False
+    try:
+        relations_last_built = float(native_snapshot.get("relations_last_built") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return artist_family_projection_matches_in_transaction(
+        connection, native_snapshot["relation_views"], relations_last_built=relations_last_built,
+    )
+
+
 def relation_source_fingerprint(
     rows: list[object],
     *,
@@ -617,8 +640,14 @@ def _ensure_relation_projection_ready(
                 phase_timings_ms["fingerprint"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
+                with _cancel_active_connection_on_request(source_connection, cancel_requested):
+                    reusable = relation_projection_matches_source(
+                        source_connection, baseline_scan_cache, source_fingerprint,
+                    )
                 phase_started_at = perf_counter()
-                if cancel_requested is None:
+                if reusable:
+                    relation_views = None
+                elif cancel_requested is None:
                     relation_views = build_relation_views_from_postgres_rows(config, rows)
                 else:
                     relation_views = build_relation_views_from_postgres_rows(
@@ -626,10 +655,10 @@ def _ensure_relation_projection_ready(
                         rows,
                         cooperate=lambda: _cooperate_with_foreground(cancel_requested),
                     )
-                phase_timings_ms["pure_build"] = (
+                phase_timings_ms["pure_build"] = 0.0 if reusable else (
                     perf_counter() - phase_started_at
                 ) * 1000
-                if not relation_projection_structure_complete(relation_views):
+                if not reusable and not relation_projection_structure_complete(relation_views):
                     raise RuntimeError("Relation projection builder returned an incomplete projection.")
                 _raise_if_projection_cancelled(cancel_requested)
             finally:
@@ -662,10 +691,52 @@ def _ensure_relation_projection_ready(
                         str(locked_metadata.get("built_from_fingerprint") or ""),
                     )
                     if (
-                        str(locked_metadata.get("status") or "") == "stale"
-                        and locked_publication_identity != baseline_publication_identity
+                        _int_value(locked_snapshot_row, "inventory_mutation_revision")
+                        != _int_value(baseline_snapshot_row, "inventory_mutation_revision")
+                        or (
+                            str(locked_metadata.get("status") or "") == "stale"
+                            and locked_publication_identity != baseline_publication_identity
+                        )
                     ):
                         retry_with_current_sources = True
+                    elif reusable:
+                        if not relation_projection_matches_source(
+                            connection, locked_scan_cache, source_fingerprint,
+                        ):
+                            retry_with_current_sources = True
+                        else:
+                            reuse_reason = relation_projection_readiness_stale_reason(locked_scan_cache)
+                            metadata = {**locked_metadata, "status": "ready"}
+                            next_scan_cache = {
+                                key: value for key, value in locked_scan_cache.items()
+                                if key != _ARTIST_SEARCH_PROJECTION_ROWS_KEY
+                            }
+                            next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = metadata
+                            if artist_search_projection_stale_reason(locked_scan_cache):
+                                phase_started_at = perf_counter()
+                                replace_artist_search_projection_in_transaction(
+                                    connection, next_scan_cache["relation_views"],
+                                    metadata=metadata,
+                                    relations_last_built=float(next_scan_cache.get("relations_last_built") or 0.0),
+                                )
+                                phase_timings_ms["search_projection_replacement"] = (
+                                    perf_counter() - phase_started_at
+                                ) * 1000
+                            if locked_metadata.get("status") != "ready":
+                                phase_started_at = perf_counter()
+                                connection.execute(
+                                    _save_scan_cache_sql(), {"scan_cache": _jsonb(next_scan_cache)},
+                                )
+                                phase_timings_ms["snapshot_publication"] = (
+                                    perf_counter() - phase_started_at
+                                ) * 1000
+                            return _projection_result(
+                                next_scan_cache["relation_views"], metadata,
+                                startup_rebuilt=bool(reuse_reason), reason=reuse_reason or "healthy",
+                                duration_ms=(perf_counter() - started_at) * 1000,
+                                source_row_count=source_row_count,
+                                phase_timings_ms=phase_timings_ms,
+                            )
                     else:
                         locked_reason = relation_projection_readiness_stale_reason(
                             locked_scan_cache
@@ -1043,6 +1114,8 @@ def _load_scan_cache_sql() -> str:
         )
         select
           library.libraries.metadata -> 'scan_cache' as scan_cache,
+          coalesce(nullif(library.libraries.metadata ->> 'inventory_mutation_revision', '')::bigint, 0)
+            as inventory_mutation_revision,
           coalesce(
             (
               select jsonb_agg(

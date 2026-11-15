@@ -3317,15 +3317,18 @@ def _ready_relation_snapshot(persistence, *, search_rows=True):
     }
 
 
+@pytest.mark.parametrize("status", ["ready", "stale"])
 @pytest.mark.parametrize("empty_family", [False, True], ids=["family", "no-family"])
 def test_pure_relation_refresh_noops_when_authority_and_projection_are_unchanged(
     monkeypatch,
     empty_family,
+    status,
 ):
     from music_app.services import scan_cache_persistence as persistence
 
     monkeypatch.setattr(persistence, "Jsonb", None)
     views, snapshot = _ready_relation_snapshot(persistence)
+    snapshot['relation_projection']['status'] = status
     if empty_family:
         views["folder_related"] = {}
         snapshot["relation_views"]["folder_related"] = {}
@@ -3382,17 +3385,29 @@ def test_pure_relation_refresh_noops_when_authority_and_projection_are_unchanged
     }
     assert callback_connections == [publication]
     assert commit_guard_calls == [True]
-    assert not any(
+    assert any(
         sql == persistence._save_scan_snapshot_sql()
         for sql, _params in publication.executed
-    )
+    ) is (status == 'stale')
     assert publication.commit_calls == 1
+    # Reuse validates the native snapshots already read by both transactions.
+    # Only publication needs a separate read to check the search projection.
+    assert sum(
+        sql == persistence._load_relation_projection_sql()
+        for sql, _params in preparation.executed
+    ) == 0
+    assert sum(
+        sql == persistence._load_relation_projection_sql()
+        for sql, _params in publication.executed
+    ) == 1
 
 
+@pytest.mark.parametrize("status", ["ready", "stale"])
 @pytest.mark.parametrize("search_rows", [False, "corrupt"], ids=["missing", "corrupt"])
 def test_pure_relation_refresh_repairs_only_search_when_rows_are_missing_or_corrupt(
     monkeypatch,
     search_rows,
+    status,
 ):
     from music_app.services import scan_cache_persistence as persistence
 
@@ -3401,6 +3416,7 @@ def test_pure_relation_refresh_repairs_only_search_when_rows_are_missing_or_corr
         persistence,
         search_rows=search_rows,
     )
+    snapshot['relation_projection']['status'] = status
     revisions = {
         "library_id": 5,
         "inventory_mutation_revision": 17,
@@ -3443,14 +3459,16 @@ def test_pure_relation_refresh_repairs_only_search_when_rows_are_missing_or_corr
     assert events == ["search"]
 
 
+@pytest.mark.parametrize("status", ["ready", "stale"])
 @pytest.mark.parametrize("family_state", ["missing", "wrong", "unexpected-for-empty"])
 def test_pure_relation_refresh_rebuilds_when_owned_family_rows_are_stale(
-    monkeypatch, family_state,
+    monkeypatch, family_state, status,
 ):
     from music_app.services import scan_cache_persistence as persistence
 
     monkeypatch.setattr(persistence, "Jsonb", None)
     views, snapshot = _ready_relation_snapshot(persistence)
+    snapshot['relation_projection']['status'] = status
     if family_state == "missing":
         snapshot["artist_family_projection"] = []
     elif family_state == "wrong":

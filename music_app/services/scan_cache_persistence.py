@@ -13,7 +13,6 @@ from typing import Any, Protocol
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.artist_family_postgres import (
-    artist_family_projection_matches_in_transaction,
     replace_artist_family_projection_in_transaction,
 )
 from music_app.services.cache import (
@@ -47,6 +46,7 @@ from music_app.services.relation_projection_postgres import (
     patch_artist_search_projection_in_transaction,
     patch_structural_relation_views,
     relation_projection_advisory_lock_sql,
+    relation_projection_matches_source as _relation_projection_matches_source,
     relation_projection_structure_complete,
     relation_projection_stale_reason,
     relation_source_fingerprint,
@@ -533,6 +533,13 @@ class PostgresScanCacheAdapter:
                         _save_scan_snapshot_sql(), {"scan_cache": _jsonb(next_snapshot)}
                     )
                 else:
+                    if next_snapshot[RELATION_PROJECTION_METADATA_KEY]["status"] == "stale":
+                        next_snapshot[RELATION_PROJECTION_METADATA_KEY] = {
+                            **next_snapshot[RELATION_PROJECTION_METADATA_KEY], "status": "ready",
+                        }
+                        connection.execute(
+                            _save_scan_snapshot_sql(), {"scan_cache": _jsonb(next_snapshot)}
+                        )
                     persisted = _relation_projection_scan_cache_from_row(
                         _first_row(connection.execute(_load_relation_projection_sql()))
                     )
@@ -3237,29 +3244,6 @@ def _patch_structural_relation_projection(
         "projection_mode": "targeted",
         "orphaned_source_artists": orphaned_source_artists,
     }
-
-
-def _relation_projection_matches_source(
-    connection: Any, snapshot: object, source_fingerprint: str
-) -> bool:
-    if relation_projection_stale_reason(snapshot):
-        return False
-    if snapshot[RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"] != source_fingerprint:
-        return False
-    persisted = _relation_projection_scan_cache_from_row(
-        _first_row(connection.execute(_load_relation_projection_sql()))
-    )
-    return (
-        not relation_projection_stale_reason(persisted)
-        and persisted[RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"]
-        == source_fingerprint
-        and persisted.get("relation_views") == snapshot.get("relation_views")
-        and artist_family_projection_matches_in_transaction(
-            connection,
-            snapshot["relation_views"],
-            relations_last_built=_float_or_zero(snapshot.get("relations_last_built")),
-        )
-    )
 
 
 def _commit_structural_relation_projection(

@@ -101,10 +101,11 @@ function createPlaywrightResultNonce() {
   return randomBytes(32).toString('hex');
 }
 
-function safeErrorSummary(error) {
-  if (!error) {
+function safeErrorSummary(error, depth = 0, seen = new Set()) {
+  if (!error || depth > 3 || seen.has(error)) {
     return null;
   }
+  seen.add(error);
   const safeTokenPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
   const name = String(error.name || '');
   const code = String(error.code || '');
@@ -114,6 +115,14 @@ function safeErrorSummary(error) {
   }
   if (safeTokenPattern.test(code)) {
     summary.code = code;
+  }
+  if (Array.isArray(error.errors)) {
+    summary.errors = error.errors.slice(0, 4)
+      .map((child) => safeErrorSummary(child, depth + 1, seen)).filter(Boolean);
+  }
+  if (error.cause) {
+    const cause = safeErrorSummary(error.cause, depth + 1, seen);
+    if (cause) summary.cause = cause;
   }
   return Object.keys(summary).length > 0 ? summary : null;
 }
@@ -1261,14 +1270,33 @@ async function prewarmFunctionalFixture(port, options = {}) {
     }
   }
   for (const pathname of ['/utilities/problematic-files', '/utilities/rules']) {
-    const response = await fetchHttpResponseCompleteFn(`${baseUrl}${pathname}`, {
-      requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
-      headers: requestHeaders,
-    });
-    if (!response?.ok) {
-      reportFailure(pathname === '/utilities/problematic-files'
-        ? 'problematic-files' : 'rules', response);
-      return false;
+    let response;
+    while (true) {
+      const remainingMs = deadline - nowFn();
+      const stage = pathname === '/utilities/problematic-files' ? 'problematic-files' : 'rules';
+      if (remainingMs <= 0) {
+        reportFailure(stage, response);
+        return false;
+      }
+      response = await fetchHttpResponseCompleteFn(`${baseUrl}${pathname}`, {
+        requestTimeoutMs: remainingMs,
+        headers: requestHeaders,
+      });
+      if (response?.ok && response.statusCode === 200) break;
+      let pendingCode;
+      try {
+        pendingCode = JSON.parse(String(response?.body || '')).error_code;
+      } catch {
+        // Non-JSON errors are terminal warmup failures.
+      }
+      if (pathname !== '/utilities/problematic-files'
+        || Number(response?.statusCode) !== 503
+        || pendingCode !== 'problematic_projection_pending'
+        || nowFn() >= deadline) {
+        reportFailure(stage, response);
+        return false;
+      }
+      await sleepFn(Math.min(pollIntervalMs, Math.max(0, deadline - nowFn())));
     }
   }
   return true;
@@ -1527,6 +1555,7 @@ async function stopManagedIsolatedApp(child, ports, options = {}) {
 
   let processOwners = [processOwner];
   let gracefulError = null;
+  let gracefulFailureCode = 'GRACEFUL_IDENTITY_CHECK_FAILED';
   try {
     if (!currentIdentity) {
       throw new Error(
@@ -1542,6 +1571,7 @@ async function stopManagedIsolatedApp(child, ports, options = {}) {
     }
     processOwners = processTree;
 
+    gracefulFailureCode = 'GRACEFUL_STDIN_FAILED';
     const input = child.stdin;
     if (
       !input
@@ -1556,12 +1586,16 @@ async function stopManagedIsolatedApp(child, ports, options = {}) {
 
     let rejectInputError = () => {};
     const inputErrorPromise = new Promise((_resolve, reject) => {
-      rejectInputError = reject;
+      rejectInputError = (error) => {
+        gracefulFailureCode = 'GRACEFUL_STDIN_FAILED';
+        reject(error);
+      };
     });
     const onInputError = (error) => rejectInputError(error);
     const removeInputErrorListener = () => input.removeListener?.('error', onInputError);
     input.once?.('error', onInputError);
     input.once?.('close', removeInputErrorListener);
+    gracefulFailureCode = 'GRACEFUL_EXIT_WAIT_FAILED';
     const exitPromise = waitForDirectChildExitFn(child, {
       timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
     });
@@ -1576,15 +1610,19 @@ async function stopManagedIsolatedApp(child, ports, options = {}) {
     }
     await exitOrInputError;
 
+    gracefulFailureCode = 'GRACEFUL_EXIT_STATUS_FAILED';
     if (child.exitCode !== 0 || child.signalCode != null) {
       throw new Error(
         `Managed isolated app PID ${child.pid} did not exit cleanly `
         + `(code=${String(child.exitCode)}, signal=${String(child.signalCode)}).`,
       );
     }
+    gracefulFailureCode = 'GRACEFUL_DESCENDANT_EXIT_FAILED';
     await waitForExactProcesses(processOwners);
   } catch (error) {
-    gracefulError = error;
+    gracefulError = Object.assign(new Error(String(error?.message || error), {
+      cause: error,
+    }), { code: gracefulFailureCode });
   }
 
   const cleanupErrors = [];

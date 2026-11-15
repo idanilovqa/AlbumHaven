@@ -872,13 +872,22 @@ class PostgresProblematicProjectionRepository:
             row.get("source_kind"), row.get("source_identity"),
             row.get("child_kind"), row.get("child_identity"),
         )
-        source_cursor = _validate_source_cursor(source_values) if any(
-            value is not None for value in source_values
-        ) else None
         group_values = (row.get("group_kind"), row.get("group_identity"))
         group_key = _validate_group_key(group_values) if any(
             value is not None for value in group_values
         ) else None
+        if group_key is None and source_values[2:] == (None, None):
+            # The database retains the completed group's scan watermark, but
+            # its child cursor must not become the next group's resume cursor.
+            if any(value is not None for value in source_values[:2]):
+                if source_values[0] not in ("album", "missing_album", "loose_source"):
+                    raise ProblematicProjectionIntegrityError("invalid completed source watermark")
+                _validate_group_key(source_values[:2])
+            source_cursor = None
+        else:
+            source_cursor = _validate_source_cursor(source_values) if any(
+                value is not None for value in source_values
+            ) else None
         committed = row.get("committed") is True or (
             "committed" not in row
             and group_key is None
@@ -946,8 +955,16 @@ class PostgresProblematicProjectionRepository:
         chunks = []
         page_complete = False
         for row in rows:
-            if row.get("group_kind") is None and row.get("page_complete") is True:
-                page_complete = True
+            if row.get("group_kind") is None:
+                if (len(rows) != 1 or row.get("rows") != []
+                        or row.get("group_complete") is not False
+                        or not isinstance(row.get("page_complete"), bool)
+                        or any(row.get(field) is not None for field in (
+                            "group_identity", "source_kind", "source_identity",
+                            "child_kind", "child_identity",
+                        ))):
+                    raise ProblematicProjectionIntegrityError("invalid empty source page")
+                page_complete = row["page_complete"]
                 continue
             payload_rows = row.get("rows")
             if not isinstance(payload_rows, list):
@@ -1826,6 +1843,7 @@ def _read_page_sql() -> str:
             join header on search_fact.revision = header.revision
             where %(query)s <> ''
               and search_fact.library_id = %(library_id)s
+              and search_fact.fact_kind <> 'private_path_locator'
               and search_fact.normalized_text like %(query_pattern)s escape '\\'
         ), filtered as not materialized (
             select item.*

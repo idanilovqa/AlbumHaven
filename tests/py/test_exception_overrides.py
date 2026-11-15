@@ -229,7 +229,7 @@ def test_exception_override_mutation_invalidates_and_refetches_scoped_problemati
     }
     cache_key = (database_url, "problematic-files")
     current_projection_key = "before-override"
-    build_count = 0
+    read_count = 0
 
     class FakeExceptionOverridesAdapter:
         def __init__(self, adapter_config):
@@ -250,31 +250,38 @@ def test_exception_override_mutation_invalidates_and_refetches_scoped_problemati
         connect=lambda _database_url: None,
     )
 
-    def build_payload():
-        nonlocal build_count
-        build_count += 1
-        return {
-            "items": [{"key": current_projection_key}],
-            "count": 1,
-        }
+    class ProjectionRepository:
+        def __init__(self, **_kwargs):
+            pass
 
-    monkeypatch.setattr(
-        repository,
-        "_build_problematic_files_payload_uncached",
-        build_payload,
-    )
+        def resolve_bootstrap_library_id(self):
+            return 7
+
+        def read_page(self, **kwargs):
+            from types import SimpleNamespace
+
+            nonlocal read_count
+            assert kwargs["library_id"] == 7
+            read_count += 1
+            return SimpleNamespace(
+                items=[{"key": current_projection_key}], total=1,
+                next_cursor=None, reason_facets={},
+            )
+
+    monkeypatch.setattr(library_browse_postgres_module,
+                        "PostgresProblematicProjectionRepository", ProjectionRepository)
     with library_browse_postgres_module._UTILITY_PROJECTION_CACHE_LOCK:
         library_browse_postgres_module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
         library_browse_postgres_module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
 
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "before-override"
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "before-override"
-    assert build_count == 1
+    assert repository.build_problematic_files_page(limit=20)["items"][0]["key"] == "before-override"
+    assert repository.build_problematic_files_page(limit=20)["items"][0]["key"] == "before-override"
+    assert read_count == 2
 
     save_exception_overrides(config, {"C:/Music/a.mp3": "Interview"})
 
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "after-override"
-    assert build_count == 2
+    assert repository.build_problematic_files_page(limit=20)["items"][0]["key"] == "after-override"
+    assert read_count == 3
     with library_browse_postgres_module._UTILITY_PROJECTION_CACHE_LOCK:
         assert library_browse_postgres_module._UTILITY_PROJECTION_GENERATIONS[cache_key] == 1
 

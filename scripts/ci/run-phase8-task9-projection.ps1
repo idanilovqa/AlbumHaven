@@ -418,6 +418,11 @@ function Read-Task9PortLeases {
     try {
         $document = Get-Content -LiteralPath $portLeaseRegistry -Raw | ConvertFrom-Json
         if ([int]$document.schemaVersion -ne 1) { throw 'unsupported schema' }
+        foreach ($lease in $document.leases) {
+            if ($lease.processStartTimeUtc -is [datetime]) {
+                $lease.processStartTimeUtc = $lease.processStartTimeUtc.ToUniversalTime().ToString('O')
+            }
+        }
         return @($document.leases)
     } catch {
         throw "Task 9 port lease registry is invalid: $portLeaseRegistry"
@@ -430,7 +435,7 @@ function Write-Task9PortLeases([object[]]$Leases) {
         ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath $temporary -Encoding utf8
     if (Test-Path -LiteralPath $portLeaseRegistry -PathType Leaf) {
-        [IO.File]::Replace($temporary, $portLeaseRegistry, $null)
+        [IO.File]::Replace($temporary, $portLeaseRegistry, [NullString]::Value)
     } else {
         [IO.File]::Move($temporary, $portLeaseRegistry)
     }

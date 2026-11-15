@@ -22,15 +22,14 @@ def physical_catalog(request):
     # Prepare the application schemas here so this contract owns its bootstrap
     # data instead of assuming an unrelated E2E fixture was loaded first.
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
-    # EXPLAIN's owned dense fixture needs ANALYZE inside the same uncommitted
-    # transaction. Ordinary SQL contracts continue to exercise runtime grants.
+    # Task 9A revokes source-table writes from the runtime role. Seed through
+    # the isolated migrator, then use runtime reads except where the contract
+    # intentionally writes, analyzes, or exercises migration DDL.
     fixture_mode = getattr(request, "param", None)
-    database_url = setup_url if fixture_mode in {"explain", "c-collation"} else runtime_url
+    database_url = setup_url
     token = uuid4().hex
     with psycopg.connect(database_url, row_factory=psycopg.rows.dict_row) as connection:
         try:
-            if fixture_mode == "c-collation":
-                connection.execute('ALTER TABLE library.local_track_files ALTER COLUMN private_path TYPE text COLLATE "C"')
             owner = connection.execute("""
                 select l.id, l.owner_account_id from library.libraries l
                 join app.bootstrap_owners b on b.account_id = l.owner_account_id
@@ -41,7 +40,7 @@ def physical_catalog(request):
             library_id = owner["id"]
             other_library = connection.execute("""
                 insert into library.libraries(owner_account_id, name, library_kind)
-                values (%s, %s, 'local') returning id
+                values (%s, %s, 'physical-contract') returning id
             """, (owner["owner_account_id"], f"Physical contract {token}")).fetchone()["id"]
             base = f"/physical-contract-{token}" if fixture_mode == "posix" else f"C:/physical-contract-{token}"
 
@@ -103,9 +102,22 @@ def physical_catalog(request):
                     """, (second_track, roots[root_name], second_path, size,
                           json.dumps({"scan_cache": {"stale": stale, "file_entry": second_entry}})))
                 owned[label] = (album_id, key)
+                if fixture_mode not in {"explain", "c-collation"}:
+                    connection.commit()
                 return album_id
 
-            yield connection, album, owned
+            connection.commit()
+            if fixture_mode in {"explain", "c-collation"}:
+                yield connection, album, owned
+            else:
+                with psycopg.connect(
+                    runtime_url,
+                    row_factory=psycopg.rows.dict_row,
+                ) as runtime_connection:
+                    try:
+                        yield runtime_connection, album, owned
+                    finally:
+                        runtime_connection.rollback()
         finally:
             connection.rollback()
 
@@ -116,6 +128,35 @@ def _query(connection, **modes):
               "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS}
     params.update(modes.pop("params", {}))
     return connection.execute(browse._problematic_files_sql(**modes), params).fetchall()
+
+
+@pytest.mark.parametrize("inventory_status", ["available", "missing"])
+def test_problematic_non_album_locators_remain_opaque_when_unicode_identity_is_hashed(
+    inventory_status,
+):
+    from music_app.services.problematic_files_projection import problematic_projection_id
+
+    projection_id = problematic_projection_id({
+        "album_id": None,
+        "album_key": "容器::" + ("非常に長い識別子" * 80),
+        "inventory_status": inventory_status,
+    })
+
+    assert projection_id.startswith("h1:")
+    assert len(projection_id.encode("utf-8")) <= 256
+    assert "容器" not in projection_id
+
+
+def test_targeted_projection_detail_sql_is_valid_for_runtime_reader(physical_catalog):
+    connection, _album, _owned = physical_catalog
+
+    rows = _query(
+        connection,
+        targeted_projection_id=True,
+        params={"projection_id": "missing-opaque-projection"},
+    )
+
+    assert rows == []
 
 
 def test_physical_categories_real_sql_candidates_selection_and_detail(physical_catalog):

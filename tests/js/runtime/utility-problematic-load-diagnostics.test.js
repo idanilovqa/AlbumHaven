@@ -16,6 +16,10 @@ const helperPath = path.join(
   'utility-loaders-and-cover-lookup.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const rendererPath = path.join(path.dirname(helperPath), 'utility-renderers-and-actions.js');
+const rendererSource = fs.readFileSync(rendererPath, 'utf8');
+const loopPlaybackPath = path.join(path.dirname(helperPath), 'utility-loop-playback.js');
+const loopPlaybackSource = fs.readFileSync(loopPlaybackPath, 'utf8');
 const listBuilderPath = path.join(
   __dirname,
   '..',
@@ -212,6 +216,7 @@ function loadHelper(overrides = {}) {
         calls.consoleErrors.push(args);
       },
     },
+    getUtilityModalElements() { return { overlay: { hidden: false } }; },
     state: {
       utility: {
         activeTab: 'problematic-files',
@@ -1357,6 +1362,7 @@ test('owned projection-pending response retains content and schedules one token-
   assert.equal(requestCount, 1);
   assert.equal(context.state.utility.problematicFiles[0], retained);
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
+  assert.equal(context.state.utility.selectedProblematicDetail, retained);
   assert.deepEqual(calls.toasts, []);
   assert.equal(scheduled.length, 1);
   assert.equal(scheduled[0].delay, 1000);
@@ -1365,6 +1371,7 @@ test('owned projection-pending response retains content and schedules one token-
   await new Promise((resolve) => setImmediate(resolve));
   await context.state.utility.loadPromise;
   assert.equal(requestCount, 2);
+  assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
   assert.equal(scheduled.length, 1, 'the pending response owns only one automatic retry');
   assert.deepEqual(calls.toasts, []);
 });
@@ -1421,6 +1428,80 @@ test('stale projection-pending retry cannot request, mutate, or toast', async ()
   assert.deepEqual(calls.toasts, []);
 });
 
+test('projection-pending retry that becomes obsolete in flight cannot commit or toast', async () => {
+  const scheduled = [];
+  const retryPayload = createDeferred();
+  let requestCount = 0;
+  const retained = { key: 'album-1', name: 'Foxtrot', detail_loaded: true };
+  const { context, calls } = loadHelper({
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        problematicFiles: [retained],
+        loaded: true,
+        loading: false,
+        loadPromise: null,
+        detailLoadPromises: {},
+        selectedProblematicKey: 'album-1',
+        selectedProblematicDetail: retained,
+        problematicDiagnostics: {
+          summaryLoad: null,
+          detailLoads: {},
+          lastDetailLoad: null,
+        },
+      },
+    },
+    scheduleBrowserTimeout(callback, delay) {
+      scheduled.push({ callback, delay });
+      return scheduled.length;
+    },
+    async fetch() {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return {
+          ok: false,
+          status: 503,
+          headers: { get: () => '1' },
+          async json() {
+            return {
+              error: 'Problematic-file projection is still building.',
+              error_code: 'problematic_projection_pending',
+            };
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json() {
+          return retryPayload.promise;
+        },
+      };
+    },
+  });
+
+  await context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  scheduled[0].callback();
+  await Promise.resolve();
+  assert.equal(requestCount, 2, 'the owned retry must start before it becomes obsolete');
+  const obsoleteRetry = context.state.utility.loadPromise;
+
+  context.state.utility.problematicSummaryRequestToken += 1;
+  context.state.utility.problematicFiles = [{ key: 'new-owner', detail_loaded: false }];
+  context.state.utility.selectedProblematicKey = 'new-owner';
+  context.state.utility.selectedProblematicDetail = null;
+  retryPayload.resolve({
+    items: [{ key: 'obsolete-owner', detail_loaded: false }],
+  });
+  await obsoleteRetry;
+
+  assert.equal(context.state.utility.problematicFiles[0].key, 'new-owner');
+  assert.equal(context.state.utility.selectedProblematicKey, 'new-owner');
+  assert.equal(context.state.utility.selectedProblematicDetail, null);
+  assert.deepEqual(calls.toasts, []);
+});
+
 test('projection-pending retry honors an explicit zero-second Retry-After', async () => {
   const scheduled = [];
   const { context } = loadHelper({
@@ -1449,9 +1530,310 @@ test('projection-pending retry honors an explicit zero-second Retry-After', asyn
   assert.equal(scheduled[0].delay, 0);
 });
 
+function projectionRetryResponse(payload, status = 200) {
+  return {
+    ok: status === 200,
+    status,
+    headers: { get: () => status === 503 ? '1' : null },
+    async json() { return payload; },
+  };
+}
+
+function loadProjectionRetryHelper(responses, utility = {}) {
+  const timers = new Map();
+  const elements = {
+    overlay: { hidden: false },
+    list: { innerHTML: '', scrollTop: 0 },
+    detail: { innerHTML: '', removeAttribute() {} },
+    count: { textContent: '' },
+  };
+  let timerId = 0;
+  let requestCount = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let maxTimers = 0;
+  const { context, calls } = loadHelper({
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
+      querySelectorAll() { return []; },
+    },
+    getUtilityModalElements() { return elements; },
+    scheduleBrowserTimeout(callback, delay) {
+      const id = ++timerId;
+      timers.set(id, { callback, delay });
+      maxTimers = Math.max(maxTimers, timers.size);
+      return id;
+    },
+    clearBrowserTimeout(id) { timers.delete(id); },
+    async fetch() {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      let response;
+      try { response = await responses[requestCount++]; }
+      catch (error) { inFlight -= 1; throw error; }
+      return {
+        ...response,
+        async json() {
+          try { return await response.json(); }
+          finally { inFlight -= 1; }
+        },
+      };
+    },
+  });
+  context.state.ui = {};
+  Object.assign(context.state.utility, utility);
+  vm.runInContext(loopPlaybackSource, context, { filename: loopPlaybackPath });
+  return {
+    context, calls, elements, timers,
+    get requestCount() { return requestCount; },
+    get maxInFlight() { return maxInFlight; },
+    get maxTimers() { return maxTimers; },
+    takeRetry() {
+      assert.equal(timers.size, 1, 'exactly one current retry must be scheduled');
+      const [id, retry] = timers.entries().next().value;
+      timers.delete(id);
+      return retry.callback;
+    },
+  };
+}
+
+function pendingProjectionResponse() {
+  return projectionRetryResponse({
+    error: 'Problematic Files projection is rebuilding.',
+    error_code: 'problematic_projection_pending',
+  }, 503);
+}
+
+test('initial projection pending keeps actual loading markup until a successful empty response', async () => {
+  const h = loadProjectionRetryHelper([
+    pendingProjectionResponse(), pendingProjectionResponse(),
+    projectionRetryResponse({ items: [], count: 0, total: 0 }),
+  ]);
+  h.context.getFilteredProblematicAlbums = () => h.context.state.utility.problematicFiles;
+  h.context.renderProblemFilterControls = () => {};
+  vm.runInContext(rendererSource, h.context, { filename: rendererPath });
+  h.context.renderUtilityModalContent = () => {
+    h.calls.renders += 1;
+    h.context.renderProblematicFiles();
+  };
+
+  await h.context.loadProblematicFiles(true);
+  for (let pending = 0; pending < 2; pending += 1) {
+    assert.match(h.elements.list.innerHTML, />Loading\.\.\.</);
+    assert.match(h.elements.detail.innerHTML, /Loading problematic albums/);
+    assert.doesNotMatch(h.elements.list.innerHTML + h.elements.detail.innerHTML, /No matching problematic albums/);
+    h.takeRetry()();
+    await new Promise((resolve) => setImmediate(resolve));
+    await h.context.state.utility.loadPromise;
+  }
+  assert.equal(h.requestCount, 3);
+  assert.equal(h.context.state.utility.loading, false);
+  assert.match(h.elements.list.innerHTML, /No matching problematic albums found/);
+  assert.match(h.elements.detail.innerHTML, /No matching problematic albums found/);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(h.calls.toasts, []);
+});
+
+test('repeated projection pending keeps one retry and one in-flight request until success', async () => {
+  const success = createDeferred();
+  const h = loadProjectionRetryHelper([
+    pendingProjectionResponse(), pendingProjectionResponse(),
+    projectionRetryResponse(success.promise),
+  ]);
+  await h.context.loadProblematicFiles(true);
+  h.takeRetry()();
+  await new Promise((resolve) => setImmediate(resolve));
+  await h.context.state.utility.loadPromise;
+  assert.equal(h.requestCount, 2);
+  h.takeRetry()();
+  await new Promise((resolve) => setImmediate(resolve));
+  const current = h.context.state.utility.loadPromise;
+  const duplicate = h.context.loadProblematicFiles(true);
+  assert.equal(h.requestCount, 3, 'a matching caller must join the current retry');
+  success.resolve({ items: [], count: 0, total: 0 });
+  await Promise.all([current, duplicate]);
+  assert.equal(h.context.state.utility.loaded, true);
+  assert.equal(h.context.state.utility.loading, false);
+  assert.equal(h.maxTimers, 1);
+  assert.equal(h.maxInFlight, 1);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(h.calls.toasts, []);
+});
+
+test('repeated projection-pending refresh retains content and selection until fresh success', async () => {
+  const retained = { key: 'album-1', name: 'Retained Album', detail_loaded: true };
+  const h = loadProjectionRetryHelper([
+    pendingProjectionResponse(), pendingProjectionResponse(),
+    projectionRetryResponse({
+      items: [{ key: retained.key, name: 'Fresh Album', detail_loaded: false }],
+      initial_detail: {
+        key: retained.key, name: 'Fresh Album', detail_loaded: true,
+        tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [],
+      },
+    }),
+  ], { problematicFiles: [retained], loaded: true, selectedProblematicKey: retained.key, selectedProblematicDetail: retained });
+  await h.context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  for (let pending = 0; pending < 2; pending += 1) {
+    assert.equal(h.context.state.utility.problematicFiles[0], retained);
+    assert.equal(h.context.state.utility.selectedProblematicKey, retained.key);
+    assert.equal(h.context.state.utility.selectedProblematicDetail, retained);
+    h.takeRetry()();
+    await new Promise((resolve) => setImmediate(resolve));
+    await h.context.state.utility.loadPromise;
+  }
+  assert.equal(h.context.state.utility.problematicFiles[0].name, 'Fresh Album');
+  assert.equal(h.context.state.utility.selectedProblematicKey, retained.key);
+  assert.equal(h.context.state.utility.loading, false);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(h.calls.toasts, []);
+});
+
+test('recognized projection pending retains status diagnostics without console errors', async () => {
+  const h = loadProjectionRetryHelper([pendingProjectionResponse(), pendingProjectionResponse()]);
+  await h.context.loadProblematicFiles(true);
+  h.takeRetry()();
+  await new Promise((resolve) => setImmediate(resolve));
+  await h.context.state.utility.loadPromise;
+  assert.equal(h.requestCount, 2);
+  assert.deepEqual(h.calls.consoleErrors, []);
+  assert.deepEqual(h.calls.toasts, []);
+  const diagnostics = h.context.state.utility.problematicDiagnostics.summaryLoad;
+  assert.equal(diagnostics.status, 503);
+  assert.equal(diagnostics.ok, false);
+  assert.match(diagnostics.error, /projection is rebuilding/);
+});
+
+for (const status of [400, 500]) {
+  test(`wrong-status projection pending ${status} remains a terminal error`, async () => {
+    const h = loadProjectionRetryHelper([projectionRetryResponse({
+      error: 'Unexpected projection failure',
+      error_code: 'problematic_projection_pending',
+    }, status)]);
+    await h.context.loadProblematicFiles(true);
+    assert.equal(h.timers.size, 0);
+    assert.equal(h.context.state.utility.loading, false);
+    assert.equal(h.context.state.utility.loaded, false);
+    assert.equal(h.calls.consoleErrors.length, 1);
+    assert.deepEqual(h.calls.toasts, [['Unable to load problematic files.', 'error', 3200]]);
+    assert.equal(h.context.state.utility.problematicDiagnostics.summaryLoad.status, status);
+  });
+}
+
+test('ordinary pending refresh retains cached paging after a tab switch without retrying', async () => {
+  const response = createDeferred();
+  const retained = { key: 'retained', name: 'Retained', detail_loaded: true };
+  const h = loadProjectionRetryHelper([response.promise], {
+    problematicFiles: [retained], loaded: true,
+    selectedProblematicKey: retained.key, selectedProblematicDetail: retained,
+    problematicFilesNextCursor: 'retained-page', problematicFilesPageSignature: '',
+    problematicFilesComplete: false,
+  });
+  const loading = h.context.loadProblematicFiles(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  h.context.setUtilityActiveTab('rules');
+  const renders = h.calls.renders;
+  response.resolve(pendingProjectionResponse());
+  await loading;
+  assert.equal(h.context.state.utility.problematicFiles[0], retained);
+  assert.equal(h.context.state.utility.selectedProblematicKey, retained.key);
+  assert.equal(h.context.state.utility.problematicFilesNextCursor, 'retained-page');
+  assert.equal(h.context.state.utility.problematicFilesPageSignature, '');
+  assert.equal(h.context.state.utility.problematicFilesComplete, false);
+  assert.equal(h.calls.renders, renders);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(h.calls.toasts, []);
+});
+
+async function replacePendingRetryOwner(h, transition) {
+  if (transition === 'close/reopen') {
+    // Keep the new session's deferred open work outside the stale request window.
+    const scheduleFrame = h.context.scheduleBrowserAnimationFrame;
+    h.context.scheduleBrowserAnimationFrame = () => 1;
+    h.context.closeUtilityModal();
+    h.context.openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: false });
+    h.context.scheduleBrowserAnimationFrame = scheduleFrame;
+  } else if (transition === 'tab') {
+    h.context.setUtilityActiveTab('rules');
+  } else {
+    h.context.state.utility.searchQuery = 'new filter';
+    if (transition === 'superseding load') await h.context.loadProblematicFiles(true);
+  }
+}
+
+function pendingRetryContent(context) {
+  const { activeTab, problematicFiles, selectedProblematicKey, selectedProblematicDetail, loaded } = context.state.utility;
+  return JSON.parse(JSON.stringify({ activeTab, problematicFiles, selectedProblematicKey, selectedProblematicDetail, loaded }));
+}
+
+for (const transition of ['close/reopen', 'tab', 'filter', 'superseding load']) {
+  test(`queued projection-pending retry cannot outlive ${transition}`, async () => {
+    const h = loadProjectionRetryHelper([
+      pendingProjectionResponse(), projectionRetryResponse({ items: [], count: 0, total: 0 }),
+    ]);
+    await h.context.loadProblematicFiles(true);
+    const callback = h.takeRetry();
+    await replacePendingRetryOwner(h, transition);
+    const content = pendingRetryContent(h.context);
+    const requests = h.requestCount;
+    const renders = h.calls.renders;
+    callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    await h.context.state.utility.loadPromise;
+    assert.equal(h.requestCount, requests);
+    assert.deepEqual(pendingRetryContent(h.context), content);
+    assert.equal(h.calls.renders, renders);
+    assert.deepEqual(h.calls.toasts, []);
+    assert.equal(h.timers.size, 0);
+  });
+
+  for (const completion of ['success', 'failure', 'pending']) {
+    test(`in-flight projection-pending retry cannot commit ${completion} after ${transition}`, async () => {
+      const obsolete = createDeferred();
+      const retained = { key: 'retained', name: 'Retained', detail_loaded: true };
+      const h = loadProjectionRetryHelper([
+        pendingProjectionResponse(), obsolete.promise,
+        projectionRetryResponse({ items: [], count: 0, total: 0 }),
+      ], { problematicFiles: [retained], loaded: true, selectedProblematicKey: retained.key, selectedProblematicDetail: retained });
+      await h.context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+      h.takeRetry()();
+      await new Promise((resolve) => setImmediate(resolve));
+      const staleLoad = h.context.state.utility.loadPromise;
+      assert.equal(h.requestCount, 2);
+      await replacePendingRetryOwner(h, transition);
+      const content = pendingRetryContent(h.context);
+      const renders = h.calls.renders;
+      obsolete.resolve(completion === 'pending' ? pendingProjectionResponse() : projectionRetryResponse(
+        completion === 'success'
+          ? {
+            items: [{ key: 'obsolete', name: 'Obsolete', detail_loaded: false }],
+            initial_detail: {
+              key: 'obsolete', name: 'Obsolete', detail_loaded: true,
+              tracks: [], repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [],
+            },
+          }
+          : { error: 'Obsolete request failed' },
+        completion === 'success' ? 200 : 500,
+      ));
+      await staleLoad;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(pendingRetryContent(h.context), content);
+      assert.equal(h.calls.renders, renders);
+      assert.deepEqual(h.calls.toasts, []);
+      assert.equal(h.timers.size, 0, 'an obsolete response must not schedule another retry');
+    });
+  }
+}
+
 test('owned expired page cursor performs one bounded first-page restart without duplicates or toast', async () => {
   const requestedUrls = [];
-  const retainedSummary = { key: 'album-1', name: 'Foxtrot', detail_loaded: false };
+  const retainedSummary = {
+    key: 'album-1',
+    projection_id: 'h1:old-revision',
+    name: 'Foxtrot',
+    detail_loaded: true,
+    tracks: [{ title: 'Retained detail' }],
+  };
   const { context, calls } = loadHelper({
     state: {
       utility: {
@@ -1462,7 +1844,8 @@ test('owned expired page cursor performs one bounded first-page restart without 
         loadPromise: null,
         completeLoadPromise: null,
         detailLoadPromises: {},
-        selectedProblematicKey: '',
+        selectedProblematicKey: 'album-1',
+        selectedProblematicDetail: retainedSummary,
         problematicFilesNextCursor: 'expired-cursor',
         problematicFilesPageSignature: '',
         problematicSummaryRequestToken: 4,
@@ -1488,6 +1871,24 @@ test('owned expired page cursor performs one bounded first-page restart without 
           },
         };
       }
+      if (String(url).includes('/detail?')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          async json() {
+            return {
+              key: 'album-1',
+              name: 'Foxtrot',
+              detail_loaded: true,
+              tracks: [{ title: 'Fresh detail' }],
+              repair_preview_rows: [],
+              track_problem_rows: [],
+              problematic_track_paths: [],
+            };
+          },
+        };
+      }
       return {
         ok: true,
         status: 200,
@@ -1495,7 +1896,12 @@ test('owned expired page cursor performs one bounded first-page restart without 
         async json() {
           return {
             items: [
-              { key: 'album-1', name: 'Foxtrot', detail_loaded: false },
+              {
+                key: 'album-1',
+                projection_id: 'h1:fresh-revision',
+                name: 'Foxtrot',
+                detail_loaded: false,
+              },
               { key: 'album-2', name: 'Nursery Cryme', detail_loaded: false },
             ],
           };
@@ -1506,14 +1912,156 @@ test('owned expired page cursor performs one bounded first-page restart without 
 
   await context.loadNextProblematicFilesPage();
 
-  assert.equal(requestedUrls.length, 2);
-  assert.ok(requestedUrls[0].includes('cursor=expired-cursor'));
-  assert.equal(requestedUrls[1], '/utilities/problematic-files?limit=50');
+  assert.deepEqual(requestedUrls, [
+    '/utilities/problematic-files?limit=50&cursor=expired-cursor',
+    '/utilities/problematic-files?limit=50',
+    '/utilities/problematic-files/detail?projection_id=h1%3Afresh-revision',
+  ]);
   assert.deepEqual(
     Array.from(context.state.utility.problematicFiles, (item) => item.key),
     ['album-1', 'album-2'],
   );
+  assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
+  assert.equal(context.state.utility.problematicFiles[0].detail_loaded, true);
+  assert.equal(context.state.utility.problematicFiles[0].tracks[0].title, 'Fresh detail');
   assert.deepEqual(calls.toasts, []);
+});
+
+test('expired cursor restart retains rendered selection and detail while the first page is unresolved', async () => {
+  const restart = createDeferred();
+  const retained = {
+    key: 'album-1', projection_id: 'h1:old-revision', name: 'Foxtrot',
+    detail_loaded: true, tracks: [{ title: 'Retained detail' }],
+  };
+  const h = loadProjectionRetryHelper([
+    projectionRetryResponse({
+      error: 'Problematic-file projection cursor expired.',
+      error_code: 'problematic_projection_cursor_expired',
+    }, 409),
+    restart.promise,
+    projectionRetryResponse({
+      key: retained.key, name: retained.name, detail_loaded: true,
+      tracks: [{ title: 'Fresh detail' }],
+      repair_preview_rows: [], track_problem_rows: [], problematic_track_paths: [],
+    }),
+  ], {
+    problematicFiles: [
+      { key: 'album-2', name: 'Nursery Cryme', detail_loaded: false }, retained,
+    ], loaded: true,
+    selectedProblematicKey: retained.key, selectedProblematicDetail: retained,
+    problematicFilesNextCursor: 'expired-cursor', problematicFilesPageSignature: '',
+    problematicFilesComplete: false,
+  });
+  const requestedUrls = [];
+  const fetch = h.context.fetch;
+  h.context.fetch = (url, options) => {
+    requestedUrls.push(String(url));
+    return fetch(url, options);
+  };
+  vm.runInContext(listBuilderSource, h.context, { filename: listBuilderPath });
+  vm.runInContext(rendererSource, h.context, { filename: rendererPath });
+  Object.assign(h.context, {
+    renderProblemFilterControls() {},
+    buildProblematicAlbumListItem(album, selected) {
+      return `<button data-problematic-album-key="${album.key}" aria-selected="${selected}">${album.name}</button>`;
+    },
+    buildProblematicAlbumDetail(album) {
+      return `<h3>${album.name}</h3><div>${album.tracks.map(track => track.title).join(', ')}</div>`;
+    },
+    renderUtilityModalContent(options) { h.context.renderProblematicFiles(options); },
+  });
+  h.context.renderProblematicFiles();
+  const priorList = h.elements.list.innerHTML;
+  const priorDetail = h.elements.detail.innerHTML;
+  assert.match(priorList, /data-problematic-album-key="album-1" aria-selected="true">Foxtrot/);
+  assert.match(priorDetail, /Foxtrot.*Retained detail/);
+
+  const loading = h.context.loadNextProblematicFilesPage();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requestedUrls, [
+    '/utilities/problematic-files?limit=50&cursor=expired-cursor',
+    '/utilities/problematic-files?limit=50',
+  ], 'one expired page must start exactly one first-page restart');
+  assert.equal(h.requestCount, 2);
+  assert.equal(h.context.state.utility.selectedProblematicKey, retained.key);
+  assert.equal(h.context.getSelectedProblematicAlbumFrom(h.context.state.utility.problematicFiles), retained);
+  assert.equal(h.context.state.utility.selectedProblematicDetail, retained);
+  assert.equal(h.elements.list.innerHTML, priorList);
+  assert.equal(h.elements.detail.innerHTML, priorDetail);
+  assert.equal((h.elements.list.innerHTML.match(/data-problematic-album-key="album-1"/g) || []).length, 1);
+  assert.doesNotMatch(h.elements.list.innerHTML + h.elements.detail.innerHTML, /Loading|No matching problematic albums/);
+  assert.deepEqual(h.calls.toasts, []);
+
+  restart.resolve(projectionRetryResponse({ items: [
+    { key: retained.key, projection_id: 'h1:fresh-revision', name: retained.name, detail_loaded: false },
+    { key: 'album-2', name: 'Nursery Cryme', detail_loaded: false },
+  ] }));
+  await loading;
+  assert.deepEqual(requestedUrls, [
+    '/utilities/problematic-files?limit=50&cursor=expired-cursor',
+    '/utilities/problematic-files?limit=50',
+    '/utilities/problematic-files/detail?projection_id=h1%3Afresh-revision',
+  ]);
+  assert.deepEqual(Array.from(h.context.state.utility.problematicFiles, item => item.key), ['album-1', 'album-2']);
+  assert.equal(h.context.state.utility.selectedProblematicKey, retained.key);
+  assert.equal(h.context.state.utility.problematicFiles[0].detail_loaded, true);
+  assert.equal(h.context.state.utility.problematicFiles[0].tracks[0].title, 'Fresh detail');
+  assert.match(h.elements.list.innerHTML, /data-problematic-album-key="album-1" aria-selected="true">Foxtrot/);
+  assert.match(h.elements.detail.innerHTML, /Foxtrot.*Fresh detail/);
+  assert.doesNotMatch(h.elements.detail.innerHTML, /Retained detail|Loading|No matching problematic albums/);
+  assert.deepEqual(h.calls.toasts, []);
+});
+
+test('selected detail uses opaque projection identity while retaining legacy mutation identity', async () => {
+  const requestedUrls = [];
+  const summary = {
+    key: 'legacy-album-key',
+    album_ref: 'legacy-album-ref',
+    projection_id: 'h1:opaque/detail identity',
+    name: 'Foxtrot',
+    detail_loaded: false,
+  };
+  const { context } = loadHelper({
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        problematicFiles: [summary],
+        loaded: true,
+        loading: false,
+        loadPromise: null,
+        detailLoadPromises: {},
+        selectedProblematicKey: summary.key,
+        problematicDiagnostics: { summaryLoad: null, detailLoads: {}, lastDetailLoad: null },
+      },
+    },
+    async fetch(url) {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            key: summary.key,
+            name: summary.name,
+            detail_loaded: true,
+            tracks: [],
+            repair_preview_rows: [],
+            track_problem_rows: [],
+            problematic_track_paths: [],
+          };
+        },
+      };
+    },
+  });
+
+  const detail = await context.loadProblematicAlbumDetail(summary.key);
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/problematic-files/detail?projection_id=h1%3Aopaque%2Fdetail%20identity',
+  ]);
+  assert.equal(detail.key, summary.key, 'legacy key remains the client selection/mutation identity');
+  assert.equal(detail.album_ref, summary.album_ref, 'legacy album_ref remains available to mutation APIs');
+  assert.equal(detail.projection_id, summary.projection_id, 'opaque identity remains attached to the summary');
 });
 
 test('loadProblematicFiles rejects successful responses that violate the summary contract', async () => {

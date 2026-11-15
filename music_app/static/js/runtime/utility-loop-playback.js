@@ -96,6 +96,14 @@ function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   if (state.utility.activeTab !== 'loops' && normalizedTab === 'loops') {
     collapseAllUtilityLoopGroups();
   }
+  if (state.utility.activeTab !== normalizedTab) {
+    if (typeof utilityOpenGeneration !== 'undefined') utilityOpenGeneration += 1;
+    if (state.utility.pendingOpenLoadTimer) {
+      clearBrowserTimeout(state.utility.pendingOpenLoadTimer);
+      state.utility.pendingOpenLoadTimer = 0;
+      if (!state.utility.loadPromise) state.utility.loading = false;
+    }
+  }
   state.utility.activeTab = normalizedTab;
   return normalizedTab;
 }

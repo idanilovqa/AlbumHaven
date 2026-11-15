@@ -167,7 +167,7 @@ def test_canonical_file_size_controls_empty_detection(canonical, cached, expecte
         assert ("Empty audio file" in (payload or {}).get("problem_reasons", [])) is expected
 
 
-def test_repository_count_and_cached_items_follow_physical_reason_exclusion(monkeypatch):
+def test_repository_count_and_items_follow_committed_physical_reason_exclusion(monkeypatch):
     from uuid import uuid4
 
     class SnapshotConnection:
@@ -191,19 +191,34 @@ def test_repository_count_and_cached_items_follow_physical_reason_exclusion(monk
     row["file_entry"]["size"] = 0
     monkeypatch.setattr(repository, "_load_problematic_file_rows", lambda **_kwargs: [row])
     monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
-    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {})
+    monkeypatch.setattr(repository, "_load_persisted_problematic_aliases", lambda: {})
+    class ProjectionRepository:
+        def __init__(self, **_kwargs):
+            pass
+
+        def resolve_bootstrap_library_id(self):
+            return 9
+
+        def read_page(self, **_kwargs):
+            from types import SimpleNamespace
+
+            summary, _detail = _payloads(row)
+            items = [summary] if summary is not None else []
+            return SimpleNamespace(items=items, total=len(items),
+                                   next_cursor=None, reason_facets={})
+
+    monkeypatch.setattr(browse, "PostgresProblematicProjectionRepository", ProjectionRepository)
     try:
-        first = repository.build_problematic_files_payload()
+        first = repository.build_problematic_files_page(limit=20)
         assert first["count"] == 1
         assert first["items"][0]["problem_reasons"] == ["Empty audio file"]
-        assert first["initial_detail"]["problem_reasons"] == ["Empty audio file"]
-        cached = repository.build_problematic_files_payload()
-        assert cached["projection_cache_status"] == "hit"
+        assert repository.build_problematic_file_detail_payload("artist::album")["problem_reasons"] == ["Empty audio file"]
+        cached = repository.build_problematic_files_page(limit=20)
         assert cached["count"] == 1
         row["ignored_repair_keys"] = [browse._problem_identity_row_key(
             row["file_private_path"], "Empty audio file", scope="file")]
         browse.invalidate_postgres_utility_projection_cache(database_url=url, kinds=["problematic-files"])
-        excluded = repository.build_problematic_files_payload()
+        excluded = repository.build_problematic_files_page(limit=20)
         assert excluded["count"] == 0
         assert excluded["items"] == []
         assert excluded["initial_detail"] is None

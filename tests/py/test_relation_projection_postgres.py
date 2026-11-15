@@ -112,6 +112,7 @@ class _ProjectionDatabase:
         self.before_failure_merge = before_failure_merge
         self.before_advisory_lock = before_advisory_lock
         self.advisory_lock_count = 0
+        self.inventory_revision = 1
         self.fail_on_replace = fail_on_replace
         self.fail_on_scan_cache_save = fail_on_scan_cache_save
 
@@ -158,7 +159,20 @@ class _ProjectionConnection:
             return _Cursor([{
                 "scan_cache": deepcopy(self.scan_cache),
                 "artist_search_projection": deepcopy(self.search_projection),
+                "inventory_mutation_revision": self.database.inventory_revision,
             }])
+        if sql == artist_family_postgres._load_owned_artist_family_projection_sql():
+            return _Cursor([
+                {
+                    "artist_key": row["artist_key"],
+                    "family_artist_key": row["family_artist_key"],
+                    "relationship_weight": row.get("relationship_weight", 1),
+                    "source_ref": row.get("source_ref", "relation_views.folder_related"),
+                    "metadata": deepcopy(row["metadata"]),
+                }
+                for row in self.family_links
+                if row["source_family"] == params["relationship_source"]
+            ])
         if "relation_views" in sql and projection.RELATION_PROJECTION_METADATA_KEY in sql:
             return _Cursor([{
                 "relation_views": deepcopy(self.scan_cache.get("relation_views")),
@@ -1212,6 +1226,93 @@ def test_legacy_ready_metadata_with_old_fingerprint_rebuilds_once_instead_of_ret
     assert metadata["built_from_fingerprint"] == current_fingerprint
     assert database.advisory_lock_count == 1
     assert database.events.count("source_load") == 1
+
+
+@pytest.mark.parametrize("condition", [
+    "unchanged", "missing-search", "corrupt-search", "missing-family",
+    "corrupt-family", "changed-source", "concurrent-stale-publication",
+])
+def test_startup_reuses_only_current_source_and_intact_nonempty_families(monkeypatch, condition):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    rows = _morse_rows()
+    views = _complete_relation_views({"Morse Portnoy George": ["Morse, Portnoy & George"]})
+    views["alias_to_canonical"] = {name: name for name in views["artists"]}
+    views["canonical_to_aliases"] = {name: [name] for name in views["artists"]}
+    metadata = projection.build_ready_relation_projection_metadata(
+        projection.relation_source_fingerprint(rows), reason="prior-scan", duration_ms=1,
+    )
+    metadata["status"] = "stale"
+    families = [
+        {**row, "source_family": "folder_derived_runtime"}
+        for row in artist_family_postgres._projection_rows(views, relations_last_built=123.0)
+    ]
+    assert families
+    search = [
+        {**row, "builder_version": metadata["builder_version"],
+         "source_fingerprint": metadata["source_fingerprint"], "relations_last_built": 123.0}
+        for row in projection._artist_search_projection_rows(views)
+    ]
+    assert search
+    if condition == "missing-search":
+        search = []
+    elif condition == "corrupt-search":
+        search[0]["source_fingerprint"] = "older-source"
+    elif condition == "missing-family":
+        families = []
+    elif condition == "corrupt-family":
+        families[0]["metadata"]["relations_last_built"] = 122.0
+    elif condition == "changed-source":
+        rows[0] = {**rows[0], "track_file_id": rows[0]["track_file_id"] + 1000}
+
+    def concurrent_publication(database, lock_count):
+        if condition == "concurrent-stale-publication" and lock_count == 1:
+            database.inventory_revision += 1
+            database.source_rows[0] = {
+                **database.source_rows[0],
+                "track_file_id": database.source_rows[0]["track_file_id"] + 1000,
+            }
+
+    database = _ProjectionDatabase(
+        scan_cache={"relation_views": views, "relations_last_built": 123.0,
+                    projection.RELATION_PROJECTION_METADATA_KEY: metadata},
+        source_rows=rows, family_links=families, search_projection=search,
+        valid_artist_keys={local_inventory_identity_key(name) for name in views["artists"]},
+        before_advisory_lock=concurrent_publication,
+    )
+    original_families = deepcopy(database.family_links)
+    builds = []
+
+    def build(_config, source_rows):
+        builds.append(projection.relation_source_fingerprint(source_rows))
+        return views
+
+    monkeypatch.setattr(projection, "build_relation_views_from_postgres_rows", build)
+    result = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+    reusable = condition in {"unchanged", "missing-search", "corrupt-search"}
+    assert bool(builds) is not reusable
+    assert ("family_replace" in database.events) is not reusable
+    assert result["ready"] is True
+    assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["status"] == "ready"
+    if reusable:
+        assert database.family_links == original_families
+        assert database.scan_cache["relations_last_built"] == 123.0
+        assert database.events.count("source_load") == 1
+        assert database.events.count("search_projection_replace") == int(condition != "unchanged")
+    else:
+        assert database.scan_cache["relations_last_built"] != 123.0
+        assert builds[-1] == projection.relation_source_fingerprint(database.source_rows)
+    if condition == "concurrent-stale-publication":
+        assert database.events.count("source_load") == 2
+        assert database.advisory_lock_count == 2
+    final_snapshot = {**database.scan_cache,
+                      projection._ARTIST_SEARCH_PROJECTION_ROWS_KEY: database.search_projection}
+    assert projection.relation_projection_readiness_stale_reason(final_snapshot) == ""
+    # Startup already loads native snapshots before preparation and under locks.
+    # Only its initial readiness read needs the separate relation/search aggregate.
+    assert sum(
+        sql == projection._load_relation_projection_sql()
+        for sql, _params in database.executed
+    ) == 1
 
 
 def test_unchanged_stale_scan_fingerprint_rebuilds_current_sources_instead_of_retrying(

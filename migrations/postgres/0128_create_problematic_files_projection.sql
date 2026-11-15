@@ -282,7 +282,12 @@ create table if not exists ops.problematic_projection_search_facts (
     semantic_child_identity <> '' and octet_length(semantic_child_identity) <= 4096
   ),
   normalized_text text not null check (
-    normalized_text <> '' and octet_length(normalized_text) <= 32768
+    normalized_text <> '' and (
+      (fact_kind = 'private_path_locator'
+       and octet_length(normalized_text) <= 65536)
+      or (fact_kind <> 'private_path_locator'
+          and octet_length(normalized_text) <= 32768)
+    )
   ),
   primary key (library_id, revision, item_key, fact_kind, semantic_child_identity),
   foreign key (library_id, revision, item_key)
@@ -426,7 +431,12 @@ create table if not exists ops.problematic_projection_search_fact_staging (
     semantic_child_identity <> '' and octet_length(semantic_child_identity) <= 4096
   ),
   normalized_text text not null check (
-    normalized_text <> '' and octet_length(normalized_text) <= 32768
+    normalized_text <> '' and (
+      (fact_kind = 'private_path_locator'
+       and octet_length(normalized_text) <= 65536)
+      or (fact_kind <> 'private_path_locator'
+          and octet_length(normalized_text) <= 32768)
+    )
   ),
   primary key (
     job_id, attempt, revision, item_key, fact_kind, semantic_child_identity
@@ -446,7 +456,8 @@ create index if not exists problematic_projection_items_search_idx
   on ops.problematic_projection_items using gin (search_text library.gin_trgm_ops);
 create index if not exists problematic_projection_search_facts_text_idx
   on ops.problematic_projection_search_facts using gin
-  (normalized_text library.gin_trgm_ops);
+  (normalized_text library.gin_trgm_ops)
+  where fact_kind <> 'private_path_locator';
 create index if not exists problematic_projection_reason_facts_filter_idx
   on ops.problematic_projection_reason_facts
   (library_id, revision, normalized_reason, item_key);
@@ -465,6 +476,10 @@ create index if not exists problematic_projection_group_fact_kind_idx
   on ops.problematic_projection_group_facts
   (job_id, attempt, revision, group_kind, group_identity,
    fact_kind, semantic_child_identity);
+create index if not exists problematic_projection_group_fact_cursor_idx
+  on ops.problematic_projection_group_facts
+  (job_id, attempt, revision, group_kind, group_identity,
+   projection_id collate "C", fact_kind collate "C", semantic_child_identity collate "C");
 create index if not exists local_tracks_problematic_album_page_idx
   on library.local_tracks (album_id, id);
 create index if not exists local_track_files_problematic_track_page_idx
@@ -478,6 +493,11 @@ create index if not exists local_track_files_problematic_companion_idx
     library.problematic_physical_album_container(private_path),
     id
   ) include (track_id, private_path)
+  where scan_cache_stale is false;
+create index if not exists local_track_files_problematic_container_members_idx
+  on library.local_track_files (
+    pg_catalog.md5(library.problematic_physical_album_container(private_path))
+  ) include (track_id, library_root_id)
   where scan_cache_stale is false;
 create index if not exists problematic_projection_due_audit_idx
   on ops.problematic_projection_state (next_integrity_audit_at, library_id)
@@ -663,7 +683,9 @@ begin
     end,
     source_xid_fence = current_fence,
     verified = false,
-    updated_at = pg_catalog.clock_timestamp();
+    updated_at = pg_catalog.clock_timestamp()
+  where ops.problematic_projection_state.source_xid_fence is distinct from current_fence
+     or ops.problematic_projection_state.verified;
 end;
 $$;
 
@@ -675,9 +697,14 @@ set search_path = pg_catalog
 as $$
 declare
   canonical_library_id bigint;
+  has_changed_rows boolean;
 begin
   select resolved.library_id into canonical_library_id
   from ops.resolve_problematic_projection_library() resolved;
+  if tg_nargs > 0 and tg_argv[0] = 'require_rows' then
+    execute 'select exists (select 1 from changed_rows)' into has_changed_rows;
+    if not has_changed_rows then return null; end if;
+  end if;
   perform ops.invalidate_problematic_projection_library(canonical_library_id);
   return null;
 exception
@@ -934,9 +961,16 @@ referencing old table as old_rows new table as new_rows
 for each statement execute function
 ops.invalidate_problematic_projection_metadata_update('file');
 drop trigger if exists invalidate_problematic_projection on library.local_album_featured_artists;
-create trigger invalidate_problematic_projection
-after insert or delete on library.local_album_featured_artists
-for each statement execute function ops.invalidate_problematic_projection();
+drop trigger if exists invalidate_problematic_projection_insert on library.local_album_featured_artists;
+create trigger invalidate_problematic_projection_insert
+after insert on library.local_album_featured_artists
+referencing new table as changed_rows
+for each statement execute function ops.invalidate_problematic_projection('require_rows');
+drop trigger if exists invalidate_problematic_projection_delete on library.local_album_featured_artists;
+create trigger invalidate_problematic_projection_delete
+after delete on library.local_album_featured_artists
+referencing old table as changed_rows
+for each statement execute function ops.invalidate_problematic_projection('require_rows');
 drop trigger if exists invalidate_problematic_projection_update on library.local_album_featured_artists;
 create trigger invalidate_problematic_projection_update
 after update of album_id, artist_id on library.local_album_featured_artists
@@ -1584,7 +1618,8 @@ begin
       and (
         state.child_kind is null or
         (state.child_kind = 'file' and
-          file.id > coalesce(nullif(state.child_identity, ''), '0')::bigint)
+          file.id > coalesce(nullif(case when state.child_kind = 'file'
+            then state.child_identity end, ''), '0')::bigint)
       )
     union all
     select 'loose_source'::text as group_kind,
@@ -1612,7 +1647,8 @@ begin
       and (
         state.child_kind is null or
         (state.child_kind = 'file' and
-          file.id > coalesce(nullif(state.child_identity, ''), '0')::bigint)
+          file.id > coalesce(nullif(case when state.child_kind = 'file'
+            then state.child_identity end, ''), '0')::bigint)
       )
     ) unbounded
     order by unbounded.child_identity::bigint
@@ -1794,12 +1830,24 @@ begin
         join library.local_tracks container_track
           on container_track.id = container_member.track_id
          and container_track.library_id = p_library_id
-        where container_member.library_root_id = candidate_file.library_root_id
-          and container_member.scan_cache_stale is false
+        join library.library_roots container_root
+          on container_root.id = container_member.library_root_id
+         and container_root.library_id = p_library_id
+         and container_root.is_active is true
+        where container_member.scan_cache_stale is false
+          and pg_catalog.md5(library.problematic_physical_album_container(
+                container_member.private_path
+              )) in (
+                pg_catalog.md5(lookup.fact_value ->> 'physical_album_container'),
+                pg_catalog.md5(library.problematic_physical_album_container(
+                  candidate_file.private_path
+                ))
+              )
           and library.problematic_physical_album_container(
                 container_member.private_path
-              ) = library.problematic_physical_album_container(
-                candidate_file.private_path
+              ) in (
+                lookup.fact_value ->> 'physical_album_container',
+                library.problematic_physical_album_container(candidate_file.private_path)
               )
           and (
             library.duplicate_identity_text(
@@ -1819,7 +1867,8 @@ begin
         candidate_file.id
       ) > (
         split_part(state.child_identity, ':', 1),
-        split_part(state.child_identity, ':', 2)::bigint
+        (case when state.child_kind = 'duplicate_companion'
+          then split_part(state.child_identity, ':', 2) else '0' end)::bigint
       )
         )
       order by lookup.semantic_child_identity, candidate_file.id
@@ -2115,7 +2164,10 @@ begin
   )
   select result.group_kind, result.group_identity, result.source_kind,
     result.source_identity, result.child_kind, result.child_identity,
-    result.rows, result.group_complete, result.page_complete
+    result.rows, result.group_complete,
+    -- A bounded nonempty page cannot prove that no later source group exists.
+    -- Confirm exhaustion with the next empty read after completing this group.
+    result.page_complete and result.group_kind is null
   from (
     select source.group_kind, source.group_identity::text,
       source.source_kind, source.source_identity::text,
@@ -2127,7 +2179,9 @@ begin
           then false
         else not exists (
           select 1 from ordinary_candidates later
-          where later.child_identity::bigint > source.child_identity::bigint
+          where later.child_identity::bigint >
+            (case when source.child_kind = 'file'
+              then source.child_identity else '0' end)::bigint
         ) and not exists (
           select 1
           from library.local_track_files later_file
@@ -2137,7 +2191,8 @@ begin
             on later_status.album_id = later_track.album_id
           where source.group_kind in ('album', 'missing_album')
             and later_track.album_id = source.album_id
-            and later_file.id > source.child_identity::bigint
+            and later_file.id > (case when source.child_kind = 'file'
+              then source.child_identity else '0' end)::bigint
             and (
               (later_status.has_active_file and later_file.scan_cache_stale is false) or
               (later_status.all_files_stale and later_file.scan_cache_stale is true)
@@ -2181,13 +2236,24 @@ begin
               join library.local_tracks later_container_track
                 on later_container_track.id = later_container_member.track_id
                and later_container_track.library_id = p_library_id
-              where later_container_member.library_root_id =
-                    later_companion_file.library_root_id
-                and later_container_member.scan_cache_stale is false
+              join library.library_roots later_container_root
+                on later_container_root.id = later_container_member.library_root_id
+               and later_container_root.library_id = p_library_id
+               and later_container_root.is_active is true
+              where later_container_member.scan_cache_stale is false
+                and pg_catalog.md5(library.problematic_physical_album_container(
+                      later_container_member.private_path
+                    )) in (
+                      pg_catalog.md5(later_lookup.fact_value ->> 'physical_album_container'),
+                      pg_catalog.md5(library.problematic_physical_album_container(
+                        later_companion_file.private_path
+                      ))
+                    )
                 and library.problematic_physical_album_container(
                       later_container_member.private_path
-                    ) = library.problematic_physical_album_container(
-                      later_companion_file.private_path
+                    ) in (
+                      later_lookup.fact_value ->> 'physical_album_container',
+                      library.problematic_physical_album_container(later_companion_file.private_path)
                     )
                 and (
                   library.duplicate_identity_text(
@@ -2211,7 +2277,9 @@ begin
                 later_companion_file.id
               ) > (
                 pg_catalog.split_part(source.child_identity, ':', 1),
-                pg_catalog.split_part(source.child_identity, ':', 2)::bigint
+                (case when source.child_kind = 'duplicate_companion'
+                  then pg_catalog.split_part(source.child_identity, ':', 2)
+                  else '0' end)::bigint
               )
             )
         )
@@ -2222,7 +2290,9 @@ begin
           then false
         else not exists (
           select 1 from ordinary_candidates later
-          where later.child_identity::bigint > source.child_identity::bigint
+          where later.child_identity::bigint >
+            (case when source.child_kind = 'file'
+              then source.child_identity else '0' end)::bigint
         ) and not exists (
           select 1
           from library.local_track_files later_file
@@ -2232,7 +2302,8 @@ begin
             on later_status.album_id = later_track.album_id
           where source.group_kind in ('album', 'missing_album')
             and later_track.album_id = source.album_id
-            and later_file.id > source.child_identity::bigint
+            and later_file.id > (case when source.child_kind = 'file'
+              then source.child_identity else '0' end)::bigint
             and (
               (later_status.has_active_file and later_file.scan_cache_stale is false) or
               (later_status.all_files_stale and later_file.scan_cache_stale is true)
@@ -2276,13 +2347,24 @@ begin
               join library.local_tracks later_container_track
                 on later_container_track.id = later_container_member.track_id
                and later_container_track.library_id = p_library_id
-              where later_container_member.library_root_id =
-                    later_companion_file.library_root_id
-                and later_container_member.scan_cache_stale is false
+              join library.library_roots later_container_root
+                on later_container_root.id = later_container_member.library_root_id
+               and later_container_root.library_id = p_library_id
+               and later_container_root.is_active is true
+              where later_container_member.scan_cache_stale is false
+                and pg_catalog.md5(library.problematic_physical_album_container(
+                      later_container_member.private_path
+                    )) in (
+                      pg_catalog.md5(later_lookup.fact_value ->> 'physical_album_container'),
+                      pg_catalog.md5(library.problematic_physical_album_container(
+                        later_companion_file.private_path
+                      ))
+                    )
                 and library.problematic_physical_album_container(
                       later_container_member.private_path
-                    ) = library.problematic_physical_album_container(
-                      later_companion_file.private_path
+                    ) in (
+                      later_lookup.fact_value ->> 'physical_album_container',
+                      library.problematic_physical_album_container(later_companion_file.private_path)
                     )
                 and (
                   library.duplicate_identity_text(
@@ -2306,7 +2388,9 @@ begin
                 later_companion_file.id
               ) > (
                 pg_catalog.split_part(source.child_identity, ':', 1),
-                pg_catalog.split_part(source.child_identity, ':', 2)::bigint
+                (case when source.child_kind = 'duplicate_companion'
+                  then pg_catalog.split_part(source.child_identity, ':', 2)
+                  else '0' end)::bigint
               )
             )
         ) and not exists (
@@ -2361,7 +2445,8 @@ begin
         not exists (
           select 1
           from ops.problematic_projection_group_facts pending_fact
-          where pending_fact.job_id = p_job_id
+          where active.group_kind = 'album'
+            and pending_fact.job_id = p_job_id
             and pending_fact.attempt = p_attempt
             and pending_fact.revision = p_revision
             and pending_fact.group_kind = active.group_kind
@@ -2373,7 +2458,8 @@ begin
       not exists (
           select 1
           from ops.problematic_projection_group_facts pending_fact
-          where pending_fact.job_id = p_job_id
+          where active.group_kind = 'album'
+            and pending_fact.job_id = p_job_id
             and pending_fact.attempt = p_attempt
             and pending_fact.revision = p_revision
             and pending_fact.group_kind = active.group_kind
@@ -2712,13 +2798,13 @@ as $$
     and fact.revision = p_revision and fact.group_kind = p_group_kind
     and fact.group_identity = p_group_identity
     and (
-      fact.projection_id, fact.fact_kind, fact.semantic_child_identity
+      fact.projection_id collate "C", fact.fact_kind collate "C", fact.semantic_child_identity collate "C"
     ) > (
       coalesce(p_after_projection_id, ''),
       coalesce(p_after_fact_kind, ''),
       coalesce(p_after_semantic_child_identity, '')
     )
-  order by fact.projection_id, fact.fact_kind, fact.semantic_child_identity
+  order by fact.projection_id collate "C", fact.fact_kind collate "C", fact.semantic_child_identity collate "C"
   limit least(greatest(p_limit, 1), 100);
 $$;
 
@@ -2823,23 +2909,25 @@ begin
       and fact.group_kind = p_group_kind
       and fact.group_identity = p_group_identity
       and fact.fact_kind in (
-        'track_title_search', 'private_path_search',
+        'track_title_search', 'private_path_search', 'private_path_locator',
         'album_title_search', 'album_artist_search', 'album_key_search'
       )
       and (
-        fact.projection_id, fact.fact_kind, fact.semantic_child_identity
+        fact.projection_id collate "C", fact.fact_kind collate "C", fact.semantic_child_identity collate "C"
       ) > (
         coalesce(p_after_projection_id, ''),
         coalesce(p_after_fact_kind, ''),
         coalesce(p_after_semantic_child_identity, '')
       )
-    order by fact.projection_id, fact.fact_kind,
-      fact.semantic_child_identity
+    order by fact.projection_id collate "C", fact.fact_kind collate "C",
+      fact.semantic_child_identity collate "C"
     limit least(greatest(p_limit, 1), 100)
   loop
     if selected_fact.normalized_text is null
        or selected_fact.normalized_text = ''
-       or pg_catalog.octet_length(selected_fact.normalized_text) > 32768 then
+      or pg_catalog.octet_length(selected_fact.normalized_text) >
+          (case when selected_fact.fact_kind = 'private_path_locator'
+               then 65536 else 32768 end) then
       raise exception 'invalid projection search fact' using errcode = '22023';
     end if;
     if exists (
@@ -2879,11 +2967,11 @@ begin
         and fact.group_kind = p_group_kind
         and fact.group_identity = p_group_identity
         and fact.fact_kind in (
-          'track_title_search', 'private_path_search',
+        'track_title_search', 'private_path_search', 'private_path_locator',
           'album_title_search', 'album_artist_search', 'album_key_search'
         )
         and (
-          fact.projection_id, fact.fact_kind, fact.semantic_child_identity
+        fact.projection_id collate "C", fact.fact_kind collate "C", fact.semantic_child_identity collate "C"
         ) > (last_projection_id, last_fact_kind, last_semantic_child_identity)
     );
 end;
@@ -2989,7 +3077,7 @@ begin
       and fact.group_kind = p_group_kind
       and fact.group_identity = p_group_identity
       and fact.fact_kind in (
-        'track_title_search', 'private_path_search',
+          'track_title_search', 'private_path_search', 'private_path_locator',
         'album_title_search', 'album_artist_search', 'album_key_search'
       )
       and exists (
@@ -3019,7 +3107,7 @@ begin
   update ops.problematic_projection_state as projection_state set
     group_kind = null, group_identity = null,
     source_kind = p_source_kind, source_identity = p_source_identity,
-    child_kind = p_child_kind, child_identity = p_child_identity,
+    child_kind = null, child_identity = null,
     updated_at = p_observed_at
   where projection_state.library_id = p_library_id
     and projection_state.live_job_id = p_job_id

@@ -163,10 +163,12 @@ def problematic_album_identity(
         if separate_release_keys is not None
         else set(_strings(row.get("separate_release_keys")))
     )
-    if row.get("separate_release_member") or row.get("separate_release"):
-        resolved_separate_release_keys.add(resolved_base_key)
     year_text = str(year or "").strip().lower()
-    if resolved_base_key in resolved_separate_release_keys and year_text:
+    if year_text and (
+        row.get("separate_release_member")
+        or row.get("separate_release")
+        or resolved_base_key in resolved_separate_release_keys
+    ):
         key = f"{resolved_base_key}::year::{year_text}"
         return key, key, year
     album_id = row.get("album_id")
@@ -241,9 +243,25 @@ def build_problematic_summary(
         for track in album.get("tracks") or []
         if isinstance(track, Mapping) and str(track.get("path") or "")
     ]
+    projection_source = {
+        "album_id": album.get("_persisted_album_id"),
+        "album_key": album.get("_persisted_album_key") or album.get("key"),
+        "album_title": album.get("name"),
+        "artist_name": album.get("album_artist"),
+        "album_metadata": {
+            "album_artist": album.get("album_artist"),
+            "edition": album.get("edition"),
+        },
+        "file_entry": {"year": album.get("year")},
+        "inventory_status": album.get("inventory_status"),
+        "separate_release_keys": album.get("_separate_release_keys") or (),
+    }
     payload: dict[str, object] = {
         "key": str(album.get("key") or ""),
-        "projection_id": str(album.get("projection_id") or ""),
+        "album_ref": str(album.get("album_ref") or album.get("key") or ""),
+        "projection_id": str(
+            album.get("projection_id") or problematic_projection_id(projection_source)
+        ),
         "name": str(album.get("name") or ""),
         "album_artist": str(album.get("album_artist") or ""),
         "artists": list(album.get("artists") or []),
@@ -2359,6 +2377,7 @@ class _ProblematicItemReducer:
         if fact_kind in (
             "track_title_search",
             "private_path_search",
+            "private_path_locator",
             "album_title_search",
             "album_artist_search",
             "album_key_search",
@@ -2471,6 +2490,9 @@ class _ProblematicItemReducer:
             if reason not in reasons:
                 reasons.insert(first_track_reason, reason)
         exact_non_track_reasons = tuple(reasons)
+        if not exact_non_track_reasons and self._track_order_reason_count == 0:
+            self.close()
+            return None
         display_reasons = [*exact_non_track_reasons, *track_order_reasons][
             :_MAX_DISPLAY_REASONS
         ]
@@ -2720,6 +2742,11 @@ class ProblematicGroupAccumulator:
                         path_identity,
                         {"path": path},
                     )
+                    yield fact(
+                        "private_path_locator",
+                        _problematic_fact_identity("private_path_locator", path),
+                        {"normalized_text": path},
+                    )
                     for chunk_index, normalized_chunk in enumerate(
                         _normalized_problematic_search_chunks(path)
                     ):
@@ -2806,7 +2833,9 @@ class ProblematicGroupAccumulator:
                     payload,
                     order_file_entry,
                 )
-                if track_number is not None:
+                if track_number is not None and not normalize_exception_value(
+                    order_file_entry.get("exception_type")
+                ):
                     disc_number = (
                         _positive_track_number(payload.get("disc_number"))
                         or _positive_track_number(

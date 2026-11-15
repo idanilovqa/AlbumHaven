@@ -1,11 +1,13 @@
 """Live duplicate SQL proof, restricted to an explicitly owned verification DB."""
 from pathlib import Path
+import os
 import uuid
 
 import pytest
 from psycopg.types.json import Jsonb
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.problematic_projection_support import publish_problematic_fixture
 from tests.py.test_library_source_appearance_live import database
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository, invalidate_postgres_utility_projection_cache
 
@@ -21,6 +23,7 @@ def inventory(database):
     artist_id = None
     release_keys = []
     root_ids = {}
+    repository = None
     try:
         with isolatedPostgres._connect(setup) as connection:
             owner = connection.execute("select account_id from app.bootstrap_owners where owner_key = 'local-bootstrap-owner'").fetchone()
@@ -80,33 +83,160 @@ def inventory(database):
 
         # Direct fixture SQL does not emit the application's inventory invalidation.
         invalidate_postgres_utility_projection_cache(database_url=runtime)
-        yield PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": runtime}), keys, paths, add_track, separate
+        repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": runtime})
+        yield repository, keys, paths, add_track, separate
     finally:
+        invalidate_postgres_utility_projection_cache(database_url=runtime)
         with isolatedPostgres._connect(setup) as connection:
             connection.execute("delete from library.separate_releases where release_key = any(%s)", (release_keys,))
             connection.execute("delete from library.local_tracks where id = any(%s)", (track_ids,))
             connection.execute("delete from library.local_albums where id = any(%s)", (album_ids,))
             if artist_id is not None:
                 connection.execute("delete from library.local_artists where id=%s", (artist_id,))
-            if created_library_id is not None:
-                connection.execute("delete from library.libraries where id=%s", (created_library_id,))
-            if account_id is not None:
-                connection.execute("delete from app.accounts where id=%s", (account_id,))
-        invalidate_postgres_utility_projection_cache(database_url=runtime)
+            connection.execute("delete from library.library_roots where id = any(%s)", (list(root_ids.values()),))
+            connection.execute(
+                "delete from ops.jobs where id = any(%s) and kind='problematic_files_projection'",
+                (list(getattr(repository, "_fixture_problematic_job_ids", ())),),
+            )
+            # Canonical bootstrap account/library remain isolated-database infrastructure.
+            # The provisioner's database teardown owns their removal.
 
 
-def test_live_duplicate_candidates_details_and_problematic_projection_agree(inventory):
+@pytest.mark.parametrize("page_limit", [1, 32])
+def test_live_projection_confirms_exhaustion_after_all_source_groups(inventory, monkeypatch, page_limit):
+    from music_app.jobs import problematic_projection_handlers as handlers
+    from music_app.services.problematic_projection_postgres import PostgresProblematicProjectionRepository
+
+    repository, *_ = inventory
+    pages = []
+    populated_groups = set()
+    load_page = PostgresProblematicProjectionRepository.load_claimed_source_page
+
+    def capture_page(self, **kwargs):
+        page = load_page(self, **kwargs)
+        populated_groups.update(chunk.group_key for chunk in page.chunks if chunk.rows)
+        pages.append((tuple((chunk.group_key, chunk.cursor, chunk.complete)
+                            for chunk in page.chunks), page.complete))
+        return page
+
+    monkeypatch.setattr(handlers, "PROBLEMATIC_PROJECTION_SOURCE_PAGE_LIMIT", page_limit)
+    monkeypatch.setattr(PostgresProblematicProjectionRepository, "load_claimed_source_page", capture_page)
+    publish_problematic_fixture(repository)
+    assert len({group for chunks, _ in pages for group, _, _ in chunks}) >= 2, pages
+    assert populated_groups == {group for chunks, _ in pages for group, _, _ in chunks}, pages
+    assert all(not complete for chunks, complete in pages if chunks), pages
+    assert pages[-1] == ((), True), pages
+
+
+def test_live_projection_resumes_after_completed_group(inventory, database, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from music_app.jobs.problematic_projection_handlers import build_problematic_projection_handler
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.jobs.models import JobState, JobTransitionResult
+    from music_app.services.jobs.repository_postgres import PostgresJobRepository
+    from music_app.services.problematic_files_projection import project_problematic_files
+    from music_app.services.problematic_projection_postgres import PostgresProblematicProjectionRepository
+
+    repository, keys, *_ = inventory
+    setup_url, _runtime_url = database
+    completed = {}
+    complete = PostgresProblematicProjectionRepository.complete_claimed_source_group
+
+    class Interrupted(Exception):
+        pass
+
+    def interrupt_after_completion(self, **kwargs):
+        complete(self, **kwargs)
+        completed.update(kwargs)
+        completed["repository"] = self
+        raise Interrupted
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PostgresProblematicProjectionRepository, "complete_claimed_source_group",
+                      interrupt_after_completion)
+        with pytest.raises(Interrupted):
+            publish_problematic_fixture(repository)
+
+    now = datetime.now(timezone.utc)
+    jobs = PostgresJobRepository(database_url=os.environ["ALBUM_HAVEN_WORKER_DATABASE_URL"])
+    claim = completed["claim"]
+    assert jobs.finish(claim, JobTransitionResult(
+        JobState.RETRY_WAIT, "test_interrupted_after_group", scheduled_at=now,
+    ), now=now)
+    resumed = jobs.claim(worker_id="test-resumed-group", now=now + timedelta(seconds=1),
+                         lease_seconds=120, kinds=("problematic_files_projection",))
+    assert resumed is not None and resumed.job_id == claim.job_id
+    assert resumed.attempt == claim.attempt + 1
+    worker = completed["repository"]
+    build = worker.prepare_claimed_build(claim=resumed, now=now + timedelta(seconds=1))
+    assert build.revision == completed["build"].revision
+    assert build.source_group_key is None and build.source_cursor is None
+    page = worker.load_claimed_source_page(claim=resumed, build=build, limit=1,
+                                          child_limit=1, now=now + timedelta(seconds=1))
+    empty_scan_watermarks = set()
+    while not page.complete and not page.chunks:
+        with isolatedPostgres._connect(setup_url) as connection:
+            watermark = connection.execute(
+                "select scan_kind, scan_identity from ops.problematic_projection_state "
+                "where library_id = %s", (build.library_id,),
+            ).fetchone()
+        watermark = (watermark["scan_kind"], int(watermark["scan_identity"]))
+        assert watermark not in empty_scan_watermarks
+        if empty_scan_watermarks:
+            assert watermark > max(empty_scan_watermarks)
+        empty_scan_watermarks.add(watermark)
+        assert len(empty_scan_watermarks) <= len(keys)
+        page = worker.load_claimed_source_page(
+            claim=resumed, build=build, limit=1, child_limit=1,
+            now=now + timedelta(seconds=1),
+        )
+    assert page.chunks and page.chunks[0].rows
+    assert page.chunks[0].group_key != completed["group_key"]
+    assert page.chunks[0].cursor[2] == "file"
+
+    class Context:
+        cancel_requested = False
+        lease_active = True
+
+        @staticmethod
+        def reauthorize():
+            return AuthorizationDecision(True, "problematic_projection_scope_current")
+
+    result = build_problematic_projection_handler(
+        repository=worker, project_group=project_problematic_files,
+    )(resumed, Context())
+    assert result.next_state is JobState.SUCCEEDED
+    assert jobs.finish(resumed, result, now=datetime.now(timezone.utc))
+    summaries = {item["key"]: item for item in repository.build_problematic_files_page(limit=200)["items"]}
+    for label in ("main", "deluxe"):
+        assert "Duplicate files" in summaries[keys[label]]["problem_reasons"]
+
+
+def test_live_duplicate_candidates_details_and_problematic_projection_agree(inventory, monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    def reject_global_duplicate_work(*args, **kwargs):
+        raise AssertionError("Problematic Files detail must use targeted duplicate lookup")
+
     repository, keys, paths, _add_track, _separate = inventory
-    summaries = {item["key"]: item for item in repository.build_problematic_files_payload()["items"]}
+    summaries = {item["key"]: item for item in publish_problematic_fixture(repository)["items"]}
     for label in ("main", "deluxe"):
         assert "Duplicate files" in summaries[keys[label]]["problem_reasons"]
         detail = repository.build_album_detail_payload(keys[label])
         assert detail["has_duplicate_files"] is True
         assert sorted(source["track_count"] for source in detail["duplicate_sources"]) == [1, 2]
         assert {track["path"] for track in detail["tracks"]} == set(paths[label])
-        problem = repository.build_problematic_file_detail_payload(keys[label])
+        with monkeypatch.context() as guard:
+            guard.setattr(browse, "_duplicate_inventory_fingerprint", reject_global_duplicate_work)
+            guard.setattr(browse, "_load_duplicate_candidate_album_ids", reject_global_duplicate_work)
+            problem = repository.build_problematic_file_detail_payload(keys[label])
+            opaque_problem = repository.build_problematic_file_detail_payload(
+                projection_id=summaries[keys[label]]["projection_id"],
+            )
         assert "Duplicate files" in problem["problem_reasons"]
         assert len(problem["duplicate_sources"]) == 2
+        assert "Duplicate files" in opaque_problem["problem_reasons"]
+        assert len(opaque_problem["duplicate_sources"]) == 2
     for label in ("reissue", "unknown"):
         detail = repository.build_album_detail_payload(keys[label])
         assert detail["has_duplicate_files"] is False
@@ -119,7 +249,7 @@ def test_candidate_container_includes_unknown_or_conflicting_multidisc_row(inven
     add_track("reissue", "Disc 2/conflict.flac", year=2002, scan_tags=scan_tags)
     for label in ("main", "deluxe"):
         assert repository.build_album_detail_payload(keys[label])["has_duplicate_files"] is False
-    summaries = {item["key"]: item for item in repository.build_problematic_files_payload()["items"]}
+    summaries = {item["key"]: item for item in publish_problematic_fixture(repository)["items"]}
     for label in ("main", "deluxe"):
         assert "Duplicate files" not in summaries.get(keys[label], {}).get("problem_reasons", [])
 
@@ -165,5 +295,5 @@ def test_candidate_year_matching_is_symmetric_across_catalogue_years(inventory):
         detail = repository.build_album_detail_payload(keys[label])
         found = {track["path"] for source in detail["duplicate_sources"] for track in source["tracks"]}
         assert set(paths["main"]) | set(paths["deluxe"]) | {path} <= found
-    problems = {item["key"]: item for item in repository.build_problematic_files_payload()["items"]}
+    problems = {item["key"]: item for item in publish_problematic_fixture(repository)["items"]}
     assert all("Duplicate files" in problems[keys[label]]["problem_reasons"] for label in ("main", "reissue"))

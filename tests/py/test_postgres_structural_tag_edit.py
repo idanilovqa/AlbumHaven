@@ -37,6 +37,12 @@ _AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
     / "postgres"
     / "0127_restore_authoritative_exception_clear.sql"
 )
+_RESTORE_INCOMPLETE_ALBUM_CONTRACT_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations"
+    / "postgres"
+    / "0129_restore_incomplete_album_contract.sql"
+)
 
 
 class FakeCursor:
@@ -2072,6 +2078,14 @@ def test_live_postgres_blank_album_restore_preserves_mixed_track_identity_and_at
         original_rows = _live_restore_rows(
             connection, track_ids=track_ids, track_file_ids=track_file_ids,
         )
+        migration_sql = _RESTORE_INCOMPLETE_ALBUM_CONTRACT_MIGRATION.read_text(
+            encoding="utf-8"
+        )
+        connection.execute(migration_sql)
+        connection.execute(migration_sql)
+        assert _live_restore_rows(
+            connection, track_ids=track_ids, track_file_ids=track_file_ids,
+        ) == original_rows
         connection.commit()
         connection.close()
         connection = psycopg.connect(database_url)

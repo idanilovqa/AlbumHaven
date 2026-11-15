@@ -3388,6 +3388,60 @@ test('functional fixture warmup bounds each projection retry to the original dea
   assert.deepEqual(requestTimeouts, [100, 10]);
 });
 
+for (const scenario of ['eventually-ready', 'deadline', 'other-503', 'wrong-status', 'accepted-only']) {
+  test(`functional fixture PF readiness uses the existing deadline: ${scenario}`, async () => {
+    const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+    const attempts = [];
+    const diagnostics = [];
+    let now = 0;
+    let rulesRequests = 0;
+    const warmed = await _private.prewarmFunctionalFixture(4324, {
+      mediaRoot,
+      requestHeaders: { Cookie: 'session=test' },
+      timeoutMs: 100,
+      pollIntervalMs: 10,
+      nowFn: () => now,
+      sleepFn: async (milliseconds) => { now += milliseconds; },
+      diagnosticWriteFn: (line) => diagnostics.push(line),
+      fetchHttpResponseCompleteFn: async (url, options) => {
+        assert.equal(options.headers.Cookie, 'session=test');
+        if (url.includes('/view-data?')) {
+          now = 75;
+          return { ok: true, statusCode: 200, body: JSON.stringify({
+            albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+          }) };
+        }
+        if (url.endsWith('/utilities/rules')) rulesRequests += 1;
+        if (!url.endsWith('/utilities/problematic-files')) {
+          return { ok: true, statusCode: 200, body: '' };
+        }
+        attempts.push(options.requestTimeoutMs);
+        if (scenario === 'eventually-ready' && attempts.length === 3) {
+          return { ok: true, statusCode: 200, body: JSON.stringify({
+            items: [], total: 0, next_cursor: null, complete: true,
+          }) };
+        }
+        return {
+          ok: scenario === 'accepted-only',
+          statusCode: scenario === 'accepted-only' ? 202 : scenario === 'wrong-status' ? 500 : 503,
+          body: JSON.stringify({ error_code: scenario === 'other-503'
+            ? 'database_unavailable' : 'problematic_projection_pending' }),
+        };
+      },
+    });
+    assert.equal(warmed, scenario === 'eventually-ready');
+    assert.deepEqual(attempts, ['other-503', 'wrong-status', 'accepted-only'].includes(scenario)
+      ? [25] : [25, 15, 5]);
+    assert.equal(now, scenario === 'deadline' ? 100
+      : scenario === 'eventually-ready' ? 95 : 75);
+    assert.equal(rulesRequests, scenario === 'eventually-ready' ? 1 : 0);
+    assert.deepEqual(diagnostics, scenario === 'eventually-ready' ? [] : [
+      `[functional-warmup-failure] ${JSON.stringify({ stage: 'problematic-files',
+        statusCode: scenario === 'accepted-only' ? 202 : scenario === 'wrong-status' ? 500 : 503 })}\n`,
+    ]);
+  });
+}
+
 test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
   const requests = [];
   const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
@@ -3414,7 +3468,7 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
           }),
         };
       }
-      return { ok: true, body: '' };
+      return { ok: true, statusCode: 200, body: '' };
     },
   });
 
@@ -3802,6 +3856,13 @@ test('stopManagedIsolatedApp cleans up by identity then rejects when graceful sh
     }),
     (error) => {
       assert.equal(error.code, 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED');
+      const diagnostic = _private.buildAuthoritativePassFinalDecisionDiagnostic({
+        exitCode: 2,
+        lifecycle: { managedAttempt: { isolatedAppCleanup: { status: 'failed', error } } },
+      });
+      assert.equal(diagnostic.isolatedAppCleanup.error.errors[0].code,
+        'GRACEFUL_EXIT_WAIT_FAILED');
+      assert.doesNotMatch(JSON.stringify(diagnostic), /graceful shutdown timed out/);
       return true;
     },
   );
@@ -6923,6 +6984,35 @@ test('final-decision marker never exposes raw credential URL, private path, or c
   assert.equal(writes.length, 1);
   assert.doesNotMatch(writes[0], /sentinel-password|sentinel-key|PrivateOwner|secret\.flac|sentinel-command/);
   assert.match(writes[0], /"name":"Error","code":"ESECRET"/);
+});
+
+test('cleanup diagnostics retain bounded nested error codes without private payloads', () => {
+  const secret = 'postgresql://owner:private-password@localhost/db C:\\Private\\music.flac';
+  const leaf = Object.assign(new Error(secret), { code: 'GRACEFUL_EXIT_WAIT_FAILED' });
+  const causal = Object.assign(new Error(secret, { cause: leaf }), { code: 'GRACEFUL_STOP' });
+  const failure = Object.assign(new AggregateError([causal], secret), {
+    code: 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED',
+  });
+  const summarize = (error) => _private.buildAuthoritativePassFinalDecisionDiagnostic({
+    exitCode: 2,
+    lifecycle: { managedAttempt: { isolatedAppCleanup: { status: 'failed', error } } },
+  }).isolatedAppCleanup.error;
+
+  const summary = summarize(failure);
+  assert.equal(summary.code, 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED');
+  assert.equal(summary.errors[0].code, 'GRACEFUL_STOP');
+  assert.equal(summary.errors[0].cause.code, 'GRACEFUL_EXIT_WAIT_FAILED');
+  assert.doesNotMatch(JSON.stringify(summary), /private-password|Private|music\.flac|message/);
+
+  const unsafe = Object.assign(new Error(secret), { name: secret, code: secret });
+  const cycle = Object.assign(new Error(secret), { code: 'CYCLE' });
+  cycle.cause = cycle;
+  const broad = new AggregateError([cycle, unsafe, ...Array(100).fill(leaf)], secret);
+  const bounded = summarize(broad);
+  assert.ok(bounded.errors.length > 0 && bounded.errors.length < 102);
+  const serialized = JSON.stringify(bounded);
+  assert.ok(serialized.length < 4096, 'diagnostics must bound recursive and broad errors');
+  assert.doesNotMatch(serialized, /private-password|Private|music\.flac|message/);
 });
 
 test('final-decision marker rebuilds injected lifecycle data from a closed safe schema', () => {

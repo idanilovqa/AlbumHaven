@@ -182,6 +182,77 @@ def _targeted_request():
     )
 
 
+def _captured_scan_intent_row(kind):
+    row = {"intent_id": 84, "library_id": 19, "captured_cover_mutation_revision": 13}
+    if kind == "full_scan":
+        row.update(
+            initiating_account_id=7, mode="manual_full_rescan", force=True,
+            logical_root_ids=["root-a"], inventory_mutation_revision=0,
+            committed_inventory_revision=None, watcher_repair_id=None,
+        )
+    else:
+        row.update(logical_root_id="root-a", exception_overrides={}, watcher_generation_kind=None)
+    return row
+
+
+@pytest.mark.parametrize("kind", ["full_scan", "targeted_reconciliation"])
+@pytest.mark.parametrize("revision", [0, 13], ids=["zero", "positive"])
+def test_claimed_scan_intent_retains_immutable_captured_cover_revision(kind, revision):
+    from dataclasses import FrozenInstanceError, MISSING, fields
+
+    row = _captured_scan_intent_row(kind)
+    row["captured_cover_mutation_revision"] = revision
+    connection = _RecordingConnection([_Result(one=row)])
+    repository, _, _ = _repository(connection)
+    intent = getattr(repository, f"load_claimed_{kind}")(
+        job_id=901, worker_id="worker-a", lease_token="lease-a",
+    )
+
+    assert intent.captured_cover_mutation_revision == revision
+    captured_field = next(field for field in fields(intent) if field.name == "captured_cover_mutation_revision")
+    assert captured_field.default is MISSING
+    values = {field.name: getattr(intent, field.name) for field in fields(intent)}
+    del values["captured_cover_mutation_revision"]
+    with pytest.raises(TypeError, match="captured_cover_mutation_revision"):
+        type(intent)(**values)
+    with pytest.raises(FrozenInstanceError):
+        intent.captured_cover_mutation_revision = 99
+    assert len(connection.executed) == 1
+    assert "read_cover_mutation_revision" not in connection.executed[0][0]
+
+
+@pytest.mark.parametrize("kind", ["full_scan", "targeted_reconciliation"])
+@pytest.mark.parametrize("revision", [None, True, -1], ids=["null", "boolean", "negative"])
+def test_claimed_scan_intent_constructor_rejects_invalid_captured_cover_revision(kind, revision):
+    from dataclasses import replace
+
+    connection = _RecordingConnection([_Result(one=_captured_scan_intent_row(kind))])
+    repository, _, _ = _repository(connection)
+    intent = getattr(repository, f"load_claimed_{kind}")(
+        job_id=901, worker_id="worker-a", lease_token="lease-a",
+    )
+
+    with pytest.raises(ValueError, match="captured_cover_mutation_revision"):
+        replace(intent, captured_cover_mutation_revision=revision)
+
+
+@pytest.mark.parametrize("kind", ["full_scan", "targeted_reconciliation"])
+@pytest.mark.parametrize("revision", ["missing", None, True, -1], ids=["missing", "null", "boolean", "negative"])
+def test_claimed_scan_loader_rejects_invalid_captured_cover_revision(kind, revision):
+    row = _captured_scan_intent_row(kind)
+    if revision == "missing":
+        del row["captured_cover_mutation_revision"]
+    else:
+        row["captured_cover_mutation_revision"] = revision
+    connection = _RecordingConnection([_Result(one=row)])
+    repository, _, _ = _repository(connection)
+
+    with pytest.raises(ValueError, match="captured_cover_mutation_revision"):
+        getattr(repository, f"load_claimed_{kind}")(
+            job_id=901, worker_id="worker-a", lease_token="lease-a",
+        )
+
+
 def test_targeted_publication_converges_inventory_retirement_and_watcher_once():
     connection = _RecordingConnection(
         results=(
@@ -657,6 +728,7 @@ def test_claimed_ordinary_targeted_legacy_row_reload_is_immutable_and_exact():
     loaded = {
         "intent_id": 84,
         "library_id": 19,
+        "captured_cover_mutation_revision": 13,
         "watcher_generation_kind": None,
         "logical_root_id": "root-a",
         "active_paths": [
@@ -699,6 +771,7 @@ def test_claimed_ordinary_targeted_legacy_row_reload_is_immutable_and_exact():
     )
 
     assert first == second
+    assert first.captured_cover_mutation_revision == 13
     assert first.root_id == "root-a"
     assert first.paths == frozenset(Path(path) for path in loaded["active_paths"])
     assert first.deleted_paths == frozenset(
@@ -776,6 +849,7 @@ def test_claimed_full_scan_loader_returns_exact_immutable_root_snapshot():
                     "force": True,
                     "logical_root_ids": ["root-a", "root-b"],
                     "inventory_mutation_revision": 0,
+                    "captured_cover_mutation_revision": 13,
                     "committed_inventory_revision": None,
                     "watcher_repair_id": 613,
                 }
@@ -797,6 +871,7 @@ def test_claimed_full_scan_loader_returns_exact_immutable_root_snapshot():
     assert intent.force is True
     assert intent.root_ids == ("root-a", "root-b")
     assert intent.watcher_repair_id == 613
+    assert intent.captured_cover_mutation_revision == 13
     [(statement, values)] = connection.executed
     assert "load_claimed_full_scan_intent" in _normalized(statement)
     assert values == {

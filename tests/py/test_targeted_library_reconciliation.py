@@ -39,6 +39,42 @@ def _request(
     )
 
 
+@pytest.mark.parametrize("publication_won", [True, False], ids=["published", "already-published"])
+@pytest.mark.parametrize(("cover_revision", "stale"), [(0, False), (14, True)], ids=["unchanged-zero", "stale"])
+def test_targeted_reconciler_retains_committed_cover_result(tmp_path, publication_won, cover_revision, stale):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    root.mkdir()
+    publication = {
+        "publication_won": publication_won, "inventory_mutation_revision": 12,
+        "affected_album_keys": ["artist::album"], "cover_mutation_revision": cover_revision,
+        "cover_publication_stale": stale,
+    }
+
+    class Repository(RecordingRepository):
+        def persist_targeted_inventory_mutation(self, **values):
+            super().persist_targeted_inventory_mutation(**values)
+            return publication
+
+    repository = Repository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=({"id": "main", "path": root},),
+        metadata_reader=lambda _path: pytest.fail("deletion-only reconciliation must not parse media"),
+    )
+
+    result = reconciler.reconcile(_request(deleted_paths=(root / "removed.flac",)))
+
+    assert len(repository.calls) == 1
+    assert result.health == ("healthy" if publication_won else "already_published")
+    assert result.revision == 12
+    assert result.affected_album_keys == ("artist::album",)
+    assert result.cover_mutation_revision == cover_revision
+    assert result.cover_publication_stale is stale
+    assert result.active_track_paths == result.new_track_paths == ()
+
+
 def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     tmp_path,
     monkeypatch,

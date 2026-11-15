@@ -29,6 +29,8 @@ class TargetedReconciliationResult:
     health: str = "healthy"
     active_track_paths: tuple[str, ...] = ()
     new_track_paths: tuple[str, ...] = ()
+    cover_mutation_revision: int = 0
+    cover_publication_stale: bool = False
 
 
 class TargetedLibraryReconciler:
@@ -359,6 +361,12 @@ class TargetedLibraryReconciler:
                     int(persisted.get("inventory_mutation_revision") or 0),
                     tuple(persisted.get("affected_album_keys") or ()),
                     "already_published",
+                    cover_mutation_revision=int(
+                        persisted.get("cover_mutation_revision") or 0
+                    ),
+                    cover_publication_stale=bool(
+                        persisted.get("cover_publication_stale")
+                    ),
                 )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),
@@ -381,6 +389,12 @@ class TargetedLibraryReconciler:
                         },
                         key=str.casefold,
                     )
+                ),
+                cover_mutation_revision=int(
+                    persisted.get("cover_mutation_revision") or 0
+                ),
+                cover_publication_stale=bool(
+                    persisted.get("cover_publication_stale")
                 ),
             )
             if self._after_commit is not None and result.revision:

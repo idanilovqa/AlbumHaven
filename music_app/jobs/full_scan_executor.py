@@ -202,6 +202,8 @@ class DurableFullScanExecutor:
         return SimpleNamespace(
             canceled=False,
             inventory_mutation_revision=result["inventory_mutation_revision"],
+            cover_mutation_revision=int(result.get("cover_mutation_revision") or 0),
+            cover_publication_stale=bool(result.get("cover_publication_stale")),
         )
 
 

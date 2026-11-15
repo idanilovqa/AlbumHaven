@@ -44,8 +44,15 @@ class ClaimedFullScanIntent:
     force: bool
     root_ids: tuple[str, ...]
     inventory_mutation_revision: int
+    captured_cover_mutation_revision: int
     committed_inventory_revision: int | None
     watcher_repair_id: int | None
+
+    def __post_init__(self) -> None:
+        _nonnegative_int(
+            self.captured_cover_mutation_revision,
+            "captured_cover_mutation_revision",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +72,14 @@ class ClaimedTargetedReconciliationIntent:
     library_id: int
     request: TargetedReconciliationRequest
     exception_overrides: Mapping[str, str]
+    captured_cover_mutation_revision: int
     watcher_generation_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        _nonnegative_int(
+            self.captured_cover_mutation_revision,
+            "captured_cover_mutation_revision",
+        )
 
     @property
     def root_id(self) -> str:
@@ -600,6 +614,10 @@ class PostgresScanJobRepository:
                 payload.get("inventory_mutation_revision"),
                 "inventory_mutation_revision",
             ),
+            captured_cover_mutation_revision=_nonnegative_int(
+                payload.get("captured_cover_mutation_revision"),
+                "captured_cover_mutation_revision",
+            ),
             committed_inventory_revision=(
                 _nonnegative_int(
                     payload.get("committed_inventory_revision"),
@@ -1113,6 +1131,10 @@ class PostgresScanJobRepository:
             library_id=_positive_id(payload.get("library_id"), "library_id"),
             request=request,
             exception_overrides=MappingProxyType(overrides),
+            captured_cover_mutation_revision=_nonnegative_int(
+                payload.get("captured_cover_mutation_revision"),
+                "captured_cover_mutation_revision",
+            ),
             watcher_generation_kind=(
                 _bounded_text(
                     payload.get("watcher_generation_kind"),

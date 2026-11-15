@@ -6,6 +6,67 @@ import pytest
 from music_app.jobs import full_scan_executor
 
 
+@pytest.mark.parametrize(("cover_revision", "stale"), [(0, False), (13, False), (14, True)])
+def test_full_scan_retains_captured_context_and_committed_cover_result(monkeypatch, cover_revision, stale):
+    captured_revision = 0 if cover_revision == 0 else 13
+    intent = SimpleNamespace(
+        intent_id=2, mode="manual_full_rescan", force=True,
+        captured_cover_mutation_revision=captured_revision,
+    )
+    authority = {"revision": captured_revision}
+    prepared = []
+    published = []
+    inventory = {"artists": [], "albums": [], "tracks": [], "track_files": []}
+
+    def scan_music_incremental(**values):
+        authority["revision"] = cover_revision
+        values["publication_state"]["observed_library_root_ids"] = {"root-a"}
+        return ({}, 1.0)
+
+    class Adapter:
+        def __init__(self, _config):
+            pass
+
+        def prepare_full_scan_inventory(self, file_cache, *, separate_release_keys):
+            assert intent.captured_cover_mutation_revision == captured_revision
+            prepared.append((file_cache, separate_release_keys))
+            return inventory
+
+        def load_cover_mutation_revision(self):
+            pytest.fail("preparation must retain the intent capture instead of refreshing authority")
+
+    class Repository:
+        def publish_claimed_full_scan(self, **values):
+            assert authority["revision"] == cover_revision
+            assert intent.captured_cover_mutation_revision == captured_revision
+            published.append(values)
+            return {
+                "publication_won": True, "inventory_mutation_revision": 41,
+                "cover_mutation_revision": cover_revision, "cover_publication_stale": stale,
+            }
+
+    monkeypatch.setattr(full_scan_executor.state_service, "scan_music_incremental", scan_music_incremental)
+    monkeypatch.setattr(full_scan_executor, "PostgresScanCacheAdapter", Adapter)
+    executor = full_scan_executor.DurableFullScanExecutor(config={}, scan_repository=Repository())
+    executor.bind_claim(SimpleNamespace(job_id=1))
+    executor.bind_scope(SimpleNamespace(separate_release_keys=()))
+
+    result = executor.run(
+        intent, roots=({"id": "root-a", "path": Path("C:/Music")},),
+        checkpoint=lambda **_values: None, should_cancel=lambda: False, expected_revision=40,
+    )
+
+    assert prepared == [({}, set())]
+    assert len(published) == 1
+    assert published[0]["inventory"] is inventory
+    assert published[0]["expected_inventory_mutation_revision"] == 40
+    assert "expected_cover_mutation_revision" not in published[0]
+    assert intent.captured_cover_mutation_revision == captured_revision
+    assert result.inventory_mutation_revision == 41
+    assert result.cover_mutation_revision == cover_revision
+    assert result.cover_publication_stale is stale
+
+
 @pytest.mark.parametrize("observed_roots", [{"root-a"}, set(), None])
 def test_full_scan_only_publishes_roots_successfully_observed(monkeypatch, observed_roots):
     published = []

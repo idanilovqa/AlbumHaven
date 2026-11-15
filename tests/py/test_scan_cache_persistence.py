@@ -6352,6 +6352,38 @@ def test_postgres_scan_cache_rating_seed_failure_rolls_back_and_propagates(monke
     assert any("jsonb_build_object('scan_cache'" in sql for sql, _params in connection.executed)
 
 
+def test_durable_targeted_preparer_preserves_committed_cover_result():
+    from types import SimpleNamespace
+
+    from music_app.services.scan_cache_persistence import DurableTargetedReconciliationPreparationAdapter
+
+    publication = {
+        "publication_won": True, "inventory_mutation_revision": 17,
+        "affected_album_keys": [], "cover_mutation_revision": 14,
+        "cover_publication_stale": True,
+    }
+    published = []
+
+    class PublicationGuard:
+        def publish_prepared(self, *, inventory, stale_scopes):
+            published.append((inventory, stale_scopes))
+            return publication
+
+    result = DurableTargetedReconciliationPreparationAdapter().persist_targeted_inventory_mutation(
+        root_id="root-a", active_file_entries={}, deleted_paths=("C:/Music/Removed/01.flac",),
+        preparation_scope=SimpleNamespace(separate_release_keys=(), existing_memberships=()),
+        publication_guard=PublicationGuard(),
+    )
+
+    assert result is publication
+    assert len(published) == 1
+    inventory, stale_scopes = published[0]
+    assert inventory == {"artists": [], "albums": [], "featured_artists": [], "tracks": [], "track_files": []}
+    assert stale_scopes == [{"root_id": "root-a", "paths": ["C:/Music/Removed/01.flac"], "subtrees": []}]
+    assert result["cover_mutation_revision"] == 14
+    assert result["cover_publication_stale"] is True
+
+
 def test_durable_targeted_preparer_publishes_only_claim_scoped_prepared_payload():
     from types import SimpleNamespace
 

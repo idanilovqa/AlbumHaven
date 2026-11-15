@@ -1599,6 +1599,52 @@ def test_root_catch_up_reconciles_every_available_participant_root(tmp_path):
     )
 
 
+@pytest.mark.parametrize(("cover_revision", "stale"), [(13, False), (14, True)])
+def test_targeted_handler_retains_claim_capture_and_committed_cover_result(tmp_path, cover_revision, stale):
+    from music_app.services.scan_cache_persistence import DurableTargetedReconciliationPreparationAdapter
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    root.mkdir()
+
+    class Repository(_ScanRepository):
+        def __init__(self):
+            super().__init__(roots=({"id": "root-a", "path": root, "library_id": 19, "is_active": True},))
+            self.intent.captured_cover_mutation_revision = 13
+            self.intent.request = TargetedReconciliationRequest(
+                root_id="root-a", deleted_paths=frozenset({root / "removed.flac"}),
+            )
+            self.publications = []
+
+        def publish_claimed_targeted_reconciliation(self, **values):
+            assert self.intent.captured_cover_mutation_revision == 13
+            self.publications.append(values)
+            return {
+                "publication_won": True, "inventory_mutation_revision": 31,
+                "affected_album_keys": ["artist::album"],
+                "cover_mutation_revision": cover_revision, "cover_publication_stale": stale,
+            }
+
+    repository = Repository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=DurableTargetedReconciliationPreparationAdapter(build_albums=lambda *_args: []),
+        root_definitions=repository.roots,
+        metadata_reader=lambda _path: pytest.fail("deletion-only reconciliation must not parse media"),
+    )
+    invalidated = []
+
+    result = _handler(repository, reconciler, invalidated)(_claim(), _Context())
+
+    assert result.next_state is JobState.SUCCEEDED
+    assert len(repository.publications) == 1
+    assert "expected_cover_mutation_revision" not in repository.publications[0]
+    assert repository.intent.captured_cover_mutation_revision == 13
+    assert len(invalidated) == 1
+    assert invalidated[0].cover_mutation_revision == cover_revision
+    assert invalidated[0].cover_publication_stale is stale
+
+
 def test_empty_root_catch_up_publishes_full_root_stale_scope(tmp_path):
     from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
     from music_app.services.scan_cache_persistence import (

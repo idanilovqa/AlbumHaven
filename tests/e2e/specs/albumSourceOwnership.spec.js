@@ -8,7 +8,7 @@ import {
   readOwnedLegacyCoverState,
 } from '../helpers/albumSourceOwnershipFixture.js';
 import { setOwnedLegacyCoverRepairProvider } from '../helpers/coverLookupProviderHelpers.js';
-import { coverPathForReference } from '../helpers/coverReferences.js';
+import { coverPathForReference, coverReferenceForPath } from '../helpers/coverReferences.js';
 
 let ownedFixture;
 
@@ -242,11 +242,12 @@ test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cove
     await expect(cards).toHaveCount(2);
     const candidatePaths = await Promise.all(
       [...Array(await cards.count()).keys()].map(async index => {
-        const candidatePath = String(
+        const candidateReference = String(
           await cards.nth(index).getAttribute('data-select-local-cover') || '',
         ).trim();
-        expect(candidatePath).not.toBe('');
-        return candidatePath;
+        expect(candidateReference).not.toBe('');
+        // Cards name images by opaque reference; the isolated E2E database maps each to its file.
+        return coverPathForReference(candidateReference);
       }),
     );
     expect(new Set(candidatePaths)).toEqual(new Set([
@@ -301,7 +302,7 @@ test('FTC-COVERS-043 differently tagged CD siblings expose only their own local 
     await coverLookupActions.waitForModalReady();
     const cards = coverLookupActions.coverLookup.localCoverCards;
     await expect(cards).toHaveCount(1);
-    await expect(cards.first()).toHaveAttribute('data-select-local-cover', fixture.walletOneCover);
+    await expect(cards.first()).toHaveAttribute('data-select-local-cover', await coverReferenceForPath(fixture.walletOneCover));
   });
 });
 

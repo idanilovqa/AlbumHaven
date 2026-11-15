@@ -1262,3 +1262,40 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.deepEqual(requests, [{ url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' }]);
   assert.equal(context.isActivePlaybackOwner(), false);
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): rapid track selections claim
+// once, renewal reuses a live reference, and release and refusal each add one bounded request.
+const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: playback ownership requests stay on ownership endpoints with one claim per selection burst', async () => {
+  const id = 'js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest';
+  await measureInteractionContract(id, async (selections) => {
+    let refuseClaims = false;
+    const capture = createRequestCapture(async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') {
+        return jsonResponse({ ...protocolFixture.valid.refsResponse, expiresAt: '2099-10-24T00:00:00Z',
+          tracks: [{ ...protocolFixture.valid.refsResponse.tracks[0], clientKey: body.tracks[0].clientKey }] });
+      }
+      if (options.method === 'PUT' && refuseClaims) return jsonResponse({ ok: false }, { ok: false, status: 409 });
+      if (options.method === 'PUT') return jsonResponse({ ...protocolFixture.valid.claimResponse, expiresAt: '2099-10-23T23:00:30Z' });
+      return jsonResponse({ protocol: 1, ok: true });
+    });
+    const { context } = loadHelper({ fetch: capture.fetch });
+    const tracks = Array.from({ length: selections }, (_, index) => ({ ...localTrack, path: `C:/Music/${index}.flac` }));
+    const claims = tracks.map(track => context.claimPlaybackOwnership(track));
+    assert.equal((await Promise.all(claims)).at(-1), true, 'the latest selection owns playback');
+    context.state.player.current = tracks.at(-1);
+    assert.equal(await context.refreshPlaybackOwnershipClaim(), true);
+    assert.equal(await context.releasePlaybackOwnership(), true);
+    refuseClaims = true;
+    assert.equal(await context.claimPlaybackOwnership(localTrack, { showBlockedToast: false }), false);
+    const methods = capture.requests.map(({ url, options }) => `${options.method} ${url.split('?')[0]}`);
+    assert.deepEqual(methods, [
+      'POST /playback/refs', 'PUT /playback/state', 'PUT /playback/state', 'DELETE /playback/state',
+      'POST /playback/refs', 'PUT /playback/state', 'GET /playback/state',
+    ]);
+    assertInteractionRequests(id, capture.urls());
+    return capture.counter.snapshot();
+  });
+});

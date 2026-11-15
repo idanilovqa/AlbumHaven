@@ -150,38 +150,6 @@ test('stale cursor recovery retains the mounted artist window instead of returni
   assert.equal(recoveryUrl.searchParams.has('gallery_cursor'), false);
 });
 
-test('stale cursor recovery reloads the retained window before replacing mounted groups', async () => {
-  const f = fixture();
-  const groups = Array.from({ length: 75 }, (_, index) => ({
-    artist: `Retained ${index}`, albums: [{ key: `retained-${index}` }],
-  }));
-  f.state.view.artist_groups = groups;
-  f.scroll.scrollTop = 300;
-  f.context.fetch = (url, options) => new Promise(resolve => f.pending.push({ url, options, resolve }));
-  f.context.renderView = options => f.renders.push(options);
-  const request = f.context.loadNextRootGalleryPage();
-  f.pending[0].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
-  await new Promise(resolve => setImmediate(resolve));
-  f.pending[1].resolve({
-    status: 200, ok: true,
-    json: async () => page(groups.slice(0, 50), {
-      gallery_page: { revision: 'r2', has_more: true, next_cursor: 'fresh-50' },
-    }),
-  });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.pending.length, 3, 'recovery must cover the retained window, not just its first page');
-  assert.equal(f.state.view.artist_groups, groups, 'keep the existing window mounted until recovery is complete');
-  f.pending[2].resolve({
-    status: 200, ok: true,
-    json: async () => page(groups.slice(50), {
-      gallery_page: { revision: 'r2', has_more: false, next_cursor: null },
-    }),
-  });
-  assert.equal(await request, true);
-  assert.equal(f.state.view.artist_groups.length, 75);
-  assert.equal(f.state.view.artist_groups[74].artist, 'Retained 74');
-});
-
 test('stale cursor recovery rejects later continuation churn without restarting again', async () => {
   const f = fixture();
   const groups = Array.from({ length: 75 }, (_, index) => ({
@@ -194,17 +162,10 @@ test('stale cursor recovery rejects later continuation churn without restarting 
   const request = f.context.loadNextRootGalleryPage();
   f.pending[0].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
   await new Promise(resolve => setImmediate(resolve));
-  f.pending[1].resolve({
-    status: 200, ok: true,
-    json: async () => page(groups.slice(0, 50), {
-      gallery_page: { revision: 'r2', has_more: true, next_cursor: 'fresh-50' },
-    }),
-  });
-  await new Promise(resolve => setImmediate(resolve));
-  f.pending[2].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
+  f.pending[1].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.equal(f.pending.length, 3, 'a second conflict must not consume another restart');
+  assert.equal(f.pending.length, 2, 'a second conflict must not consume another restart');
   assert.equal(await request, false);
   assert.equal(f.state.view.artist_groups, groups);
   assert.equal(f.renders.length, 0);
@@ -262,38 +223,6 @@ test('stale cursor recovery caps missing retained-artist requests', async () => 
   assert.equal(requests.length, 8, 'the original cursor request counts toward the recovery cap');
   assert.equal(f.state.view.artist_groups, retained);
   assert.equal(f.renders.length, 0);
-});
-
-test('stale cursor recovery retains trailing releases after insertions enlarge the window', async () => {
-  const f = fixture();
-  f.scroll.scrollTop = 300;
-  const retained = Array.from({ length: 75 }, (_, index) => ({
-    artist: `Retained ${index}`, albums: [{ key: `old-${index}` }],
-  }));
-  const inserted = Array.from({ length: 50 }, (_, index) => ({
-    artist: `Inserted ${index}`, albums: [{ key: `new-${index}` }],
-  }));
-  const refreshed = [retained[0], ...inserted, ...retained.slice(1)];
-  f.state.view.artist_groups = retained;
-  f.context.renderView = options => f.renders.push(options);
-  let requests = 0;
-  f.context.fetch = async url => {
-    requests += 1;
-    const cursor = new URL(url, 'https://localhost').searchParams.get('gallery_cursor');
-    if (cursor === 'page-1') {
-      return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
-    }
-    const offset = cursor ? Number(cursor.slice('fresh-'.length)) : 0;
-    const hasMore = offset + 50 < refreshed.length;
-    return { status: 200, ok: true, json: async () => page(
-      refreshed.slice(offset, offset + 50),
-      { gallery_page: { revision: 'r2', has_more: hasMore, next_cursor: hasMore ? `fresh-${offset + 50}` : null } },
-    ) };
-  };
-  assert.equal(await f.context.loadNextRootGalleryPage(), true);
-  assert.ok(f.state.view.artist_groups.some(group => group.albums.some(album => album.key === 'old-74')),
-    'the retained trailing release must survive inserts before it');
-  assert.ok(requests <= 5, 'coverage recovery must remain bounded');
 });
 
 test('stale cursor recovery recognizes the trailing release after its rating changes', async () => {
@@ -502,46 +431,91 @@ for (const direction of ['Next', 'Previous']) {
   }
 }
 
-for (const coverageRefresh of [false, true]) {
-  test(`pending recovery after cursor restart retains cards (coverage=${coverageRefresh})`, async () => {
-    const f = fixture();
-    const retries = [];
-    f.context.setTimeout = callback => { retries.push(callback); return 1; };
-    f.context.clearTimeout = () => {};
-    f.context.renderView = options => f.renders.push(options);
-    const mounted = f.state.view.artist_groups;
-    const controller = new AbortController();
-    const request = coverageRefresh
-      ? f.context.collectRootGalleryRefresh(f.state.view, '/view-data?surface=albums&gallery_page_size=50',
-        2, controller, () => true)
-      : f.context.loadNextRootGalleryPage();
-    f.pending[0].resolveResponse({ status: 409, json: async () => ({ restart_required: true }) });
-    await new Promise(setImmediate);
-    const restartedUrl = f.pending[1].url;
-    assert.equal(new URL(restartedUrl, 'https://localhost').searchParams.has('gallery_cursor'), false);
-    f.pending[1].resolveResponse({
-      status: 503,
-      clone: () => ({ json: async () => ({ code: 'gallery_projection_pending' }) }),
-    });
-    await new Promise(setImmediate);
-    assert.equal(f.state.view.artist_groups, mounted);
-    assert.equal(f.renders.length, 0);
-    assert.equal(retries.length, 1);
-    retries[0]();
-    await new Promise(setImmediate);
-    assert.equal(f.pending[2].url, restartedUrl);
-    const recovered = page([{ artist: 'New', albums: [{ key: 'new1' }, { key: 'new2' }] }], {
-      gallery_page: { revision: 'r2', next_cursor: null, has_more: false },
-    });
-    f.pending[2].resolve(recovered);
-    const result = await request;
-    if (coverageRefresh) {
-      assert.deepEqual(result, recovered);
-      assert.equal(f.state.view.artist_groups, mounted);
-    } else {
-      assert.equal(result, true);
-      assert.equal(f.state.view.artist_groups[0].artist, 'New');
-      assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
-    }
+test('pending recovery after cursor restart retains cards', async () => {
+  const f = fixture();
+  const retries = [];
+  f.context.setTimeout = callback => { retries.push(callback); return 1; };
+  f.context.clearTimeout = () => {};
+  f.context.renderView = options => f.renders.push(options);
+  const mounted = f.state.view.artist_groups;
+  const request = f.context.loadNextRootGalleryPage();
+  f.pending[0].resolveResponse({ status: 409, json: async () => ({ restart_required: true }) });
+  await new Promise(setImmediate);
+  const restartedUrl = f.pending[1].url;
+  assert.equal(new URL(restartedUrl, 'https://localhost').searchParams.has('gallery_cursor'), false);
+  f.pending[1].resolveResponse({
+    status: 503,
+    clone: () => ({ json: async () => ({ code: 'gallery_projection_pending' }) }),
   });
+  await new Promise(setImmediate);
+  assert.equal(f.state.view.artist_groups, mounted);
+  assert.equal(f.renders.length, 0);
+  assert.equal(retries.length, 1);
+  retries[0]();
+  await new Promise(setImmediate);
+  assert.equal(f.pending[2].url, restartedUrl);
+  const recovered = page([{ artist: 'New', albums: [{ key: 'new1' }, { key: 'new2' }] }], {
+    gallery_page: { revision: 'r2', next_cursor: null, has_more: false },
+  });
+  f.pending[2].resolve(recovered);
+  assert.equal(await request, true);
+  assert.equal(f.state.view.artist_groups[0].artist, 'New');
+  assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
+});
+
+// A catalog change reloads only the anchored window around the visible album, whatever the scroll
+// depth; earlier and later pages reload through their cursors when the user scrolls to them.
+function deepRootGallery(f, artists, visibleIndex) {
+  f.state.view.artist_groups = Array.from({ length: artists }, (_, index) => ({
+    artist: `Retained ${index}`, albums: [{ key: `retained-${index}` }],
+  }));
+  f.semanticScrollAnchor.albumKey = `retained-${visibleIndex}`;
+  f.scroll.scrollTop = 300;
+  f.context.renderView = options => f.renders.push(options);
 }
+
+const windowAround = (anchor, extra = {}) => page(
+  Array.from({ length: 50 }, (_, offset) => ({ artist: `Fresh ${anchor} ${offset}`, albums: [{ key: offset === 16 ? `retained-${anchor}` : `fresh-${anchor}-${offset}` }] })),
+  { gallery_page: { revision: 'r2', has_more: true, next_cursor: 'after-window', has_previous: true, previous_cursor: 'before-window', anchor_artist: `Retained ${anchor}`, anchor_offset: anchor, anchor_group_artist: `Retained ${anchor}` }, ...extra },
+);
+
+test('stale cursor recovery reloads only the window around the visible album', async () => {
+  const f = fixture();
+  deepRootGallery(f, 20000, 12000);
+  const requests = [];
+  f.context.fetch = async (url) => {
+    requests.push(new URL(url, 'https://localhost').searchParams);
+    return requests.length === 1
+      ? { status: 409, ok: false, json: async () => ({ restart_required: true }) }
+      : { status: 200, ok: true, json: async () => windowAround(12000) };
+  };
+  assert.equal(await f.context.loadNextRootGalleryPage(), true);
+  assert.equal(requests.length, 2, 'one conflict and one window, whatever the scroll depth');
+  assert.equal(requests[1].get('gallery_anchor_artist'), 'Retained 12000');
+  assert.equal(requests[1].has('gallery_cursor'), false);
+  assert.equal(requests[1].has('omit_sidebar'), false, 'the recovered window refreshes the sidebar totals');
+  assert.equal(f.state.view.artist_groups.length, 50, 'pages outside the window are not retained');
+  assert.ok(f.state.view.artist_groups.some(group => group.albums[0].key === 'retained-12000'));
+  assert.equal(f.state.view.gallery_page.previous_cursor, 'before-window');
+  assert.equal(f.state.view.gallery_page.next_cursor, 'after-window');
+  assert.equal(f.renders.length, 1);
+  assert.equal(f.renders[0].semanticScrollAnchor, f.semanticScrollAnchor, 'the visible album keeps its on-screen offset');
+  assert.deepEqual([f.renders[0].semanticScrollAnchor.albumKey, f.renders[0].semanticScrollAnchor.offset], ['retained-12000', 24]);
+  assert.equal(f.renders[0].semanticScrollOwnerGeneration, 7, 'restoration is skipped only if the user scrolled meanwhile');
+});
+
+test('stale cursor recovery anchors at the nearest surviving neighbour of a deleted visible artist', async () => {
+  const f = fixture();
+  deepRootGallery(f, 300, 150);
+  const anchors = [];
+  f.context.fetch = async (url) => {
+    const params = new URL(url, 'https://localhost').searchParams;
+    if (params.has('gallery_cursor')) return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
+    anchors.push(params.get('gallery_anchor_artist'));
+    return params.get('gallery_anchor_artist') === 'Retained 150'
+      ? { status: 400, ok: false, json: async () => ({ error: 'Gallery artist anchor is unavailable.' }) }
+      : { status: 200, ok: true, json: async () => windowAround(151) };
+  };
+  assert.equal(await f.context.loadNextRootGalleryPage(), true);
+  assert.deepEqual(anchors, ['Retained 150', 'Retained 151']);
+});

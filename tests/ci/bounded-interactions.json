@@ -138,7 +138,7 @@
     },
     {
       "id": "js:admin-members.js#requestJson",
-      "action": "fetch requests installed by requestJson",
+      "action": "Create or edit an account, send reset and welcome mail, revoke sessions, and retry failed navigation",
       "entrypoints": [
         "js:music_app/static/js/admin-members.js#requestJson:request:fetch"
       ],
@@ -150,11 +150,41 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/admin/accounts",
+          "/admin/accounts/*",
+          "/admin/accounts/*/password-reset",
+          "/admin/accounts/*/welcome",
+          "/admin/accounts/*/sessions/revoke"
+        ],
+        "forbidden": [
+          "/admin/members",
+          "/view-data",
+          "/home-data",
+          "/login"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 5
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/admin-members.test.js",
+      "testIdentity": "request capture: account editor mutations reach only account endpoints, once per action",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; account management is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:admin-members.js#rosterRequest",
-      "action": "fetch requests installed by rosterRequest",
+      "action": "Copy or send a roster invitation, including duplicate clicks during a pending rotation",
       "entrypoints": [
         "js:music_app/static/js/admin-members.js#rosterRequest:request:fetch"
       ],
@@ -166,7 +196,34 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/admin/accounts/*/invitation/copy",
+          "/admin/accounts/*/invitation/send"
+        ],
+        "forbidden": [
+          "/admin/members",
+          "/view-data",
+          "/home-data",
+          "/login"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/admin-members.test.js",
+      "testIdentity": "request capture: roster invitation actions reach only invitation endpoints, once per action",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; account management is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:admin-members.js#sendInvitation",
@@ -227,7 +284,7 @@
     },
     {
       "id": "js:app-copy-worker.js#asset",
-      "action": "fetch requests installed by asset",
+      "action": "Load one unversioned static asset with a copy holding other assets",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#asset:request:fetch"
       ],
@@ -239,11 +296,41 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/static/*",
+          "/static/*/*",
+          "/static/*/*/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: an unversioned asset request reaches only that asset",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#cover",
-      "action": "fetch requests installed by cover",
+      "action": "Load one gallery cover with a copy holding other covers",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#cover:request:fetch"
       ],
@@ -255,11 +342,39 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/cover"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: a cover request reaches only that cover, whatever the kept covers",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#fetchPage",
-      "action": "fetch requests installed by fetchPage",
+      "action": "Navigate to the app page without a fresh copy, then to it again and to unrelated pages",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#fetchPage:request:fetch"
       ],
@@ -271,11 +386,39 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 5,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: app page navigations fetch only the app page, once per missing copy",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#fillCovers",
-      "action": "fetch requests installed by fillCovers",
+      "action": "Save the current view: keep its page and fill one batch of its unseen covers",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#fillCovers:request:fetch"
       ],
@@ -286,12 +429,40 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "background-batch",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/cover"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 5,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 121
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 120
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: saving the view fetches its page once and at most one batch of unseen covers",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy-worker.js#versionedAsset",
-      "action": "fetch requests installed by versionedAsset",
+      "action": "Load a versioned static asset twice and an already kept one",
       "entrypoints": [
         "js:music_app/static/js/app-copy-worker.js#versionedAsset:request:fetch"
       ],
@@ -303,7 +474,37 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/static/*",
+          "/static/*/*",
+          "/static/*/*/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: a versioned asset is fetched once and then served from the copy",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:app-copy.js#ask",
@@ -776,7 +977,7 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick",
-      "action": "fetchAndRender requests installed by handleGalleryBootstrapClick",
+      "action": "Click Home and artist gallery links and a similar-artist chip, each repeatedly",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick:request:fetchAndRender"
       ],
@@ -788,20 +989,48 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/",
           "/*",
           "/home-data",
+          "/view-data",
           "/view-data*"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "request capture: gallery links and similar-artist chips request their own view once per click",
+      "performanceTargets": [
+        "all-artists",
+        "selected-artist",
+        "root-album-browse",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "gallery-artwork-diversity"
+      ],
+      "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState",
-      "action": "fetchAndRender requests installed by handleGalleryBootstrapPopState",
+      "action": "Step back to Home, to a search, and to an anchored root gallery, each step repeated",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState:request:fetchAndRender"
       ],
@@ -813,14 +1042,42 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
+          "/view-data",
           "/view-data*"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "request capture: history steps request the restored view once, Home through /home-data",
+      "performanceTargets": [
+        "all-artists",
+        "selected-artist",
+        "root-album-browse",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "gallery-artwork-diversity"
+      ],
+      "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleSidebarArtistSelectionClick",
@@ -968,7 +1225,7 @@
     },
     {
       "id": "js:runtime/bootstrap-init.js#runHydration",
-      "action": "fetchAndRender requests installed by runHydration",
+      "action": "Hydrate the startup view for Home, the root gallery, and a selected artist",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-init.js#runHydration:request:fetchAndRender"
       ],
@@ -980,7 +1237,42 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-init-playback-ownership.test.js",
+      "testIdentity": "request capture: startup hydration requests its own view endpoint once",
+      "performanceTargets": [
+        "all-artists",
+        "selected-artist",
+        "root-album-browse",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "gallery-artwork-diversity"
+      ],
+      "rollback": "Test-only request-capture contract (plus a harness hook); startup hydration is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-utility-event-handlers.js#bindCoverLookupFileInput",
@@ -1758,7 +2050,7 @@
     },
     {
       "id": "js:runtime/discovery-center-navigation.js#navigate",
-      "action": "fetch requests installed by navigate",
+      "action": "Switch Discovery Center tabs by click and history, ignoring links outside /news",
       "entrypoints": [
         "js:music_app/static/js/runtime/discovery-center-navigation.js#navigate:request:fetch"
       ],
@@ -1770,7 +2062,36 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/news"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/discovery-center-navigation.test.js",
+      "testIdentity": "request capture: Discovery Center tabs fetch only /news, once per navigation",
+      "performanceTargets": [
+        "search-browse",
+        "all-artists",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; Discovery Center navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-card-component.js#schedule",
@@ -2029,24 +2350,8 @@
       }
     },
     {
-      "id": "js:runtime/gallery-refresh-and-status.js#collectRootGalleryRefresh",
-      "action": "fetchGalleryViewResponse requests installed by collectRootGalleryRefresh",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#collectRootGalleryRefresh:request:fetchGalleryViewResponse"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
-      "action": "fetch/fetchAndRender/retryPendingGalleryViewResponse requests installed by fetchAndRender",
+      "action": "Navigate Home, to an artist with repeated presses, to a queued search, and to a pending search",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetch",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetchAndRender",
@@ -2060,18 +2365,41 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
+          "/view-data",
           "/view-data*"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 5
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: gallery navigation fetches its own endpoint once and dispatches one queued view",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchArtist",
-      "action": "fetchGalleryViewResponse requests installed by fetchArtist",
+      "action": "Recover the root gallery after a catalog change: a continuation conflict and a preserveScroll refresh, at any scroll depth",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchArtist:request:fetchGalleryViewResponse"
       ],
@@ -2082,12 +2410,42 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 100,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 3,
+        "responseRows": 100
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: catalog-change recovery requests one window at any scroll depth",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Reverting restores whole-coverage recovery, whose requests grow with scroll depth (ceil(loaded/50)+2); the guard then rejects it again."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse",
-      "action": "fetch/retryPendingGalleryViewResponse requests installed by fetchGalleryViewResponse",
+      "action": "Load a root gallery page while its projection is pending, then cancel a pending load",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:fetch",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:retryPendingGalleryViewResponse"
@@ -2099,28 +2457,41 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:runtime/gallery-refresh-and-status.js#fetchRecoveryResponse",
-      "action": "fetchGalleryViewResponse requests installed by fetchRecoveryResponse",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchRecoveryResponse:request:fetchGalleryViewResponse"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a pending gallery projection retries the same page once per second until cancelled",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
       ],
-      "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static"
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage",
-      "action": "fetchGalleryViewResponse requests installed by loadNextRootGalleryPage",
+      "action": "Scroll toward the end of the root gallery, with repeated scroll checks while the page loads",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage:request:fetchGalleryViewResponse"
       ],
@@ -2131,12 +2502,41 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: root gallery scrolling requests one /view-data cursor page per direction",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage",
-      "action": "fetchGalleryViewResponse requests installed by loadPreviousRootGalleryPage",
+      "action": "Scroll toward the start of an anchored root gallery, with repeated scroll checks while the page loads",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage:request:fetchGalleryViewResponse"
       ],
@@ -2147,8 +2547,37 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: root gallery scrolling requests one /view-data cursor page per direction",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#pollStatus",
@@ -2197,7 +2626,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse",
-      "action": "abort listeners, fetch requests, setTimeout timers installed by retryPendingGalleryViewResponse",
+      "action": "Retry a pending gallery projection once per second until it answers or is cancelled",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:event:abort",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:request:fetch",
@@ -2210,12 +2639,41 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a pending gallery projection retries the same page once per second until cancelled",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",
-      "action": "fetchAndRender requests installed by runDispatch",
+      "action": "Dispatch Home and selected-artist startup hydration follow-ups after busy retries",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#runDispatch:request:fetchAndRender"
       ],
@@ -2227,7 +2685,36 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: startup hydration follow-ups dispatch one request after busy retries",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",
@@ -2647,7 +3134,7 @@
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks",
-      "action": "fetch requests installed by hydrateDeferredNonAlbumTracks",
+      "action": "Open artist and library loose tracks repeatedly for a selected artist and the root gallery",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks:request:fetch"
       ],
@@ -2659,7 +3146,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data"
+        ],
+        "forbidden": [
+          "/home-data",
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
+      "testIdentity": "request capture: loose-track hydration requests /view-data once per scope",
+      "performanceTargets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback"
+      ],
+      "rollback": "Test-only request-capture contract; loose-track hydration is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#openAlbumInExplorer",
@@ -2873,7 +3388,7 @@
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest",
-      "action": "fetch requests, setTimeout timers installed by playbackOwnershipRequest",
+      "action": "Select tracks in a burst, renew the claim, release it, and be refused by another owner",
       "entrypoints": [
         "js:music_app/static/js/runtime/playback-ownership-helpers.js#playbackOwnershipRequest:request:fetch",
         "js:music_app/static/js/runtime/playback-ownership-helpers.js#playbackOwnershipRequest:timer:setTimeout"
@@ -2886,7 +3401,34 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/refs",
+          "/playback/state"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/track",
+          "/playback/session/complete"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 200
+      },
+      "budgets": {
+        "requests": 7
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "request capture: playback ownership requests stay on ownership endpoints with one claim per selection burst",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; playback requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipTrack",
@@ -3052,7 +3594,7 @@
     },
     {
       "id": "js:runtime/player-listen-session-helpers.js#postPlaybackSession",
-      "action": "fetch requests, setTimeout timers installed by postPlaybackSession",
+      "action": "Play one track to completion through many progress events",
       "entrypoints": [
         "js:music_app/static/js/runtime/player-listen-session-helpers.js#postPlaybackSession:request:fetch",
         "js:music_app/static/js/runtime/player-listen-session-helpers.js#postPlaybackSession:timer:setTimeout"
@@ -3065,7 +3607,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/playback/session/now-playing",
+          "/playback/session/scrobble",
+          "/playback/session/complete"
+        ],
+        "forbidden": [
+          "/playback/state",
+          "/playback/refs",
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-listen-session-helpers.test.js",
+      "testIdentity": "request capture: one listen posts each session write once on listen-session endpoints",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; playback requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/player-loop-playback.js#attachPlayerEvents",
@@ -3531,7 +4101,7 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval",
-      "action": "fetch/fetchAndRender requests installed by confirmMissingAlbumRemoval",
+      "action": "Confirm, conflict on, or cancel removing a missing album from Home and from an artist view",
       "entrypoints": [
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval:request:fetch",
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval:request:fetchAndRender"
@@ -3544,15 +4114,34 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/",
           "/*",
-          "/api/library/albums/*/confirm-removal"
+          "/api/library/albums/*/confirm-removal",
+          "/home-data",
+          "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 2000
+      },
+      "budgets": {
+        "requests": 6
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/tag-editor-and-optimistic-updates.test.js",
+      "testIdentity": "request capture: missing album removal posts once and refreshes its own view once",
+      "performanceTargets": [
+        "selected-artist"
+      ],
+      "rollback": "Test-only request-capture contract; missing album removal is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#confirmProblemSuggestions",
@@ -3876,7 +4465,7 @@
     },
     {
       "id": "js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails",
-      "action": "fetch requests installed by fetchTrackModalAlbumDetails",
+      "action": "Open the same album repeatedly, then an album whose album_id an older server rejects",
       "entrypoints": [
         "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails:request:fetch"
       ],
@@ -3888,13 +4477,37 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/album-details"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/track-modal-lightbox-helpers.test.js",
+      "testIdentity": "request capture: Album Details opens fetch /album-details once per album",
+      "performanceTargets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only request-capture contract; Album Details loading is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/track-modal-lightbox-helpers.js#preloadTrackModalArtwork",
@@ -4204,7 +4817,7 @@
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#fetchSummary",
-      "action": "fetch requests installed by fetchSummary",
+      "action": "Open Problematic Files: one bounded first page, then one complete summary shared by concurrent loads",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#fetchSummary:request:fetch"
       ],
@@ -4216,7 +4829,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/utilities/problematic-files/detail"
+        ]
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 5000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loaders-and-cover-lookup.test.js",
+      "testIdentity": "request capture: Problematic Files loads one bounded page and one complete summary",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only request-capture contract; the Utility loaders are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#fetchUnsuccessfulAlbumCovers",
@@ -4460,7 +5101,7 @@
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#resumeDeferredUtilityViewRequest",
-      "action": "fetchAndRender requests installed by resumeDeferredUtilityViewRequest",
+      "action": "Close Settings and resume the gallery request it deferred (Home or a search)",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#resumeDeferredUtilityViewRequest:request:fetchAndRender"
       ],
@@ -4472,11 +5113,38 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 10,
+        "production": 5000
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loaders-and-cover-lookup.test.js",
+      "testIdentity": "request capture: closing Settings resumes a deferred view on its own endpoint, once",
+      "performanceTargets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Test-only request-capture contract; the Utility loaders are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#runLocalPlaylistImportAnalysis",
-      "action": "fetch requests installed by runLocalPlaylistImportAnalysis",
+      "action": "Analyze a selected local playlist, with repeated clicks while the analysis runs",
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#runLocalPlaylistImportAnalysis:request:fetch"
       ],
@@ -4488,13 +5156,31 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/imports/local-playlists/analyze"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/view-data",
+          "/home-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loaders-and-cover-lookup.test.js",
+      "testIdentity": "request capture: local playlist analysis posts once to the advertised analysis route",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; the Utility loaders are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#saveLastfmIntegration",
@@ -4916,7 +5602,7 @@
     },
     {
       "id": "js:settings-navigation.js#navigate",
-      "action": "fetch requests installed by navigate",
+      "action": "Navigate between Settings pages, submit an account form, and reject non-Settings routes",
       "entrypoints": [
         "js:music_app/static/js/settings-navigation.js#navigate:request:fetch"
       ],
@@ -4928,7 +5614,38 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/account",
+          "/admin/members",
+          "/admin/server",
+          "/admin/accounts/*",
+          "/account/password",
+          "/account/password-suggestion/dismiss"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/login",
+          "/logout"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 6
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/settings-navigation.test.js",
+      "testIdentity": "request capture: Settings navigation fetches only its owned pages, once per navigation",
+      "performanceTargets": [],
+      "rollback": "Test-only request-capture contract; Settings navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:startup-progress.js#<top-level>",

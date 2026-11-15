@@ -85,11 +85,13 @@ const DEFECTS = [
     // until the bar reaches its target.
     id: 'BI-H13 requestAnimationFrame animation loop that rescans every gallery card each frame',
     language: 'js',
-    file: 'music_app/static/js/startup-progress.js',
-    anchor: '    if (percent < targetPercent) animationFrame = window.requestAnimationFrame(animate);\n',
-    replacement: "    document.querySelectorAll('.album-card').forEach(card => card.classList.toggle('dimmed', percent < 100));\n"
-      + '    if (percent < targetPercent) animationFrame = window.requestAnimationFrame(animate);\n',
-    expected: /^js:startup-progress\.js#animate: \d+ reachable hazard\(s\) need a runtime contract \(.*querySelectorAll at music_app\/static\/js\/startup-progress\.js:\d+/,
+    // A statically proven animation loop: a contract entry would leave the new
+    // hazard to its runtime contract instead of reporting it here.
+    file: 'music_app/static/js/runtime/utility-renderers-and-actions.js',
+    anchor: '      const result = scrollFocusedRowsIntoView();\n',
+    replacement: '      const result = scrollFocusedRowsIntoView();\n'
+      + "      document.querySelectorAll('.album-card').forEach(card => card.classList.toggle('dimmed', !result.layoutReady));\n",
+    expected: /^js:runtime\/utility-renderers-and-actions\.js#finishFocusedNavigation: \d+ reachable hazard\(s\) need a runtime contract \(.*querySelectorAll at music_app\/static\/js\/runtime\/utility-renderers-and-actions\.js:\d+/,
   },
   {
     id: 'BI-H13 self-rescheduling setTimeout poller that rescans every loop range',

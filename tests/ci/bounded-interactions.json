@@ -963,14 +963,76 @@
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:wheel"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-event-handlers.js"
+        "music_app/static/js/runtime/bootstrap-event-handlers.js",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+        "music_app/static/js/runtime/player-and-waveform.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/utility-log-history-query.js",
+        "music_app/static/js/runtime/utility-log-history-ui.js",
+        "music_app/static/js/runtime/utility-loop-playback.js",
+        "music_app/static/js/runtime/utility-renderers-and-actions.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/android-bridge-client.js",
+        "music_app/static/js/runtime/library-settings.js",
+        "music_app/static/js/unfolding-action-button.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/core-state-and-helpers.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/problematic-album-helpers.js",
+        "music_app/static/js/admin-members.js",
+        "music_app/static/js/navigation-tree.js",
+        "music_app/static/js/runtime/notification-ui-helpers.js",
+        "music_app/static/js/runtime/player-waveform-peaks.js",
+        "music_app/static/js/runtime/bootstrap-utility-event-handlers.js",
+        "music_app/static/js/runtime/browser-dialog-helpers.js",
+        "music_app/static/js/runtime/loop-range-controls.js",
+        "music_app/static/js/runtime/player-loop-playback.js",
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/utilities/loops-tab.js",
+        "music_app/static/js/utilities/shell.js",
+        "music_app/static/js/runtime/alert-components.js",
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+        "music_app/static/js/utilities/rules-tab.js",
+        "music_app/static/js/runtime/status-ui-helpers.js",
+        "music_app/static/js/runtime/gallery-main-components.js",
+        "music_app/static/js/runtime/android-settings.js",
+        "music_app/static/js/runtime/appearance-backgrounds-bridge.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js",
+        "music_app/static/js/utilities/appearance-tab.js",
+        "music_app/static/js/app-copy-worker.js",
+        "music_app/static/js/appearance-device-profiles.js",
+        "music_app/static/js/client-layout-bootstrap.js",
+        "music_app/static/js/runtime/client-preferences-helpers.js",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
-      "workClass": "delta",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 3015,
+        "domQueries": 3,
+        "domMutations": 2,
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "domMutations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-utility-event-handlers.test.js",
+      "testIdentity": "bounded interaction: tag editor drag selection and field input update only changed rows among 1,000 tracks",
+      "performanceTargets": [],
+      "rollback": "Revert the hovered-track guard and changed-row selection sync; tag editor drag selection then re-renders every row on each mousemove again. No data or API change."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery",
@@ -1234,14 +1296,49 @@
         "js:music_app/static/js/runtime/bootstrap-init.js#<top-level>:timer:requestAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-init.js"
+        "music_app/static/js/runtime/bootstrap-init.js",
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/notification-ui-helpers.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/browser-dialog-helpers.js",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/runtime/alert-components.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/mobile-home.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 80,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 60,
+        "renderCommits": 1,
+        "markupBytes": 91400,
+        "domQueries": 4
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-modal-and-drawer.test.js",
+      "testIdentity": "bounded interaction: notification drawer scroll renders one task window among 1,000 loaded notifications",
+      "performanceTargets": [],
+      "rollback": "Revert the window-only drawer scroll render and rendered-window anchor lookup; scrolls then recount, re-sign, and search every loaded notification again. No data or API change."
     },
     {
       "id": "js:runtime/bootstrap-init.js#runHydration",

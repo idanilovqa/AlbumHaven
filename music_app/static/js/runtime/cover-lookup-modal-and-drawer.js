@@ -1572,15 +1572,22 @@ const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
 const COVER_LOOKUP_TASK_ROW_HEIGHT = 96;
 
+// A scroll anchor is a rendered card, so the rendered window is searched first.
+function findCoverLookupRenderedTaskIndex(tasks, taskId) {
+  const matches = task => String(task?.id || '').trim() === taskId;
+  const start = Math.min(tasks.length, Math.max(0, Number(state.coverLookup.taskRenderWindowStart || 0)));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  for (let index = start; index < end; index += 1) if (matches(tasks[index])) return index;
+  return tasks.findIndex(matches);
+}
+
 function getCoverLookupTaskRenderWindow(tasks, body, scrollAnchor = null) {
   const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
   const scrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
-  const anchorIndex = scrollAnchor?.taskId
-    ? tasks.findIndex((task) => String(task?.id || '').trim() === scrollAnchor.taskId)
-    : -1;
+  const anchorIndex = scrollAnchor?.taskId ? findCoverLookupRenderedTaskIndex(tasks, scrollAnchor.taskId) : -1;
   const visibleStart = anchorIndex >= 0
     ? anchorIndex
     : Math.floor(Math.max(0, scrollTop) / rowHeight);
@@ -1883,6 +1890,19 @@ function renderCoverLookupDrawer({
     syncCoverLookupElapsedTimer();
     return;
   }
+  if (preserveSelectedNotificationText) {
+    state.coverLookup.taskRenderWindowStart = getCoverLookupTaskRenderWindow(
+      tasks, body, taskIds.length ? null : captureCoverLookupDrawerScrollAnchor(body),
+    ).start;
+  } else {
+    renderCoverLookupDrawerTaskWindow(body, tasks, taskIds);
+    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+  }
+  syncCoverLookupElapsedTimer();
+}
+
+// Renders only the visible task window and its spacers.
+function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
   const restoreScrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
@@ -2017,20 +2037,33 @@ function renderCoverLookupDrawer({
       </div>
     `;
   }).join('');
-  if (!preserveSelectedNotificationText) {
-    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
-    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
-    replaceCoverLookupDrawerMarkup(body, `
-      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
-      ${taskMarkup}
-      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
-    `, taskIds);
-    if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
-      body.scrollTop = Math.max(0, restoreScrollTop);
-    }
-    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+  const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+  const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+  replaceCoverLookupDrawerMarkup(body, `
+    <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+    ${taskMarkup}
+    <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+  `, taskIds);
+  if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
+    body.scrollTop = Math.max(0, restoreScrollTop);
   }
-  syncCoverLookupElapsedTimer();
+  return visibleTasks;
+}
+
+// Scrolling moves only the task window; the counts, timers, and the other
+// tasks' terminal signatures cannot change, so they are not recomputed.
+function renderCoverLookupDrawerScrollWindow() {
+  const body = document.getElementById('cover-lookup-drawer-body');
+  const tasks = state.coverLookup.tasks;
+  if (!body || !state.coverLookup.drawerOpen || !Array.isArray(tasks) || !tasks.length) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+    return;
+  }
+  const visibleTasks = renderCoverLookupDrawerTaskWindow(body, tasks);
+  state.coverLookup.drawerRenderedTerminalSignatures = Object.assign(
+    state.coverLookup.drawerRenderedTerminalSignatures || {},
+    buildCoverLookupDrawerTerminalSignatures(visibleTasks),
+  );
 }
 
 async function clearCompletedCoverLookupTasks() {
@@ -3052,12 +3085,12 @@ function handleCoverLookupDrawerScroll(event) {
   }
   const renderWindowChanged = nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0);
   if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)?.taskId) {
-    renderCoverLookupDrawer({ preserveInteraction: false });
+    renderCoverLookupDrawerScrollWindow();
   } else if (renderWindowChanged && typeof window.setTimeout === 'function') {
     coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
       coverLookupDrawerScrollRenderTimer = 0;
       if (state.coverLookup.drawerOpen) {
-        renderCoverLookupDrawer({ preserveInteraction: false });
+        renderCoverLookupDrawerScrollWindow();
       }
     }, 120);
   }

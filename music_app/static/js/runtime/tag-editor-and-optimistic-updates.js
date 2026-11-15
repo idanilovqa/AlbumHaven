@@ -280,6 +280,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),

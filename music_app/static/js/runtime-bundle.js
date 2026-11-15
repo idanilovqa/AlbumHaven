@@ -5831,6 +5831,7 @@ const state = {
     anchorPath: '',
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     values: {},
   },
   coverLookup: {
@@ -32588,7 +32589,17 @@ function renderTagEditor(options = {}) {
     els.autoNumberStatus.textContent = String(state.tagEditor.autoNumberStatus || '');
   }
 
-  const existingTrackButtons = options.preserveTrackList
+  const syncTrackRowSelection = (row) => {
+    const isSelected = selectedPathSet.has(String(row.getAttribute('data-tag-editor-track') || ''));
+    row.classList.toggle('is-active', isSelected);
+    row.querySelector?.('.tag-editor-track-select')
+      ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  };
+  // A drag-selection step keeps the mounted list and names the rows it changed.
+  const changedSelectionPaths = options.preserveTrackList && Array.isArray(options.changedSelectionPaths)
+    ? options.changedSelectionPaths
+    : null;
+  const existingTrackButtons = options.preserveTrackList && !changedSelectionPaths
     ? Array.from(els.list.querySelectorAll('[data-tag-editor-track]'))
     : [];
   const canPreserveTrackList = existingTrackButtons.length === tracks.length
@@ -32596,14 +32607,13 @@ function renderTagEditor(options = {}) {
       String(existingTrackButtons[index]?.getAttribute('data-tag-editor-track') || '')
       === String(track.path || '')
     ));
-  if (canPreserveTrackList) {
-    existingTrackButtons.forEach((button) => {
-      const path = String(button.getAttribute('data-tag-editor-track') || '');
-      const isSelected = selectedPathSet.has(path);
-      button.classList.toggle('is-active', isSelected);
-      button.querySelector?.('.tag-editor-track-select')
-        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  if (changedSelectionPaths) {
+    changedSelectionPaths.forEach((path) => {
+      const row = els.list.querySelector(`[data-tag-editor-track="${cssEscape(path)}"]`);
+      if (row) syncTrackRowSelection(row);
     });
+  } else if (canPreserveTrackList) {
+    existingTrackButtons.forEach(syncTrackRowSelection);
   } else {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
@@ -34214,15 +34224,22 @@ const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
 const COVER_LOOKUP_TASK_ROW_HEIGHT = 96;
 
+// A scroll anchor is a rendered card, so the rendered window is searched first.
+function findCoverLookupRenderedTaskIndex(tasks, taskId) {
+  const matches = task => String(task?.id || '').trim() === taskId;
+  const start = Math.min(tasks.length, Math.max(0, Number(state.coverLookup.taskRenderWindowStart || 0)));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  for (let index = start; index < end; index += 1) if (matches(tasks[index])) return index;
+  return tasks.findIndex(matches);
+}
+
 function getCoverLookupTaskRenderWindow(tasks, body, scrollAnchor = null) {
   const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
   const scrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
-  const anchorIndex = scrollAnchor?.taskId
-    ? tasks.findIndex((task) => String(task?.id || '').trim() === scrollAnchor.taskId)
-    : -1;
+  const anchorIndex = scrollAnchor?.taskId ? findCoverLookupRenderedTaskIndex(tasks, scrollAnchor.taskId) : -1;
   const visibleStart = anchorIndex >= 0
     ? anchorIndex
     : Math.floor(Math.max(0, scrollTop) / rowHeight);
@@ -34525,6 +34542,19 @@ function renderCoverLookupDrawer({
     syncCoverLookupElapsedTimer();
     return;
   }
+  if (preserveSelectedNotificationText) {
+    state.coverLookup.taskRenderWindowStart = getCoverLookupTaskRenderWindow(
+      tasks, body, taskIds.length ? null : captureCoverLookupDrawerScrollAnchor(body),
+    ).start;
+  } else {
+    renderCoverLookupDrawerTaskWindow(body, tasks, taskIds);
+    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+  }
+  syncCoverLookupElapsedTimer();
+}
+
+// Renders only the visible task window and its spacers.
+function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
   const restoreScrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
@@ -34659,20 +34689,33 @@ function renderCoverLookupDrawer({
       </div>
     `;
   }).join('');
-  if (!preserveSelectedNotificationText) {
-    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
-    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
-    replaceCoverLookupDrawerMarkup(body, `
-      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
-      ${taskMarkup}
-      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
-    `, taskIds);
-    if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
-      body.scrollTop = Math.max(0, restoreScrollTop);
-    }
-    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+  const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+  const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+  replaceCoverLookupDrawerMarkup(body, `
+    <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+    ${taskMarkup}
+    <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+  `, taskIds);
+  if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
+    body.scrollTop = Math.max(0, restoreScrollTop);
   }
-  syncCoverLookupElapsedTimer();
+  return visibleTasks;
+}
+
+// Scrolling moves only the task window; the counts, timers, and the other
+// tasks' terminal signatures cannot change, so they are not recomputed.
+function renderCoverLookupDrawerScrollWindow() {
+  const body = document.getElementById('cover-lookup-drawer-body');
+  const tasks = state.coverLookup.tasks;
+  if (!body || !state.coverLookup.drawerOpen || !Array.isArray(tasks) || !tasks.length) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+    return;
+  }
+  const visibleTasks = renderCoverLookupDrawerTaskWindow(body, tasks);
+  state.coverLookup.drawerRenderedTerminalSignatures = Object.assign(
+    state.coverLookup.drawerRenderedTerminalSignatures || {},
+    buildCoverLookupDrawerTerminalSignatures(visibleTasks),
+  );
 }
 
 async function clearCompletedCoverLookupTasks() {
@@ -35694,12 +35737,12 @@ function handleCoverLookupDrawerScroll(event) {
   }
   const renderWindowChanged = nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0);
   if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)?.taskId) {
-    renderCoverLookupDrawer({ preserveInteraction: false });
+    renderCoverLookupDrawerScrollWindow();
   } else if (renderWindowChanged && typeof window.setTimeout === 'function') {
     coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
       coverLookupDrawerScrollRenderTimer = 0;
       if (state.coverLookup.drawerOpen) {
-        renderCoverLookupDrawer({ preserveInteraction: false });
+        renderCoverLookupDrawerScrollWindow();
       }
     }, 120);
   }
@@ -36984,6 +37027,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
@@ -48052,6 +48096,7 @@ function handleUtilityBootstrapMouseDown(event) {
   if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
     state.tagEditor.dragSelecting = true;
     state.tagEditor.dragAnchorPath = path;
+    state.tagEditor.dragHoverPath = path;
   }
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
@@ -48235,9 +48280,19 @@ function handleUtilityBootstrapMouseOver(event) {
   const trackButton = event.target.closest('[data-tag-editor-track]');
   if (!trackButton) return false;
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  // Moves within the hovered track change nothing; a new track changes only
+  // the rows entering or leaving the dragged range.
+  if (path === state.tagEditor.dragHoverPath) return true;
+  state.tagEditor.dragHoverPath = path;
+  const previousPaths = new Set(state.tagEditor.selectedPaths || []);
   const rangePaths = getTagEditorRangePaths(state.tagEditor.dragAnchorPath, path);
   setTagEditorSelectedPaths(rangePaths, state.tagEditor.dragAnchorPath);
-  renderTagEditor({ preserveTrackList: true });
+  const selectedPaths = new Set(state.tagEditor.selectedPaths);
+  const changedSelectionPaths = [
+    ...[...previousPaths].filter(item => !selectedPaths.has(item)),
+    ...[...selectedPaths].filter(item => !previousPaths.has(item)),
+  ];
+  renderTagEditor({ preserveTrackList: true, changedSelectionPaths });
   syncTagEditorAutoNumberControls();
   return true;
 }
@@ -48300,6 +48355,7 @@ function handleUtilityBootstrapMouseUp(event) {
   }
   state.tagEditor.dragSelecting = false;
   state.tagEditor.dragAnchorPath = '';
+  state.tagEditor.dragHoverPath = '';
 }
 
 function toggleUtilityLoopGroupCollapse(groupKey) {

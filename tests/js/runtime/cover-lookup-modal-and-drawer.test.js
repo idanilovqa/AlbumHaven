@@ -1021,7 +1021,7 @@ require('node:test')('mobile notification scrolling defers virtual-window rerend
     getBoundingClientRect: () => ({ top: 100, bottom: 196 }),
   }];
   let renderCount = 0;
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawerScrollWindow = () => { renderCount += 1; };
 
   const anchor = context.captureCoverLookupDrawerScrollAnchor(bodyElement);
   assert.equal(anchor.taskId, 'task-40');
@@ -1064,7 +1064,7 @@ require('node:test')('mobile notification scrolling immediately replaces an unco
     getBoundingClientRect: () => ({ top: -196, bottom: -100 }),
   }];
   let renderCount = 0;
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawerScrollWindow = () => { renderCount += 1; };
 
   await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
 
@@ -7580,5 +7580,47 @@ require('node:test')('bounded interaction: Cover Lookup sheet touchmove stays co
     run,
     budgets: { itemsVisited: 0, domQueries: 0, domMutations: 11, listeners: 0 },
     growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
+});
+
+require('node:test')('bounded interaction: notification drawer scroll renders one task window among 1,000 loaded notifications', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, bodyElement } = createDrawerHarness();
+    let markup = '';
+    Object.defineProperty(bodyElement, 'innerHTML', {
+      get: () => markup,
+      set(value) {
+        counter.count('renderCommits');
+        counter.count('markupBytes', String(value).length);
+        markup = String(value);
+      },
+    });
+    Object.assign(bodyElement, { scrollTop: 0, scrollHeight: cardinality * 96, clientHeight: 600 });
+    bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+    bodyElement.querySelectorAll = () => { counter.count('domQueries'); return []; };
+    context.state.coverLookup.tasks = countedCollection(Array.from({ length: cardinality }, (_value, index) => ({
+      id: `task-${index}`, status: 'completed', album: `Album ${index % 10}`, artist: 'Artist',
+    })), counter);
+    context.state.coverLookup.tasksNextCursor = null;
+    context.renderCoverLookupDrawer();
+    const work = await counter.measure(async () => {
+      for (const scrollTop of [960, 1920]) {
+        bodyElement.scrollTop = scrollTop;
+        await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+      }
+    });
+    assert.equal(context.state.coverLookup.taskRenderWindowStart, 10);
+    assert.equal((markup.match(/data-open-cover-lookup-task=/g) || []).length, Math.min(60, cardinality - 10));
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/bootstrap-init.js#<top-level>',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 60, renderCommits: 1, markupBytes: 91400, domQueries: 4 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });

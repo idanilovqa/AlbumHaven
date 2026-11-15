@@ -2618,7 +2618,17 @@ function renderTagEditor(options = {}) {
     els.autoNumberStatus.textContent = String(state.tagEditor.autoNumberStatus || '');
   }
 
-  const existingTrackButtons = options.preserveTrackList
+  const syncTrackRowSelection = (row) => {
+    const isSelected = selectedPathSet.has(String(row.getAttribute('data-tag-editor-track') || ''));
+    row.classList.toggle('is-active', isSelected);
+    row.querySelector?.('.tag-editor-track-select')
+      ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  };
+  // A drag-selection step keeps the mounted list and names the rows it changed.
+  const changedSelectionPaths = options.preserveTrackList && Array.isArray(options.changedSelectionPaths)
+    ? options.changedSelectionPaths
+    : null;
+  const existingTrackButtons = options.preserveTrackList && !changedSelectionPaths
     ? Array.from(els.list.querySelectorAll('[data-tag-editor-track]'))
     : [];
   const canPreserveTrackList = existingTrackButtons.length === tracks.length
@@ -2626,14 +2636,13 @@ function renderTagEditor(options = {}) {
       String(existingTrackButtons[index]?.getAttribute('data-tag-editor-track') || '')
       === String(track.path || '')
     ));
-  if (canPreserveTrackList) {
-    existingTrackButtons.forEach((button) => {
-      const path = String(button.getAttribute('data-tag-editor-track') || '');
-      const isSelected = selectedPathSet.has(path);
-      button.classList.toggle('is-active', isSelected);
-      button.querySelector?.('.tag-editor-track-select')
-        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  if (changedSelectionPaths) {
+    changedSelectionPaths.forEach((path) => {
+      const row = els.list.querySelector(`[data-tag-editor-track="${cssEscape(path)}"]`);
+      if (row) syncTrackRowSelection(row);
     });
+  } else if (canPreserveTrackList) {
+    existingTrackButtons.forEach(syncTrackRowSelection);
   } else {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');

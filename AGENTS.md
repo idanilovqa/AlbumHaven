@@ -70,14 +70,39 @@ operate, or contribute to the application.
   watcher, poller, background loop) is declared in
   `tests/ci/bounded-interactions.json`. After adding, moving, or removing one,
   run `node scripts/ci/validate-bounded-interactions.cjs --sync`, review the
-  entries it registers (action, work class, owned endpoints), then validate.
-  `--sync` never widens a reviewed entry's endpoint ownership.
-- An entry proves boundedness statically only while discovery finds no hazard
-  reachable from it. Otherwise it needs a deterministic contract that runs the
-  real code at a small and a production-calibration cardinality and asserts
-  absolute operation budgets and growth (`tests/js/helpers/bounded-interaction-counter.js`,
+  entries it registers (action, work class), then validate. `--sync` never
+  grants endpoints: a request it registers gets an empty
+  `requestOwnership.allowed` list, and validation fails until the author fills
+  it with the reviewed endpoints (and `forbidden` with the ones it must never
+  reach).
+- Hot paths need full reachable-hazard proof: an entry proves boundedness
+  statically only while discovery finds no hazard reachable from its hot
+  entrypoints (a JavaScript helper chain deeper than the call-depth limit is
+  itself a hazard). Hot paths are, by entrypoint kind only:
+  JavaScript high-frequency or repeating events (`pointermove`, `mousemove`,
+  `scroll`, `wheel`, `touchmove`, `input`, `mouseover`, `pointerover`,
+  `dragover`, `resize`, `drag`, `pointerrawupdate`, `selectionchange`,
+  `timeupdate`, and channel or worker `message`); `setInterval`;
+  `requestAnimationFrame`; a `setTimeout` whose callback can reach the function
+  that schedules it (a poller), including through a helper that schedules its
+  own callback parameter; Mutation, Resize, Intersection, and Performance
+  observers; workers; and every Python route and background entrypoint
+  (watchers, pollers, schedulers, reconcilers, refresh/publish, thread and
+  executor targets). Otherwise the entry needs a deterministic contract that
+  runs the real code at a small and a production-calibration cardinality and
+  asserts absolute operation budgets and growth
+  (`tests/js/helpers/bounded-interaction-counter.js`,
   `tests/py/bounded_interactions.py`). Interactive work never declares
   `library-size`; there are no allowlists, waivers, or baselines.
+- Every other JavaScript entrypoint (click, change, submit, keydown, load and
+  other one-shot events, one-shot `setTimeout`, request owners) is not forced
+  to prove its call chain, but still fails for a dedicated surface routed
+  through a generic endpoint, a literal or resolved request target outside
+  `requestOwnership.allowed` or inside `forbidden`, a dynamic request target
+  without a request-capture contract, or an unregistered or stale entrypoint.
+  Direct broad work is rejected outright only inside a high-frequency handler;
+  interactive Python routes keep their library-scale and direct-enumeration
+  rejections. Existing contracts on one-shot entries stay in force.
 - Before calling an interaction implemented, run
   `npm run test:bounded-interactions` (or with `--changed-paths <file>` for the
   owners you changed) at production-calibration cardinality. Record the exact

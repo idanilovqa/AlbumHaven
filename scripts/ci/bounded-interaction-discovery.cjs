@@ -4,8 +4,9 @@
 // hazards reachable from them. Discovery proves coverage, not boundedness:
 // hazards are computed for every entrypoint (listener, timer, observer, worker
 // message, request owner). Direct hazards inside a high-frequency handler are
-// rejected outright; every other reachable hazard is reported so the registry
-// can require a deterministic runtime contract for that entry.
+// rejected outright. Every hazard records whether its entrypoint is a hot path
+// (see isHotEntrypoint); only hot-path hazards require a deterministic runtime
+// contract, while the others still select contracts for changed files.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,7 +18,13 @@ const EXCLUDED_JS = [/(^|\/)runtime-bundle\.js$/, /(^|\/)vendor\//, /(^|\/)dist\
 const HIGH_FREQUENCY_EVENTS = new Set([
   'pointermove', 'mousemove', 'scroll', 'wheel', 'touchmove', 'input', 'mouseover', 'pointerover', 'dragover', 'resize',
 ]);
+// Events that keep firing while they last but are not per-frame input:
+// channel and worker messages (worker, worklet port, socket, broadcast), media
+// playback progress, and an ongoing text selection or drag. Their handlers are
+// hot paths without rejecting per-event work outright.
+const REPEATING_EVENTS = new Set([...HIGH_FREQUENCY_EVENTS, 'message', 'timeupdate', 'selectionchange', 'drag', 'pointerrawupdate']);
 const TIMER_CALLS = new Set(['setInterval', 'setTimeout', 'requestAnimationFrame']);
+const REPEATING_TIMERS = new Set(['setInterval', 'requestAnimationFrame']);
 const DEFERRED_CALLBACK_CALLS = new Set(['setTimeout', 'requestAnimationFrame', 'queueMicrotask', 'requestIdleCallback']);
 const OBSERVERS = new Set(['MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'PerformanceObserver']);
 const MAX_RESOLUTION_DEPTH = 8;
@@ -231,11 +238,25 @@ function receiverClasses(receiver, context, index) {
   return [];
 }
 
+// A name bound inside an enclosing function (a local function, a parameter, a
+// local value) is that binding, never a same-named function elsewhere: a
+// callback parameter called `resolve` or a local `cancel` must not stand for
+// every `resolve` or `cancel` in the runtime. Other names are global.
+function resolveIdentifier(reference, file, index) {
+  const defs = index.functions.get(reference.name) || [];
+  for (let scope = ownerOf(file, reference).scope; scope; scope = ownerOf(file, scope).scope) {
+    const local = defs.filter(def => def.file === file && ownerOf(file, def.node).scope === scope);
+    if (local.length) return local;
+    if (scopeDeclarations(file, scope).has(reference.name)) return [];
+  }
+  return defs;
+}
+
 function resolveCallable(target, context, index) {
   const node = unwrapChain(target);
   if (!node) return [];
   if (isFunction(node)) return [{ file: context.file, node, name: '<inline>' }];
-  if (node.type === 'Identifier') return index.functions.get(node.name) || [];
+  if (node.type === 'Identifier') return resolveIdentifier(node, context.file, index);
   if (node.type === 'CallExpression' && memberProperty(node.callee) === 'bind') {
     return resolveCallable(node.callee.object, context, index);
   }
@@ -736,6 +757,42 @@ function reachableHazards(handler, context, index) {
   return { direct, indirect };
 }
 
+// Every function a handler can call, at any depth (the call graph is finite,
+// so a visited set ends the walk), the handler itself included.
+const reachableCache = new WeakMap();
+function reachableFunctions(handler, index) {
+  if (reachableCache.has(handler.node)) return reachableCache.get(handler.node);
+  const seen = new Set();
+  const queue = [handler];
+  while (queue.length) {
+    const def = queue.pop();
+    if (seen.has(def.node)) continue;
+    seen.add(def.node);
+    queue.push(...calledFunctions(def.node, { file: def.file, className: ownerOf(def.file, def.node).className }, index));
+  }
+  reachableCache.set(handler.node, seen);
+  return seen;
+}
+
+// Hot paths need every reachable hazard proven by a contract: high-frequency
+// and repeating events, observers, workers, and repeating timers. A timer is
+// repeating when it is `setInterval` or `requestAnimationFrame`, or a
+// `setTimeout` whose callback can reach the function that schedules it again
+// (a poller); a call to a timer helper is classified by the timer the helper
+// uses. Every other entrypoint (one-shot events and timeouts, request
+// owners) is not hot: it keeps route, request, and registration checks only.
+function isHotEntrypoint(found, file, handlers, index) {
+  if (found.kind === 'event') return REPEATING_EVENTS.has(found.trigger);
+  if (found.kind === 'observer' || found.kind === 'worker') return true;
+  if (found.kind !== 'timer') return false;
+  if (REPEATING_TIMERS.has(found.timer)) return true;
+  const reached = new Set(handlers.flatMap(handler => [...reachableFunctions(handler, index)]));
+  for (let scope = ownerOf(file, found.node).scope; scope; scope = ownerOf(file, scope).scope) {
+    if (reached.has(scope)) return true;
+  }
+  return false;
+}
+
 // The function that runs when the entrypoint fires: a listener, timer, or
 // observer callback, or the function that owns a request.
 function entrypointHandler(found, file) {
@@ -860,6 +917,38 @@ function requestHelpers(files, index) {
   return helpers;
 }
 
+function isTimerCall(node) {
+  return TIMER_CALLS.has(calleeName(node)) && (node.callee.type === 'Identifier' || GLOBAL_OBJECTS.has(node.callee.object?.name));
+}
+
+// Functions that schedule one of their own parameters with a timer (such as
+// `scheduleBrowserTimeout(callback, delay)`) become timer helpers, to a
+// fixpoint: each call to one is a timer entrypoint that runs the passed
+// callback, classified by the timer it ultimately uses.
+function timerHelpers(files, index) {
+  const helpers = new Map();
+  const definitions = new Map([...index.functions.values()].flat().map(def => [def.node, def]));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const file of files) {
+      walkAst(file.ast, (node) => {
+        if (node.type !== 'CallExpression') return;
+        const helper = node.callee.type === 'Identifier' ? helpers.get(node.callee.name) : undefined;
+        const timer = isTimerCall(node) ? calleeName(node) : helper?.timer;
+        const callback = node.arguments[helper ? helper.param : 0];
+        if (!timer || callback?.type !== 'Identifier') return;
+        const { scope } = ownerOf(file, node);
+        const def = scope && definitions.get(scope);
+        const param = def ? functionParamIndex(scope, callback.name) : -1;
+        if (param < 0 || helpers.has(def.name)) return;
+        helpers.set(def.name, { param, timer });
+        changed = true;
+      });
+    }
+  }
+  return helpers;
+}
+
 function entry(file, node, kind, trigger) {
   const { owner } = ownerOf(file, node);
   return {
@@ -875,7 +964,7 @@ function entry(file, node, kind, trigger) {
 }
 
 // Entry points plus the callback node each one runs.
-function fileEntrypoints(file, index, helpers) {
+function fileEntrypoints(file, index, helpers, timers) {
   const found = [];
   walkAst(file.ast, (node) => {
     if (node.type === 'CallExpression') {
@@ -883,8 +972,11 @@ function fileEntrypoints(file, index, helpers) {
       if (name === 'addEventListener') {
         const trigger = stringValue(node.arguments[0]);
         if (trigger) found.push({ ...entry(file, node, 'event', trigger), handler: node.arguments[1] });
-      } else if (TIMER_CALLS.has(name) && (node.callee.type === 'Identifier' || GLOBAL_OBJECTS.has(node.callee.object?.name))) {
-        found.push({ ...entry(file, node, 'timer', name), handler: node.arguments[0] });
+      } else if (isTimerCall(node)) {
+        found.push({ ...entry(file, node, 'timer', name), handler: node.arguments[0], timer: name });
+      } else if (node.callee.type === 'Identifier' && timers.has(name)) {
+        const { param, timer } = timers.get(name);
+        found.push({ ...entry(file, node, 'timer', name), handler: node.arguments[param], timer });
       } else if (node.callee.type === 'Identifier' && helpers.has(name)) {
         const call = entry(file, node, 'request', name);
         const { scope } = ownerOf(file, node);
@@ -978,7 +1070,7 @@ function dedupeEntrypoints(entries) {
   return [...byKey.values()];
 }
 
-function publicEntry({ handler, node, ...rest }) {
+function publicEntry({ handler, node, timer, ...rest }) {
   return rest;
 }
 
@@ -989,21 +1081,23 @@ function discoverJavaScriptSource(source, filePath) {
 function analyzeFiles(files) {
   const index = indexDefinitions(files);
   const helpers = requestHelpers(files, index);
+  const timers = timerHelpers(files, index);
   const entrypoints = [];
   const hazards = [];
+  const hotKeys = new Set();
   for (const file of files) {
-    for (const found of fileEntrypoints(file, index, helpers)) {
+    for (const found of fileEntrypoints(file, index, helpers, timers)) {
       entrypoints.push(publicEntry(found));
       const callback = entrypointHandler(found, file);
-      if (!callback) continue;
+      const handlers = callback ? resolveCallable(callback, { file, className: ownerOf(file, callback).className }, index) : [];
+      if (isHotEntrypoint(found, file, handlers, index)) hotKeys.add(found.key);
       const highFrequency = found.kind === 'event' && HIGH_FREQUENCY_EVENTS.has(found.trigger);
-      const context = { file, className: ownerOf(file, callback).className };
-      for (const handler of resolveCallable(callback, context, index)) {
+      for (const handler of handlers) {
         const handlerContext = { file: handler.file, className: ownerOf(handler.file, handler.node).className };
         const { direct, indirect } = reachableHazards(handler, handlerContext, index);
         // Broad work directly inside a high-frequency handler is rejected; any
-        // other reachable hazard requires a runtime contract. Work bounded once
-        // per event matters only when the event repeats per frame.
+        // other reachable hazard of a hot path requires a runtime contract.
+        // Work bounded once per event matters only when the event repeats per frame.
         const counted = hazard => highFrequency || hazard.scale;
         for (const hazard of direct.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'direct', reject: highFrequency });
         for (const hazard of indirect.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'indirect', reject: false });
@@ -1011,13 +1105,17 @@ function analyzeFiles(files) {
     }
     hazards.push(...routeOwnershipHazards(file).map(hazard => ({ ...hazard, entrypoint: hazard.key, depth: 'direct', via: [], reject: true })));
   }
+  // Hotness belongs to the entrypoint key: one repeating timer makes every
+  // timer of that kind in its owner hot.
   const keyed = hazards.map(hazard => ({
     ...hazard,
+    hot: hotKeys.has(hazard.entrypoint),
     key: hazard.key || `${hazard.entrypoint}:${hazard.rule}:${hazard.operation}@${hazard.path}#${hazard.via.at(-1) || '<handler>'}`,
   }));
   const uniqueHazards = new Map();
   for (const hazard of sortEntries(keyed)) if (!uniqueHazards.has(hazard.key)) uniqueHazards.set(hazard.key, hazard);
-  return { entrypoints: dedupeEntrypoints(entrypoints), hazards: [...uniqueHazards.values()] };
+  const inventory = dedupeEntrypoints(entrypoints).map(item => ({ ...item, hot: hotKeys.has(item.key) }));
+  return { entrypoints: inventory, hazards: [...uniqueHazards.values()] };
 }
 
 // Direct hazards in one source, once per source position even when several

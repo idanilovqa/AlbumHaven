@@ -20,11 +20,13 @@ test('discovers listeners, timers, observers, requests, and worker messages in s
   `;
   const base = { language: 'javascript', path: FILE, owner: 'install' };
   assert.deepEqual(discoverJavaScriptSource(source, FILE), [
-    { ...base, key: `js:${FILE}#install:event:message`, kind: 'event', trigger: 'message', line: 7 },
-    { ...base, key: `js:${FILE}#install:event:pointermove`, kind: 'event', trigger: 'pointermove', line: 3 },
-    { ...base, key: `js:${FILE}#install:observer:MutationObserver`, kind: 'observer', trigger: 'MutationObserver', line: 5 },
-    { ...base, key: `js:${FILE}#install:request:fetch`, kind: 'request', trigger: 'fetch', line: 6, targets: [{ target: '/api/view-data', line: 6 }] },
-    { ...base, key: `js:${FILE}#install:timer:setInterval`, kind: 'timer', trigger: 'setInterval', line: 4 },
+    { ...base, key: `js:${FILE}#install:event:message`, kind: 'event', trigger: 'message', line: 7, hot: true },
+    { ...base, key: `js:${FILE}#install:event:pointermove`, kind: 'event', trigger: 'pointermove', line: 3, hot: true },
+    { ...base, key: `js:${FILE}#install:observer:MutationObserver`, kind: 'observer', trigger: 'MutationObserver', line: 5, hot: true },
+    {
+      ...base, key: `js:${FILE}#install:request:fetch`, kind: 'request', trigger: 'fetch', line: 6, targets: [{ target: '/api/view-data', line: 6 }], hot: false,
+    },
+    { ...base, key: `js:${FILE}#install:timer:setInterval`, kind: 'timer', trigger: 'setInterval', line: 4, hot: true },
   ]);
 });
 
@@ -151,8 +153,113 @@ test('resolves calls on global singletons, window functions, instance fields, an
 test('a call chain deeper than the depth limit is a hazard, never a silent pass', () => {
   const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
   const chain = [1, 2, 3, 4, 5, 6, 7].map(level => `function step${level}() { step${level + 1}(); }`).join('\n');
-  const { hazards } = analyzeJavaScriptSources({ [FILE]: `${chain}\nfunction step8() {}\nroot.addEventListener('click', () => step1());` });
-  assert.deepEqual(hazards.map(hazard => [hazard.operation, hazard.via.at(-1), hazard.reject]), [['call-depth-exceeded', 'step7', false]]);
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `${chain}\nfunction step8() {}\nroot.addEventListener('wheel', () => step1());` });
+  assert.deepEqual(hazards.map(hazard => [hazard.operation, hazard.via.at(-1), hazard.reject, hazard.hot]), [['call-depth-exceeded', 'step7', false, true]]);
+});
+
+// Owner decision "Hot paths only": full reachable-hazard proof applies to hot
+// paths; one-shot entrypoints keep route, request, and registration checks.
+test('classifies hot paths by entrypoint kind: repeating events, observers, repeating timers, and pollers', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { entrypoints } = analyzeJavaScriptSources({ [FILE]: `
+    function onEvents(root, worker) {
+      root.addEventListener('scroll', sync);
+      root.addEventListener('timeupdate', sync);
+      worker.addEventListener('message', sync);
+      root.addEventListener('click', sync);
+      root.addEventListener('keydown', sync);
+    }
+    function watch(node) { new ResizeObserver(sync).observe(node); }
+    function tick() { setInterval(sync, 1000); }
+    function paint() { requestAnimationFrame(sync); }
+    function debounce() { setTimeout(sync, 100); }
+    async function poll() { await fetch('/status'); setTimeout(poll, 2000); }
+    function schedulePoll() { setTimeout(() => { sync(); refresh(); }, 2000); }
+    function refresh() { schedulePoll(); }
+    function retry() { load().then(() => { setTimeout(retry, 500); }); }
+    function load() { return Promise.resolve(); }
+    function sync() {}
+  ` });
+  const hot = Object.fromEntries(entrypoints.map(item => [item.key.split('#')[1], item.hot]));
+  assert.deepEqual(hot, {
+    'debounce:timer:setTimeout': false,
+    'onEvents:event:click': false,
+    'onEvents:event:keydown': false,
+    'onEvents:event:message': true,
+    'onEvents:event:scroll': true,
+    'onEvents:event:timeupdate': true,
+    'paint:timer:requestAnimationFrame': true,
+    'poll:request:fetch': false,
+    'poll:timer:setTimeout': true,
+    'retry:timer:setTimeout': true,
+    'schedulePoll:timer:setTimeout': true,
+    'tick:timer:setInterval': true,
+    'watch:observer:ResizeObserver': true,
+  });
+});
+
+test('hazards reachable only from one-shot entrypoints are reported but not hot', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function scanRows() { document.querySelectorAll('.row').forEach(row => row.remove()); }
+    function install(root) {
+      root.addEventListener('click', () => scanRows());
+      root.addEventListener('scroll', () => scanRows());
+      setTimeout(scanRows, 100);
+    }
+    async function save() { await fetch('/api/save'); scanRows(); }
+    function poll() { scanRows(); setTimeout(poll, 1000); }
+  ` });
+  const hot = new Map();
+  for (const hazard of hazards) hot.set(hazard.entrypoint.split('#')[1], hazard.hot);
+  assert.deepEqual(Object.fromEntries(hot), {
+    'install:event:click': false,
+    'install:event:scroll': true,
+    'install:timer:setTimeout': false,
+    'poll:timer:setTimeout': true,
+    'save:request:fetch': false,
+  });
+  assert.ok(hazards.every(hazard => !hazard.reject));
+});
+
+test('a function that schedules its own callback parameter is a timer helper whose callers are timer entrypoints', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { entrypoints, hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function scheduleTimeout(callback, delay) { return window.setTimeout(callback, delay); }
+    function afterPaint(callback) { return scheduleFrame(callback); }
+    function scheduleFrame(callback) { return window.requestAnimationFrame(callback); }
+    function schedulePoll(delay) { scheduleTimeout(() => pollStatus(), delay); }
+    async function pollStatus() { state.rows.forEach(row => row.seen = true); schedulePoll(1000); }
+    function openMenu() { scheduleTimeout(() => focus(), 0); afterPaint(measure); }
+    function focus() {}
+    function measure() {}
+  ` });
+  const hot = Object.fromEntries(entrypoints.map(item => [item.key.split('#')[1], item.hot]));
+  assert.deepEqual(hot, {
+    'afterPaint:timer:scheduleFrame': true,
+    'openMenu:timer:afterPaint': true,
+    'openMenu:timer:scheduleTimeout': false,
+    'scheduleFrame:timer:requestAnimationFrame': true,
+    'schedulePoll:timer:scheduleTimeout': true,
+    'scheduleTimeout:timer:setTimeout': false,
+  });
+  assert.deepEqual(hazards.map(hazard => [hazard.entrypoint.split('#')[1], hazard.operation, hazard.hot]), [
+    ['schedulePoll:timer:scheduleTimeout', 'forEach', true],
+  ]);
+});
+
+test('a name bound inside the enclosing function never resolves to a same-named function elsewhere', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function cancel() { document.querySelectorAll('.row').forEach(row => row.remove()); }
+    function resolve() { state.rows.forEach(row => row.done = true); }
+    function install(root, resolve) {
+      const cancel = () => root.classList.remove('open');
+      root.addEventListener('scroll', () => { cancel(); resolve(); });
+    }
+    function global(root) { root.addEventListener('wheel', () => cancel()); }
+  ` });
+  assert.deepEqual([...new Set(hazards.map(hazard => hazard.entrypoint.split('#')[1]))], ['global:event:wheel']);
 });
 
 test('lookup and copy methods and indexed loops over shared collections are hazards', () => {

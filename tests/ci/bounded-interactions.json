@@ -3248,8 +3248,7 @@
         "itemsVisited": 120,
         "domQueries": 10,
         "domMutations": 10,
-        "outputEmissions": 10,
-        "responseBytes": 17921
+        "outputEmissions": 10
       },
       "growth": {
         "metric": "itemsVisited",

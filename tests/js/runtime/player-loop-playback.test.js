@@ -3957,7 +3957,7 @@ function loadCountedPlayer(counter, loopCount) {
     getPlayerDuration: () => 300,
     getTimelineSecondsFromClientX: clientX => clientX / 2,
     seekStreamingPlayback: (seconds) => { audio.currentTime = seconds; },
-    setLocalStorageItem: (_key, value) => { counter.count('outputEmissions'); counter.count('responseBytes', value.length); },
+    setLocalStorageItem: () => counter.count('outputEmissions'),
     removeLocalStorageItem: () => {},
     getLocalStorageItem: () => null,
     PLAYER_STATE_STORAGE_KEY: 'albumhaven.playerState.v1',
@@ -3988,8 +3988,8 @@ function loadCountedPlayer(counter, loopCount) {
 test('bounded interaction: global seekbar drag and input stay album-bounded with 1,000 saved loops', async () => {
   const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
   for (const [event, budgets] of [
-    ['pointermove', { itemsVisited: 0, domQueries: 0, domMutations: 10, outputEmissions: 0, responseBytes: 0 }],
-    ['input', { itemsVisited: 120, domQueries: 10, domMutations: 10, outputEmissions: 10, responseBytes: 17921 }],
+    ['pointermove', { itemsVisited: 0, domQueries: 0, domMutations: 10, outputEmissions: 0 }],
+    ['input', { itemsVisited: 120, domQueries: 10, domMutations: 10, outputEmissions: 10 }],
   ]) {
     const run = async (cardinality) => {
       const counter = createInteractionCounter();

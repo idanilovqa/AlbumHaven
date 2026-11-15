@@ -8,9 +8,13 @@ Production code carries no counters.
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+
+REGISTRY_PATH = Path(__file__).resolve().parents[1] / "ci" / "bounded-interactions.json"
 
 
 @dataclass
@@ -176,6 +180,40 @@ def _check_budgets(interaction_id: str, label: str, size: int, counts: Operation
     return violations
 
 
+@functools.cache
+def _checked_in_entries() -> dict[str, Mapping[str, object]]:
+    registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    return {entry["id"]: entry for entry in registry["interactions"]}
+
+
+def _registry_mismatches(
+    interaction_id: str,
+    actual: Mapping[str, object],
+    registry: Mapping[str, object] | None,
+) -> list[str]:
+    """A contract measured under a registry interaction id must measure exactly
+    the cardinalities, budgets, and growth the registry declares for it."""
+    if registry is None:
+        entry = _checked_in_entries().get(interaction_id)
+    else:
+        entry = next((item for item in registry["interactions"] if item["id"] == interaction_id), None)
+    if entry is None:
+        return []
+    cardinalities = entry.get("cardinalities") or {}
+    declared_growth = entry.get("growth")
+    expected = {
+        "small": cardinalities.get("small"),
+        "large": cardinalities.get("production"),
+        "budgets": entry.get("budgets"),
+        "growth": None if declared_growth is None else (declared_growth.get("metric"), declared_growth.get("largeMinusSmallMax")),
+    }
+    return [
+        f"{interaction_id}: {key} {actual[key]!r} differs from the registry's {expected[key]!r}"
+        for key in expected
+        if actual[key] != expected[key]
+    ]
+
+
 def measure_scale_pair(
     *,
     interaction_id: str,
@@ -184,10 +222,15 @@ def measure_scale_pair(
     run: Callable[[int], OperationCounts],
     budgets: Mapping[str, float],
     growth: tuple[str, float] | None = None,
+    registry: Mapping[str, object] | None = None,
 ) -> tuple[OperationCounts, OperationCounts]:
     """Runs one interaction at two cardinalities; enforces budgets and growth."""
     if not (0 < small < large):
         raise ValueError(f"{interaction_id}: scale pair needs 0 < small < large")
+    actual = {"small": small, "large": large, "budgets": dict(budgets), "growth": None if growth is None else tuple(growth)}
+    mismatches = _registry_mismatches(interaction_id, actual, registry)
+    if mismatches:
+        raise AssertionError("\n".join(mismatches))
     small_counts = run(small)
     large_counts = run(large)
     violations = [

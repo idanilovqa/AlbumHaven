@@ -1,6 +1,7 @@
 'use strict';
 
-const { endpointMatches, normalizeEndpoint } = require('../../../scripts/ci/validate-bounded-interactions.cjs');
+const { isDeepStrictEqual } = require('node:util');
+const { endpointMatches, loadRegistry, normalizeEndpoint } = require('../../../scripts/ci/validate-bounded-interactions.cjs');
 
 // Deterministic operation counters for bounded-interaction contracts. Tests
 // pass instrumented collaborators into the code under test; nothing here
@@ -47,12 +48,34 @@ function formatViolation(id, metric, cardinality, value, budget) {
   return `${id}: ${metric}=${value} at cardinality ${cardinality} exceeds budget ${budget}`;
 }
 
+let checkedInEntries = null;
+
+function registryEntry(id, registry) {
+  if (registry) return registry.interactions.find(entry => entry.id === id);
+  checkedInEntries ??= new Map(loadRegistry().interactions.map(entry => [entry.id, entry]));
+  return checkedInEntries.get(id);
+}
+
+// A contract measured under a registry interaction id must measure exactly the
+// cardinalities, budgets, and growth that the registry declares for it.
+function registryMismatches(id, { small, large, budgets, growth }, registry) {
+  const entry = registryEntry(id, registry);
+  if (!entry) return [];
+  const expected = { small: entry.cardinalities?.small, large: entry.cardinalities?.production, budgets: entry.budgets, growth: entry.growth };
+  const actual = { small, large, budgets, growth };
+  return Object.keys(expected)
+    .filter(key => !isDeepStrictEqual(actual[key], expected[key]))
+    .map(key => `${id}: ${key} ${JSON.stringify(actual[key])} differs from the registry's ${JSON.stringify(expected[key])}`);
+}
+
 // Runs one interaction at a small and a production cardinality, then enforces
 // both the absolute budgets and the allowed growth between the two runs.
-async function measureScalePair({ id = 'interaction', small, large, run, budgets, growth }) {
+async function measureScalePair({ id = 'interaction', small, large, run, budgets, growth, registry }) {
   if (!(Number.isInteger(small) && Number.isInteger(large) && large > small && small > 0)) {
     throw new Error(`${id}: scale pair needs integer cardinalities with large > small > 0`);
   }
+  const mismatches = registryMismatches(id, { small, large, budgets, growth }, registry);
+  if (mismatches.length) throw new Error(mismatches.join('\n'));
   const results = { small: await run(small), large: await run(large) };
   const violations = [];
   for (const [metric, budget] of Object.entries(budgets || {})) {

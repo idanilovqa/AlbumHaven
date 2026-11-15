@@ -5,7 +5,8 @@
 //
 // Every discovered frontend/backend entrypoint must be registered exactly once.
 // An entry proves boundedness either statically (no hazard reachable from any
-// of its entrypoints) or with a deterministic runtime contract. Rejected
+// of its entrypoints) or with a deterministic runtime contract, which is rerun
+// for a change to its owners or to any file hosting one of its hazards. Rejected
 // hazards (direct broad work in a high-frequency handler, a dedicated surface
 // routed through a generic endpoint, direct filesystem enumeration in a route,
 // or a route reaching a registered library-scale operation) fail regardless of
@@ -34,6 +35,12 @@ const RULE_PATTERN = /^BI-(0[1-9]|1[0-4])$/;
 
 function normalizePath(value) {
   return String(value || '').replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
+// `/*`, `/*/*`, or `*`: a pattern with no literal segment owns every endpoint.
+function isBareWildcard(pattern) {
+  const segments = String(pattern).split('/').filter(Boolean);
+  return segments.length > 0 && segments.every(segment => /^\*+$/.test(segment));
 }
 
 function endpointMatches(endpoint, pattern) {
@@ -143,6 +150,7 @@ function validateSchema(registry, { fileExists, readFile }) {
       } else {
         for (const endpoint of [...ownership.allowed, ...ownership.forbidden]) {
           if (!String(endpoint).startsWith('/') || String(endpoint).includes('?')) errors.push(`${label}: endpoint ${endpoint} must be a path without query`);
+          if (isBareWildcard(endpoint)) errors.push(`${label}: endpoint ${endpoint} is a bare wildcard; name the real endpoints`);
         }
       }
     }
@@ -208,11 +216,6 @@ function validateInventory(registry, discovery) {
       const sample = hazards.slice(0, 3).map(hazard => `${hazard.operation} at ${hazard.path}:${hazard.line}`).join('; ');
       errors.push(`${entry.id}: ${hazards.length} reachable hazard(s) need a runtime contract (${sample})`);
     }
-    if (entry.proof === 'contract') {
-      for (const file of new Set(hazards.map(hazard => hazard.path))) {
-        if (!entry.owners.includes(file)) errors.push(`${entry.id}: hazard owner ${file} must be listed in owners`);
-      }
-    }
     for (const key of entry.entrypoints || []) {
       const found = discovered.get(key);
       if (found?.kind !== 'request') continue;
@@ -244,10 +247,16 @@ async function validateRepository({ root = REPO_ROOT, registry = loadRegistry(ro
   return { errors: validateInventory(registry, discovery), discovery };
 }
 
-function interactionsForPaths(registry, changedPaths) {
+// Contracts to rerun for a change: an entry is selected when a changed path is
+// one of its owners or hosts any hazard reachable from its entrypoints, so a
+// helper change reruns every contract that reaches it without listing helpers.
+function interactionsForPaths(registry, changedPaths, discovery = { hazards: [] }) {
   const changed = new Set((changedPaths || []).map(normalizePath));
+  const reached = new Set(discovery.hazards.filter(hazard => changed.has(hazard.path)).map(hazard => hazard.entrypoint));
   return (registry.interactions || [])
-    .filter(entry => entry.proof === 'contract' && entry.owners.some(owner => changed.has(owner)))
+    .filter(entry => entry.proof === 'contract' && (
+      entry.owners.some(owner => changed.has(owner)) || entry.entrypoints.some(key => reached.has(key))
+    ))
     .map(entry => entry.id);
 }
 
@@ -265,7 +274,8 @@ async function main(argv = process.argv.slice(2)) {
   if (argv.includes('--changed-paths')) {
     const file = argv[argv.indexOf('--changed-paths') + 1];
     const changed = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
-    process.stdout.write(`${interactionsForPaths(registry, changed).join('\n')}\n`);
+    const discovery = await discoverRepository({ registry });
+    process.stdout.write(`${interactionsForPaths(registry, changed, discovery).join('\n')}\n`);
     return 0;
   }
   const { errors, discovery } = await validateRepository({ registry });
@@ -293,6 +303,7 @@ module.exports = {
   discoverRepository,
   endpointMatches,
   interactionsForPaths,
+  isBareWildcard,
   loadRegistry,
   normalizeEndpoint,
   validateInventory,

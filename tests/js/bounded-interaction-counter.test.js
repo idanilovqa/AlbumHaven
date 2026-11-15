@@ -229,3 +229,49 @@ test('BI-H02 rejects navigation summaries that scale with library tracks', async
   );
   await measureScalePair({ ...contract, run: async count => openCollectionsNavigation(count, { compactSummary: true }) });
 });
+
+const REGISTERED = {
+  interactions: [{
+    id: 'js:runtime/example.js#install',
+    proof: 'contract',
+    cardinalities: { small: 20, production: 1000 },
+    budgets: { itemsVisited: 3 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  }],
+};
+const registeredPair = overrides => measureScalePair({
+  id: 'js:runtime/example.js#install',
+  small: 20,
+  large: 1000,
+  run: async () => ({ itemsVisited: 2 }),
+  budgets: { itemsVisited: 3 },
+  growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  registry: REGISTERED,
+  ...overrides,
+});
+
+test('a scale pair under a registry id must measure exactly the registered contract', async () => {
+  await registeredPair({});
+  await assert.rejects(() => registeredPair({ large: 500 }), /large 500 differs from the registry's 1000/);
+  await assert.rejects(() => registeredPair({ small: 10 }), /small 10 differs from the registry's 20/);
+  await assert.rejects(() => registeredPair({ budgets: { itemsVisited: 30 } }), /budgets .* differs from the registry's/);
+  await assert.rejects(() => registeredPair({ growth: { metric: 'itemsVisited', largeMinusSmallMax: 5 } }), /growth .* differs from the registry's/);
+  await assert.rejects(() => registeredPair({ growth: undefined }), /growth undefined differs/);
+});
+
+test('a scale pair under an unregistered id is checked only against its own budgets', async () => {
+  await registeredPair({ id: 'example', large: 500, budgets: { itemsVisited: 30 } });
+});
+
+test('scale pairs are checked against the checked-in registry by default', async () => {
+  const { loadRegistry } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const contract = loadRegistry().interactions.find(entry => entry.proof === 'contract');
+  await assert.rejects(() => measureScalePair({
+    id: contract.id,
+    small: contract.cardinalities.small,
+    large: contract.cardinalities.production + 1,
+    run: async () => ({}),
+    budgets: contract.budgets,
+    growth: contract.growth,
+  }), /large \d+ differs from the registry's \d+/);
+});

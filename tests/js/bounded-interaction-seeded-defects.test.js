@@ -46,6 +46,15 @@ const DEFECTS = [
     expected: /^rejected BI-04 route-owner:\/view-data\?surface=home at music_app\/static\/js\/runtime\/view-state-helpers\.js:\d+/,
   },
   {
+    id: 'BI-H17 Home routed through generic view-data from a one-shot click handler',
+    language: 'js',
+    file: 'music_app/static/js/runtime/mobile-navigation.js',
+    anchor: "    if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();\n",
+    replacement: "    if (event.target.closest?.('[data-mobile-back]')) navigateMobileBack();\n"
+      + "    if (event.target.closest?.('[data-mobile-home]')) void fetch('/view-data?surface=home');\n",
+    expected: /^rejected BI-04 route-owner:\/view-data\?surface=home at music_app\/static\/js\/runtime\/mobile-navigation\.js:\d+ from js:music_app\/static\/js\/runtime\/mobile-navigation\.js#/,
+  },
+  {
     id: 'BI-H13 status poll that also fetches broad library data',
     language: 'js',
     file: 'music_app/static/js/runtime/gallery-refresh-and-status.js',
@@ -62,12 +71,24 @@ const DEFECTS = [
     expected: /^unregistered entrypoint js:music_app\/static\/js\/runtime\/gallery-refresh-and-status\.js#startSeededGalleryPoll:timer:setInterval$/,
   },
   {
+    // A hot path: the foreground-ready probe waits for paint with
+    // requestAnimationFrame and reschedules itself until the document is healthy.
     id: 'BI-H13 timer callback that sweeps every pending entry (timers were never analyzed)',
     language: 'js',
     file: 'music_app/static/js/runtime/android-bridge-client.js',
-    anchor: '      androidBridge.pending.delete(id);\n      reject(',
-    replacement: '      androidBridge.pending.forEach(entry => entry.reject(new Error(\'Android bridge timed out.\')));\n      reject(',
-    expected: /^js:runtime\/android-bridge-client\.js#sendAndroidBridgeCommand: \d+ reachable hazard\(s\) need a runtime contract \(.*forEach at music_app\/static\/js\/runtime\/android-bridge-client\.js:\d+/,
+    anchor: '    if (foregroundDocumentHealthy()) {\n',
+    replacement: '    androidBridge.pending.forEach(entry => entry.reject(new Error(\'Android bridge timed out.\')));\n    if (foregroundDocumentHealthy()) {\n',
+    expected: /^js:runtime\/android-bridge-client\.js#afterPaint: \d+ reachable hazard\(s\) need a runtime contract \(.*forEach at music_app\/static\/js\/runtime\/android-bridge-client\.js:\d+/,
+  },
+  {
+    id: 'BI-H13 self-rescheduling setTimeout poller that rescans every loop range',
+    language: 'js',
+    file: 'music_app/static/js/runtime/loop-range-controls.js',
+    anchor: '      if (!pointerWithin && !retained()) renderEngagement(false);\n    }, 500);',
+    replacement: '      if (!pointerWithin && !retained()) renderEngagement(false);\n'
+      + "      document.querySelectorAll('[data-loop-range]').forEach(range => range.classList.remove('engaged'));\n"
+      + '      leave();\n    }, 500);',
+    expected: /^js:runtime\/loop-range-controls\.js#leave: \d+ reachable hazard\(s\) need a runtime contract \(.*querySelectorAll at music_app\/static\/js\/runtime\/loop-range-controls\.js:\d+/,
   },
   {
     id: 'BI-09 resize observer that rescans every gallery card (observers were never analyzed)',

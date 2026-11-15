@@ -11,8 +11,6 @@ from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
 from music_app.services.library_hydration import (
     find_cover_for_track_folder,
     hydrate_library_state_from_disk,
-    repair_cover_paths_in_cache,
-    refresh_cached_cover_paths_in_library_state,
     sanitize_hydrated_file_cache,
 )
 
@@ -64,32 +62,6 @@ def test_find_cover_for_track_folder_checks_parent_for_disc_subfolders(tmp_path:
     cover_path.write_bytes(b"cover")
 
     assert find_cover_for_track_folder(disc_root, {".jpg"}) == cover_path
-
-
-def test_repair_cover_paths_in_cache_updates_missing_cover_paths(tmp_path: Path):
-    album_root = tmp_path / "Artist" / "Album"
-    album_root.mkdir(parents=True)
-    track_path = album_root / "song.mp3"
-    cover_path = album_root / "folder.jpg"
-    track_path.write_bytes(b"track")
-    cover_path.write_bytes(b"cover")
-
-    file_cache = {
-        str(track_path): {
-            "path": str(track_path),
-            "cover_path": None,
-        }
-    }
-
-    changed_entries = repair_cover_paths_in_cache(file_cache, {".jpg"})
-
-    assert changed_entries == {
-        str(track_path): {
-            "path": str(track_path),
-            "cover_path": str(cover_path),
-        }
-    }
-    assert file_cache[str(track_path)]["cover_path"] == str(cover_path)
 
 
 def test_sanitize_hydrated_file_cache_filters_missing_files_and_applies_repairs(tmp_path: Path):
@@ -321,54 +293,6 @@ def test_sanitize_hydrated_file_cache_reuses_cover_dimension_and_root_resolution
 
     assert image_dimension_calls == 1
     assert root_resolution_calls == 1
-
-
-def test_refresh_cached_cover_paths_in_library_state_rebuilds_albums_and_schedules_save(tmp_path: Path, monkeypatch):
-    album_root = tmp_path / "Artist" / "Album"
-    album_root.mkdir(parents=True)
-    track_path = album_root / "song.mp3"
-    cover_path = album_root / "cover.jpg"
-    track_path.write_bytes(b"track")
-    cover_path.write_bytes(b"cover")
-
-    scheduled = []
-    rebuilt = []
-    monkeypatch.setattr(
-        "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: scheduled.append((config, cache_path, changed_entries)),
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_hydration.build_albums_from_file_cache",
-        lambda file_cache, separate_release_keys: rebuilt.append((dict(file_cache), set(separate_release_keys))) or [SimpleNamespace(key="album-1")],
-    )
-
-    library_state = {
-        "file_cache": {str(track_path): {"path": str(track_path), "cover_path": None}},
-        "separate_release_keys": {"separate"},
-        "scan_in_progress": False,
-        "covers_in_progress": False,
-        "cover_path_refresh_at": 0.0,
-    }
-    config = {"IMAGE_EXTENSIONS": {".jpg"}, "CACHE_PATH": tmp_path / "cache.json"}
-
-    changed = refresh_cached_cover_paths_in_library_state(
-        library_state,
-        config,
-        min_interval_seconds=5.0,
-        now=10.0,
-    )
-
-    assert changed is True
-    assert library_state["cover_path_refresh_at"] == 10.0
-    assert library_state["albums"][0].key == "album-1"
-    assert rebuilt and rebuilt[0][1] == {"separate"}
-    assert scheduled == [
-        (
-            config,
-            tmp_path / "cache.json",
-            {str(track_path): {"path": str(track_path), "cover_path": str(cover_path)}},
-        )
-    ]
 
 
 def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Path, monkeypatch):

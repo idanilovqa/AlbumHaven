@@ -464,6 +464,7 @@ def test_dead_no_arg_state_wrappers_are_absent():
         "scan_percent",
         "relations_percent",
         "refresh_cached_cover_paths_in_state",
+        "refresh_cached_cover_paths_for_state",
         "cover_file_cache_snapshot",
         "hydrate_library_from_disk",
         "start_background_library_hydration",
@@ -2763,37 +2764,6 @@ def test_guarded_relation_repair_waits_for_database_before_acquiring_cache_lock(
         "publication-commit",
         "database-lock-released",
     ]
-
-
-def test_refresh_cached_cover_paths_for_state_uses_explicit_dependencies_without_flask_context(config, monkeypatch):
-    library_state = {"file_cache": {"track-1": {"path": "track-1"}}}
-    captured = []
-
-    def fake_refresh_cached_cover_paths_in_library_state(state_arg, config_arg, **kwargs):
-        captured.append((state_arg, config_arg, kwargs))
-        return True
-
-    monkeypatch.setattr(
-        state_module,
-        "refresh_cached_cover_paths_in_library_state",
-        fake_refresh_cached_cover_paths_in_library_state,
-    )
-    monkeypatch.setattr(state_module.time, "time", lambda: 456.75)
-
-    assert state_module.refresh_cached_cover_paths_for_state(
-        library_state,
-        config,
-        min_interval_seconds=12.0,
-    ) is True
-
-    assert captured == [(
-        library_state,
-        config,
-        {
-            "min_interval_seconds": 12.0,
-            "now": 456.75,
-        },
-    )]
 
 
 def test_cover_file_cache_snapshot_for_state_uses_provided_state_without_flask_context():

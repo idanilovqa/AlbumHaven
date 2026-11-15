@@ -27,10 +27,7 @@ from music_app.services.cover_refresh_runtime import (
 )
 from music_app.services.cover_refresh_planning import build_cover_refresh_jobs
 from music_app.services.exception_overrides import load_exception_overrides
-from music_app.services.library_hydration import (
-    hydrate_library_state_from_disk,
-    refresh_cached_cover_paths_in_library_state,
-)
+from music_app.services.library_hydration import hydrate_library_state_from_disk
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.gallery_projection_postgres import (
@@ -739,21 +736,6 @@ def format_timestamp(value: float) -> str:
     if not value:
         return "Never"
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
-
-
-def refresh_cached_cover_paths_for_state(
-    library_state: dict[str, object],
-    config: dict[str, object],
-    *,
-    min_interval_seconds: float = 5.0,
-) -> bool:
-    with _CACHE_LOCK:
-        return refresh_cached_cover_paths_in_library_state(
-            library_state,
-            config,
-            min_interval_seconds=min_interval_seconds,
-            now=time.time(),
-        )
 
 
 def cover_file_cache_snapshot_for_state(

@@ -479,10 +479,9 @@ def test_a_certain_album_under_another_name_matches_and_is_marked_for_tag_correc
         "disc_position": None, "signals": ["durations", "track_count", "track_list", "year"], "tag_differs": True}]
 
 
-def test_a_person_and_the_same_named_band_they_belong_to_are_one_artist():
-    """Owner 2026-11-09: Alice Cooper is a person; the 1969-74 albums credited to the group
-    he is a member of are still his. One artist-level identity, the person; each album keeps
-    its certain MBID, and the group is stored so those identities resolve."""
+def test_a_person_and_the_same_named_band_they_belong_to_split_per_album():
+    """Owner 2026-11-14 (reversing 2026-11-09): Alice Cooper the singer and his 1969-73 band
+    are different artists with different MBIDs; "member of band" merges nothing."""
     person = {"id": GERMAN, "name": "Axxis", "type": "Person", "disambiguation": "the singer",
               "relations": [{"type": "member of band", "direction": "forward",
                              "artist": {"id": TRANCE, "name": "Axxis"}}]}
@@ -494,12 +493,28 @@ def test_a_person_and_the_same_named_band_they_belong_to_are_one_artist():
 
     outcome = resolve_artist(context, client=client)
 
-    assert outcome["classification"] == "found"
-    assert outcome["artist"]["mbid"] == GERMAN
+    assert outcome["classification"] == "per_album"
+    assert "artist" not in outcome and "associated_artists" not in outcome
     assert {item["local_album_id"]: item["artist_mbid"] for item in outcome["album_identities"]} == {
         1: GERMAN, 2: GERMAN, 3: TRANCE}
-    assert {artist["mbid"] for artist in outcome["artists"]} == {GERMAN, TRANCE}
-    assert any("inc=artist-rels" in url for url in calls)
+    assert not any("inc=artist-rels" in url for url in calls)
+
+
+def test_a_person_whose_band_holds_none_of_the_albums_is_simply_matched():
+    """The negative: every certain album is the person's, so there is nothing to split."""
+    person = {"id": GERMAN, "name": "Axxis", "type": "Person",
+              "relations": [{"type": "member of band", "direction": "forward",
+                             "artist": {"id": TRANCE, "name": "Axxis"}}]}
+    artists = {GERMAN: person, TRANCE: {"id": TRANCE, "name": "Axxis", "type": "Group"}}
+    client, _calls = _client({GERMAN: ["Kingdom of the Night", "Axxis II"], TRANCE: ["Something Else"]},
+                             artists=artists)
+    context = {"local_artist_id": 7, "local_name": "Axxis",
+               "albums": [{**album, "id": index + 1}
+                          for index, album in enumerate(albums("Kingdom of the Night", "Axxis II"))]}
+
+    outcome = resolve_artist(context, client=client)
+
+    assert outcome["classification"] == "found" and outcome["artist"]["mbid"] == GERMAN
 
 
 def test_another_release_never_replaces_an_album_with_weaker_evidence():

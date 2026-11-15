@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.8 - 2026-11-14
+## 0.11.9 - 2026-11-15
 
 - Added the append-only migration attestation table (migration 0210) used to reconcile the production migration ledger with the repository without rewriting its history. Fresh databases need no attestations; production applies it only through the owner-approved reconciliation plan.
+
+## 0.11.8 - 2026-11-14
+
+- A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.
 
 ## 0.11.7 - 2026-11-14
 

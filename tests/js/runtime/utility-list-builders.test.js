@@ -3536,7 +3536,7 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
 for (const scenario of [
   { name: 'auto-selected content search', source: 'auto_top_match', allResults: true },
   { name: 'explicit artist selection', source: 'requested_artist' },
-  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true },
+  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true, allResults: true },
   { name: 'nonstructural edit', source: 'auto_top_match', field: 'title' },
   { name: 'superseded view', source: 'auto_top_match', superseded: true },
   { name: 'changed query', source: 'auto_top_match', changedQuery: true },

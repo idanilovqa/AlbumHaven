@@ -2473,19 +2473,11 @@ async function watchSaveTask(taskId, context = {}) {
             try {
               let refreshView = state.view;
               const originSearch = context.originatingSearchContext;
-              const originalOwner = String(originalAlbum?.album_artist || '').trim().toLowerCase();
-              const splitAlbums = Array.isArray(context.optimisticAlbums) ? context.optimisticAlbums : [];
               const restoresAllSearchResults = Boolean(
                 canReconcileOriginView()
                 && structuralTagEditRequiresMountedGalleryChildReplacement
                 && originSearch?.selected_artist_source === 'auto_top_match'
                 && !(originSearch.artist_name_match_artists || []).length
-                && originalOwner
-                && splitAlbums.some(album => String(album?.album_artist || '').trim().toLowerCase() === originalOwner)
-                && splitAlbums.some(album => {
-                  const owner = String(album?.album_artist || '').trim().toLowerCase();
-                  return owner && owner !== originalOwner;
-                })
                 && originatingViewRequestUrl
                 && String(state.view.query || '').trim()
                 && parseBrowserUrlState(originatingViewRequestUrl).query === state.view.query

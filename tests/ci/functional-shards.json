@@ -1237,7 +1237,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
-              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists",
               "area": "album-details"
             },
             {

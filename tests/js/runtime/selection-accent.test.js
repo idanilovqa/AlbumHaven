@@ -191,6 +191,52 @@ test('Appearance uses the aggregate controller for Selection accent instead of a
   assert.equal(controller.getState().dirty,true);
 });
 
+test('bounded interaction: selection accent color input stays bounded after 500 editor mounts', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  await measureScalePair({
+    id: 'js:selection-accent.js#mount',
+    small: 1,
+    large: 500,
+    budgets: { requests: 0, listeners: 0, domQueries: 30, domMutations: 80, renderCommits: 0 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+    async run(mounts) {
+      const app = harness();
+      app.respond({ enabled: true, color: '#34ca78' });
+      await app.controller.load();
+      const counter = createInteractionCounter();
+      const { CountedElement } = createCountedDom(counter);
+      // Each mount renders a new editor into a new container, replacing the one mounted before.
+      const mountEditor = () => {
+        const node = name => new CountedElement('input', { name });
+        const parts = {
+          '[data-selection-accent-enabled]': node('enabled'), '[data-selection-accent-color]': node('color'),
+          '[data-selection-accent-hex]': node('hex'), '[data-selection-accent-save]': node('save'),
+          '[data-selection-accent-cancel]': node('cancel'), '[data-selection-accent-retry]': node('retry'),
+          '[data-selection-accent-status]': node('status'), '.selection-accent-colors': node('colors'),
+          '.selection-accent-error': node('error'),
+          'all:.selection-accent-preview': [new CountedElement('nav'), new CountedElement('nav')],
+        };
+        const editor = new CountedElement('section', { selectors: parts });
+        app.api.mount(new CountedElement('div', { selectors: { '.selection-accent-editor': editor } }), app.controller);
+        return { editor, color: parts['[data-selection-accent-color]'], previews: parts['all:.selection-accent-preview'] };
+      };
+      let mounted;
+      for (let mount = 0; mount < mounts; mount += 1) mounted = mountEditor();
+      const colors = Array.from({ length: 10 }, (_value, step) => `#${String(step).repeat(2)}a0b0`);
+      const work = await counter.measure(() => {
+        for (const color of colors) {
+          mounted.color.value = color;
+          mounted.editor.dispatch('input', { target: mounted.color });
+        }
+      });
+      assert.deepEqual(plain(app.controller.getState().draft), { enabled: true, color: colors.at(-1) });
+      assert.equal(mounted.previews[1].style.getPropertyValue('--navigation-tree-selection-accent-color'), colors.at(-1));
+      return { ...work, requests: app.requests.length - 1 };
+    },
+  });
+});
+
 test('aggregate Appearance bootstrap suppresses the legacy selection-accent request', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '../../../music_app/static/js/selection-accent.js'),

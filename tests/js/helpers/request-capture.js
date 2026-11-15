@@ -13,9 +13,10 @@ function requestUrl(input) {
   return typeof input === 'string' ? input : String(input?.url ?? input);
 }
 
-// `respond(url, options, index)` returns the response (or a promise of one) for
-// each recorded request; `counter` counts one `requests` unit per call.
-function createRequestCapture(respond, counter = createInteractionCounter()) {
+// `respond(url, options)` returns the response (or a promise of one) for each
+// recorded request; `counter` counts one `requests` unit per call.
+function createRequestCapture(respond) {
+  const counter = createInteractionCounter();
   const requests = [];
   return {
     counter,
@@ -24,22 +25,19 @@ function createRequestCapture(respond, counter = createInteractionCounter()) {
     fetch(input, options = {}) {
       const url = requestUrl(input);
       counter.count('requests');
-      requests.push({ url, options, input });
-      return respond(url, options, requests.length - 1, input);
+      requests.push({ url, options });
+      return respond(url, options);
     },
   };
 }
 
-function jsonResponse(body, { status = 200, headers = {} } = {}) {
-  const response = {
+function jsonResponse(body, { status = 200 } = {}) {
+  return {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get: name => headers[String(name).toLowerCase()] ?? null },
     json: async () => body,
-    text: async () => JSON.stringify(body),
-    clone: () => jsonResponse(body, { status, headers }),
+    clone: () => jsonResponse(body, { status }),
   };
-  return response;
 }
 
 function contractEntry(id) {

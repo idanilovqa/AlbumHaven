@@ -7655,7 +7655,7 @@ function capturedGallery(respond) {
   context.clearTimeout = () => {};
   const capture = createRequestCapture(respond);
   context.fetch = capture.fetch;
-  return { ...fixture, scroll, timers, capture };
+  return { ...fixture, timers, capture };
 }
 
 function retainedRootView(albums) {

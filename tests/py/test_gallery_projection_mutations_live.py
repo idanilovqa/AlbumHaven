@@ -615,6 +615,8 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
             publish.set()
             release_target.set()
             target_family_attempt.set()
+    # The watcher publication leaves its relations to the queued background refresh.
+    relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     aliases = repository._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]
@@ -693,6 +695,8 @@ def test_targeted_publication_coexists_with_legacy_relation_only_publisher(galle
             refresh.result(timeout=15)
         finally:
             release_publisher.set()
+    # The watcher publication leaves its relations to the queued background refresh.
+    relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     aliases = browse.PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
     )._load_relation_alias_maps()

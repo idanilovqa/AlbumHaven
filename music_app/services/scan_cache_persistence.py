@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -294,6 +294,19 @@ class PostgresScanCacheAdapter:
             ).fetchall()
         return tuple(str(_row_mapping(row)["private_path"]) for row in rows)
 
+    def persist_moved_album_inventory(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        moves: tuple[dict[str, object], ...],
+    ) -> dict[str, object]:
+        return self.persist_targeted_inventory_mutation(
+            root_id=root_id,
+            active_file_entries=active_file_entries,
+            moves=moves,
+        )
+
     def persist_targeted_inventory_mutation(
         self,
         *,
@@ -304,55 +317,11 @@ class PostgresScanCacheAdapter:
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
     ) -> dict[str, object]:
-        with self._targeted_inventory_transaction(
-            root_id=root_id,
-            active_file_entries=active_file_entries,
-            deleted_paths=deleted_paths,
-            deleted_subtrees=deleted_subtrees,
-            moves=moves,
-            publication_guard=publication_guard,
-        ) as (connection, result):
-            if connection is not None:
-                _commit_structural_relation_projection(
-                    connection,
-                    self._config,
-                    reason="targeted_reconciliation",
-                )
-        return result
-
-    def persist_moved_album_inventory(
-        self,
-        *,
-        root_id: str,
-        active_file_entries: dict[str, dict[str, object]],
-        moves: tuple[dict[str, object], ...],
-    ) -> dict[str, object]:
-        """Publish an in-app album move without rebuilding relations inline.
+        """Publish one targeted inventory mutation without rebuilding relations.
 
         The revision increment marks the relation projection stale; the caller
         queues the gallery refresh, which rebuilds it in the background.
         """
-        with self._targeted_inventory_transaction(
-            root_id=root_id,
-            active_file_entries=active_file_entries,
-            moves=moves,
-        ) as (_connection, result):
-            pass
-        return result
-
-    @contextmanager
-    def _targeted_inventory_transaction(
-        self,
-        *,
-        root_id: str,
-        active_file_entries: dict[str, dict[str, object]],
-        deleted_paths: tuple[str, ...] = (),
-        deleted_subtrees: tuple[str, ...] = (),
-        moves: tuple[dict[str, object], ...] = (),
-        publication_guard: Callable | None = None,
-    ):
-        """Write one targeted inventory mutation, then yield its open connection
-        (None when nothing changed) and result before committing."""
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
             raise ValueError("Targeted inventory mutation requires a root id.")
@@ -613,12 +582,11 @@ class PostgresScanCacheAdapter:
                     ).strip()
                 )
             if not inventory_changed:
-                yield None, {
+                return {
                     "inventory_mutation_revision": 0,
                     "affected_album_keys": [],
                     "new_track_paths": new_track_paths,
                 }
-                return
             # A logical album can span different containers and configured
             # roots. Replace scan-owned credits using all its retained active
             # members, not just the paths selected by this watcher event.
@@ -716,12 +684,12 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
-            yield connection, {
+            connection.commit()
+            return {
                 "inventory_mutation_revision": revision,
                 "affected_album_keys": sorted(affected_album_keys),
                 "new_track_paths": new_track_paths,
             }
-            connection.commit()
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         del cache_path

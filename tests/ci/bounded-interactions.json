@@ -8786,14 +8786,29 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#mark_album_version:route:POST /versions/mark"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/library_album_index.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "candidate_rows": 0
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_mark_version_route_contract_reads_two_albums_by_key_at_production_album_count",
+      "testIdentity": "test_mark_version_route_contract_reads_two_albums_by_key_at_production_album_count",
+      "rollback": "Reverting fix(versions) makes POST /versions/mark build a key map over every published album again (candidate_rows grows with the album count)."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore",
@@ -9763,8 +9778,8 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_cover_workflow.py::test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size",
-      "testIdentity": "test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_gallery_mark_seen_route_contract_probes_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_gallery_mark_seen_route_contract_probes_only_the_selected_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
@@ -10085,14 +10100,30 @@
         "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_covers_unsuccessful:route:POST /utilities/fetch-covers-unsuccessful"
       ],
       "owners": [
-        "music_app/routes/api_wave_d_asgi_routes.py"
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/cover_refresh_runtime.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "candidate_rows": 0,
+        "builder_calls": 1
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_fetch_unsuccessful_covers_route_contract_only_reserves_the_batch_at_production_track_count",
+      "testIdentity": "test_fetch_unsuccessful_covers_route_contract_only_reserves_the_batch_at_production_track_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/appearance_asgi.py#get_appearance",
@@ -11705,19 +11736,37 @@
     },
     {
       "id": "py:services/cover_refresh_runtime.py#refresh_cover_artwork_request",
-      "action": "Run refresh refresh_cover_artwork_request",
+      "action": "Refresh covers for the whole library after a scan, as one coalesced batch",
       "entrypoints": [
         "py:music_app/services/cover_refresh_runtime.py#refresh_cover_artwork_request:refresh:name"
       ],
       "owners": [
-        "music_app/services/cover_refresh_runtime.py"
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_planning.py",
+        "music_app/services/cover_refresh_execution.py",
+        "music_app/services/cover_refresh_jobs.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 3,
+        "queue_claims": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request",
@@ -11801,35 +11850,69 @@
     },
     {
       "id": "py:services/cover_refresh_runtime.py#start_manual_cover_refresh",
-      "action": "Run refresh start_manual_cover_refresh",
+      "action": "Fetch covers for every album without a good cover, as one coalesced, cancellable batch",
       "entrypoints": [
         "py:music_app/services/cover_refresh_runtime.py#start_manual_cover_refresh:refresh:name"
       ],
       "owners": [
-        "music_app/services/cover_refresh_runtime.py"
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_planning.py",
+        "music_app/services/cover_refresh_execution.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 3,
+        "queue_claims": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/cover_refresh_runtime.py#start_manual_cover_refresh_request",
-      "action": "Run refresh start_manual_cover_refresh_request",
+      "action": "Fetch covers for every album without a good cover, as one coalesced, cancellable batch",
       "entrypoints": [
         "py:music_app/services/cover_refresh_runtime.py#start_manual_cover_refresh_request:refresh:name"
       ],
       "owners": [
-        "music_app/services/cover_refresh_runtime.py"
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_planning.py",
+        "music_app/services/cover_refresh_execution.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 3,
+        "queue_claims": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/covers.py#_drain_background_cover_admissions",
@@ -11926,7 +12009,22 @@
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 7,
+        "generation_changes": 4
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/gallery_projection_postgres.py#publish_gallery_projection",
@@ -11942,7 +12040,22 @@
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 7,
+        "generation_changes": 4
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh",
@@ -12026,13 +12139,13 @@
       "proof": "static"
     },
     {
-      "id": "py:services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm",
-      "action": "Prewarm a utility projection (Problematic Files and others) on an executor",
+      "id": "py:services/library_album_index.py#publish_library_albums",
+      "action": "Publish an album list with its key and track-path index on the publisher's thread",
       "entrypoints": [
-        "py:music_app/services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm:background:executor"
+        "py:music_app/services/library_album_index.py#publish_library_albums:publisher:name"
       ],
       "owners": [
-        "music_app/services/library_browse_postgres.py"
+        "music_app/services/library_album_index.py"
       ],
       "rules": [
         "BI-07",
@@ -12042,10 +12155,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/library_browse_postgres.py#_refresh_relation_views",
-      "action": "Run refresh _refresh_relation_views",
+      "id": "py:services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm",
+      "action": "Prewarm a utility projection (Problematic Files and others) on an executor",
       "entrypoints": [
-        "py:music_app/services/library_browse_postgres.py#_refresh_relation_views:refresh:name"
+        "py:music_app/services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm:background:executor"
       ],
       "owners": [
         "music_app/services/library_browse_postgres.py"
@@ -12583,19 +12696,34 @@
     },
     {
       "id": "py:services/relation_state.py#refresh_relation_views_in_state",
-      "action": "Run refresh refresh_relation_views_in_state",
+      "action": "Build in-memory relation views once for a published library that has none",
       "entrypoints": [
         "py:music_app/services/relation_state.py#refresh_relation_views_in_state:refresh:name"
       ],
       "owners": [
-        "music_app/services/relation_state.py"
+        "music_app/services/relation_state.py",
+        "music_app/services/library_hydration.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 1
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_in_memory_relation_build_contract_runs_once_across_production_hydration_triggers",
+      "testIdentity": "test_in_memory_relation_build_contract_runs_once_across_production_hydration_triggers",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/save_tasks.py#finalize_save_task",
@@ -12703,19 +12831,36 @@
     },
     {
       "id": "py:services/state.py#_drain_watcher_cover_refresh_queue",
-      "action": "Run background _drain_watcher_cover_refresh_queue",
+      "action": "Refresh covers for albums the watcher added, reading only the queued albums",
       "entrypoints": [
         "py:music_app/services/state.py#_drain_watcher_cover_refresh_queue:background:while"
       ],
       "owners": [
-        "music_app/services/state.py"
+        "music_app/services/state.py",
+        "music_app/services/cover_refresh_runtime.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
-      "workClass": "background-batch",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "candidate_rows": 0,
+        "returned_rows": 6,
+        "queue_claims": 1
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_production_album_count",
+      "testIdentity": "test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_production_album_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/state.py#_hydrate_library_state_worker",
@@ -12793,19 +12938,35 @@
     },
     {
       "id": "py:services/state.py#_run_scheduled_relation_projection_rebuild",
-      "action": "Run background _run_scheduled_relation_projection_rebuild",
+      "action": "Rebuild the relation projection in the background, one running and one trailing pass",
       "entrypoints": [
         "py:music_app/services/state.py#_run_scheduled_relation_projection_rebuild:background:while"
       ],
       "owners": [
-        "music_app/services/state.py"
+        "music_app/services/state.py",
+        "music_app/services/relation_projection_postgres.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 1,
+        "generation_changes": 1
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/state.py#_submit_watcher_cover_refresh",

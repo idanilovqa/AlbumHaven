@@ -1247,6 +1247,35 @@ def test_unchanged_stale_scan_fingerprint_rebuilds_current_sources_instead_of_re
     assert database.events.count("source_load") == 1
 
 
+def test_projection_marked_stale_over_unchanged_sources_is_restored_without_rebuilding(monkeypatch):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    database = _ProjectionDatabase(source_rows=_morse_rows())
+    built = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+    # An inventory publication (a watcher event or an album move) marks the
+    # projection stale without checking whether relation sources changed.
+    database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["status"] = "stale"
+    family_links = list(database.family_links)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("unchanged relation sources must not be rebuilt")
+
+    monkeypatch.setattr(projection, "build_relation_views_from_postgres_rows", unexpected)
+    monkeypatch.setattr(projection, "replace_artist_family_projection_in_transaction", unexpected)
+
+    restored = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+
+    metadata = database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]
+    assert restored["rebuild_reason"] == "source_unchanged"
+    assert restored["startup_rebuilt"] is False
+    assert metadata["status"] == "ready"
+    assert metadata["built_from_fingerprint"] == projection.relation_source_fingerprint(_morse_rows())
+    assert restored["relation_views"] == built["relation_views"]
+    assert database.family_links == family_links
+    assert not projection.relation_projection_readiness_stale_reason(database.scan_cache | {
+        projection._ARTIST_SEARCH_PROJECTION_ROWS_KEY: database.search_projection,
+    })
+
+
 def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projection_fields(monkeypatch):
     fingerprint = projection.relation_source_fingerprint(_morse_rows())
     relation_views = _complete_relation_views()

@@ -7601,18 +7601,6 @@ def _build_artist_page_seam(artist_ref: object, **kwargs: object) -> dict[str, o
     return build_artist_page_seam(artist_ref, **kwargs)
 
 
-def _ensure_relation_views(library_state: dict[str, object], config: dict[str, object]) -> bool:
-    from music_app.services.relation_state import ensure_relation_views
-
-    return ensure_relation_views(library_state, config)
-
-
-def _refresh_relation_views(library_state: dict[str, object], config: dict[str, object]) -> dict[str, object]:
-    from music_app.services.relation_state import refresh_relation_views_in_state
-
-    return refresh_relation_views_in_state(library_state, config)
-
-
 def _get_related_for_artist(
     selected_artist: str,
     relation_views: Mapping[str, object],

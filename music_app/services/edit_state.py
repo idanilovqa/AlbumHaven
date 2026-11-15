@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 from music_app.services.library import album_separate_release_key, album_to_dict, build_albums_from_file_cache
+from music_app.services.library_album_index import publish_library_albums
 from music_app.services.metadata import apply_text_repairs_to_file, normalize_exception_value
 from music_app.services.non_album_view_payloads import is_loose_track_album_value
 from music_app.services.relations import build_relation_views
@@ -135,7 +136,7 @@ def rebuild_affected_albums_in_state(
             affected_album_keys.update(_cache_entry_album_keys(updated_entry, separate_release_keys))
 
     if not affected_album_keys:
-        st["albums"] = _merge_rebuilt_albums(list(st.get("albums", []) or []), [], set())
+        publish_library_albums(st, _merge_rebuilt_albums(list(st.get("albums", []) or []), [], set()))
         return
 
     affected_entries = {
@@ -144,7 +145,7 @@ def rebuild_affected_albums_in_state(
         if _cache_entry_album_keys(entry, separate_release_keys) & affected_album_keys
     }
     rebuilt_albums = build_albums_from_file_cache(affected_entries, separate_release_keys)
-    st["albums"] = _merge_rebuilt_albums(list(st.get("albums", []) or []), rebuilt_albums, affected_album_keys)
+    publish_library_albums(st, _merge_rebuilt_albums(list(st.get("albums", []) or []), rebuilt_albums, affected_album_keys))
 
 
 def build_affected_album_dicts(

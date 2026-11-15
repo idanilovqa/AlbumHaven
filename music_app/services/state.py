@@ -27,6 +27,7 @@ from music_app.services.cover_refresh_runtime import (
 )
 from music_app.services.cover_refresh_planning import build_cover_refresh_jobs
 from music_app.services.exception_overrides import load_exception_overrides
+from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_hydration import hydrate_library_state_from_disk
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -917,10 +918,10 @@ def refresh_relation_views_for_state(
                     path: {**entry, **repaired_entries[path]} if path in repaired_entries else entry
                     for path, entry in current_entries.items()
                 }
-                target_state["albums"] = build_albums_from_file_cache(
+                publish_library_albums(target_state, build_albums_from_file_cache(
                     target_state["file_cache"],
                     set(target_state.get("separate_release_keys") or set()),
-                )
+                ))
                 repaired_cover_published = True
         if postgres_relation_projection:
             if not isinstance(committed_relation_state, dict) or not isinstance(
@@ -954,7 +955,7 @@ def refresh_relation_views_for_state(
                 raise ScanCancelled()
             if repaired_cover_published:
                 library_state["file_cache"] = target_state["file_cache"]
-                library_state["albums"] = target_state["albums"]
+                publish_library_albums(library_state, target_state["albums"])
             for key in (
                 "relation_views",
                 "relations_in_progress",

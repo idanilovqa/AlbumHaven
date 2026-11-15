@@ -104,7 +104,7 @@ test('mobile thin seek surface keeps touch dragging under player control', async
 });
 
 for (const mode of ['docked', 'floating']) {
-  test(`compact cover CSS accepts quoted references in ${mode} mode`, async ({ page }) => {
+  test(`compact cover CSS accepts quoted paths in ${mode} mode`, async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 640 });
     const requestedPaths = [];
     await page.route('**/cover/*', route => {

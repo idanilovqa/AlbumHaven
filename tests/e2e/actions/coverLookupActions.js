@@ -99,9 +99,13 @@ export async function readDisplayedBlobBytes(element, expected) {
   return Array.from(bytes);
 }
 
+// The server's reference <-> fixture file mapping, read from the isolated E2E database.
+const FIXTURE_COVER_REFERENCES = { coverPathForReference, coverReferenceForPath };
+
 export class CoverLookupActions {
-  constructor(coverLookup) {
+  constructor(coverLookup, { coverReferences = FIXTURE_COVER_REFERENCES } = {}) {
     this.coverLookup = coverLookup;
+    this.coverReferences = coverReferences;
     this.laterProviderFixtureHeld = false;
     this.candidateImageFixtureHeld = false;
     this.providerFixtureMode = 'no-results';
@@ -1331,7 +1335,7 @@ export class CoverLookupActions {
       const src = normalizeResponseUrl(displayedSource, this.coverLookup.page.url());
       const coverUrl = new URL(src);
       // The page names the cover by reference; the fixture file comes from the server's mapping.
-      const coverPath = await coverPathForReference(coverReferenceFromUrl(src));
+      const coverPath = await this.coverReferences.coverPathForReference(coverReferenceFromUrl(src));
       const coverRevision = coverUrl.pathname.startsWith('/cover/')
         ? String(coverUrl.searchParams.get('v') || '')
         : '';
@@ -1380,7 +1384,7 @@ export class CoverLookupActions {
       if (!coverPath) {
         throw new Error(`Cannot measure full-size ${label} bytes without a cover path.`);
       }
-      const reference = await coverReferenceForPath(coverPath);
+      const reference = await this.coverReferences.coverReferenceForPath(coverPath);
       if (!reference) {
         throw new Error(`Cannot measure full-size ${label} bytes: the app has not named that cover.`);
       }
@@ -1411,14 +1415,14 @@ export class CoverLookupActions {
     const body = await response.body();
     return {
       src,
-      coverPath: await coverPathForReference(coverReferenceFromUrl(src)),
+      coverPath: await this.coverReferences.coverPathForReference(coverReferenceFromUrl(src)),
       coverRevision: String(coverUrl.searchParams.get('v') || ''),
       sha256: createHash('sha256').update(body).digest('hex').toUpperCase(),
     };
   }
 
   async readLocalCoverCardEvidence(card, label) {
-    const sourcePath = await coverPathForReference(String(await card.getAttribute('data-select-local-cover') || '').trim());
+    const sourcePath = await this.coverReferences.coverPathForReference(String(await card.getAttribute('data-select-local-cover') || '').trim());
     const fullSizeSource = String(await card.getAttribute('data-cover-src') || '').trim();
     const name = String(await this.coverLookup.localCoverNameWithin(card).textContent() || '').trim();
     const resolution = String(
@@ -1464,7 +1468,7 @@ export class CoverLookupActions {
     const expectedPath = String(sourcePath || '').trim();
     await expect(this.coverLookup.localCoverCards.first()).toBeVisible({ timeout });
     // Cards name candidates by reference; the gallery has just named every candidate it shows.
-    const expectedReference = await coverReferenceForPath(expectedPath);
+    const expectedReference = await this.coverReferences.coverReferenceForPath(expectedPath);
     const count = await this.coverLookup.localCoverCards.count();
     for (let index = 0; index < count; index += 1) {
       const card = this.coverLookup.localCoverCards.nth(index);
@@ -1495,7 +1499,7 @@ export class CoverLookupActions {
   async deleteLocalCoverBySourcePath(sourcePath, options = {}) {
     const timeout = options.timeout || 30000;
     const expectedPath = String(sourcePath || '').trim();
-    const expectedReference = await coverReferenceForPath(expectedPath);
+    const expectedReference = await this.coverReferences.coverReferenceForPath(expectedPath);
     const count = await this.coverLookup.localCoverCards.count();
     let card = null;
     for (let index = 0; index < count; index += 1) {
@@ -1606,7 +1610,7 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
-    const selectedCoverPath = await coverPathForReference(String(payload.selected_cover_ref || '').trim());
+    const selectedCoverPath = await this.coverReferences.coverPathForReference(String(payload.selected_cover_ref || '').trim());
     if (!selectedCoverPath) {
       throw new Error('Local cover selection did not return an authoritative cover path.');
     }

@@ -2269,7 +2269,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     );
     const neutralPreservedAlbum = opened.album;
     expect(neutralPreservedAlbum.cover_selection_origin).toBe(neutralBaselineAlbum.cover_selection_origin);
-    expect(await coverPathForReference(neutralPreservedAlbum.cover_ref)).toBe(await coverPathForReference(neutralBaselineAlbum.cover_ref));
+    expect(neutralPreservedAlbum.cover_ref).toBe(neutralBaselineAlbum.cover_ref);
     expect(neutralPreservedAlbum.cover_revision).toBe(neutralBaselineAlbum.cover_revision);
     for (const field of USER_COVER_LINKED_FIELDS) {
       expect(neutralPreservedAlbum[field]).toBe(neutralBaselineAlbum[field]);

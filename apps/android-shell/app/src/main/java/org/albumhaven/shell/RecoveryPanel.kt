@@ -69,9 +69,10 @@ class RecoveryPanel(private val root: View) {
     /** Whether any native screen covers the page. */
     val showing: Boolean get() = root.isVisible
 
-    fun showLoading(originHost: String, onSwitchSandbox: (() -> Unit)?) {
+    /** [detail] replaces "Connecting to <host>", as while switching sandbox to install a build. */
+    fun showLoading(originHost: String, onSwitchSandbox: (() -> Unit)?, detail: String? = null) {
         show(loading)
-        loadingDetail.text = root.context.getString(R.string.recovery_loading_detail, originHost)
+        loadingDetail.text = detail ?: root.context.getString(R.string.recovery_loading_detail, originHost)
         showSwitch(loadingSwitch, onSwitchSandbox)
     }
 

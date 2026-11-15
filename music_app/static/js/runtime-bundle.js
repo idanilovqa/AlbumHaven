@@ -12509,6 +12509,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.album_details.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
+    "updates.choose.v1": "optional",
     "downloads.link.v1": "optional",
     "files.save.v1": "optional",
     "app.copy.v1": "optional"
@@ -27710,10 +27711,13 @@ const ANDROID_SANDBOX_CHOICES = Array.from({ length: 99 }, (_, index) => ({
 }));
 
 const ANDROID_UPDATES_CAPABILITY = 'updates.manual.v1';
+const ANDROID_CHOOSE_CAPABILITY = 'updates.choose.v1';
 const ANDROID_SANDBOX_CAPABILITY = 'sandbox.select.v1';
 
 // `update` is the shell's latest `updates.state` payload; null until the handshake reports one.
-const androidSettings = { status: null, switching: false, update: null };
+// `builds` is the sandbox app's `updates.builds` summary: the installed build and the builds of
+// every sandbox Update would offer.
+const androidSettings = { status: null, switching: false, update: null, builds: null };
 
 function androidVersionLabel(info) {
   return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
@@ -27724,6 +27728,8 @@ function androidVersionLabel(info) {
 function androidUpdateMenuView() {
   const update = androidSettings.update;
   if (!update || !hasAndroidCapability(ANDROID_UPDATES_CAPABILITY)) return null;
+  const choice = androidBuildChoiceView(update);
+  if (choice) return choice;
   switch (update.state) {
     case 'checking': return ['Checking…', null];
     case 'upToDate': return ['No updates available', 'check'];
@@ -27740,6 +27746,30 @@ function androidUpdateMenuView() {
     case 'failed': return ['Update failed. Try again', update.versionName ? 'download' : 'check'];
     default: return ['Check for update', 'check'];
   }
+}
+
+// The sandbox app's Update row while no update runs: one waiting build installs from its sandbox
+// (switching to it when it is another's); two or more, or only an older one, open the shell's
+// native build sheet. Null when no sandbox has a build this app does not have.
+function androidBuildChoiceView(update) {
+  const builds = androidSettings.builds;
+  const resting = ['idle', 'upToDate', 'available'].includes(update.state)
+    || (update.state === 'failed' && !update.versionName);
+  if (!resting || !hasAndroidCapability(ANDROID_CHOOSE_CAPABILITY) || !Number.isInteger(builds?.count) || builds.count < 1) {
+    return null;
+  }
+  const single = builds.single;
+  if (single) {
+    return [`Update to build ${single.versionCode}`, 'choose',
+      single.thisSandbox ? single.title : `From sandbox${single.sandbox} · switches sandbox`];
+  }
+  const waiting = builds.count === 1 ? '1 sandbox has a build' : `${builds.count} sandboxes have builds`;
+  return ['Choose app build', 'choose', `${waiting} · installed ${builds.installedVersionCode}`];
+}
+
+function setAndroidBuilds(builds) {
+  if (builds && typeof builds === 'object') androidSettings.builds = builds;
+  renderAndroidUpdateMenuItem();
 }
 
 // The row is changed in place, so an open menu keeps its focus while progress arrives. A menu
@@ -27836,6 +27866,7 @@ function buildAndroidSettingsHtml(info) {
 // the sandbox it just connected to.
 function adoptAndroidSettingsHandshake(info) {
   if (info.updates) androidSettings.update = info.updates;
+  if (info.builds) androidSettings.builds = info.builds;
   renderAndroidUpdateMenuItem();
   const connectedSlot = info.sandbox?.connectedSlot;
   if (connectedSlot) {
@@ -27931,6 +27962,7 @@ function initAndroidSettings() {
   if (!isAndroidShell()) return;
   document.addEventListener('click', handleAndroidSettingsClick);
   androidBridge.events.set('updates.state', setAndroidUpdate);
+  androidBridge.events.set('updates.builds', setAndroidBuilds);
   connectAndroidSettings();
 }
 

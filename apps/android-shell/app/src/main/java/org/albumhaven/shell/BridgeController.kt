@@ -40,6 +40,15 @@ interface UpdatePort {
     fun install(): Boolean
 }
 
+/** The sandbox app's build picker as the bridge sees it (`updates.choose.v1`). */
+interface BuildChoicePort {
+    /** What the Update row shows: the installed build and the builds Update would offer. */
+    val summary: JSONObject
+
+    /** Update was pressed: install the one waiting build, or let the owner choose. False when it does not apply now. */
+    fun choose(webProtocols: IntRange): Boolean
+}
+
 /** The shell's record of the current origin's copy of its last view (`app.copy.v1`; see [AppCopies]). */
 interface AppCopyPort {
     /** The page reports whether its origin now has a copy. */
@@ -60,13 +69,16 @@ class BridgeController(
     private val files: FileSaves? = null,
     /** Opens pages with a copy at once (`app.copy.v1`); null where the shell does not. */
     private val copies: AppCopyPort? = null,
+    /** Offers every sandbox's build (`updates.choose.v1`); null outside the sandbox app. */
+    private val builds: BuildChoicePort? = null,
 ) {
 
     private val playbackBridge = PlaybackBridge(playback)
     private var negotiatedProtocol: Int? = null
 
     /** The range the document offered, so an update is accepted only if it can open the current site. */
-    private var webProtocols: IntRange? = null
+    var webProtocols: IntRange? = null
+        private set
 
     /** Posts to the document that negotiated the bridge; events go nowhere before a handshake. */
     private var eventSink: ((String) -> Unit)? = null
@@ -143,6 +155,11 @@ class BridgeController(
         if (updates != null) emit(UPDATE_STATE_EVENT, update.toJson())
     }
 
+    /** Sends the builds Update would offer, whenever the sandbox build index changes. */
+    fun emitBuilds() {
+        if (updates != null && builds != null) emit(UPDATE_BUILDS_EVENT, builds.summary)
+    }
+
     private fun emit(name: String, payload: JSONObject) = post("event", UUID.randomUUID().toString(), name, payload)
 
     private fun post(type: String, id: String, name: String, payload: JSONObject) {
@@ -185,6 +202,8 @@ class BridgeController(
                 selectSandbox(message, protocol, reply)
             message.name in UPDATE_COMMANDS && updates != null ->
                 update(message, protocol, updates, reply)
+            message.name == UPDATE_CHOOSE && updates != null && builds != null ->
+                choose(message, protocol, builds, reply)
             message.name == FILES_SAVE && files != null ->
                 files.handle(message.payload) { respond(message, protocol, it, reply) }
             message.name == APP_COPY_STATE && copies != null ->
@@ -252,6 +271,7 @@ class BridgeController(
             .put("origin", host.selectedOrigin())
             .put("playback", PlaybackBridge.snapshotJson(playback.snapshot))
         updates?.let { payload.put("updates", it.state.toJson()) }
+        if (updates != null && builds != null) payload.put("builds", builds.summary)
         copies?.let { payload.put("appCopy", JSONObject().put("forget", it.forgetPending)) }
         if (identity.channel == ShellChannel.SANDBOX) {
             payload.put(
@@ -269,6 +289,7 @@ class BridgeController(
         if (identity.channel == ShellChannel.SANDBOX) add(SANDBOX_CAPABILITY)
         addAll(PlaybackBridge.CAPABILITIES)
         if (updates != null) add(UPDATES_CAPABILITY)
+        if (updates != null && builds != null) add(CHOOSE_CAPABILITY)
         add(DOWNLOAD_LINKS_CAPABILITY)
         if (files != null) add(FILES_CAPABILITY)
         if (copies != null) add(APP_COPY_CAPABILITY)
@@ -315,6 +336,21 @@ class BridgeController(
         )
     }
 
+    /** Takes no arguments; the native sheet, a switch or the update's own events follow. */
+    private fun choose(message: BridgeMessage, protocol: Int, builds: BuildChoicePort, reply: (String) -> Unit) {
+        if (message.payload.length() != 0) {
+            reply(BridgeCodec.failure(message, protocol, "invalid_payload", "Unexpected fields"))
+            return
+        }
+        reply(
+            if (builds.choose(checkNotNull(webProtocols))) {
+                BridgeCodec.success(message, protocol)
+            } else {
+                BridgeCodec.failure(message, protocol, "update_unavailable", "Not available in this update state")
+            },
+        )
+    }
+
     private fun selectSandbox(message: BridgeMessage, protocol: Int, reply: (String) -> Unit) {
         val slot = message.payload.opt("slot") as? Int
         if (slot == null || slot !in OriginPolicy.SANDBOX_SLOTS) {
@@ -337,6 +373,7 @@ class BridgeController(
         const val PROTOCOL_MAX = 1
         const val SANDBOX_CAPABILITY = "sandbox.select.v1"
         const val UPDATES_CAPABILITY = "updates.manual.v1"
+        const val CHOOSE_CAPABILITY = "updates.choose.v1"
 
         /** Same-origin downloads go through a cookie-less link the shell asks the page for. */
         const val DOWNLOAD_LINKS_CAPABILITY = "downloads.link.v1"
@@ -351,7 +388,9 @@ class BridgeController(
         private const val UPDATE_DOWNLOAD = "updates.download"
         private const val UPDATE_INSTALL = "updates.install"
         private val UPDATE_COMMANDS = setOf(UPDATE_CHECK, UPDATE_DOWNLOAD, UPDATE_INSTALL)
+        private const val UPDATE_CHOOSE = "updates.choose"
         private const val UPDATE_STATE_EVENT = "updates.state"
+        private const val UPDATE_BUILDS_EVENT = "updates.builds"
         private const val HANDSHAKE = "bridge.handshake"
         private const val SANDBOX_SELECT = "sandbox.select"
         private const val MAX_REQUIRED_CAPABILITIES = 64

@@ -41,7 +41,7 @@
   const SIGN_IN_POSTS = new Set(['/login', '/logout']);
   // Every path the worker answers or watches; Chrome sends all others straight to the network.
   const OWN_PATHS = [
-    '/', '/static/*', '/cover/*', '/__album-haven-cover/*', '/login*', '/logout',
+    '/', '/static/*', '/cover/*', '/login*', '/logout',
     '/accept-invitation*', '/password-reset*', '/password-recovery*',
   ];
 
@@ -143,9 +143,10 @@
 
     // [page.running]: the page is the one starting now, so its version's assets stay while it runs.
     async function keepPage(url, response, page, fetchedIn) {
-      const html = withoutPaths((await response.text()).replace(NETWORK_MARKER, COPY_MARKER));
+      const text = await response.text();
       await exclusive(async () => {
         if (fetchedIn !== generation) return;
+        const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));
         const account = response.headers.get(COPY_HEADER);
         let target = await accountCache();
         if (target && target.name !== CACHE_PREFIX + account) {
@@ -224,10 +225,11 @@
       const waited = new Promise((resolve) => { setTimeout(() => resolve(null), SERVER_WAIT_MS); });
       const answer = await Promise.race([network.catch(() => null), waited]);
       if (answer && answer.status < 500) return answer;
-      const copy = await freshCopy(url);
-      if (!copy) return network;
       page.running = false;
-      return copy;
+      const copy = await freshCopy(url);
+      if (copy) return copy;
+      page.running = true;
+      return network;
     }
 
     async function navigate(request, event) {
@@ -236,28 +238,30 @@
       return (await freshCopy(url)) || fetchPage(url, { running: true }, event);
     }
 
-    async function put(cache, request, response) {
-      await quietly(exclusive(() => cache.put(request, response)));
+    // Keeps [response] for [request] after the answer, unless signing out came first.
+    function keepAsset(event, cache, request, response) {
+      const fetchedIn = generation;
+      later(event, () => exclusive(() => (fetchedIn === generation ? cache.put(request, response) : undefined)));
     }
 
     // A version names exactly one build of an asset: kept once the server marks it immutable.
-    async function versionedAsset(request) {
+    async function versionedAsset(request, event) {
       const target = await accountCache();
       const kept = target ? await target.cache.match(request) : null;
       if (kept) return kept;
       const response = await fetch(request);
       if (target && response.status === 200 && /\bimmutable\b/i.test(response.headers.get('Cache-Control') || '')) {
-        await put(target.cache, request, response.clone());
+        keepAsset(event, target.cache, request, response.clone());
       }
       return response;
     }
 
     // Unversioned assets (images, fonts) stay network-first; the copy only stands in offline.
-    async function asset(request) {
+    async function asset(request, event) {
       const target = await accountCache();
       try {
         const response = await fetch(request);
-        if (target && response.status === 200 && !noStore(response)) await put(target.cache, request, response.clone());
+        if (target && response.status === 200 && !noStore(response)) keepAsset(event, target.cache, request, response.clone());
         return response;
       } catch (error) {
         const kept = target ? await target.cache.match(request) : null;

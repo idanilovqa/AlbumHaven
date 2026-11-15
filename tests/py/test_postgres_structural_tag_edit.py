@@ -3827,136 +3827,164 @@ def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
 @pytest.mark.parametrize("destination_state", ["absent", "equal", "conflicting"])
 @pytest.mark.parametrize("operation", ["retirement", "semantic_consolidation"])
 def test_live_postgres_structural_consolidation_preserves_album_decisions(
-    state_kind, destination_state, operation,
+    state_kind, destination_state, operation, request,
 ):
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
         pytest.skip("Isolated setup is required for retirement preservation.")
     isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
     token = uuid4().hex
-    with psycopg.connect(_ISOLATED_SETUP_DATABASE_URL) as setup:
-        try:
-            library_id, account_id = setup.execute(
-                "select id, owner_account_id from library.libraries where name='Local Library'"
-            ).fetchone()
-            artist_id = setup.execute(
-                "insert into library.local_artists(library_id,artist_key,name) "
-                "values(%s,%s,'Retirement Artist') returning id",
-                (library_id, f"retirement-artist-{token}"),
-            ).fetchone()[0]
-            album_keys = [f"retirement-source-{token}", f"retirement-destination-{token}"]
-            if operation == "semantic_consolidation":
-                setup.execute(
-                    "insert into library.separate_releases(library_id,release_key) values(%s,%s)",
-                    (library_id, "retirement artist::retirement album"),
-                )
-            album_ids_by_key = {}
-            for album_key in reversed(album_keys):
-                is_source = album_key == album_keys[0]
-                title = "Retirement Album"
-                if operation == "retirement" and is_source:
-                    title = "Previous Retirement Album"
-                album_ids_by_key[album_key] = setup.execute(
-                    "insert into library.local_albums(library_id,artist_id,album_key,title,metadata) "
-                    "values(%s,%s,%s,%s,%s::jsonb) returning id",
-                    (library_id, artist_id, album_key, title,
-                     json.dumps({"retirement_source_note": token} if is_source else {"canonical_note": token})),
-                ).fetchone()[0]
-            album_ids = [album_ids_by_key[key] for key in album_keys]
-            task_id, task_requested_at = setup.execute(
-                "insert into ops.cover_lookup_tasks "
-                "(library_id,local_album_id,album_key,task_key,status,metadata) "
-                "values(%s,%s,%s,%s,'pending',%s::jsonb) returning id,requested_at",
-                (library_id, album_ids[0], album_keys[0], f"retirement-task-{token}",
-                 json.dumps({"retained": token, "source_payload": {"album_payload": {
-                     "id": album_ids[0], "album_id": album_ids[0], "key": album_keys[0],
-                     "retained": token,
-                 }}})),
-            ).fetchone()
-            if state_kind == "disc_rating":
-                source_value, other_value = 7, None
-                table, value_column = "app.album_disc_ratings", "rating"
-                for index, album_key in enumerate(album_keys):
-                    if index and destination_state == "absent":
-                        continue
-                    setup.execute(
-                        "insert into app.album_disc_ratings "
-                        "(account_id,library_id,album_key,disc_key,rating,provenance) "
-                        "values(%s,%s,%s,'bonus disc',%s,'user')",
-                        (account_id, library_id, album_key,
-                         other_value if index and destination_state == "conflicting" else source_value),
-                    )
-            else:
-                source_value, other_value = uuid4(), uuid4()
-                table, value_column = "library.local_album_artist_identities", "artist_mbid"
-                for mbid in (source_value, other_value):
-                    setup.execute(
-                        "insert into integration.musicbrainz_artists(mbid,canonical_name,refreshed_at) "
-                        "values(%s,'Retirement Artist',now())", (mbid,),
-                    )
-                for index, album_key in enumerate(album_keys):
-                    if index and destination_state == "absent":
-                        continue
-                    setup.execute(
-                        "insert into library.local_album_artist_identities "
-                        "(library_id,album_key,artist_mbid,decision_source,matcher_version) "
-                        "values(%s,%s,%s,'manual',4)",
-                        (library_id, album_key,
-                         other_value if index and destination_state == "conflicting" else source_value),
-                    )
-            revision = setup.execute(
-                "select coalesce((metadata->>'inventory_mutation_revision')::bigint,0) "
-                "from library.libraries where id=%s", (library_id,),
-            ).fetchone()[0]
-            setup.execute("set local role album_haven_app")
-            if operation == "retirement":
-                disposition = setup.execute(
-                    "select library.retire_vacated_structural_album(%s,%s,%s,%s,%s)",
-                    (library_id, *album_ids, *album_keys),
-                ).fetchone()[0]
-                expected = "preserved_user_state" if destination_state == "conflicting" else "retired"
-                assert disposition == expected
-            else:
-                canonical = setup.execute(
-                    "select * from library.reconcile_targeted_album_noncover(%s,%s,%s,true)",
-                    (library_id, album_ids[0], revision),
-                ).fetchone()
-                assert canonical == (album_ids[1], album_keys[1])
-            setup.execute("reset role")
-            task_album_id, task_album_key, task_status, requested_at, task_metadata = setup.execute(
-                "select local_album_id,album_key,status,requested_at,metadata "
-                "from ops.cover_lookup_tasks where id=%s", (task_id,),
-            ).fetchone()
-            expected_index = 0 if destination_state == "conflicting" else 1
-            assert (task_album_id, task_album_key) == (album_ids[expected_index], album_keys[expected_index])
-            assert (task_status, requested_at) == ("pending", task_requested_at)
-            assert task_metadata["retained"] == token
-            task_album = task_metadata["source_payload"]["album_payload"]
-            assert (task_album["id"], task_album["album_id"], task_album["key"]) == (
-                album_ids[expected_index], album_ids[expected_index], album_keys[expected_index],
+    album_keys = [f"retirement-source-{token}", f"retirement-destination-{token}"]
+    artist_name = f"Retirement Artist {token}"
+    separate_release_key = f"{artist_name.casefold()}::retirement album"
+    artist_mbids = []
+
+    def cleanup():
+        with psycopg.connect(_ISOLATED_SETUP_DATABASE_URL) as cleanup_connection:
+            cleanup_connection.execute(
+                "delete from ops.cover_lookup_tasks where task_key=%s",
+                (f"retirement-task-{token}",),
             )
-            assert task_album["retained"] == token
-            assert setup.execute(
-                "select exists(select 1 from library.local_albums where id=%s)",
-                (album_ids[0],),
-            ).fetchone()[0] is (destination_state == "conflicting")
-            assert setup.execute(
+            cleanup_connection.execute(
+                "delete from library.local_albums where album_key=any(%s)", (album_keys,),
+            )
+            cleanup_connection.execute(
+                "delete from library.local_artists where artist_key=%s",
+                (f"retirement-artist-{token}",),
+            )
+            cleanup_connection.execute(
+                "delete from library.separate_releases where release_key=%s",
+                (separate_release_key,),
+            )
+            cleanup_connection.execute(
+                "delete from integration.musicbrainz_artists where mbid=any(%s::uuid[])",
+                (artist_mbids,),
+            )
+
+    request.addfinalizer(cleanup)
+    with psycopg.connect(_ISOLATED_SETUP_DATABASE_URL) as setup:
+        library_id, account_id = setup.execute(
+            "select id, owner_account_id from library.libraries where name='Local Library'"
+        ).fetchone()
+        artist_id = setup.execute(
+            "insert into library.local_artists(library_id,artist_key,name) "
+            "values(%s,%s,%s) returning id",
+            (library_id, f"retirement-artist-{token}", artist_name),
+        ).fetchone()[0]
+        if operation == "semantic_consolidation":
+            setup.execute(
+                "insert into library.separate_releases(library_id,release_key) values(%s,%s)",
+                (library_id, separate_release_key),
+            )
+        album_ids_by_key = {}
+        for album_key in reversed(album_keys):
+            is_source = album_key == album_keys[0]
+            title = "Retirement Album"
+            if operation == "retirement" and is_source:
+                title = "Previous Retirement Album"
+            album_ids_by_key[album_key] = setup.execute(
+                "insert into library.local_albums(library_id,artist_id,album_key,title,metadata) "
+                "values(%s,%s,%s,%s,%s::jsonb) returning id",
+                (library_id, artist_id, album_key, title,
+                 json.dumps({"retirement_source_note": token} if is_source else {"canonical_note": token})),
+            ).fetchone()[0]
+        album_ids = [album_ids_by_key[key] for key in album_keys]
+        task_id, task_requested_at = setup.execute(
+            "insert into ops.cover_lookup_tasks "
+            "(library_id,local_album_id,album_key,task_key,status,metadata) "
+            "values(%s,%s,%s,%s,'pending',%s::jsonb) returning id,requested_at",
+            (library_id, album_ids[0], album_keys[0], f"retirement-task-{token}",
+             json.dumps({"retained": token, "source_payload": {"album_payload": {
+                 "id": album_ids[0], "album_id": album_ids[0], "key": album_keys[0],
+                 "retained": token,
+             }}})),
+        ).fetchone()
+        if state_kind == "disc_rating":
+            source_value, other_value = 7, None
+            table, value_column = "app.album_disc_ratings", "rating"
+            for index, album_key in enumerate(album_keys):
+                if index and destination_state == "absent":
+                    continue
+                setup.execute(
+                    "insert into app.album_disc_ratings "
+                    "(account_id,library_id,album_key,disc_key,rating,provenance) "
+                    "values(%s,%s,%s,'bonus disc',%s,'user')",
+                    (account_id, library_id, album_key,
+                     other_value if index and destination_state == "conflicting" else source_value),
+                )
+        else:
+            source_value, other_value = uuid4(), uuid4()
+            artist_mbids.extend((source_value, other_value))
+            table, value_column = "library.local_album_artist_identities", "artist_mbid"
+            for mbid in (source_value, other_value):
+                setup.execute(
+                    "insert into integration.musicbrainz_artists(mbid,canonical_name,refreshed_at) "
+                    "values(%s,'Retirement Artist',now())", (mbid,),
+                )
+            for index, album_key in enumerate(album_keys):
+                if index and destination_state == "absent":
+                    continue
+                setup.execute(
+                    "insert into library.local_album_artist_identities "
+                    "(library_id,album_key,artist_mbid,decision_source,matcher_version) "
+                    "values(%s,%s,%s,'manual',4)",
+                    (library_id, album_key,
+                     other_value if index and destination_state == "conflicting" else source_value),
+                )
+    connection = psycopg.connect(database_url)
+    try:
+        revision = connection.execute(
+            "select coalesce((metadata->>'inventory_mutation_revision')::bigint,0) "
+            "from library.libraries where id=%s", (library_id,),
+        ).fetchone()[0]
+        if operation == "retirement":
+            disposition = connection.execute(
+                "select library.retire_vacated_structural_album(%s,%s,%s,%s,%s)",
+                (library_id, *album_ids, *album_keys),
+            ).fetchone()[0]
+            expected = "preserved_user_state" if destination_state == "conflicting" else "retired"
+            assert disposition == expected
+        else:
+            canonical = connection.execute(
+                "select * from library.reconcile_targeted_album_noncover(%s,%s,%s,true)",
+                (library_id, album_ids[0], revision),
+            ).fetchone()
+            assert canonical == (album_ids[1], album_keys[1])
+        task_album_id, task_album_key, task_status, requested_at, task_metadata = connection.execute(
+            "select local_album_id,album_key,status,requested_at,metadata "
+            "from ops.cover_lookup_tasks where id=%s", (task_id,),
+        ).fetchone()
+        expected_index = 0 if destination_state == "conflicting" else 1
+        assert (task_album_id, task_album_key) == (album_ids[expected_index], album_keys[expected_index])
+        assert (task_status, requested_at) == ("pending", task_requested_at)
+        assert task_metadata["retained"] == token
+        task_album = task_metadata["source_payload"]["album_payload"]
+        assert (task_album["id"], task_album["album_id"], task_album["key"]) == (
+            album_ids[expected_index], album_ids[expected_index], album_keys[expected_index],
+        )
+        assert task_album["retained"] == token
+        assert connection.execute(
+            "select exists(select 1 from library.local_albums where id=%s)",
+            (album_ids[0],),
+        ).fetchone()[0] is (destination_state == "conflicting")
+        assert connection.execute(
+            f"select {value_column} from {table} where library_id=%s and album_key=%s",
+            (library_id, album_keys[1]),
+        ).fetchone()[0] == (other_value if destination_state == "conflicting" else source_value)
+        if destination_state == "conflicting":
+            assert connection.execute(
                 f"select {value_column} from {table} where library_id=%s and album_key=%s",
-                (library_id, album_keys[1]),
-            ).fetchone()[0] == (other_value if destination_state == "conflicting" else source_value)
-            if destination_state == "conflicting":
-                assert setup.execute(
-                    f"select {value_column} from {table} where library_id=%s and album_key=%s",
-                    (library_id, album_keys[0]),
-                ).fetchone()[0] == source_value
-            if operation == "semantic_consolidation":
-                canonical_metadata = setup.execute(
-                    "select metadata from library.local_albums where id=%s", (album_ids[1],),
-                ).fetchone()[0]
-                assert canonical_metadata["canonical_note"] == token
-                assert ("retirement_source_note" in canonical_metadata) is (destination_state != "conflicting")
-        finally:
-            setup.rollback()
+                (library_id, album_keys[0]),
+            ).fetchone()[0] == source_value
+        if operation == "semantic_consolidation":
+            canonical_metadata = connection.execute(
+                "select metadata from library.local_albums where id=%s", (album_ids[1],),
+            ).fetchone()[0]
+            assert canonical_metadata["canonical_note"] == token
+            assert ("retirement_source_note" in canonical_metadata) is (destination_state != "conflicting")
+    finally:
+        connection.rollback()
+        connection.close()
 
 
 def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_revision(monkeypatch):

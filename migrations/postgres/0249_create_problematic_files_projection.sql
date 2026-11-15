@@ -186,11 +186,13 @@ alter table ops.jobs drop constraint if exists jobs_kind_recovery_check;
 alter table ops.jobs add constraint jobs_kind_recovery_check check (
   (kind in (
     'full_scan', 'targeted_reconciliation', 'post_scan_cover_refresh',
-    'cover_lookup', 'cover_bulk_refresh', 'lastfm_scrobble_retry',
-    'auth_welcome_delivery', 'auth_invitation_delivery',
-    'auth_password_reset_delivery', 'problematic_files_projection'
+    'cover_lookup', 'cover_bulk_refresh', 'auth_welcome_delivery',
+    'problematic_files_projection'
   ) and recovery_policy = 'retry_safe') or
-  (kind = 'cover_remote_save' and recovery_policy = 'ambiguous_on_stale_lease')
+  (kind in (
+    'cover_remote_save', 'lastfm_scrobble_retry',
+    'auth_invitation_delivery', 'auth_password_reset_delivery'
+  ) and recovery_policy = 'ambiguous_on_stale_lease')
 );
 
 create table if not exists ops.problematic_projection_state (
@@ -1169,6 +1171,18 @@ declare
     expected_kinds,
     'problematic_files_projection'
   );
+  cover_finalization_functions constant text[] := array[
+    'library.resolve_cover_mutation_identity(bigint,text[])',
+    'library.read_cover_mutation_revision(bigint)',
+    'library.commit_cover_selection(bigint,bigint,text[],bigint,bigint,text,text,text,text,boolean,integer,integer,boolean,jsonb,text,bigint,integer,text,text,bigint,bigint,timestamp with time zone)',
+    'library.recover_cover_mutation(bigint,bigint,bigint,bigint,text,text,text,bigint,integer,text,text,bigint,bigint,timestamp with time zone)',
+    'library.load_cover_mutation_baseline(bigint,bigint)',
+    'ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamp with time zone)',
+    'ops.advance_claimed_cover_finalization(bigint,bigint,integer,text,text,bigint,text,timestamp with time zone)',
+    'ops.retry_claimed_cover_finalization(bigint,integer,text,text,timestamp with time zone,text,timestamp with time zone)',
+    'ops.requeue_expired_cover_finalization(timestamp with time zone)',
+    'ops.reconcile_stale_job_leases(timestamp with time zone,integer)'
+  ];
   required_functions constant text[] := array[
     'ops.problematic_projection_claim_valid(bigint,integer,text,text,timestamp with time zone)',
     'ops.prepare_claimed_problematic_projection(bigint,integer,text,text,timestamp with time zone)',
@@ -1194,6 +1208,16 @@ declare
     'ops.complete_problematic_projection_integrity_audit(bigint,uuid,uuid,integer,bigint,bit,bigint,bit,timestamp with time zone)'
   ];
 begin
+  if exists (
+    select 1
+    from pg_catalog.unnest(cover_finalization_functions) as required(signature)
+    where pg_catalog.to_regprocedure(required.signature) is null
+       or not pg_catalog.has_function_privilege(
+         session_user, pg_catalog.to_regprocedure(required.signature), 'EXECUTE'
+       )
+  ) then
+    return false;
+  end if;
   if p_registered_kinds is not distinct from baseline_kinds then
     return ops.validate_durable_worker_startup_baseline_0125(p_registered_kinds);
   end if;

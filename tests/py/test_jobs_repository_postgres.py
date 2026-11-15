@@ -650,7 +650,7 @@ def test_attempt_preservation_is_valid_only_for_retry_wait():
 
 def test_stale_reconciliation_is_bounded_locked_and_registry_driven():
     rows = [{"retried_count": 1, "failed_count": 1, "ambiguous_count": 1, "canceled_count": 1}]
-    connection = _RecordingConnection([_Result(one=rows[0])])
+    connection = _RecordingConnection([_Result(one={"requeued_count": 2}), _Result(one=rows[0])])
     repository, _ = _repository(connection)
 
     assert repository.reconcile_stale_leases(now=NOW, limit=25) == (
@@ -661,20 +661,10 @@ def test_stale_reconciliation_is_bounded_locked_and_registry_driven():
             canceled_count=1,
         )
     )
-    sql = _normalized(connection.executed[0][0])
-    assert "for update skip locked" in sql
-    assert "state = 'running'" in sql
-    assert "lease_expires_at <=" in sql
-    assert "order by lease_expires_at, id" in sql
-    assert "limit" in sql
-    assert "recovery_policy = 'retry_safe'" in sql
-    assert "attempt_count < max_attempts" in sql
-    assert "'retry_wait'" in sql and "'ambiguous'" in sql
-    assert "cancel_requested_at is not null" in sql
-    assert "then 'canceled'" in sql
-    assert "recovery_policy = 'ambiguous_on_stale_lease'" in sql
-    assert "insert into ops.job_transitions" in sql
-    assert "as canceled_count" in sql
+    assert len(connection.executed) == 2
+    assert "ops.requeue_expired_cover_finalization(" in connection.executed[0][0]
+    assert "ops.reconcile_stale_job_leases(" in connection.executed[1][0]
+    assert connection.commits == 1
 
 
 def test_stale_reconciliation_rejects_unbounded_limits():
@@ -716,3 +706,56 @@ def test_repository_requires_a_database_url_before_connecting():
 
     with pytest.raises(RuntimeError, match="database url|database_url"):
         repository.claim(worker_id="worker-a", now=NOW, lease_seconds=300)
+
+@pytest.mark.parametrize("attempt", [1, 7])
+def test_finalization_retry_uses_guarded_function_without_attempt_exhaustion(attempt):
+    connection = _RecordingConnection([_Result(one={"moved": True})])
+    repository, _ = _repository(connection)
+    claimed = ClaimedJob(**_claim_row(kind="cover_remote_save", attempt=attempt, max_attempts=1))
+    outcome = JobTransitionResult(
+        JobState.RETRY_WAIT, "cover_finalization_pending",
+        scheduled_at=NOW + timedelta(seconds=30),
+    )
+
+    assert repository.finish(claimed, outcome, now=NOW) is True
+
+    assert len(connection.executed) == 1
+    sql, parameters = connection.executed[0]
+    assert "ops.retry_claimed_cover_finalization(" in sql
+    assert "update ops.jobs" not in sql.casefold()
+    values = tuple(parameters.values()) if isinstance(parameters, dict) else tuple(parameters)
+    for value in (claimed.job_id, attempt, claimed.worker_id, claimed.lease_token,
+                  outcome.scheduled_at, outcome.reason_code, NOW):
+        assert value in values
+
+
+def test_finalization_retry_rejects_lost_claim_instead_of_recording_completion():
+    from music_app.services.jobs.models import JobLeaseLost
+
+    connection = _RecordingConnection([_Result(one={"moved": False})])
+    repository, _ = _repository(connection)
+    claimed = ClaimedJob(**_claim_row(kind="cover_remote_save", max_attempts=1))
+
+    with pytest.raises(JobLeaseLost):
+        repository.finish(
+            claimed,
+            JobTransitionResult(JobState.RETRY_WAIT, "cover_finalization_pending",
+                                scheduled_at=NOW + timedelta(seconds=5)),
+            now=NOW,
+        )
+
+    assert len(connection.executed) == 1
+    assert "ops.retry_claimed_cover_finalization(" in connection.executed[0][0]
+
+
+@pytest.mark.parametrize("state", ["running", "retry_wait"])
+def test_cancel_finalization_required_maps_to_noop(state):
+    connection = _RecordingConnection([_Result(one={
+        "job_id": 41, "prior_state": state, "next_state": state,
+        "reason_code": "cover_finalization_required", "transition_recorded": False,
+    })])
+    repository, _ = _repository(connection)
+
+    result = repository.request_cancel(41, actor_account_id=7, now=NOW)
+
+    assert result.disposition is JobCancellationDisposition.NOOP

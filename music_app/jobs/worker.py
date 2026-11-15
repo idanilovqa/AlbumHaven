@@ -14,6 +14,8 @@ from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import (
     ClaimedJob,
     JobHeartbeatResult,
+    JobKind,
+    JobLeaseLost,
     JobState,
     JobTransitionResult,
 )
@@ -416,18 +418,21 @@ class Worker:
         if claimed is None:
             return False
 
-        decision = self._authorize(claimed)
-        if not decision.allowed:
+        decision = (
+            None
+            if claimed.kind == JobKind.COVER_REMOTE_SAVE
+            else self._authorize(claimed)
+        )
+        if decision is not None and not decision.allowed:
             outcome = (
                 _authorization_unavailable_outcome(claimed, now=self._clock())
                 if decision.indeterminate
                 else JobTransitionResult(JobState.CANCELED, decision.reason_code)
             )
-            self._repository.finish(
-                claimed,
-                outcome,
-                now=self._clock(),
-            )
+            try:
+                self._repository.finish(claimed, outcome, now=self._clock())
+            except JobLeaseLost:
+                pass
             return True
 
         context = ExecutionContext(
@@ -456,6 +461,9 @@ class Worker:
                 outcome = handler(claimed, context)
                 if not isinstance(outcome, JobTransitionResult):
                     outcome = JobTransitionResult(JobState.FAILED, "handler_failed")
+            except JobLeaseLost:
+                context.mark_lease_lost()
+                outcome = None
             except Exception:
                 outcome = JobTransitionResult(JobState.FAILED, "handler_failed")
         finally:
@@ -466,9 +474,12 @@ class Worker:
                 claimed, now=self._clock()
             )
         try:
-            context.finish_if_active(
-                lambda: self._repository.finish(claimed, outcome, now=self._clock())
-            )
+            if outcome is not None:
+                context.finish_if_active(
+                    lambda: self._repository.finish(claimed, outcome, now=self._clock())
+                )
+        except JobLeaseLost:
+            context.mark_lease_lost()
         finally:
             with self._contexts_lock:
                 self._active_contexts.discard(context)

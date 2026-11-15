@@ -1600,3 +1600,69 @@ def test_blocking_finish_times_out_without_losing_active_context_or_closing():
     assert closed == [True]
     assert not runner.is_alive()
     assert not any(thread.is_alive() for thread in owned)
+
+@pytest.mark.parametrize("allowed", [False, True])
+def test_remote_save_defers_authorization_to_checkpoint_aware_handler(allowed):
+    claimed = claim(JobKind.COVER_REMOTE_SAVE.value)
+    repository = Repository([claimed])
+    authorization = Authorization(AuthorizationDecision(allowed, "capability_revoked"))
+    dispatched = []
+    handlers = JobHandlerRegistry()
+
+    def handle(received, context):
+        dispatched.append((received, context))
+        # A checkpoint-aware handler must see the claim even after capability loss.
+        return JobTransitionResult(JobState.SUCCEEDED, "cover_remote_save_completed")
+
+    handlers.register(JobKind.COVER_REMOTE_SAVE, handle)
+    assert worker(repository, authorization=authorization, handlers=handlers).run_once() is True
+
+    assert len(dispatched) == 1
+    assert dispatched[0][0] is claimed
+    assert repository.finishes[0][1].next_state is JobState.SUCCEEDED
+    assert authorization.claims == []
+
+
+def test_worker_lost_finalization_finish_does_not_attempt_second_transition():
+    from music_app.services.jobs.models import JobLeaseLost
+
+    claimed = claim(JobKind.COVER_REMOTE_SAVE.value)
+    repository = Repository([claimed])
+    finishes = []
+
+    def finish(received, outcome, *, now):
+        finishes.append((received, outcome, now))
+        raise JobLeaseLost(received.job_id)
+
+    repository.finish = finish
+    handlers = JobHandlerRegistry()
+    handlers.register(JobKind.COVER_REMOTE_SAVE, lambda *_: JobTransitionResult(
+        JobState.RETRY_WAIT, "cover_finalization_pending",
+        scheduled_at=NOW + timedelta(seconds=5)))
+
+    assert worker(repository, handlers=handlers).run_once() is True
+    assert len(finishes) == 1
+    assert finishes[0][0] is claimed
+    assert finishes[0][1].reason_code == "cover_finalization_pending"
+
+
+def test_worker_handler_lease_loss_skips_finish_and_releases_active_context():
+    from music_app.services.jobs.models import JobLeaseLost
+
+    claimed = claim(JobKind.COVER_REMOTE_SAVE.value)
+    repository = Repository([claimed])
+    contexts = []
+    handlers = JobHandlerRegistry()
+
+    def handle(received, context):
+        contexts.append(context)
+        raise JobLeaseLost(received.job_id)
+
+    handlers.register(JobKind.COVER_REMOTE_SAVE, handle)
+    running_worker = worker(repository, handlers=handlers)
+
+    assert running_worker.run_once() is True
+    assert repository.finishes == []
+    assert len(contexts) == 1
+    assert contexts[0].lease_active is False
+    assert running_worker._active_contexts == set()

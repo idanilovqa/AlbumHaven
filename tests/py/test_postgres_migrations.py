@@ -1683,6 +1683,30 @@ def test_0128_extends_durable_job_kind_without_weakening_existing_policies():
         assert f"'{existing}'" in sql
 
 
+def test_0249_job_recovery_constraint_matches_registered_policies():
+    from music_app.services.jobs.registry import JOB_POLICIES
+
+    definition = "add constraint jobs_kind_recovery_check check ("
+    for migration in reversed(sorted(MIGRATIONS_DIR.glob("*.sql"))):
+        sql = _normalized_sql(migration.read_text(encoding="utf-8"))
+        if definition in sql:
+            break
+    else:
+        pytest.fail("No migration defines jobs_kind_recovery_check")
+    constraint = sql.rsplit(definition, 1)[1].split(");", 1)[0]
+    policies = {}
+    for group in re.finditer(
+        r"kind\s+(?:in\s*\((?P<kinds>[^)]+)\)|=\s*'(?P<kind>[^']+)')"
+        r"\s+and\s+recovery_policy\s*=\s*'(?P<policy>[^']+)'",
+        constraint,
+    ):
+        kinds = re.findall(r"'([^']+)'", group["kinds"]) if group["kinds"] else [group["kind"]]
+        for kind in kinds:
+            assert kind not in policies
+            policies[kind] = group["policy"]
+    assert policies == {kind: policy.recovery_policy.value for kind, policy in JOB_POLICIES.items()}
+
+
 def test_0128_enqueue_matches_the_closed_projection_authorization_contract():
     sql = _normalized_sql(
         PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")

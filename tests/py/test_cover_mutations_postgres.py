@@ -251,8 +251,11 @@ def test_load_baseline_maps_coherent_authority_snapshot() -> None:
     assert baseline.cover_mutation_revision == 11
     assert baseline.selected_cover_revision == "cover-11"
     assert baseline.selected_cover_path == "covers/album.jpg"
-    sql, parameters = _call(connection, "library.cover_mutation_state")
-    assert "library.local_albums" in sql
+    sql, parameters = _call(connection, "library.load_cover_mutation_baseline")
+    assert "library.cover_mutation_state" not in sql
+    assert "library.libraries" not in sql
+    assert "library.local_albums" not in sql
+    assert "library.load_cover_mutation_baseline(%(library_id)s,%(album_id)s)" in "".join(sql.split())
     assert parameters == {"library_id": 7, "album_id": 91}
 
 

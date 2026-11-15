@@ -15,6 +15,8 @@ from .models import (
     JobCancellationDisposition,
     JobCancellationResult,
     JobHeartbeatResult,
+    JobKind,
+    JobLeaseLost,
     RecoveryPolicy,
     JobState,
     JobStatusSnapshot,
@@ -391,6 +393,12 @@ class PostgresJobRepository:
                 and not transition_recorded
             ):
                 disposition = JobCancellationDisposition.RUNNING_REQUESTED
+            elif reason_code == "cover_finalization_required" and (
+                prior_state in {state.value for state in JobState}
+                and next_state == prior_state
+                and not transition_recorded
+            ):
+                disposition = JobCancellationDisposition.NOOP
             elif reason_code == "terminal_noop" and (
                 prior_state in {"succeeded", "failed", "canceled", "ambiguous"}
                 and next_state == prior_state
@@ -428,6 +436,11 @@ class PostgresJobRepository:
         _require_reason_code(outcome.reason_code)
 
         is_retry = next_state is JobState.RETRY_WAIT
+        finalization_retry = (
+            claim.kind == JobKind.COVER_REMOTE_SAVE
+            and is_retry
+            and outcome.reason_code == "cover_finalization_pending"
+        )
         preserve_attempt = outcome.preserve_attempt
         if preserve_attempt and not is_retry:
             raise ValueError("attempt preservation requires a retry outcome")
@@ -440,10 +453,37 @@ class PostgresJobRepository:
             if outcome.scheduled_at is None:
                 raise ValueError("retry outcome requires scheduled_at")
             _require_aware_datetime("retry scheduled_at", outcome.scheduled_at)
-            if claim.attempt >= claim.max_attempts and not preserve_attempt:
+            if (
+                claim.attempt >= claim.max_attempts
+                and not preserve_attempt
+                and not finalization_retry
+            ):
                 raise ValueError("retry outcome exceeds the attempt limit")
         elif outcome.scheduled_at is not None:
             raise ValueError("terminal outcome cannot include retry scheduled_at")
+
+        if finalization_retry:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    select ops.retry_claimed_cover_finalization(
+                      %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s,
+                      %(scheduled_at)s, %(reason_code)s, %(now)s
+                    ) as moved
+                    """,
+                    {
+                        "job_id": claim.job_id,
+                        "attempt": claim.attempt,
+                        "worker_id": claim.worker_id,
+                        "lease_token": claim.lease_token,
+                        "scheduled_at": outcome.scheduled_at,
+                        "reason_code": outcome.reason_code,
+                        "now": now,
+                    },
+                ).fetchone()
+                if row is None or not row["moved"]:
+                    raise JobLeaseLost("durable job lease lost")
+                return True
 
         state_value = next_state.value
         completed_at = None if is_retry else now
@@ -537,79 +577,14 @@ class PostgresJobRepository:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise ValueError("stale lease limit must be between 1 and 1000")
         statement = """
-            with stale as (
-              select id, attempt_count, max_attempts, recovery_policy,
-                     cancel_requested_at,
-                     recovery_policy = 'retry_safe'
-                       and attempt_count < max_attempts as can_retry
-                from ops.jobs
-               where state = 'running'
-                 and lease_expires_at <= %(now)s
-               order by lease_expires_at, id
-               for update skip locked
-               limit %(limit)s
-            ), updated as (
-              update ops.jobs as jobs
-                 set state = case
-                       when stale.cancel_requested_at is not null
-                        and stale.recovery_policy = 'retry_safe' then 'canceled'
-                       when stale.recovery_policy = 'ambiguous_on_stale_lease' then 'ambiguous'
-                       when stale.can_retry then 'retry_wait'
-                       when stale.recovery_policy = 'retry_safe' then 'failed'
-                       else 'ambiguous'
-                     end,
-                     scheduled_at = case
-                       when stale.cancel_requested_at is not null
-                        and stale.recovery_policy = 'retry_safe' then jobs.scheduled_at
-                       when stale.can_retry then %(now)s
-                       else jobs.scheduled_at
-                     end,
-                     completed_at = case
-                       when stale.cancel_requested_at is not null
-                        and stale.recovery_policy = 'retry_safe' then %(now)s
-                       when stale.can_retry then null
-                       else %(now)s
-                     end,
-                     outcome_code = case
-                       when stale.cancel_requested_at is not null
-                        and stale.recovery_policy = 'retry_safe' then 'stale_lease_canceled'
-                       when stale.can_retry then 'stale_lease_retry'
-                       when stale.recovery_policy = 'retry_safe' then 'attempts_exhausted'
-                       else 'stale_lease_ambiguous'
-                     end,
-                     lease_owner = null,
-                     lease_token = null,
-                     lease_expires_at = null,
-                     heartbeat_at = null,
-                     updated_at = %(now)s
-                from stale
-               where jobs.id = stale.id
-               returning jobs.id as job_id, jobs.state as next_state,
-                         jobs.attempt_count, stale.recovery_policy,
-                         jobs.scheduled_at, jobs.outcome_code
-            ), transitioned as (
-              insert into ops.job_transitions (
-                job_id, prior_state, next_state, attempt_count, reason_code,
-                retry_decision, next_due_at, transitioned_at
-              )
-              select job_id, 'running', next_state, attempt_count, outcome_code,
-                     case when next_state = 'retry_wait' then 'scheduled'
-                          when next_state = 'failed'
-                           and recovery_policy = 'retry_safe' then 'exhausted'
-                          else 'none' end,
-                     case when next_state = 'retry_wait' then scheduled_at else null end,
-                     %(now)s
-                from updated
-              returning job_id, next_state
-            )
-            select
-              count(*) filter (where next_state = 'retry_wait')::bigint as retried_count,
-              count(*) filter (where next_state = 'failed')::bigint as failed_count,
-              count(*) filter (where next_state = 'ambiguous')::bigint as ambiguous_count,
-              count(*) filter (where next_state = 'canceled')::bigint as canceled_count
-              from transitioned
+            select retried_count, failed_count, ambiguous_count, canceled_count
+              from ops.reconcile_stale_job_leases(%(now)s, %(limit)s)
         """
         with self._connect() as connection:
+            connection.execute(
+                "select ops.requeue_expired_cover_finalization(%(now)s)",
+                {"now": now},
+            )
             row = connection.execute(
                 statement, {"now": now, "limit": limit}
             ).fetchone()

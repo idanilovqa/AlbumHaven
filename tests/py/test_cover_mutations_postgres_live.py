@@ -123,9 +123,11 @@ def _seed_scope(
     with isolatedPostgres._connect(setup_url) as connection:
         account_id = int(
             connection.execute(
-                "select account_id from app.bootstrap_owners "
-                "where owner_key = 'local-bootstrap-owner'"
-            ).fetchone()["account_id"]
+                "insert into app.accounts(display_name,username_display,username_normalized,"
+                "contact_email,contact_email_normalized,account_kind,is_active) "
+                "values(%s,%s,%s,%s,%s,'managed',true) returning id",
+                (token, token, token, f"{token}@example.invalid", f"{token}@example.invalid"),
+            ).fetchone()["id"]
         )
         library_id = int(
             connection.execute(
@@ -212,6 +214,12 @@ def _cover_mutation_database_urls() -> tuple[str, str, str, str]:
     try:
         _drop_schemas(setup_url)
         isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            assert connection.execute(
+                "select count(*) as count from library.libraries library "
+                "join app.bootstrap_owners owner on owner.account_id=library.owner_account_id "
+                "where owner.owner_key='local-bootstrap-owner' and library.library_kind='local'",
+            ).fetchone()["count"] == 1
         yield setup_url, app_url, worker_url, readonly_url
     finally:
         _drop_schemas(setup_url)

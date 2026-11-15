@@ -11,7 +11,8 @@ from music_app.services.cover_provider_deadline import (
     cover_lookup_provider_deadline_at,
 )
 from music_app.services.jobs.authorization import AuthorizationDecision
-from music_app.services.jobs.models import ClaimedJob, JobKind, JobState, JobTransitionResult
+from music_app.services.jobs.models import ClaimedJob, JobKind, JobLeaseLost, JobState, JobTransitionResult
+from music_app.services.cover_mutation_coordinator import CoverMutationOutcome, CoverMutationStatus
 from music_app.jobs.safe_logging import DurablePipelineLogger
 
 
@@ -609,7 +610,7 @@ def _cover_remote_save_claim_valid(claim: ClaimedJob) -> bool:
         and claim.library_id is not None
         and claim.account_id is not None
         and claim.capability_key == "library.covers.write"
-        and claim.max_attempts == 1
+        and claim.max_attempts >= 1
         and claim.idempotency_key
         == f"cover-remote-save:{claim.library_id}:{task_key}:{generation}:{candidate_id}"
     )
@@ -638,7 +639,8 @@ def build_cover_remote_save_handler(
     cover_repository: Any,
     config: Mapping[str, object],
     logger: Any,
-    run_save: Callable[..., Mapping[str, object]],
+    run_save: Callable[..., CoverMutationOutcome | Mapping[str, object]],
+    finalizer: Any = None,
     clock: Callable[[], datetime] | None = None,
 ) -> Callable[[ClaimedJob, Any], JobTransitionResult]:
     """Execute one remote selection through private recovery checkpoints."""
@@ -649,6 +651,70 @@ def build_cover_remote_save_handler(
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
         if not _cover_remote_save_claim_valid(claim):
             return JobTransitionResult(JobState.CANCELED, "cover_remote_save_scope_invalid")
+
+        def finalize(outcome: CoverMutationOutcome) -> JobTransitionResult:
+            if outcome.checkpoint == "publication_completed":
+                return JobTransitionResult(JobState.SUCCEEDED, "cover_remote_save_completed")
+            revision = outcome.finalization_checkpoint_revision
+            checkpoint_id = outcome.finalization_checkpoint_id
+            try:
+                if checkpoint_id is None or revision is None:
+                    raise RuntimeError("committed cover lacks finalization evidence")
+                if outcome.checkpoint == "authority_committed":
+                    runtime_values = dict(
+                        library_id=outcome.library_id,
+                        local_album_id=outcome.local_album_id,
+                        cover_mutation_revision=outcome.cover_mutation_revision,
+                        selected_cover_revision=outcome.selected_cover_revision,
+                    )
+                    if finalizer is None:
+                        cover_repository.publish_runtime_if_revision(claim=claim, **runtime_values)
+                    else:
+                        finalizer.publish_runtime_if_revision(**runtime_values)
+                    revision = cover_repository.advance_finalization(
+                        claim=claim, checkpoint_id=checkpoint_id,
+                        expected_checkpoint_revision=revision,
+                        checkpoint="runtime_published", observed_at=now(),
+                    )
+                    if revision is None:
+                        raise JobLeaseLost(claim.job_id)
+                elif outcome.checkpoint != "runtime_published":
+                    raise RuntimeError("committed cover checkpoint is invalid")
+                task_values = dict(
+                    task_id=outcome.task_id,
+                    cover_mutation_revision=outcome.cover_mutation_revision,
+                    terminal_state="completed",
+                )
+                if finalizer is None:
+                    cover_repository.publish_task_if_revision(claim=claim, **task_values)
+                else:
+                    finalizer.publish_task_if_revision(**task_values)
+                revision = cover_repository.advance_finalization(
+                    claim=claim, checkpoint_id=checkpoint_id,
+                    expected_checkpoint_revision=revision,
+                    checkpoint="publication_completed", observed_at=now(),
+                )
+                if revision is None:
+                    raise JobLeaseLost(claim.job_id)
+            except JobLeaseLost:
+                raise
+            except Exception:
+                durable_logger.warning('{"action":"cover_finalization_retry"}')
+                return JobTransitionResult(
+                    JobState.RETRY_WAIT, "cover_finalization_pending",
+                    scheduled_at=now() + timedelta(seconds=min(300, 5 * max(1, claim.attempt))),
+                )
+            return JobTransitionResult(JobState.SUCCEEDED, "cover_remote_save_completed")
+
+        try:
+            outcome = cover_repository.load_claimed_finalization(claim=claim, observed_at=now())
+        except Exception:
+            return JobTransitionResult(
+                JobState.RETRY_WAIT, "cover_finalization_pending",
+                scheduled_at=now() + _STORAGE_RETRY_DELAY,
+            )
+        if outcome is not None:
+            return finalize(outcome)
         claim_values = _claim_parameters(claim, now())
         try:
             scope = cover_repository.load_claimed_remote_save(**claim_values)
@@ -656,8 +722,12 @@ def build_cover_remote_save_handler(
             return JobTransitionResult(JobState.FAILED, "cover_remote_save_scope_unavailable")
         if scope is None:
             return JobTransitionResult(JobState.CANCELED, "cover_remote_save_scope_stale")
+        legacy_completed = scope.checkpoint == "publication_completed"
+        if not legacy_completed and (claim.max_attempts != 1 or not context.reauthorize().allowed):
+            return JobTransitionResult(JobState.CANCELED, "cover_remote_save_authorization_denied")
         checkpoint_revision = int(scope.checkpoint_revision)
         fence_lost = False
+        publication_confirmed = False
 
         def should_cancel() -> bool:
             return bool(
@@ -718,30 +788,34 @@ def build_cover_remote_save_handler(
             return checkpoint_revision
 
         def publish(**options: object) -> bool:
-            nonlocal checkpoint_revision, fence_lost
+            nonlocal checkpoint_revision, fence_lost, publication_confirmed
             expected_checkpoint_revision = int(
                 options.pop("expected_checkpoint_revision", checkpoint_revision)
             )
-            if should_cancel():
+            if not legacy_completed and should_cancel():
                 return False
-            try:
-                published = cover_repository.publish_claimed_remote_save(
-                    **_refresh_claim_parameters(claim, now()),
-                    checkpoint_id=scope.checkpoint_id,
-                    task_id=int(claim.parameters["task_id"]),
-                    expected_checkpoint_revision=expected_checkpoint_revision,
-                    expected_task_revision=int(scope.task_revision),
-                    **options,
-                )
-            except Exception:
-                published = None
+            for _publication_attempt in range(2):
+                try:
+                    published = cover_repository.publish_claimed_remote_save(
+                        **_refresh_claim_parameters(claim, now()),
+                        checkpoint_id=scope.checkpoint_id,
+                        task_id=int(claim.parameters["task_id"]),
+                        expected_checkpoint_revision=expected_checkpoint_revision,
+                        expected_task_revision=int(scope.task_revision),
+                        **options,
+                    )
+                except Exception:
+                    published = None
+                if published is not None:
+                    break
             if published is None:
                 fence_lost = True
                 return False
             checkpoint_revision = int(published[0])
+            publication_confirmed = True
             return True
 
-        if should_cancel():
+        if not legacy_completed and should_cancel():
             return JobTransitionResult(JobState.CANCELED, "cover_remote_save_canceled")
         try:
             result = run_save(
@@ -762,11 +836,31 @@ def build_cover_remote_save_handler(
             )
         except Exception:
             result = {"status": "ambiguous" if checkpoint_revision > 0 else "failed"}
+        if isinstance(result, CoverMutationOutcome):
+            if result.status is CoverMutationStatus.COMMITTED:
+                return finalize(result)
+        if not publication_confirmed:
+            try:
+                committed = cover_repository.load_claimed_finalization(claim=claim, observed_at=now())
+            except Exception:
+                return JobTransitionResult(
+                    JobState.RETRY_WAIT, "cover_finalization_pending",
+                    scheduled_at=now() + _STORAGE_RETRY_DELAY,
+                )
+            if committed is not None:
+                return finalize(committed)
+        if isinstance(result, CoverMutationOutcome):
+            if result.status is CoverMutationStatus.CANCELED:
+                return JobTransitionResult(JobState.CANCELED, "cover_remote_save_canceled")
+            return JobTransitionResult(JobState.AMBIGUOUS, "cover_remote_save_ambiguous")
         status = str(result.get("status") or "failed")
         if fence_lost or status == "ambiguous":
             return JobTransitionResult(JobState.AMBIGUOUS, "cover_remote_save_ambiguous")
         if status == "succeeded":
-            return JobTransitionResult(JobState.SUCCEEDED, "cover_remote_save_completed")
+            return JobTransitionResult(
+                JobState.SUCCEEDED if publication_confirmed else JobState.AMBIGUOUS,
+                "cover_remote_save_completed" if publication_confirmed else "cover_remote_save_ambiguous",
+            )
         if status == "canceled":
             return JobTransitionResult(JobState.CANCELED, "cover_remote_save_canceled")
         return JobTransitionResult(JobState.FAILED, "cover_remote_save_failed")

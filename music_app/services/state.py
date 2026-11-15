@@ -410,12 +410,19 @@ def sync_durable_inventory_revision(
     current_revision = max(
         0, int(library_state.get("inventory_mutation_revision") or 0)
     )
+    current_cover_revision = max(
+        0, int(library_state.get("cover_mutation_revision") or 0)
+    )
+    durable_cover_revision = current_cover_revision
     try:
         adapter = select_scan_cache_adapter(config)
         load_publication = getattr(adapter, "load_inventory_publication", None)
         if callable(load_publication):
             publication = load_publication()
             durable_revision = max(0, int(publication.get("inventory_mutation_revision") or 0))
+            durable_cover_revision = max(
+                current_cover_revision, int(publication.get("cover_mutation_revision") or 0)
+            )
         else:
             load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
             if not callable(load_revision):
@@ -423,16 +430,17 @@ def sync_durable_inventory_revision(
             durable_revision = max(0, int(load_revision() or 0))
     except Exception:
         return current_revision
-    if durable_revision <= current_revision:
+    if durable_revision <= current_revision and durable_cover_revision <= current_cover_revision:
         return current_revision
     invalidate_targeted_library_projections(
         library_state,
         config,
-        revision=durable_revision,
+        revision=max(current_revision, durable_revision),
         affected_album_keys=(),
     )
+    library_state["cover_mutation_revision"] = durable_cover_revision
     library_state["relation_projection_ready"] = False
-    return durable_revision
+    return max(current_revision, durable_revision)
 
 
 def _bounded_file_error_history_recorder(

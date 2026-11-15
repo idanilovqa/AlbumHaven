@@ -801,6 +801,9 @@ def test_remote_cover_save_handler_uses_claimed_scope_and_checkpoint_callbacks()
             self.persisted = []
             self.published = []
 
+        def load_claimed_finalization(self, **_kwargs):
+            return None
+
         def load_claimed_remote_save(self, **_kwargs):
             return scope
 
@@ -846,3 +849,451 @@ def test_remote_cover_save_handler_uses_claimed_scope_and_checkpoint_callbacks()
     assert repository.checkpoints[0]["next_checkpoint"] == "download_started"
     assert repository.persisted[0]["checkpoint_id"] == scope.checkpoint_id
     assert repository.published[0]["expected_task_revision"] == scope.task_revision
+
+class _FinalizationRepository:
+    def __init__(self, checkpoint):
+        from music_app.services.cover_mutation_coordinator import CoverMutationOutcome, CoverMutationStatus
+
+        self.scope = CoverMutationOutcome(
+            status=CoverMutationStatus.COMMITTED, checkpoint=checkpoint,
+            finalization_checkpoint_id=61, finalization_checkpoint_revision=4,
+            library_id=9, local_album_id=101, task_id=31,
+            cover_mutation_revision=12, selected_cover_revision="selected-revision",
+        )
+        self.loads = []
+        self.advances = []
+
+    def load_claimed_finalization(self, **values):
+        self.loads.append(values)
+        return self.scope
+
+    def load_claimed_remote_save(self, **_values):
+        return SimpleNamespace(checkpoint_id=61, checkpoint="accepted",
+                               checkpoint_revision=0, task_revision=4)
+
+    def advance_finalization(self, **values):
+        self.advances.append(values)
+        return values["expected_checkpoint_revision"] + 1
+
+
+class _Finalizer:
+    def __init__(self, failure=None):
+        self.failure = failure
+        self.calls = []
+
+    def publish_runtime_if_revision(self, **values):
+        self.calls.append(("runtime", values))
+        if self.failure == "runtime":
+            raise RuntimeError("runtime publication unavailable")
+
+    def publish_task_if_revision(self, **values):
+        self.calls.append(("task", values))
+        if self.failure == "task":
+            raise RuntimeError("task publication unavailable")
+
+
+def _finalization_handler(repository, finalizer, provider_calls):
+    from music_app.jobs.cover_handlers import build_cover_remote_save_handler
+
+    def run_save(**values):
+        provider_calls.append(values)
+        return {"status": "succeeded"}
+
+    values = dict(cover_repository=repository, config={},
+                  logger=logging.getLogger("test.cover.finalization"),
+                  run_save=run_save, clock=lambda: NOW, finalizer=finalizer)
+    return build_cover_remote_save_handler(**values)
+
+
+def _remote_save_claim(**overrides):
+    values = dict(
+        kind="cover_remote_save", capability_key="library.covers.write",
+        parameters={"task_id": 31,
+                    "candidate_generation": "11111111-1111-4111-8111-111111111111",
+                    "candidate_id": "candidate-1"},
+        idempotency_key="cover-remote-save:9:lookup-abc:11111111-1111-4111-8111-111111111111:candidate-1",
+        max_attempts=1,
+    )
+    values.update(overrides)
+    return _claim(**values)
+
+
+@pytest.mark.parametrize("checkpoint,expected_publications,expected_edges", [
+    ("authority_committed", ["runtime", "task"], ["runtime_published", "publication_completed"]),
+    ("runtime_published", ["task"], ["publication_completed"]),
+    ("publication_completed", [], []),
+])
+@pytest.mark.parametrize("canceled,authorized", [(False, True), (True, True), (False, False)])
+def test_remote_save_reclaims_finalization_without_provider_replay(
+    checkpoint, expected_publications, expected_edges, canceled, authorized,
+):
+    repository = _FinalizationRepository(checkpoint)
+    finalizer = _Finalizer()
+    provider_calls = []
+    context = _Context()
+    context.cancel_requested = canceled
+    context.allowed = authorized
+    claimed = _remote_save_claim()
+
+    result = _finalization_handler(repository, finalizer, provider_calls)(claimed, context)
+
+    assert result.next_state is JobState.SUCCEEDED
+    assert provider_calls == []
+    assert repository.loads == [{"claim": claimed, "observed_at": NOW}]
+    assert [name for name, _ in finalizer.calls] == expected_publications
+    assert [edge["checkpoint"] for edge in repository.advances] == expected_edges
+    assert [edge["expected_checkpoint_revision"] for edge in repository.advances] == list(
+        range(4, 4 + len(expected_edges)))
+    assert all(edge["claim"] is claimed and edge["checkpoint_id"] == 61
+               for edge in repository.advances)
+
+
+@pytest.mark.parametrize("failure,expected_edges", [
+    ("runtime", []), ("task", ["runtime_published"]),
+])
+@pytest.mark.parametrize("attempt", [1, 8])
+def test_remote_save_publication_failure_retries_original_claim_after_attempt_limit(
+    failure, expected_edges, attempt,
+):
+    repository = _FinalizationRepository("authority_committed")
+    finalizer = _Finalizer(failure)
+    provider_calls = []
+
+    result = _finalization_handler(repository, finalizer, provider_calls)(
+        _remote_save_claim(attempt=attempt), _Context())
+
+    assert result.next_state is JobState.RETRY_WAIT
+    assert result.reason_code == "cover_finalization_pending"
+    assert result.scheduled_at > NOW
+    assert provider_calls == []
+    assert [edge["checkpoint"] for edge in repository.advances] == expected_edges
+
+@pytest.mark.parametrize("failed_edge", ["runtime_published", "publication_completed"])
+def test_remote_save_lost_checkpoint_ack_reloads_persisted_successor_without_replay(failed_edge):
+    from dataclasses import replace
+
+    repository = _FinalizationRepository("authority_committed")
+    finalizer = _Finalizer()
+    provider_calls = []
+    lost_ack = []
+
+    def advance(**values):
+        repository.advances.append(values)
+        revision = values["expected_checkpoint_revision"] + 1
+        repository.scope = replace(repository.scope, checkpoint=values["checkpoint"],
+                                   finalization_checkpoint_revision=revision)
+        if values["checkpoint"] == failed_edge and not lost_ack:
+            lost_ack.append(True)
+            raise RuntimeError("checkpoint acknowledgement lost")
+        return revision
+
+    repository.advance_finalization = advance
+    handler = _finalization_handler(repository, finalizer, provider_calls)
+    first = handler(_remote_save_claim(), _Context())
+    assert first.next_state is JobState.RETRY_WAIT
+    assert first.reason_code == "cover_finalization_pending"
+    assert repository.scope.checkpoint == failed_edge
+
+    second = handler(_remote_save_claim(attempt=2), _Context())
+
+    assert second.next_state is JobState.SUCCEEDED
+    assert provider_calls == []
+    assert [name for name, _ in finalizer.calls] == ["runtime", "task"]
+    assert [edge["checkpoint"] for edge in repository.advances] == [
+        "runtime_published", "publication_completed"]
+    assert [edge["expected_checkpoint_revision"] for edge in repository.advances] == [4, 5]
+
+
+def test_remote_save_pre_authority_denial_prevents_provider_work():
+    repository = _FinalizationRepository("accepted")
+    repository.load_claimed_finalization = lambda **_values: None
+    context = _Context()
+    context.allowed = False
+    provider_calls = []
+
+    result = _finalization_handler(repository, _Finalizer(), provider_calls)(
+        _remote_save_claim(), context)
+
+    assert result.next_state is JobState.CANCELED
+    assert provider_calls == []
+    assert repository.advances == []
+
+
+def test_remote_save_finalization_reclaim_accepts_extended_attempt_budget():
+    repository = _FinalizationRepository("publication_completed")
+    provider_calls = []
+    result = _finalization_handler(repository, _Finalizer(), provider_calls)(
+        _remote_save_claim(attempt=2, max_attempts=2), _Context())
+    assert result.next_state is JobState.SUCCEEDED
+    assert provider_calls == []
+
+
+@pytest.mark.parametrize("boundary,commit_state,expected", [
+    ("before_artifact", "not_attempted", JobState.CANCELED),
+    ("after_artifact", "not_attempted", JobState.CANCELED),
+    ("during_commit", "confirmed_absent", JobState.CANCELED),
+    ("during_commit", "confirmed_present", JobState.RETRY_WAIT),
+    ("during_commit", "indeterminate", JobState.AMBIGUOUS),
+    ("after_commit", "confirmed_present", JobState.RETRY_WAIT),
+    ("during_runtime_finalization", "confirmed_present", JobState.RETRY_WAIT),
+    ("during_task_finalization", "confirmed_present", JobState.RETRY_WAIT),
+    ("publication_completed", "confirmed_present", JobState.SUCCEEDED),
+])
+def test_remote_save_state_matches_durable_boundary(boundary, commit_state, expected):
+    from dataclasses import replace
+    from music_app.jobs.cover_handlers import build_cover_remote_save_handler
+    from music_app.services.cover_mutation_coordinator import CoverMutationOutcome, CoverMutationStatus
+
+    repository = _FinalizationRepository("authority_committed")
+    committed = repository.scope
+    repository.scope = None
+    context = _Context()
+    calls = []
+    finalizer = _Finalizer("task" if boundary == "during_task_finalization" else "runtime")
+
+    def run_save(**values):
+        calls.append(boundary)
+        context.cancel_requested = True
+        if commit_state in {"not_attempted", "confirmed_absent"}:
+            assert values["should_cancel"]() is True
+            return CoverMutationOutcome(status=CoverMutationStatus.CANCELED)
+        if commit_state == "indeterminate":
+            return CoverMutationOutcome(status=CoverMutationStatus.AMBIGUOUS)
+        repository.scope = committed
+        if boundary in {"during_commit", "after_commit"}:
+            raise RuntimeError("interrupted after authority commit")
+        if boundary == "publication_completed":
+            repository.scope = replace(committed, checkpoint="publication_completed")
+        return repository.scope
+
+    result = build_cover_remote_save_handler(
+        cover_repository=repository, config={}, finalizer=finalizer,
+        logger=logging.getLogger("test.cover.boundary"), run_save=run_save,
+        clock=lambda: NOW,
+    )(_remote_save_claim(), context)
+
+    assert result.next_state is expected
+    assert calls == [boundary]
+    if expected is JobState.RETRY_WAIT:
+        assert result.reason_code == "cover_finalization_pending"
+        assert result.scheduled_at > NOW
+    if commit_state != "confirmed_present":
+        assert repository.advances == []
+        assert finalizer.calls == []
+    if boundary == "publication_completed":
+        assert repository.advances == []
+        assert finalizer.calls == []
+
+
+def test_remote_save_same_claim_typed_commit_finalizes_original_identity():
+    from music_app.jobs.cover_handlers import build_cover_remote_save_handler
+
+    repository = _FinalizationRepository("authority_committed")
+    committed = repository.scope
+    repository.scope = None
+    finalizer = _Finalizer()
+    calls = []
+    claim = _remote_save_claim()
+
+    def run_save(**values):
+        calls.append(values)
+        repository.scope = committed
+        return committed
+
+    result = build_cover_remote_save_handler(
+        cover_repository=repository, config={}, finalizer=finalizer,
+        logger=logging.getLogger("test.cover.same-claim"), run_save=run_save,
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert result.next_state is JobState.SUCCEEDED
+    assert len(calls) == 1
+    assert (calls[0]["job_id"], calls[0]["task_id"]) == (claim.job_id, 31)
+    assert finalizer.calls == [
+        ("runtime", {"library_id": 9, "local_album_id": 101,
+                     "cover_mutation_revision": 12, "selected_cover_revision": "selected-revision"}),
+        ("task", {"task_id": 31, "cover_mutation_revision": 12, "terminal_state": "completed"}),
+    ]
+    assert [edge["checkpoint"] for edge in repository.advances] == [
+        "runtime_published", "publication_completed"]
+    assert all(edge["claim"] is claim for edge in repository.advances)
+
+
+@pytest.mark.parametrize("interrupted_edge", ["runtime_published", "publication_completed"])
+def test_remote_save_crash_before_checkpoint_replays_same_publication_identity(interrupted_edge):
+    from dataclasses import replace
+
+    repository = _FinalizationRepository("authority_committed")
+    finalizer = _Finalizer()
+    interrupted = []
+    provider_calls = []
+
+    def advance(**values):
+        repository.advances.append(values)
+        if values["checkpoint"] == interrupted_edge and not interrupted:
+            interrupted.append(True)
+            raise RuntimeError("crash before checkpoint write")
+        revision = values["expected_checkpoint_revision"] + 1
+        repository.scope = replace(repository.scope, checkpoint=values["checkpoint"],
+                                   finalization_checkpoint_revision=revision)
+        return revision
+
+    repository.advance_finalization = advance
+    handler = _finalization_handler(repository, finalizer, provider_calls)
+    first = handler(_remote_save_claim(), _Context())
+    assert first.next_state is JobState.RETRY_WAIT
+    assert repository.scope.checkpoint == (
+        "authority_committed" if interrupted_edge == "runtime_published" else "runtime_published")
+
+    second = handler(_remote_save_claim(attempt=2, max_attempts=2), _Context())
+
+    assert second.next_state is JobState.SUCCEEDED
+    assert provider_calls == []
+    assert repository.scope.checkpoint == "publication_completed"
+    assert repository.scope.finalization_checkpoint_revision == 6
+    interrupted_publication = "runtime" if interrupted_edge == "runtime_published" else "task"
+    replayed = [values for name, values in finalizer.calls if name == interrupted_publication]
+    assert len(replayed) == 2
+    assert replayed[0] == replayed[1]
+    other_publications = [name for name, _ in finalizer.calls if name != interrupted_publication]
+    assert len(other_publications) == 1
+
+
+class _LegacyRemoteSaveRepository:
+    def __init__(self, claimed, *, checkpoint="promotion_completed", acknowledgements=("ack",), scope_rejected=False):
+        from uuid import UUID
+        from music_app.services.cover_jobs_postgres import ClaimedCoverRemoteSaveScope
+
+        self.claimed = claimed
+        self.scope = ClaimedCoverRemoteSaveScope(
+            checkpoint_id=61, checkpoint=checkpoint, checkpoint_revision=4, task_revision=7,
+            candidate_generation=UUID(claimed.parameters["candidate_generation"]),
+            candidate_id=claimed.parameters["candidate_id"],
+            selected_candidate={"id": "candidate-1", "url": "https://covers.invalid/legacy.jpg"},
+            library_root_path="C:/Music/Artist/Album",
+            track_paths=("C:/Music/Artist/Album/01.flac",),
+            selected_cover_path="C:/Music/Artist/Album/cover.jpg",
+        )
+        self.scope_rejected = scope_rejected
+        self.acknowledgements = list(acknowledgements)
+        self.loads = []
+        self.published = []
+        self.persisted_publication = (4, 7) if checkpoint == "publication_completed" else None
+
+    def load_claimed_finalization(self, **values):
+        assert values == {"claim": self.claimed, "observed_at": NOW}
+        return None
+
+    def load_claimed_remote_save(self, **values):
+        self.loads.append(values)
+        assert values == {
+            "task_key": self.claimed.subject_ref, "task_id": 31, "library_id": 9,
+            "job_id": self.claimed.job_id, "attempt": self.claimed.attempt,
+            "worker_id": self.claimed.worker_id, "lease_token": self.claimed.lease_token,
+            "now": NOW,
+        }
+        return None if self.scope_rejected else self.scope
+
+    def publish_claimed_remote_save(self, **values):
+        self.published.append(values)
+        assert values == {
+            "library_id": 9, "job_id": self.claimed.job_id, "attempt": self.claimed.attempt,
+            "worker_id": self.claimed.worker_id, "lease_token": self.claimed.lease_token,
+            "now": NOW, "checkpoint_id": 61, "task_id": 31,
+            "expected_checkpoint_revision": 4, "expected_task_revision": 7,
+            "selected_cover_path": self.scope.selected_cover_path, "linked_remote": False,
+        }
+        acknowledgement = self.acknowledgements.pop(0)
+        if acknowledgement == "rejected":
+            return None
+        if self.persisted_publication is None:
+            self.persisted_publication = (5, 8)
+        if acknowledgement == "lost":
+            raise RuntimeError("legacy publication acknowledgement lost")
+        return self.persisted_publication
+
+
+def _legacy_remote_handler(repository, monkeypatch):
+    from music_app.jobs.cover_handlers import build_cover_remote_save_handler
+    from music_app.services import cover_lookup_runtime
+
+    def reject_repeated_work(*_args, **_kwargs):
+        pytest.fail("legacy publication must reuse its persisted selection")
+
+    for name in (
+        "fetch_remote_cover_bytes", "prepare_remote_cover_bytes_for_authoritative_write",
+        "decode_image_bytes", "prepare_cover_reservation",
+        "begin_prepared_remote_cover_promotion", "execute_cover_mutation_for_config",
+    ):
+        monkeypatch.setattr(cover_lookup_runtime, name, reject_repeated_work)
+    return build_cover_remote_save_handler(
+        cover_repository=repository, config={},
+        logger=logging.getLogger("test.cover.legacy-publication"),
+        run_save=cover_lookup_runtime.run_claimed_cover_remote_save,
+        clock=lambda: NOW,
+    )
+
+
+@pytest.mark.parametrize("acknowledgements,expected", [
+    (("ack",), JobState.SUCCEEDED),
+    (("lost", "ack"), JobState.SUCCEEDED),
+    (("lost", "lost"), JobState.AMBIGUOUS),
+    (("rejected", "rejected"), JobState.AMBIGUOUS),
+], ids=["first-ack", "lost-ack-replayed", "both-acks-lost", "publication-fence-rejected"])
+def test_legacy_remote_publication_has_bounded_ack_replay(acknowledgements, expected, monkeypatch):
+    claimed = _remote_save_claim()
+    repository = _LegacyRemoteSaveRepository(claimed, acknowledgements=acknowledgements)
+
+    result = _legacy_remote_handler(repository, monkeypatch)(claimed, _Context())
+
+    assert result.next_state is expected
+    assert len(repository.loads) == 1
+    assert len(repository.published) == len(acknowledgements)
+    assert len(repository.published) <= 2
+    assert repository.acknowledgements == []
+    if acknowledgements == ("rejected", "rejected"):
+        assert repository.persisted_publication is None
+    if len(repository.published) == 2:
+        assert repository.published[0] == repository.published[1]
+    assert repository.scope.authority_cover_mutation_revision is None
+    assert repository.scope.committed_cover_revision is None
+    if expected is JobState.AMBIGUOUS:
+        assert result.reason_code == "cover_remote_save_ambiguous"
+    else:
+        assert result.reason_code == "cover_remote_save_completed"
+        assert repository.persisted_publication == (5, 8)
+
+
+def test_legacy_completed_reclaim_confirms_existing_proof_after_cancellation_and_authorization_loss(monkeypatch):
+    claimed = _remote_save_claim(attempt=2, max_attempts=2)
+    repository = _LegacyRemoteSaveRepository(claimed, checkpoint="publication_completed")
+    context = _Context()
+    context.cancel_requested = True
+    context.allowed = False
+
+    result = _legacy_remote_handler(repository, monkeypatch)(claimed, context)
+
+    assert result.next_state is JobState.SUCCEEDED
+    assert len(repository.loads) == 1
+    assert len(repository.published) == 1
+    assert repository.persisted_publication == (4, 7)
+    assert repository.scope.authority_cover_mutation_revision is None
+    assert repository.scope.committed_cover_revision is None
+
+
+def test_legacy_completed_reclaim_cannot_bypass_rejected_claim_scope(monkeypatch):
+    claimed = _remote_save_claim(attempt=2, max_attempts=2)
+    repository = _LegacyRemoteSaveRepository(
+        claimed, checkpoint="publication_completed", scope_rejected=True,
+    )
+    context = _Context()
+    context.cancel_requested = True
+    context.allowed = False
+    context.lease_active = False
+
+    result = _legacy_remote_handler(repository, monkeypatch)(claimed, context)
+
+    assert result.next_state is JobState.CANCELED
+    assert result.reason_code == "cover_remote_save_scope_stale"
+    assert len(repository.loads) == 1
+    assert repository.published == []

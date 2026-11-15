@@ -1667,3 +1667,15 @@ def test_compensation_rejects_authority_mismatch_without_touching_bytes(
         )
 
     assert target.read_bytes() == b"replacement"
+
+
+def test_linked_remote_artifact_accepts_canonical_remote_digest_without_local_identity():
+    artifact = CoverArtifactIdentity(
+        private_path=None, sha256=_DIGEST, post_write_exists=False,
+        selected_cover_path=None, promoted_cover_revision="remote-revision",
+        prior_cover_existed=False, prior_cover_bytes=None,
+    )
+
+    assert artifact.sha256 == _DIGEST
+    assert artifact.private_path is None
+    assert artifact.selected_cover_path is None

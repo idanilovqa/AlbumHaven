@@ -6,6 +6,8 @@ from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timezone
 import inspect
+import hashlib
+import json
 from types import MethodType
 import os
 from pathlib import Path
@@ -46,7 +48,6 @@ from music_app.services.cover_provider_registry import (
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.cache import execute_cover_mutation_for_config
 from music_app.services.cover_mutation_coordinator import (
-    CommitOutcomeUnknown,
     CoverArtifactIdentity,
     CoverMutationOutcome,
     CoverMutationStatus,
@@ -355,10 +356,22 @@ def run_claimed_cover_remote_save(
     lease_token: str | None = None,
     task_id: int | None = None,
     checkpoint_revision: int | None = None,
-) -> dict[str, object]:
+) -> CoverMutationOutcome | dict[str, object]:
     """Execute one claimed remote selection with conservative crash recovery."""
 
     del logger
+    if scope.checkpoint in {"promotion_completed", "publication_completed"}:
+        if scope.checkpoint == "promotion_completed" and should_cancel():
+            return {"status": "canceled", "reason_code": "canceled_before_publication"}
+        if publish(
+            expected_checkpoint_revision=scope.checkpoint_revision,
+            selected_cover_path=scope.selected_cover_path,
+            linked_remote=scope.selected_cover_path is None,
+        ):
+            return {"status": "succeeded"}
+        return {"status": "ambiguous", "reason_code": "legacy_publication_uncertain"}
+    if scope.checkpoint != "accepted":
+        return {"status": "ambiguous", "reason_code": "pre_authority_recovery_required"}
     album_root = Path(scope.library_root_path)
     track_paths = {str(path) for path in scope.track_paths}
     try:
@@ -382,6 +395,9 @@ def run_claimed_cover_remote_save(
         "remote_cover_width": selected_image.width,
         "remote_cover_height": selected_image.height,
     }
+    remote_digest = hashlib.sha256(
+        json.dumps(remote_cover, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     mutation: dict[str, object] = {}
 
     def prepare(_request, _baseline):
@@ -420,10 +436,10 @@ def run_claimed_cover_remote_save(
         if selected_image.display_only:
             return CoverArtifactIdentity(
                 private_path=None,
-                sha256=None,
+                sha256=remote_digest,
                 post_write_exists=False,
                 selected_cover_path=None,
-                promoted_cover_revision=None,
+                promoted_cover_revision=remote_digest,
                 prior_cover_existed=False,
                 prior_cover_bytes=None,
             )
@@ -460,46 +476,6 @@ def run_claimed_cover_remote_save(
             raise RuntimeError("durable artifact checkpoint was lost")
         return revision
 
-    def commit_selection(request) -> CoverMutationOutcome:
-        revision = persist_selection(
-            expected_checkpoint_revision=request.checkpoint_revision,
-            selected_cover_path=request.selected_cover_path,
-            selected_cover_revision=request.promoted_cover_revision,
-            linked_remote=selected_image.display_only,
-            local_cover_width=request.local_cover_width,
-            local_cover_height=request.local_cover_height,
-            expected_library_id=request.identity.library_id,
-            expected_album_id=request.identity.local_album_id,
-            expected_inventory_revision=request.expected_inventory_revision,
-            expected_cover_mutation_revision=request.expected_cover_mutation_revision,
-            track_paths=request.track_paths,
-        )
-        promotion = mutation.get("promotion")
-        if promotion is not None:
-            complete_local_image_promotion(promotion)
-        if revision is None:
-            raise CommitOutcomeUnknown("claimed selection commit was not confirmed")
-        mutation["committed"] = True
-        revision = checkpoint("promotion_completed")
-        if revision is None:
-            mutation["failure"] = ("ambiguous", "promotion_checkpoint_lost")
-            raise CommitOutcomeUnknown("claimed promotion checkpoint was not confirmed")
-        return CoverMutationOutcome(
-            status=CoverMutationStatus.COMMITTED,
-            finalization_checkpoint_revision=revision,
-        )
-
-    def recover_selection(_request, _artifact) -> CoverMutationOutcome:
-        return CoverMutationOutcome(status=CoverMutationStatus.AMBIGUOUS)
-
-    def publish_committed(outcome, artifact) -> None:
-        if not publish(
-            expected_checkpoint_revision=outcome.finalization_checkpoint_revision,
-            selected_cover_path=artifact.selected_cover_path,
-            linked_remote=selected_image.display_only,
-        ):
-            raise RuntimeError("durable cover publication was not confirmed")
-
     def compensate_artifact(_artifact) -> None:
         promotion = mutation.get("promotion")
         if promotion is not None:
@@ -512,16 +488,14 @@ def run_claimed_cover_remote_save(
             track_paths=track_paths,
             album_root=album_root,
             selected_origin="user",
+            explicit_selection=True,
             clear_selection=False,
             remote_cover=remote_cover if selected_image.display_only else None,
             prepare=prepare,
             cleanup_prepared=lambda _prepared: None,
             write_artifact=write_artifact,
             prepare_commit=prepare_commit,
-            commit_selection=commit_selection,
-            recover_selection=recover_selection,
             compensate_artifact=compensate_artifact,
-            publish_committed=publish_committed,
             should_cancel=should_cancel,
             job_id=job_id,
             attempt=attempt,
@@ -534,27 +508,11 @@ def run_claimed_cover_remote_save(
         failure = mutation.get("failure")
         if isinstance(failure, tuple):
             return {"status": failure[0], "reason_code": failure[1]}
-        return {
-            "status": "ambiguous" if mutation.get("committed") else "failed",
-            "reason_code": (
-                "publication_uncertain" if mutation.get("committed") else "selection_commit_uncertain"
-            ),
-        }
-    if outcome.status is CoverMutationStatus.CANCELED:
-        return {
-            "status": "canceled",
-            "reason_code": (
-                "canceled_before_commit"
-                if mutation.get("promotion") is not None
-                else "canceled_before_promotion"
-            ),
-        }
-    if outcome.status is CoverMutationStatus.AMBIGUOUS:
-        failure = mutation.get("failure")
-        if isinstance(failure, tuple):
-            return {"status": failure[0], "reason_code": failure[1]}
-        return {"status": "ambiguous", "reason_code": "selection_commit_uncertain"}
-    return {"status": "succeeded"}
+        return {"status": "failed", "reason_code": "selection_commit_uncertain"}
+    promotion = mutation.get("promotion")
+    if outcome.status is CoverMutationStatus.COMMITTED and promotion is not None:
+        complete_local_image_promotion(promotion)
+    return outcome
 
 
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:

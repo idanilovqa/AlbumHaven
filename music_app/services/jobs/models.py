@@ -8,6 +8,10 @@ from enum import Enum
 from typing import Any, Mapping
 
 
+class JobLeaseLost(RuntimeError):
+    """The claim no longer owns a live durable-job lease."""
+
+
 class JobKind(str, Enum):
     FULL_SCAN = "full_scan"
     TARGETED_RECONCILIATION = "targeted_reconciliation"

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import inspect
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -16,6 +17,11 @@ import pytest
 
 from music_app.services import cover_lookup_runtime, cover_workflow
 from music_app.services import cover_lookup_tasks
+from music_app.services.cover_mutation_coordinator import (
+    CommitOutcomeUnknown,
+    CoverMutationOutcome,
+    CoverMutationStatus,
+)
 from music_app.services.cover_provider_candidates import SelectedRemoteImage
 from music_app.services.library_roots import save_library_root_settings
 from tests.py.runtime_testing import configure_test_app_paths
@@ -197,8 +203,15 @@ def test_remote_cover_writer_uses_shared_mutation_coordinator(writer, entrypoint
 
     assert "execute_cover_mutation_for_config(" in source, writer
     assert "run_serialized_cover_selection(" not in source, writer
-    for callback in ("prepare=", "write_artifact=", "publish_committed="):
+    for callback in ("prepare=", "write_artifact="):
         assert callback in source, writer
+    if writer == "durable_remote_save":
+        assert "prepare_commit=" in source
+        assert "commit_selection=" not in source
+        assert "recover_selection=" not in source
+        assert "publish_committed=" not in source
+    else:
+        assert "publish_committed=" in source, writer
 
 
 def _capture_task_update(
@@ -218,6 +231,7 @@ def _install_cover_mutation_repository(
     *,
     commit_error: Exception | None = None,
     on_commit=None,
+    recovery_result=None,
 ):
     from music_app.services import cache as cache_service
     from music_app.services import cover_mutation_coordinator
@@ -260,9 +274,19 @@ def _install_cover_mutation_repository(
                 status=CoverMutationStatus.COMMITTED,
                 cover_mutation_revision=1,
                 selected_cover_revision=request.promoted_cover_revision,
+                checkpoint="authority_committed" if request.job_id is not None else None,
+                library_id=identity.library_id,
+                local_album_id=identity.local_album_id,
+                task_id=request.task_id,
+                finalization_checkpoint_id=61 if request.job_id is not None else None,
+                finalization_checkpoint_revision=(
+                    request.checkpoint_revision + 1 if request.job_id is not None else None
+                ),
             )
 
         def recover_ambiguous(self, *, request):
+            if recovery_result is not None:
+                return recovery_result
             raise AssertionError(f"Unexpected ambiguous recovery: {request!r}")
 
     expected_identity = identity
@@ -4181,7 +4205,7 @@ def test_claimed_remote_cover_visual_comparison_precedes_mutation_locks(
     monkeypatch,
     tmp_path: Path,
 ):
-    _install_cover_mutation_repository(monkeypatch)
+    committed_requests = _install_cover_mutation_repository(monkeypatch)
     from music_app.services import cover_mutation_coordinator
 
     events = []
@@ -4233,6 +4257,7 @@ def test_claimed_remote_cover_visual_comparison_precedes_mutation_locks(
 
     result = cover_lookup_runtime.run_claimed_cover_remote_save(
         scope=SimpleNamespace(
+            checkpoint="accepted",
             library_root_path=str(album_root),
             track_paths=(str(track_path),),
             selected_candidate={
@@ -4256,7 +4281,12 @@ def test_claimed_remote_cover_visual_comparison_precedes_mutation_locks(
         checkpoint_revision=0,
     )
 
-    assert result == {"status": "succeeded"}
+    assert result.status is CoverMutationStatus.COMMITTED
+    assert result.checkpoint == "authority_committed"
+    assert result.finalization_checkpoint_id == 61
+    assert result.finalization_checkpoint_revision == 3
+    assert committed_requests[0].selected_cover_path == str(cover_path)
+    assert committed_requests[0].artifact_sha256 == hashlib.sha256(cover_path.read_bytes()).hexdigest()
     assert events.index("visual-compare") < events.index("advisory-acquire")
     assert events.index("visual-compare") < events.index("local-acquire")
     assert (album_root / "cover-existing-1.jpg").read_bytes() == concurrent_cover_bytes
@@ -4265,10 +4295,12 @@ def test_claimed_remote_cover_visual_comparison_precedes_mutation_locks(
 def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publication(
     config, logger, monkeypatch, tmp_path: Path
 ):
-    _install_cover_mutation_repository(monkeypatch)
+    events = []
+    committed_requests = _install_cover_mutation_repository(
+        monkeypatch, on_commit=lambda _request: events.append("commit")
+    )
     from music_app.services import cover_mutation_coordinator
 
-    events = []
     prepare_remote_cover = (
         cover_lookup_runtime.prepare_remote_cover_bytes_for_authoritative_write
     )
@@ -4287,6 +4319,7 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
     track_path.write_bytes(b"track")
     cover_path = album_root / "cover.jpg"
     scope = SimpleNamespace(
+        checkpoint="accepted",
         library_root_path=str(album_root),
         track_paths=(str(track_path),),
         selected_candidate={
@@ -4295,9 +4328,10 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
             "art_kind": "cover",
         },
     )
-    promotion = SimpleNamespace(
+    promotion = cover_workflow.LocalCoverPromotion(
         cover_path=cover_path,
-        promoted_cover_revision="revision-1",
+        promoted_cover_revision=hashlib.sha256(remote_image).hexdigest(),
+        reserve_artifact=None,
         prior_cover_existed=False,
         prior_cover_bytes=None,
     )
@@ -4316,11 +4350,12 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
         "serialize_cover_mutation",
         serialized,
     )
-    monkeypatch.setattr(
-        cover_lookup_runtime,
-        "begin_prepared_remote_cover_promotion",
-        lambda *_args, **_kwargs: promotion,
-    )
+
+    def promote(*_args, **_kwargs):
+        cover_path.write_bytes(remote_image)
+        return promotion
+
+    monkeypatch.setattr(cover_lookup_runtime, "begin_prepared_remote_cover_promotion", promote)
     completed = []
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -4336,27 +4371,14 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
         checkpoints.append((name, kwargs))
         return revision
 
-    persisted = []
-
-    def persist_selection(**kwargs):
-        nonlocal revision
-        revision += 1
-        events.append("commit")
-        persisted.append(kwargs)
-        return revision
-
-    published = []
-
     result = cover_lookup_runtime.run_claimed_cover_remote_save(
         scope=scope,
         config=config,
         logger=logger,
         should_cancel=lambda: False,
         checkpoint=checkpoint,
-        persist_selection=persist_selection,
-        publish=lambda **kwargs: (
-            events.append("publish"), published.append(kwargs)
-        )[-1] is None,
+        persist_selection=lambda **_kwargs: pytest.fail("modern save must use the shared commit owner"),
+        publish=lambda **_kwargs: pytest.fail("the durable handler owns publication"),
         library_id=1,
         job_id=10,
         attempt=1,
@@ -4366,30 +4388,43 @@ def test_claimed_remote_cover_save_checkpoints_local_promotion_before_publicatio
         checkpoint_revision=0,
     )
 
-    assert result == {"status": "succeeded"}
+    assert result.status is CoverMutationStatus.COMMITTED
+    assert result.checkpoint == "authority_committed"
+    assert result.finalization_checkpoint_id == 61
+    assert result.finalization_checkpoint_revision == 3
+    assert (result.library_id, result.local_album_id, result.task_id) == (1, 1, 20)
     assert [name for name, _kwargs in checkpoints] == [
         "download_started",
         "artifact_written",
-        "promotion_completed",
     ]
-    assert persisted[0]["selected_cover_path"] == str(cover_path)
-    assert persisted[0]["selected_cover_revision"] == "revision-1"
-    assert persisted[0]["linked_remote"] is False
+    assert len(committed_requests) == 1
+    request = committed_requests[0]
+    assert request.selected_cover_path == str(cover_path)
+    assert request.promoted_cover_revision == hashlib.sha256(remote_image).hexdigest()
+    assert request.remote_cover is None
+    assert request.artifact_sha256 == hashlib.sha256(remote_image).hexdigest()
+    assert request.checkpoint_revision == 2
+    assert (request.job_id, request.attempt, request.worker_id, request.lease_token, request.task_id) == (
+        10, 1, "worker-1", "lease-1", 20,
+    )
+    assert checkpoints[1][1] == {
+        "artifact_sha256": request.artifact_sha256,
+        "cover_revision": request.promoted_cover_revision,
+    }
+    assert cover_path.read_bytes() == remote_image
     assert completed == [promotion]
-    assert published[0]["linked_remote"] is False
     assert events == [
         "decode",
         "advisory-acquire",
         "local-acquire",
         "commit",
-        "publish",
     ]
 
 
 def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_checkpoint_is_lost(
     config, logger, monkeypatch, tmp_path: Path
 ):
-    _install_cover_mutation_repository(monkeypatch)
+    committed_requests = _install_cover_mutation_repository(monkeypatch)
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
@@ -4397,9 +4432,10 @@ def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_chec
     promoted_bytes = _jpeg_bytes((40, 120, 220))
     promoted_cover_path = album_root / "cover.jpg"
     promoted_cover_path.write_bytes(promoted_bytes)
-    promotion = SimpleNamespace(
+    promotion = cover_workflow.LocalCoverPromotion(
         cover_path=promoted_cover_path,
         promoted_cover_revision=hashlib.sha256(promoted_bytes).hexdigest(),
+        reserve_artifact=None,
         prior_cover_existed=False,
         prior_cover_bytes=None,
     )
@@ -4414,11 +4450,12 @@ def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_chec
         lambda *_args, **_kwargs: promotion,
     )
     rolled_back = []
-    monkeypatch.setattr(
-        cover_lookup_runtime,
-        "rollback_local_image_promotion",
-        lambda value: rolled_back.append(value),
-    )
+
+    def rollback(value):
+        rolled_back.append(value)
+        cover_workflow.rollback_local_image_promotion(value)
+
+    monkeypatch.setattr(cover_lookup_runtime, "rollback_local_image_promotion", rollback)
     calls = 0
 
     def checkpoint(_name, **_kwargs):
@@ -4428,6 +4465,7 @@ def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_chec
 
     result = cover_lookup_runtime.run_claimed_cover_remote_save(
         scope=SimpleNamespace(
+            checkpoint="accepted",
             library_root_path=str(album_root),
             track_paths=(str(track_path),),
             selected_candidate={
@@ -4445,20 +4483,26 @@ def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_chec
 
     assert result["status"] == "ambiguous"
     assert rolled_back == [promotion]
+    assert not promoted_cover_path.exists()
+    assert committed_requests == []
 
 
 def test_claimed_remote_cover_save_preserves_artifact_when_selection_commit_is_uncertain(
     config, logger, monkeypatch, tmp_path: Path
 ):
-    _install_cover_mutation_repository(monkeypatch)
+    committed_requests = _install_cover_mutation_repository(
+        monkeypatch, commit_error=CommitOutcomeUnknown("commit acknowledgement lost"),
+        recovery_result=CoverMutationOutcome(status=CoverMutationStatus.AMBIGUOUS),
+    )
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
     track_path.write_bytes(b"track")
     remote_image = _jpeg_bytes((40, 120, 220))
-    promotion = SimpleNamespace(
+    promotion = cover_workflow.LocalCoverPromotion(
         cover_path=album_root / "cover.jpg",
-        promoted_cover_revision="revision-1",
+        promoted_cover_revision=hashlib.sha256(remote_image).hexdigest(),
+        reserve_artifact=None,
         prior_cover_existed=False,
         prior_cover_bytes=None,
     )
@@ -4467,11 +4511,12 @@ def test_claimed_remote_cover_save_preserves_artifact_when_selection_commit_is_u
         "fetch_remote_cover_bytes",
         lambda *_args, **_kwargs: (remote_image, "image/jpeg"),
     )
-    monkeypatch.setattr(
-        cover_lookup_runtime,
-        "begin_prepared_remote_cover_promotion",
-        lambda *_args, **_kwargs: promotion,
-    )
+
+    def promote(*_args, **_kwargs):
+        promotion.cover_path.write_bytes(remote_image)
+        return promotion
+
+    monkeypatch.setattr(cover_lookup_runtime, "begin_prepared_remote_cover_promotion", promote)
     rolled_back = []
     monkeypatch.setattr(
         cover_lookup_runtime,
@@ -4481,6 +4526,7 @@ def test_claimed_remote_cover_save_preserves_artifact_when_selection_commit_is_u
 
     result = cover_lookup_runtime.run_claimed_cover_remote_save(
         scope=SimpleNamespace(
+            checkpoint="accepted",
             library_root_path=str(album_root),
             track_paths=(str(track_path),),
             selected_candidate={
@@ -4492,7 +4538,7 @@ def test_claimed_remote_cover_save_preserves_artifact_when_selection_commit_is_u
         logger=logger,
         should_cancel=lambda: False,
         checkpoint=lambda _name, **_kwargs: 1,
-        persist_selection=lambda **_kwargs: None,
+        persist_selection=lambda **_kwargs: pytest.fail("modern save must use the shared commit owner"),
         publish=lambda **_kwargs: pytest.fail("uncertain selection must not publish"),
         library_id=1,
         job_id=10,
@@ -4503,10 +4549,9 @@ def test_claimed_remote_cover_save_preserves_artifact_when_selection_commit_is_u
         checkpoint_revision=0,
     )
 
-    assert result == {
-        "status": "ambiguous",
-        "reason_code": "selection_commit_uncertain",
-    }
+    assert result.status is CoverMutationStatus.AMBIGUOUS
+    assert len(committed_requests) == 1
+    assert promotion.cover_path.read_bytes() == remote_image
     assert rolled_back == []
 
 
@@ -4525,7 +4570,7 @@ def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_wa
     lock_key = str(album_root.resolve(strict=False)).casefold()
     blocking_promotion = cover_workflow.begin_external_cover_write_promotion(album_root)
     lease_expired = Event()
-    result: list[dict[str, object]] = []
+    result: list[CoverMutationOutcome] = []
     errors: list[BaseException] = []
     replacement_attempts: list[Path] = []
     atomic_replace = cover_workflow._atomic_replace_file_bytes
@@ -4546,6 +4591,7 @@ def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_wa
             result.append(
                 cover_lookup_runtime.run_claimed_cover_remote_save(
                     scope=SimpleNamespace(
+                        checkpoint="accepted",
                         library_root_path=str(album_root),
                         track_paths=(str(track_path),),
                         selected_candidate={
@@ -4583,7 +4629,8 @@ def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_wa
 
     assert not worker.is_alive()
     assert errors == []
-    assert result == [{"status": "canceled", "reason_code": "canceled_before_promotion"}]
+    assert len(result) == 1
+    assert result[0].status is CoverMutationStatus.CANCELED
     assert replacement_attempts == []
     assert cover_path.read_bytes() == original_bytes
 
@@ -4591,7 +4638,7 @@ def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_wa
 def test_claimed_display_only_remote_cover_commits_link_without_fetch(
     config, logger, monkeypatch, tmp_path: Path
 ):
-    _install_cover_mutation_repository(monkeypatch)
+    committed_requests = _install_cover_mutation_repository(monkeypatch)
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)
     track_path = album_root / "01.flac"
@@ -4603,7 +4650,6 @@ def test_claimed_display_only_remote_cover_commits_link_without_fetch(
     )
     revision = 0
     checkpoints = []
-    persisted = []
 
     def next_revision(name=None, **_kwargs):
         nonlocal revision
@@ -4612,12 +4658,9 @@ def test_claimed_display_only_remote_cover_commits_link_without_fetch(
             checkpoints.append(name)
         return revision
 
-    def persist(**kwargs):
-        persisted.append(kwargs)
-        return next_revision()
-
     result = cover_lookup_runtime.run_claimed_cover_remote_save(
         scope=SimpleNamespace(
+            checkpoint="accepted",
             library_root_path=str(album_root),
             track_paths=(str(track_path),),
             selected_candidate={
@@ -4631,8 +4674,8 @@ def test_claimed_display_only_remote_cover_commits_link_without_fetch(
         logger=logger,
         should_cancel=lambda: False,
         checkpoint=next_revision,
-        persist_selection=persist,
-        publish=lambda **_kwargs: True,
+        persist_selection=lambda **_kwargs: pytest.fail("modern save must use the shared commit owner"),
+        publish=lambda **_kwargs: pytest.fail("the durable handler owns publication"),
         library_id=1,
         job_id=10,
         attempt=1,
@@ -4642,11 +4685,26 @@ def test_claimed_display_only_remote_cover_commits_link_without_fetch(
         checkpoint_revision=0,
     )
 
-    assert result == {"status": "succeeded"}
-    assert checkpoints == ["artifact_written", "promotion_completed"]
-    assert persisted[0]["linked_remote"] is True
-    assert persisted[0]["selected_cover_path"] is None
-    assert persisted[0]["selected_cover_revision"] is None
+    assert result.status is CoverMutationStatus.COMMITTED
+    assert result.checkpoint == "authority_committed"
+    assert result.finalization_checkpoint_id == 61
+    assert result.finalization_checkpoint_revision == 2
+    assert checkpoints == ["artifact_written"]
+    assert len(committed_requests) == 1
+    request = committed_requests[0]
+    assert request.selected_cover_path is None
+    assert request.remote_cover["remote_cover_url"] == "https://open.spotify.invalid/image"
+    digest = hashlib.sha256(json.dumps(
+        request.remote_cover, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    assert request.artifact_sha256 == digest
+    assert request.promoted_cover_revision == digest
+    assert request.checkpoint_revision == 1
+    assert (request.job_id, request.attempt, request.worker_id, request.lease_token, request.task_id) == (
+        10, 1, "worker-1", "lease-1", 20,
+    )
+    assert list(album_root.iterdir()) == [track_path]
+
 
 def test_progressive_service_candidates_accumulate_provider_stages(
     config,
@@ -5033,13 +5091,12 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
     )
 
     subsequent_selection_completed = Event()
-    selection_thread = Thread(
-        target=lambda: cover_workflow.run_serialized_cover_selection(
-            album_root,
-            subsequent_selection_completed.set,
-        ),
-        daemon=True,
-    )
+
+    def subsequent_selection():
+        with cover_workflow.local_cover_selection_lock(album_root):
+            subsequent_selection_completed.set()
+
+    selection_thread = Thread(target=subsequent_selection, daemon=True)
     selection_thread.start()
     lock_was_released = subsequent_selection_completed.wait(timeout=0.5)
 
@@ -5064,3 +5121,44 @@ def test_fallback_download_with_multiple_new_reserves_rolls_back_and_releases_al
     assert lock_was_released
     selection_thread.join(timeout=0.5)
     assert not selection_thread.is_alive()
+
+
+@pytest.mark.parametrize("checkpoint", ["promotion_completed", "publication_completed"])
+@pytest.mark.parametrize("selected_path", [None, "C:/Music/Artist/Album/cover.jpg"], ids=["linked", "local"])
+@pytest.mark.parametrize("publication_confirmed", [False, True], ids=["fence-rejected", "confirmed"])
+def test_legacy_claimed_runtime_only_replays_existing_publication(
+    checkpoint, selected_path, publication_confirmed, monkeypatch,
+):
+    def reject_repeated_work(*_args, **_kwargs):
+        pytest.fail("legacy publication must reuse its persisted selection")
+
+    for name in (
+        "fetch_remote_cover_bytes", "prepare_remote_cover_bytes_for_authoritative_write",
+        "decode_image_bytes", "prepare_cover_reservation",
+        "begin_prepared_remote_cover_promotion", "execute_cover_mutation_for_config",
+    ):
+        monkeypatch.setattr(cover_lookup_runtime, name, reject_repeated_work)
+    published = []
+
+    def publish(**values):
+        published.append(values)
+        return publication_confirmed
+
+    scope = SimpleNamespace(
+        checkpoint=checkpoint, checkpoint_revision=4, selected_cover_path=selected_path,
+    )
+    result = cover_lookup_runtime.run_claimed_cover_remote_save(
+        scope=scope, config={}, logger=SimpleNamespace(),
+        should_cancel=lambda: checkpoint == "publication_completed",
+        checkpoint=reject_repeated_work, persist_selection=reject_repeated_work,
+        publish=publish,
+    )
+
+    assert published == [{
+        "expected_checkpoint_revision": 4, "selected_cover_path": selected_path,
+        "linked_remote": selected_path is None,
+    }]
+    assert result == (
+        {"status": "succeeded"} if publication_confirmed
+        else {"status": "ambiguous", "reason_code": "legacy_publication_uncertain"}
+    )

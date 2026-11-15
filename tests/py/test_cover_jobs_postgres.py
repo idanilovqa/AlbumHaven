@@ -677,3 +677,241 @@ def test_begin_claimed_cover_refresh_returns_lease_fenced_separate_release_keys(
     assert scope.separate_release_keys == ("artist::same title",)
     sql = connection.executed[0][0]
     assert "ops.begin_claimed_cover_refresh" in sql
+
+
+@pytest.mark.parametrize("checkpoint", ["authority_committed", "runtime_published", "publication_completed"])
+def test_load_claimed_finalization_maps_stored_identity_and_revision(checkpoint):
+    from music_app.services.cover_mutation_coordinator import CoverMutationStatus
+
+    connection = _Connection([{
+        "checkpoint_id": 61, "checkpoint": checkpoint, "checkpoint_revision": 7,
+        "library_id": 19, "local_album_id": 23, "task_id": 73,
+        "cover_mutation_revision": 12, "selected_cover_revision": "stored-revision",
+    }])
+    repository = _repository(connection, _Jobs())
+    claim = _finalization_claim()
+
+    outcome = repository.load_claimed_finalization(claim=claim, observed_at=NOW)
+
+    assert outcome.status is CoverMutationStatus.COMMITTED
+    assert outcome.checkpoint == checkpoint
+    assert outcome.finalization_checkpoint_id == 61
+    assert outcome.finalization_checkpoint_revision == 7
+    assert (outcome.library_id, outcome.local_album_id, outcome.task_id) == (19, 23, 73)
+    assert outcome.cover_mutation_revision == 12
+    assert outcome.selected_cover_revision == "stored-revision"
+    assert len(connection.executed) == 1
+    sql, parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_finalization(" in sql
+    values = tuple(parameters.values()) if isinstance(parameters, dict) else tuple(parameters)
+    for value in (88, 3, "worker-cover", "lease-cover", NOW):
+        assert value in values
+
+
+def _finalization_claim():
+    from music_app.services.jobs.models import ClaimedJob
+
+    return ClaimedJob(
+        job_id=88, kind="cover_remote_save", subject_kind="cover_lookup_task",
+        subject_ref="lookup", parameters={"task_id": 73}, account_id=7, library_id=19,
+        capability_key="library.covers.write", request_origin_id=42,
+        deployment_mode="self_hosted_private_web", client_surface="web",
+        idempotency_key="remote:88", attempt=3, max_attempts=3,
+        worker_id="worker-cover", lease_token="lease-cover", lease_expires_at=NOW,
+        scheduled_at=NOW,
+    )
+
+
+@pytest.mark.parametrize("revision", [None, 8])
+def test_advance_finalization_forwards_exact_claim_and_nullable_revision(revision):
+    connection = _Connection([{"row_revision": revision}])
+    repository = _repository(connection, _Jobs())
+
+    assert repository.advance_finalization(
+        claim=_finalization_claim(), checkpoint_id=61,
+        expected_checkpoint_revision=7, checkpoint="runtime_published", observed_at=NOW,
+    ) == revision
+
+    sql, parameters = connection.executed[0]
+    assert "ops.advance_claimed_cover_finalization(" in sql
+    assert parameters == {
+        "job_id": 88, "attempt": 3, "worker_id": "worker-cover",
+        "lease_token": "lease-cover", "observed_at": NOW, "checkpoint_id": 61,
+        "expected_checkpoint_revision": 7, "checkpoint": "runtime_published",
+    }
+
+
+def test_load_claimed_finalization_accepts_zero_authority_and_missing_claim():
+    row = {
+        "checkpoint_id": 61, "checkpoint": "authority_committed", "checkpoint_revision": 7,
+        "library_id": 19, "local_album_id": 23, "task_id": 73,
+        "cover_mutation_revision": 0, "selected_cover_revision": "stored-revision",
+    }
+    connection = _Connection([row, None])
+    repository = _repository(connection, _Jobs())
+    assert repository.load_claimed_finalization(
+        claim=_finalization_claim(), observed_at=NOW,
+    ).cover_mutation_revision == 0
+    assert repository.load_claimed_finalization(
+        claim=_finalization_claim(), observed_at=NOW,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("current_revision", "current_cover", "accepted"),
+    [(0, "stored-revision", True), (1, "later-cover", True), (0, "wrong-cover", False),
+     (None, "stored-revision", False)],
+)
+def test_finalization_runtime_publisher_checks_current_durable_baseline(
+    finalization_scope_row, current_revision, current_cover, accepted,
+):
+    finalization_scope_row.update(
+        current_cover_mutation_revision=current_revision, selected_cover_revision=current_cover,
+    )
+    connection = _Connection([finalization_scope_row])
+    repository = _repository(connection, _Jobs())
+    values = dict(
+        claim=_finalization_claim(), library_id=19, local_album_id=23,
+        cover_mutation_revision=0, selected_cover_revision="stored-revision",
+    )
+    if accepted:
+        repository.publish_runtime_if_revision(**values)
+    else:
+        with pytest.raises(ValueError, match="cover authority"):
+            repository.publish_runtime_if_revision(**values)
+    sql, parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_remote_save(" in sql
+    assert " join " not in sql
+    assert parameters["library_id"] == 19
+    assert parameters["task_id"] == 73
+
+
+@pytest.fixture
+def finalization_scope_row():
+    return {
+        "checkpoint_id": 61, "checkpoint": "runtime_published", "checkpoint_revision": 7,
+        "task_revision": 9, "candidate_generation": GENERATION, "candidate_id": "candidate-1",
+        "selected_candidate": {"url": "https://covers.invalid/selected.jpg"},
+        "library_root_path": "C:/fixture", "track_paths": ["C:/fixture/01.flac"],
+        "library_id": 19, "local_album_id": 23, "task_id": 73,
+        "authority_cover_mutation_revision": 0, "current_cover_mutation_revision": 0,
+        "selected_cover_path": "current-cover.jpg", "selected_cover_revision": "stored-revision",
+        "committed_cover_revision": "stored-revision", "artifact_sha256": "a" * 64,
+    }
+
+
+@pytest.mark.parametrize("publish_row", [None, {"checkpoint_revision": 7, "task_revision": 9}])
+def test_finalization_task_publisher_uses_current_scoped_sql_context(finalization_scope_row, publish_row):
+    from music_app.services.jobs.models import JobLeaseLost
+
+    connection = _Connection([finalization_scope_row, publish_row])
+    repository = _repository(connection, _Jobs())
+    values = dict(
+        claim=_finalization_claim(), task_id=73, cover_mutation_revision=0,
+        terminal_state="completed",
+    )
+    if publish_row is None:
+        with pytest.raises(JobLeaseLost):
+            repository.publish_task_if_revision(**values)
+    else:
+        repository.publish_task_if_revision(**values)
+    load_sql, load_parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_remote_save(" in load_sql
+    assert " join " not in load_sql
+    assert load_parameters["task_key"] == "lookup"
+    sql, parameters = connection.executed[1]
+    assert "ops.publish_claimed_cover_remote_save(" in sql
+    assert " join " not in sql
+    assert parameters["task_id"] == 73
+    assert parameters["expected_checkpoint_revision"] == 7
+    assert parameters["expected_task_revision"] == 9
+    assert parameters["selected_cover_path"] == "current-cover.jpg"
+    assert parameters["linked_remote"] is False
+    assert parameters["lease_token"] == "lease-cover"
+
+
+@pytest.mark.parametrize(
+    ("publisher", "field", "value"),
+    [("runtime", "library_id", 20), ("runtime", "local_album_id", 24),
+     ("runtime", "authority_cover_mutation_revision", 1),
+     ("runtime", "committed_cover_revision", "different-revision"),
+     ("task", "task_id", 74), ("task", "authority_cover_mutation_revision", 1)],
+)
+def test_finalization_publishers_reject_changed_loader_identity(finalization_scope_row, publisher, field, value):
+    finalization_scope_row[field] = value
+    connection = _Connection([finalization_scope_row])
+    repository = _repository(connection, _Jobs())
+    with pytest.raises(ValueError, match="identity changed"):
+        if publisher == "runtime":
+            repository.publish_runtime_if_revision(
+                claim=_finalization_claim(), library_id=19, local_album_id=23,
+                cover_mutation_revision=0, selected_cover_revision="stored-revision",
+            )
+        else:
+            repository.publish_task_if_revision(
+                claim=_finalization_claim(), task_id=73, cover_mutation_revision=0,
+                terminal_state="completed",
+            )
+    assert len(connection.executed) == 1
+
+
+@pytest.mark.parametrize("publisher", ["runtime", "task"])
+def test_finalization_publishers_reject_missing_claim_scope(publisher):
+    from music_app.services.jobs.models import JobLeaseLost
+
+    connection = _Connection([None])
+    repository = _repository(connection, _Jobs())
+    with pytest.raises(JobLeaseLost):
+        if publisher == "runtime":
+            repository.publish_runtime_if_revision(
+                claim=_finalization_claim(), library_id=19, local_album_id=23,
+                cover_mutation_revision=0, selected_cover_revision="stored-revision",
+            )
+        else:
+            repository.publish_task_if_revision(
+                claim=_finalization_claim(), task_id=73, cover_mutation_revision=0,
+                terminal_state="completed",
+            )
+    assert len(connection.executed) == 1
+
+
+@pytest.mark.parametrize("linked_remote", [False, True])
+def test_direct_remote_publisher_forwards_local_and_linked_context(linked_remote):
+    connection = _Connection([{"checkpoint_revision": 8, "task_revision": 10}, None])
+    repository = _repository(connection, _Jobs())
+    values = dict(
+        checkpoint_id=61, task_id=73, expected_checkpoint_revision=7,
+        expected_task_revision=9, selected_cover_path=None if linked_remote else "cover.jpg",
+        linked_remote=linked_remote, library_id=19, job_id=88, attempt=3,
+        worker_id="worker-cover", lease_token="lease-cover", now=NOW,
+    )
+    assert repository.publish_claimed_remote_save(**values) == (8, 10)
+    assert repository.publish_claimed_remote_save(**values) is None
+    sql, parameters = connection.executed[0]
+    assert "ops.publish_claimed_cover_remote_save(" in sql
+    assert parameters["selected_cover_path"] == values["selected_cover_path"]
+    assert parameters["linked_remote"] is linked_remote
+    assert parameters["library_id"] == 19
+    assert parameters["expected_checkpoint_revision"] == 7
+    assert parameters["expected_task_revision"] == 9
+
+
+@pytest.mark.parametrize("selected_path", [None, "current-cover.jpg"])
+def test_remote_save_scope_loads_current_album_context_for_linked_and_local_cover(finalization_scope_row, selected_path):
+    finalization_scope_row.update(selected_cover_path=selected_path)
+    connection = _Connection([finalization_scope_row])
+    repository = _repository(connection, _Jobs())
+    scope = repository.load_claimed_remote_save(
+        task_key="lookup", task_id=73, library_id=19, job_id=88, attempt=3,
+        worker_id="worker-cover", lease_token="lease-cover", now=NOW,
+    )
+    assert scope.selected_cover_path == selected_path
+    assert scope.track_paths == ("C:/fixture/01.flac",)
+    assert (scope.library_id, scope.local_album_id, scope.task_id) == (19, 23, 73)
+    assert scope.authority_cover_mutation_revision == 0
+    assert scope.current_cover_mutation_revision == 0
+    assert scope.selected_cover_revision == "stored-revision"
+    assert scope.committed_cover_revision == "stored-revision"
+    sql, _parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_remote_save(" in sql
+    assert " join " not in sql

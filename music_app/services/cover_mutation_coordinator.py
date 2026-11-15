@@ -53,9 +53,7 @@ class CoverArtifactIdentity:
         if self.private_path is None:
             if (
                 self.post_write_exists
-                or self.sha256 is not None
                 or self.selected_cover_path is not None
-                or self.promoted_cover_revision is not None
                 or self.prior_cover_existed
                 or self.prior_cover_bytes is not None
                 or self.prior_cover_atime_ns is not None
@@ -66,6 +64,13 @@ class CoverArtifactIdentity:
                 raise ValueError(
                     "linked remote artifacts cannot carry local artifact identity"
                 )
+            if (self.sha256 is None) != (self.promoted_cover_revision is None):
+                raise ValueError("linked remote digest and revision must be paired")
+            if self.sha256 is not None and (
+                len(self.sha256) != 64
+                or any(character not in "0123456789abcdef" for character in self.sha256)
+            ):
+                raise ValueError("linked remote digest must be lowercase SHA256")
             return
         elif self.post_write_exists != (self.sha256 is not None):
             raise ValueError("local artifact existence and digest must agree")

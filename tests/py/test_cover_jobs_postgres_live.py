@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -14,6 +17,714 @@ import psycopg
 from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
 from tests.e2e.support import isolatedPostgres
+
+
+@pytest.fixture
+def live_finalization(request, live_cover_database):
+    from music_app.services.cover_mutation_coordinator import CoverMutationIdentity, CoverMutationStatus, CoverSelectionCommit
+    from music_app.services.cover_mutations_postgres import PostgresCoverMutationRepository
+
+    setup_url, runtime_url = live_cover_database
+    account_id, library_id, album_key, origin_key = _seed_cover_scope(setup_url)
+
+    def finish_owned_jobs():
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "update ops.jobs set state='succeeded',completed_at=clock_timestamp(),"
+                "lease_owner=null,lease_token=null,lease_expires_at=null,heartbeat_at=null "
+                "where library_id=%s and state in ('running','queued','retry_wait')",
+                (library_id,),
+            )
+
+    request.addfinalizer(finish_owned_jobs)
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    app_covers = PostgresCoverJobRepository(database_url=runtime_url, connect_to_database=isolatedPostgres._connect)
+    worker_jobs = PostgresJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    worker_covers = PostgresCoverJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    generation = uuid4()
+    values = dict(
+        task_key=str(generation), library_id=library_id, account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}", deployment_mode="self_hosted_private_web",
+        client_surface="private_web", candidate_generation=generation,
+        resource_revision=0, scheduled_at=datetime.now(timezone.utc),
+    )
+    lookup = app_covers.accept_candidate_lookup(album_key=album_key, **values)
+    candidate_id = f"candidate-{generation}"
+    legacy = getattr(request, "param", None) == "legacy"
+    pre_authority = getattr(request, "param", None) == "pre_authority"
+    digest = "a" * 64
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.cover_lookup_tasks set status='completed', completed_at=now(), "
+            "provider_payload=jsonb_build_object('possible_matches',jsonb_build_array("
+            "jsonb_build_object('id',%s::text,'url','https://covers.invalid/final.jpg',"
+            "'art_kind','cover'))) where id=%s", (candidate_id, lookup.task_id),
+        )
+        connection.execute(
+            "update ops.jobs set state='succeeded',started_at=now(),completed_at=now() where id=%s",
+            (lookup.job_id,),
+        )
+    accepted = app_covers.accept_remote_save(candidate_id=candidate_id, **values)
+    claim = worker_jobs.claim(
+        worker_id=f"finalizer-{generation}", now=datetime.now(timezone.utc),
+        lease_seconds=60, kinds=("cover_remote_save",),
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    claim_values = dict(
+        task_key=str(generation), task_id=accepted.task_id, library_id=library_id,
+        job_id=claim.job_id, attempt=claim.attempt, worker_id=claim.worker_id,
+        lease_token=claim.lease_token, now=datetime.now(timezone.utc),
+    )
+    scope = worker_covers.load_claimed_remote_save(**claim_values)
+    assert scope is not None
+    selected_cover_path = str(Path(scope.track_paths[0]).parent / "current-authority.jpg")
+    with isolatedPostgres._connect(setup_url) as connection:
+        album_id = connection.execute(
+            "select local_album_id from ops.cover_remote_save_checkpoints where id=%s",
+            (scope.checkpoint_id,),
+        ).fetchone()["local_album_id"]
+        if legacy:
+            connection.execute(
+                "update ops.cover_remote_save_checkpoints set checkpoint='promotion_completed',"
+                "row_revision=row_revision+1 where id=%s", (scope.checkpoint_id,),
+            )
+        else:
+            connection.execute(
+                "update ops.cover_remote_save_checkpoints set checkpoint='artifact_written',"
+                "artifact_key=%s,artifact_sha256=%s,"
+                "row_revision=row_revision+1 where id=%s",
+                (uuid4(), digest, scope.checkpoint_id),
+            )
+    checkpoint_revision = scope.checkpoint_revision + 1
+    if not legacy and not pre_authority:
+        committed = PostgresCoverMutationRepository(
+            database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+        ).commit_selection(request=CoverSelectionCommit(
+            identity=CoverMutationIdentity(library_id, album_id), track_paths=scope.track_paths,
+            expected_inventory_revision=0, expected_cover_mutation_revision=0,
+            expected_selected_cover_revision=None, selected_cover_path=selected_cover_path,
+            promoted_cover_revision="durable-revision", selected_origin="user",
+            clear_selection=False, remote_cover=None, artifact_sha256=digest,
+            observed_at=datetime.now(timezone.utc), job_id=claim.job_id, attempt=claim.attempt,
+            worker_id=claim.worker_id, lease_token=claim.lease_token, task_id=accepted.task_id,
+            checkpoint_revision=checkpoint_revision, explicit_selection=True,
+        ))
+        assert committed.status is CoverMutationStatus.COMMITTED
+        assert committed.cover_mutation_revision == 1
+        assert committed.finalization_checkpoint_id == scope.checkpoint_id
+        assert committed.finalization_checkpoint_revision is not None
+        checkpoint_revision = committed.finalization_checkpoint_revision
+        scope = worker_covers.load_claimed_remote_save(**claim_values)
+        assert scope is not None
+        assert scope.authority_cover_mutation_revision == 1
+        assert scope.current_cover_mutation_revision == 1
+        assert scope.selected_cover_revision == "durable-revision"
+        assert scope.selected_cover_path == selected_cover_path
+    return SimpleNamespace(
+        setup_url=setup_url, runtime_url=runtime_url, worker_url=worker_url,
+        account_id=account_id, library_id=library_id, album_id=album_id,
+        task_id=accepted.task_id, checkpoint_id=scope.checkpoint_id,
+        checkpoint_revision=checkpoint_revision, task_revision=scope.task_revision,
+        selected_cover_path=selected_cover_path,
+        claim=claim, jobs=worker_jobs, covers=worker_covers,
+    )
+
+
+@pytest.mark.parametrize("checkpoint", ["authority_committed", "runtime_published", "publication_completed"])
+def test_live_finalization_load_and_advance_preserve_exact_identity_and_lost_ack(
+    live_finalization, checkpoint,
+):
+    from dataclasses import replace
+
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set checkpoint=%s,"
+            "completed_at=case when %s='publication_completed' then clock_timestamp() else null end where id=%s",
+            (checkpoint, checkpoint, scope.checkpoint_id),
+        )
+    outcome = scope.covers.load_claimed_finalization(claim=scope.claim, observed_at=datetime.now(timezone.utc))
+    assert outcome is not None
+    assert (outcome.library_id, outcome.local_album_id, outcome.task_id) == (
+        scope.library_id, scope.album_id, scope.task_id,
+    )
+    assert outcome.checkpoint == checkpoint
+    assert outcome.cover_mutation_revision == 1
+    assert outcome.selected_cover_revision == "durable-revision"
+    assert scope.covers.load_claimed_finalization(
+        claim=replace(scope.claim, lease_token="wrong-lease"), observed_at=datetime.now(timezone.utc),
+    ) is None
+    next_checkpoint = "runtime_published" if checkpoint == "authority_committed" else "publication_completed"
+    values = dict(
+        claim=scope.claim, checkpoint_id=scope.checkpoint_id,
+        expected_checkpoint_revision=outcome.finalization_checkpoint_revision,
+        checkpoint=next_checkpoint, observed_at=datetime.now(timezone.utc),
+    )
+    revision = scope.covers.advance_finalization(**values)
+    assert revision == outcome.finalization_checkpoint_revision + (checkpoint != next_checkpoint)
+    assert scope.covers.advance_finalization(**values) == revision
+    assert scope.covers.advance_finalization(
+        **{**values, "expected_checkpoint_revision": revision + 3},
+    ) is None
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=%s",
+            (scope.claim.job_id,),
+        )
+    assert scope.covers.load_claimed_finalization(
+        claim=scope.claim, observed_at=datetime.now(timezone.utc) - timedelta(days=1),
+    ) is None
+    assert scope.covers.advance_finalization(**values) is None
+
+
+@pytest.mark.parametrize(
+    ("live_finalization", "checkpoint"),
+    [("pre_authority", "artifact_written"), ("modern", "authority_committed"),
+     ("modern", "runtime_published"), ("modern", "publication_completed")],
+    indirect=["live_finalization"],
+    ids=["artifact_written", "authority_committed", "runtime_published", "publication_completed"],
+)
+def test_live_finalization_cancellation_preserves_post_authority_job(live_finalization, checkpoint):
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set checkpoint=%s,"
+            "completed_at=case when %s='publication_completed' then clock_timestamp() else null end where id=%s",
+            (checkpoint, checkpoint, scope.checkpoint_id),
+        )
+        before = connection.execute(
+            "select count(*) as count from ops.job_transitions where job_id=%s", (scope.claim.job_id,),
+        ).fetchone()["count"]
+    with isolatedPostgres._connect(scope.runtime_url) as connection:
+        row = connection.execute(
+            "select * from ops.request_job_cancellation(%s,%s,clock_timestamp())",
+            (scope.claim.job_id, scope.account_id),
+        ).fetchone()
+    assert row["reason_code"] == ("cancel_requested" if checkpoint == "artifact_written" else "cover_finalization_required")
+    assert row["transition_recorded"] is False
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        job = connection.execute("select state,cancel_requested_at from ops.jobs where id=%s", (scope.claim.job_id,)).fetchone()
+        after = connection.execute("select count(*) as count from ops.job_transitions where job_id=%s", (scope.claim.job_id,)).fetchone()["count"]
+    assert job["state"] == "running"
+    assert (job["cancel_requested_at"] is not None) is (checkpoint == "artifact_written")
+    assert after == before
+
+
+def test_live_finalization_modern_publisher_uses_authority_and_fences_replay(live_finalization):
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute("update ops.cover_remote_save_checkpoints set checkpoint='runtime_published' where id=%s", (scope.checkpoint_id,))
+    values = dict(
+        checkpoint_id=scope.checkpoint_id, task_id=scope.task_id,
+        expected_checkpoint_revision=scope.checkpoint_revision,
+        expected_task_revision=scope.task_revision, selected_cover_path="stale-request.jpg",
+        linked_remote=True, job_id=scope.claim.job_id, attempt=scope.claim.attempt,
+        library_id=scope.library_id,
+        worker_id=scope.claim.worker_id, lease_token=scope.claim.lease_token,
+        now=datetime.now(timezone.utc),
+    )
+    assert scope.covers.publish_claimed_remote_save(**{**values, "expected_task_revision": scope.task_revision + 3}) is None
+    assert scope.covers.publish_claimed_remote_save(**{**values, "expected_checkpoint_revision": scope.checkpoint_revision + 3}) is None
+    published = scope.covers.publish_claimed_remote_save(**values)
+    assert published is not None
+    assert published == (scope.checkpoint_revision, scope.task_revision + 1)
+    assert scope.covers.publish_claimed_remote_save(**{**values, "expected_task_revision": published[1]}) == published
+    scope.covers.publish_task_if_revision(claim=scope.claim, task_id=scope.task_id, cover_mutation_revision=1, terminal_state="completed")
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        task = connection.execute("select status,selected_cover_private_path,metadata,row_revision from ops.cover_lookup_tasks where id=%s", (scope.task_id,)).fetchone()
+    assert task["status"] == "completed"
+    assert task["selected_cover_private_path"] == scope.selected_cover_path
+    assert task["metadata"]["notification_action_taken"] is True
+    assert task["metadata"]["cover_mutation_revision"] == 1
+    assert task["row_revision"] == published[1]
+
+
+@pytest.mark.parametrize(
+    ("live_finalization", "linked_remote"), [("legacy", True), ("legacy", False)],
+    indirect=["live_finalization"], ids=["linked-no-digest", "local-digest"],
+)
+def test_live_legacy_publication_replays_lost_ack_without_authority_proof(live_finalization, linked_remote):
+    scope = live_finalization
+    selected_path = None if linked_remote else "legacy-cover.jpg"
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set artifact_key=%s,artifact_sha256=%s,"
+            "cover_revision=%s where id=%s",
+            (
+                None if linked_remote else uuid4(),
+                None if linked_remote else hashlib.sha256(b"legacy-cover-fixture").hexdigest(),
+                None if linked_remote else "legacy-cover-revision", scope.checkpoint_id,
+            ),
+        )
+    values = dict(
+        checkpoint_id=scope.checkpoint_id, task_id=scope.task_id,
+        expected_checkpoint_revision=scope.checkpoint_revision,
+        expected_task_revision=scope.task_revision, selected_cover_path=selected_path,
+        linked_remote=linked_remote, library_id=scope.library_id, job_id=scope.claim.job_id,
+        attempt=scope.claim.attempt, worker_id=scope.claim.worker_id,
+        lease_token=scope.claim.lease_token, now=datetime.now(timezone.utc),
+    )
+    first = scope.covers.publish_claimed_remote_save(**values)
+    assert first == (scope.checkpoint_revision + 1, scope.task_revision + 1)
+    snapshot_sql = (
+        "select task.status,task.selected_cover_private_path,task.row_revision as task_revision,"
+        "task.completed_at as task_completed_at,task.metadata,checkpoint.checkpoint,"
+        "checkpoint.row_revision as checkpoint_revision,checkpoint.completed_at,"
+        "checkpoint.authority_cover_mutation_revision,checkpoint.artifact_sha256 "
+        "from ops.cover_lookup_tasks task join ops.cover_remote_save_checkpoints checkpoint "
+        "on checkpoint.task_id=task.id where checkpoint.id=%s"
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        before = connection.execute(snapshot_sql, (scope.checkpoint_id,)).fetchone()
+    assert scope.covers.publish_claimed_remote_save(**values) == first
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        after = connection.execute(snapshot_sql, (scope.checkpoint_id,)).fetchone()
+    assert after == before
+    assert after["status"] == "completed"
+    assert after["checkpoint"] == "publication_completed"
+    assert after["selected_cover_private_path"] == selected_path
+    assert after["metadata"]["notification_action_taken"] is True
+    assert "cover_mutation_revision" not in after["metadata"]
+    assert after["authority_cover_mutation_revision"] is None
+    assert (after["artifact_sha256"] is None) is linked_remote
+
+
+def test_live_finalization_retry_extends_exhausted_budget_and_rejects_lost_lease(live_finalization):
+    from music_app.services.jobs.models import JobTransitionResult, JobState, JobLeaseLost
+
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute("update ops.jobs set max_attempts=attempt_count where id=%s", (scope.claim.job_id,))
+    from dataclasses import replace
+    claim = replace(scope.claim, max_attempts=scope.claim.attempt)
+    now = datetime.now(timezone.utc)
+    outcome = JobTransitionResult(next_state=JobState.RETRY_WAIT, reason_code="cover_finalization_pending", scheduled_at=now + timedelta(minutes=1))
+    assert scope.jobs.finish(claim, outcome, now=now)
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        job = connection.execute("select state,max_attempts,attempt_count,lease_owner,lease_token,lease_expires_at from ops.jobs where id=%s", (claim.job_id,)).fetchone()
+        transitions = connection.execute("select count(*) as count from ops.job_transitions where job_id=%s and reason_code='cover_finalization_pending'", (claim.job_id,)).fetchone()["count"]
+    assert job == {"state": "retry_wait", "max_attempts": claim.attempt + 1, "attempt_count": claim.attempt, "lease_owner": None, "lease_token": None, "lease_expires_at": None}
+    assert transitions == 1
+    with pytest.raises(JobLeaseLost):
+        scope.jobs.finish(claim, outcome, now=now)
+
+
+@pytest.mark.parametrize("checkpoint", ["authority_committed", "runtime_published", "publication_completed"])
+def test_live_finalization_requeue_uses_database_clock_and_is_idempotent(live_finalization, checkpoint):
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set checkpoint=%s,"
+            "completed_at=case when %s='publication_completed' then clock_timestamp() else null end where id=%s",
+            (checkpoint, checkpoint, scope.checkpoint_id),
+        )
+        connection.execute("update ops.jobs set lease_expires_at=clock_timestamp()-interval '1 second',max_attempts=attempt_count where id=%s", (scope.claim.job_id,))
+        generic_id = connection.execute(
+            "insert into ops.jobs(kind,subject_kind,subject_ref,parameters,deployment_mode,"
+            "client_surface,idempotency_key,max_attempts,recovery_policy,scheduled_at,state,"
+            "attempt_count,lease_owner,lease_token,lease_expires_at,heartbeat_at,started_at,library_id) "
+            "values('auth_welcome_delivery','mail_outbox',%s,'{}'::jsonb,"
+            "'self_hosted_private_web','private_web',%s,3,'retry_safe',clock_timestamp(),"
+            "'running',1,'generic-clock-worker',%s,clock_timestamp()+interval '1 hour',"
+            "clock_timestamp(),clock_timestamp(),%s) returning id",
+            (uuid4().hex, uuid4().hex, uuid4().hex, scope.library_id),
+        ).fetchone()["id"]
+    with isolatedPostgres._connect(scope.worker_url) as connection:
+        first = connection.execute("select ops.requeue_expired_cover_finalization(%s) as count", (datetime.now(timezone.utc) - timedelta(days=30),)).fetchone()["count"]
+        second = connection.execute("select ops.requeue_expired_cover_finalization(%s) as count", (datetime.now(timezone.utc) + timedelta(days=30),)).fetchone()["count"]
+        connection.execute(
+            "select * from ops.reconcile_stale_job_leases(%s,1000)",
+            (datetime.now(timezone.utc) + timedelta(days=30),),
+        ).fetchone()
+    assert first == 1
+    assert second == 0
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        job = connection.execute("select state,attempt_count,max_attempts,lease_token,scheduled_at > clock_timestamp()-interval '1 minute' as due_now from ops.jobs where id=%s", (scope.claim.job_id,)).fetchone()
+        count = connection.execute("select count(*) as count from ops.job_transitions where job_id=%s and reason_code='cover_finalization_lease_expired'", (scope.claim.job_id,)).fetchone()["count"]
+        assert connection.execute("select state from ops.jobs where id=%s", (generic_id,)).fetchone()["state"] == "running"
+        connection.execute("update ops.jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=%s", (generic_id,))
+    assert job == {"state": "retry_wait", "attempt_count": scope.claim.attempt, "max_attempts": scope.claim.attempt + 1, "lease_token": None, "due_now": True}
+    assert count == 1
+    with isolatedPostgres._connect(scope.worker_url) as connection:
+        connection.execute(
+            "select * from ops.reconcile_stale_job_leases(%s,1000)",
+            (datetime.now(timezone.utc) - timedelta(days=30),),
+        ).fetchone()
+        connection.execute("select * from ops.reconcile_stale_job_leases(clock_timestamp(),1000)").fetchone()
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute("select state from ops.jobs where id=%s", (generic_id,)).fetchone()["state"] == "retry_wait"
+        assert connection.execute(
+            "select count(*) as count from ops.job_transitions where job_id=%s and prior_state='running'",
+            (generic_id,),
+        ).fetchone()["count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("live_finalization", "checkpoint"),
+    [("committed", value) for value in ("authority_committed", "runtime_published", "publication_completed")]
+    + [("pre_authority", "artifact_written")],
+    indirect=["live_finalization"],
+    ids=["authority_committed", "runtime_published", "publication_completed", "artifact_written"],
+)
+def test_live_finalization_requeue_races_generic_recovery(live_finalization, checkpoint):
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set checkpoint=%s,"
+            "completed_at=case when %s='publication_completed' then clock_timestamp() else null end where id=%s",
+            (checkpoint, checkpoint, scope.checkpoint_id),
+        )
+        connection.execute(
+            "update ops.jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=%s",
+            (scope.claim.job_id,),
+        )
+        evidence = connection.execute(
+            "select * from ops.cover_remote_save_checkpoints where id=%s", (scope.checkpoint_id,),
+        ).fetchone()
+    barrier = Barrier(2)
+
+    def reconcile(finalization):
+        with isolatedPostgres._connect(scope.worker_url) as connection:
+            connection.execute("set local statement_timeout = '10s'")
+            backend = connection.execute("select pg_backend_pid() as pid").fetchone()["pid"]
+            barrier.wait(timeout=10)
+            if finalization:
+                result = connection.execute(
+                    "select ops.requeue_expired_cover_finalization(clock_timestamp()) as count",
+                ).fetchone()["count"]
+            else:
+                result = connection.execute(
+                    "select * from ops.reconcile_stale_job_leases(clock_timestamp(),1000)",
+                ).fetchone()
+        return backend, result
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        finalization = executor.submit(reconcile, True)
+        generic = executor.submit(reconcile, False)
+        finalization_backend, requeued = finalization.result(timeout=20)
+        generic_backend, counts = generic.result(timeout=20)
+    assert finalization_backend != generic_backend
+    committed = checkpoint != "artifact_written"
+    assert requeued == int(committed)
+    assert counts == {
+        "retried_count": 0, "failed_count": 0,
+        "ambiguous_count": int(not committed), "canceled_count": 0,
+    }
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select * from ops.cover_remote_save_checkpoints where id=%s", (scope.checkpoint_id,),
+        ).fetchone() == evidence
+        transitions = connection.execute(
+            "select next_state,reason_code from ops.job_transitions where job_id=%s and prior_state='running'",
+            (scope.claim.job_id,),
+        ).fetchall()
+        job = connection.execute(
+            "select state,lease_owner,lease_token,lease_expires_at,heartbeat_at from ops.jobs where id=%s",
+            (scope.claim.job_id,),
+        ).fetchone()
+    expected_state = "retry_wait" if committed else "ambiguous"
+    assert transitions == [{
+        "next_state": expected_state,
+        "reason_code": "cover_finalization_lease_expired" if committed else "stale_lease_ambiguous",
+    }]
+    assert job == {
+        "state": expected_state, "lease_owner": None, "lease_token": None,
+        "lease_expires_at": None, "heartbeat_at": None,
+    }
+    if committed:
+        reclaimed = scope.jobs.claim(
+            worker_id=f"reclaim-{uuid4().hex}", now=datetime.now(timezone.utc),
+            lease_seconds=60, kinds=("cover_remote_save",),
+        )
+        assert reclaimed is not None
+        assert reclaimed.job_id == scope.claim.job_id
+        assert reclaimed.attempt == scope.claim.attempt + 1
+
+
+@pytest.mark.parametrize(
+    ("live_finalization", "recovery"),
+    [("committed", "finalization"), ("pre_authority", "generic-terminal"), ("committed", "generic-retry")],
+    indirect=["live_finalization"], ids=["finalization", "generic-terminal", "generic-retry"],
+)
+@pytest.mark.parametrize("expired", [False, True], ids=["live-lease", "expired-lease"])
+@pytest.mark.parametrize("skew_days", [-30, 30], ids=["past", "future"])
+def test_live_stale_recovery_uses_database_timestamps(live_finalization, recovery, expired, skew_days):
+    scope = live_finalization
+    job_id = scope.claim.job_id
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        if recovery == "generic-retry":
+            job_id = connection.execute(
+                "insert into ops.jobs(kind,subject_kind,subject_ref,parameters,deployment_mode,"
+                "client_surface,idempotency_key,max_attempts,recovery_policy,scheduled_at,state,"
+                "attempt_count,lease_owner,lease_token,lease_expires_at,heartbeat_at,started_at,library_id) "
+                "values('auth_welcome_delivery','mail_outbox',%s,'{}'::jsonb,"
+                "'self_hosted_private_web','private_web',%s,3,'retry_safe',clock_timestamp(),"
+                "'running',1,'skew-worker',%s,clock_timestamp()+interval '1 hour',"
+                "clock_timestamp(),clock_timestamp(),%s) returning id",
+                (uuid4().hex, uuid4().hex, uuid4().hex, scope.library_id),
+            ).fetchone()["id"]
+        connection.execute(
+            "update ops.jobs set lease_expires_at=clock_timestamp()+%s::interval where id=%s",
+            ("-1 second" if expired else "1 hour", job_id),
+        )
+        before = connection.execute("select * from ops.jobs where id=%s", (job_id,)).fetchone()
+    statement = (
+        "select ops.requeue_expired_cover_finalization(%s) as count"
+        if recovery == "finalization" else "select * from ops.reconcile_stale_job_leases(%s,1000)"
+    )
+    with isolatedPostgres._connect(scope.worker_url) as connection:
+        database_time = connection.execute("select transaction_timestamp() as time").fetchone()["time"]
+        caller_time = database_time + timedelta(days=skew_days)
+        result = connection.execute(statement, (caller_time,)).fetchone()
+        repeated = connection.execute(statement, (caller_time,)).fetchone()
+    expected_counts = {"retried_count": 0, "failed_count": 0, "ambiguous_count": 0, "canceled_count": 0}
+    if recovery == "finalization":
+        assert result == {"count": int(expired)}
+        assert repeated == {"count": 0}
+    else:
+        assert repeated == expected_counts
+        expected_counts["retried_count" if recovery == "generic-retry" else "ambiguous_count"] = int(expired)
+        assert result == expected_counts
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        job = connection.execute("select * from ops.jobs where id=%s", (job_id,)).fetchone()
+        transitions = connection.execute(
+            "select next_state,reason_code,retry_decision,next_due_at,transitioned_at "
+            "from ops.job_transitions where job_id=%s and prior_state='running'", (job_id,),
+        ).fetchall()
+    if not expired:
+        assert job == before
+        assert transitions == []
+        return
+    retrying = recovery != "generic-terminal"
+    expected_reason = {
+        "finalization": "cover_finalization_lease_expired",
+        "generic-terminal": "stale_lease_ambiguous",
+        "generic-retry": "stale_lease_retry",
+    }[recovery]
+    assert job["state"] == ("retry_wait" if retrying else "ambiguous")
+    assert job["outcome_code"] == expected_reason
+    assert job["scheduled_at"] == (database_time if retrying else before["scheduled_at"])
+    assert job["updated_at"] == database_time
+    assert job["completed_at"] == (None if retrying else database_time)
+    assert all(job[field] is None for field in ("lease_owner", "lease_token", "lease_expires_at", "heartbeat_at"))
+    assert transitions == [{
+        "next_state": job["state"], "reason_code": expected_reason,
+        "retry_decision": "scheduled" if retrying else "none",
+        "next_due_at": database_time if retrying else None, "transitioned_at": database_time,
+    }]
+    assert job["updated_at"] != caller_time
+
+
+@pytest.mark.parametrize("checkpoint", ["authority_committed", "runtime_published", "publication_completed"])
+def test_live_retry_wait_finalization_cancellation_preserves_job(live_finalization, checkpoint):
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set checkpoint=%s,"
+            "completed_at=case when %s='publication_completed' then clock_timestamp() else null end where id=%s",
+            (checkpoint, checkpoint, scope.checkpoint_id),
+        )
+        connection.execute(
+            "update ops.jobs set state='retry_wait',scheduled_at=clock_timestamp(),"
+            "max_attempts=attempt_count+1,lease_owner=null,lease_token=null,"
+            "lease_expires_at=null,heartbeat_at=null where id=%s", (scope.claim.job_id,),
+        )
+        before = connection.execute("select * from ops.jobs where id=%s", (scope.claim.job_id,)).fetchone()
+        transitions = connection.execute(
+            "select * from ops.job_transitions where job_id=%s order by id", (scope.claim.job_id,),
+        ).fetchall()
+    with isolatedPostgres._connect(scope.runtime_url) as connection:
+        result = connection.execute(
+            "select * from ops.request_job_cancellation(%s,%s,clock_timestamp())",
+            (scope.claim.job_id, scope.account_id),
+        ).fetchone()
+    assert result["prior_state"] == result["next_state"] == "retry_wait"
+    assert result["reason_code"] == "cover_finalization_required"
+    assert result["transition_recorded"] is False
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute("select * from ops.jobs where id=%s", (scope.claim.job_id,)).fetchone() == before
+        assert connection.execute(
+            "select * from ops.job_transitions where job_id=%s order by id", (scope.claim.job_id,),
+        ).fetchall() == transitions
+
+
+def test_live_committed_checkpoint_recovery_preserves_later_authority(live_finalization):
+    from music_app.services.cover_mutation_coordinator import (
+        CoverMutationIdentity, CoverMutationRecovery, CoverMutationStatus, CoverSelectionCommit,
+    )
+    from music_app.services.cover_mutations_postgres import PostgresCoverMutationRepository
+
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        checkpoint = connection.execute(
+            "select * from ops.cover_remote_save_checkpoints where id=%s", (scope.checkpoint_id,),
+        ).fetchone()
+        paths = tuple(row["private_path"] for row in connection.execute(
+            "select file.private_path from library.local_tracks track "
+            "join library.local_track_files file on file.track_id=track.id where track.album_id=%s order by file.id",
+            (scope.album_id,),
+        ).fetchall())
+    repository = PostgresCoverMutationRepository(
+        database_url=scope.worker_url, connect_to_database=isolatedPostgres._connect,
+    )
+    identity = CoverMutationIdentity(scope.library_id, scope.album_id)
+    later = repository.commit_selection(request=CoverSelectionCommit(
+        identity=identity, track_paths=paths, expected_inventory_revision=0,
+        expected_cover_mutation_revision=1, expected_selected_cover_revision="durable-revision",
+        selected_cover_path=str(Path(scope.selected_cover_path).with_name("later-authority.jpg")),
+        promoted_cover_revision="later-revision", selected_origin="user", explicit_selection=True,
+        clear_selection=False, remote_cover=None, artifact_sha256="b" * 64,
+        observed_at=datetime.now(timezone.utc), job_id=None, attempt=None, worker_id=None,
+        lease_token=None, task_id=None, checkpoint_revision=None,
+    ))
+    assert later.status is CoverMutationStatus.COMMITTED
+    assert later.cover_mutation_revision == 2
+    later_baseline = repository.load_baseline(identity=identity)
+    recovered = repository.recover_ambiguous(request=CoverMutationRecovery(
+        identity=identity, expected_inventory_revision=0, expected_cover_mutation_revision=0,
+        expected_selected_cover_revision=None, promoted_cover_revision="durable-revision",
+        artifact_sha256="a" * 64, job_id=scope.claim.job_id, attempt=scope.claim.attempt,
+        worker_id=scope.claim.worker_id, lease_token=scope.claim.lease_token,
+        task_id=scope.task_id, checkpoint_revision=scope.checkpoint_revision - 1,
+        observed_at=datetime.now(timezone.utc),
+    ))
+    assert recovered.status is CoverMutationStatus.COMMITTED
+    assert recovered.cover_mutation_revision == 1
+    assert recovered.selected_cover_revision == "durable-revision"
+    assert recovered.finalization_checkpoint_id == scope.checkpoint_id
+    assert recovered.finalization_checkpoint_revision == scope.checkpoint_revision
+    assert repository.load_baseline(identity=identity) == later_baseline
+    assert later_baseline.cover_mutation_revision == 2
+    assert later_baseline.selected_cover_revision == "later-revision"
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select * from ops.cover_remote_save_checkpoints where id=%s", (scope.checkpoint_id,),
+        ).fetchone() == checkpoint
+
+
+@pytest.mark.parametrize("live_finalization", ["pre_authority"], indirect=True)
+@pytest.mark.parametrize("artifact_digest", [None, "a" * 64], ids=["missing-request-digest", "missing-checkpoint-digest"])
+def test_live_modern_commit_rejects_missing_artifact_digest(live_finalization, artifact_digest):
+    scope = live_finalization
+    snapshot_sql = (
+        "select to_jsonb(album) as album,library.read_cover_mutation_revision(album.library_id) as revision,"
+        "(select jsonb_agg(to_jsonb(file) order by file.id) from library.local_tracks track "
+        "join library.local_track_files file on file.track_id=track.id where track.album_id=album.id) as files "
+        "from library.local_albums album where album.id=%s"
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "update ops.cover_remote_save_checkpoints set artifact_sha256=null where id=%s", (scope.checkpoint_id,),
+        )
+        checkpoint = connection.execute(
+            "select * from ops.cover_remote_save_checkpoints where id=%s", (scope.checkpoint_id,),
+        ).fetchone()
+        before = connection.execute(snapshot_sql, (scope.album_id,)).fetchone()
+        paths = tuple(row["private_path"] for row in connection.execute(
+            "select file.private_path from library.local_tracks track "
+            "join library.local_track_files file on file.track_id=track.id where track.album_id=%s order by file.id",
+            (scope.album_id,),
+        ).fetchall())
+    assert checkpoint["checkpoint"] == "artifact_written"
+    assert checkpoint["authority_cover_mutation_revision"] is None
+    assert before["revision"] == 0
+    statement = (
+        "select * from library.commit_cover_selection(%s,%s,%s::text[],0,0,null,%s,"
+        "'durable-revision','user',true,null::integer,null::integer,false,null::jsonb,"
+        "%s,%s,%s,%s,%s,%s,%s,clock_timestamp())"
+    )
+    values = (
+        scope.library_id, scope.album_id, list(paths), scope.selected_cover_path, artifact_digest,
+        scope.claim.job_id, scope.claim.attempt, scope.claim.worker_id,
+        scope.claim.lease_token, scope.task_id, scope.checkpoint_revision,
+    )
+    if artifact_digest is None:
+        with pytest.raises(psycopg.errors.RaiseException, match="durable cover fence requires artifact SHA-256"):
+            with isolatedPostgres._connect(scope.worker_url) as connection:
+                connection.execute(statement, values).fetchone()
+    else:
+        with isolatedPostgres._connect(scope.worker_url) as connection:
+            result = connection.execute(statement, values).fetchone()
+        assert result["committed"] is False
+        assert result["reason_code"] == "lease_lost"
+        assert result["finalization_checkpoint_id"] is None
+        assert result["finalization_checkpoint_revision"] is None
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(snapshot_sql, (scope.album_id,)).fetchone() == before
+        assert connection.execute(
+            "select * from ops.cover_remote_save_checkpoints where id=%s", (scope.checkpoint_id,),
+        ).fetchone() == checkpoint
+
+
+def test_live_finalization_functions_are_worker_only(live_finalization):
+    scope = live_finalization
+    signatures = (
+        "ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamptz)",
+        "ops.advance_claimed_cover_finalization(bigint,bigint,integer,text,text,bigint,text,timestamptz)",
+        "ops.retry_claimed_cover_finalization(bigint,integer,text,text,timestamptz,text,timestamptz)",
+        "ops.requeue_expired_cover_finalization(timestamptz)",
+    )
+    for database_url, expected in ((scope.worker_url, True), (scope.runtime_url, False)):
+        with isolatedPostgres._connect(database_url) as connection:
+            for signature in signatures:
+                assert connection.execute(
+                    "select has_function_privilege(current_user,%s,'execute') as allowed", (signature,),
+                ).fetchone()["allowed"] is expected
+    with isolatedPostgres._connect(scope.runtime_url) as connection:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            connection.execute(
+                "select * from ops.load_claimed_cover_finalization(%s,%s,%s,%s,clock_timestamp())",
+                (scope.claim.job_id, scope.claim.attempt, scope.claim.worker_id, scope.claim.lease_token),
+            )
+
+
+@pytest.mark.parametrize("role", ["app", "worker"])
+def test_live_cover_baseline_scoped_reader_preserves_private_table_denial(live_finalization, role):
+    from music_app.services.cover_mutation_coordinator import CoverMutationIdentity, CoverMutationRetryRequired
+    from music_app.services.cover_mutations_postgres import PostgresCoverMutationRepository
+
+    scope = live_finalization
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            "insert into library.cover_mutation_state(library_id,cover_mutation_revision) "
+            "values(%s,9) on conflict(library_id) do update set cover_mutation_revision=9",
+            (scope.library_id,),
+        )
+        connection.execute(
+            "update library.libraries set metadata=metadata || "
+            "jsonb_build_object('inventory_mutation_revision',7) where id=%s", (scope.library_id,),
+        )
+        connection.execute(
+            "update library.local_albums set metadata=metadata || "
+            "jsonb_build_object('cover_revision','baseline-revision') where id=%s", (scope.album_id,),
+        )
+    database_url = scope.runtime_url if role == "app" else scope.worker_url
+    repository = PostgresCoverMutationRepository(
+        database_url=database_url, connect_to_database=isolatedPostgres._connect,
+    )
+    baseline = repository.load_baseline(identity=CoverMutationIdentity(scope.library_id, scope.album_id))
+    assert baseline.inventory_revision == 7
+    assert baseline.cover_mutation_revision == 9
+    assert baseline.selected_cover_revision == "baseline-revision"
+    assert baseline.selected_cover_path == scope.selected_cover_path
+    with pytest.raises(CoverMutationRetryRequired):
+        repository.load_baseline(identity=CoverMutationIdentity(scope.library_id + 1, scope.album_id))
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with isolatedPostgres._connect(database_url) as connection:
+            connection.execute(
+                "select cover_mutation_revision from library.cover_mutation_state where library_id=%s",
+                (scope.library_id,),
+            ).fetchone()
+    if role == "worker":
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with isolatedPostgres._connect(database_url) as connection:
+                connection.execute("select metadata from library.libraries where id=%s", (scope.library_id,)).fetchone()
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with isolatedPostgres._connect(os.environ["DATABASE_READONLY_URL"]) as connection:
+                connection.execute(
+                    "select * from library.load_cover_mutation_baseline(%s,%s)",
+                    (scope.library_id, scope.album_id),
+                ).fetchone()
 
 
 def _skip_or_fail_ci(message: str) -> None:
@@ -156,6 +867,63 @@ def test_live_worker_startup_requires_digest_checkpoint_execute_grant(live_cover
         with isolatedPostgres._connect(setup_url) as connection:
             connection.execute(f"grant execute on function {signature} to album_haven_worker")
         assert preflight() is True
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [
+        "library.load_cover_mutation_baseline(bigint,bigint)",
+        "ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamptz)",
+        "ops.advance_claimed_cover_finalization(bigint,bigint,integer,text,text,bigint,text,timestamptz)",
+        "ops.retry_claimed_cover_finalization(bigint,integer,text,text,timestamptz,text,timestamptz)",
+        "ops.requeue_expired_cover_finalization(timestamptz)",
+        "ops.reconcile_stale_job_leases(timestamptz,integer)",
+        "library.resolve_cover_mutation_identity(bigint,text[])",
+        "library.read_cover_mutation_revision(bigint)",
+        "library.commit_cover_selection(bigint,bigint,text[],bigint,bigint,"
+        "text,text,text,text,boolean,integer,integer,boolean,jsonb,text,bigint,"
+        "integer,text,text,bigint,bigint,timestamptz)",
+        "library.recover_cover_mutation(bigint,bigint,bigint,bigint,text,text,"
+        "text,bigint,integer,text,text,bigint,bigint,timestamptz)",
+    ],
+    ids=["baseline", "load", "advance", "retry", "requeue", "reconcile",
+         "identity", "revision", "commit", "recover"],
+)
+def test_live_worker_startup_requires_finalization_functions_and_execute(live_cover_database, signature):
+    from music_app.services.jobs.models import JobKind
+
+    setup_url, _runtime_url = live_cover_database
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    kinds = sorted(kind.value for kind in JobKind)
+    if signature == "library.load_cover_mutation_baseline(bigint,bigint)":
+        kinds.remove(JobKind.PROBLEMATIC_FILES_PROJECTION.value)
+
+    def preflight():
+        with isolatedPostgres._connect(worker_url) as connection:
+            return connection.execute(
+                "select ops.validate_durable_worker_startup(%s::text[]) as valid", (kinds,),
+            ).fetchone()["valid"]
+
+    assert preflight() is True
+    try:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(f"revoke execute on function {signature} from album_haven_worker")
+        assert preflight() is False
+    finally:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(f"grant execute on function {signature} to album_haven_worker")
+    assert preflight() is True
+    function_name = signature.split("(", 1)[0].split(".", 1)[1]
+    temporary_name = f"missing_finalization_{uuid4().hex}"
+    temporary_signature = signature.replace(function_name, temporary_name, 1)
+    try:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(f"alter function {signature} rename to {temporary_name}")
+        assert preflight() is False
+    finally:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(f"alter function {temporary_signature} rename to {function_name}")
+    assert preflight() is True
 
 
 def _seed_cover_scope(setup_url: str) -> tuple[int, int, str, str]:
@@ -392,27 +1160,41 @@ def test_live_cover_stale_reconciliation_preserves_generic_job_policy(
     live_cover_database, kind, policy, max_attempts, attempt_count, cancel_requested,
     expected_state, expected_decision,
 ):
+    from music_app.services.jobs.registry import policy_for
+
+    declared_policy = policy_for(kind)
+    assert declared_policy.recovery_policy.value == policy
+    assert declared_policy.max_attempts == max_attempts
     setup_url, _ = live_cover_database
     worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
     key = f"cover-stale-policy-{uuid4().hex}"
+    account_id = library_id = capability_key = None
+    subject_kind = "mail_outbox"
+    if kind == "auth_password_reset_delivery":
+        account_id, _library_id, _album_key, _origin_key = _seed_cover_scope(setup_url)
+        capability_key = "accounts.password_reset.send"
     with isolatedPostgres._connect(setup_url) as connection:
         job_id = connection.execute(
             "insert into ops.jobs (kind, subject_kind, subject_ref, parameters, "
             "deployment_mode, client_surface, idempotency_key, max_attempts, "
             "recovery_policy, scheduled_at, state, attempt_count, lease_owner, "
             "lease_token, lease_expires_at, heartbeat_at, started_at, "
-            "cancel_requested_at, cancel_reason_code) values ("
-            "%s, 'mail_outbox', %s, '{}'::jsonb, "
+            "cancel_requested_at, cancel_reason_code,account_id,library_id,capability_key) values ("
+            "%s, %s, %s, '{}'::jsonb, "
             "'self_hosted_private_web', 'private_web', %s, %s, %s, "
             "clock_timestamp() - interval '2 minutes', 'running', %s, "
             "'expired-worker', %s, clock_timestamp() - interval '1 minute', "
             "clock_timestamp() - interval '2 minutes', "
             "clock_timestamp() - interval '2 minutes', "
             "case when %s then clock_timestamp() - interval '1 minute' else null end, "
-            "case when %s then 'user_requested' else null end) returning id",
-            (kind, key, key, max_attempts, policy, attempt_count, uuid4().hex,
-             cancel_requested, cancel_requested),
+            "case when %s then 'user_requested' else null end,%s,%s,%s) returning id",
+            (kind, subject_kind, key, key, max_attempts, policy, attempt_count, uuid4().hex,
+             cancel_requested, cancel_requested, account_id, library_id, capability_key),
         ).fetchone()["id"]
+        assert connection.execute(
+            "select not exists(select 1 from ops.cover_remote_save_checkpoints where job_id=%s) as no_checkpoint",
+            (job_id,),
+        ).fetchone()["no_checkpoint"] is True
     with isolatedPostgres._connect(worker_url) as connection:
         connection.execute(
             "select * from ops.reconcile_stale_job_leases(clock_timestamp(), 1000)"

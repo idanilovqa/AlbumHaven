@@ -1728,6 +1728,50 @@ as $function$
   );
 $function$;
 
+create or replace function library.load_cover_mutation_baseline(
+  requested_library_id bigint,
+  requested_album_id bigint
+)
+returns table (
+  inventory_revision bigint,
+  cover_mutation_revision bigint,
+  selected_cover_revision text,
+  selected_cover_path text
+)
+language sql
+security definer
+set search_path = pg_catalog, library
+stable
+as $baseline$
+  select coalesce(
+           nullif(library_row.metadata ->> 'inventory_mutation_revision', '')::bigint,
+           0
+         ),
+         library.read_cover_mutation_revision(requested_library_id),
+         nullif(album.metadata ->> 'cover_revision', ''),
+         nullif(album.cover_path, '')
+  from library.libraries as library_row
+  join library.local_albums as album
+    on album.library_id = library_row.id
+    and album.id = requested_album_id
+  where library_row.id = requested_library_id;
+$baseline$;
+
+revoke all on function library.load_cover_mutation_baseline(bigint,bigint) from public;
+do $baseline_grants$
+begin
+  if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
+    grant execute on function library.load_cover_mutation_baseline(bigint,bigint) to album_haven_app;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then
+    grant execute on function library.load_cover_mutation_baseline(bigint,bigint) to album_haven_worker;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
+    revoke all on function library.load_cover_mutation_baseline(bigint,bigint) from album_haven_readonly;
+  end if;
+end;
+$baseline_grants$;
+
 create or replace function library.commit_cover_selection(
   requested_library_id bigint,
   requested_album_id bigint,
@@ -4666,6 +4710,503 @@ with bootstrap_context as materialized (
 end;
 $function$;
 
+create or replace function ops.request_job_cancellation(
+  p_job_id bigint,
+  p_actor_account_id bigint,
+  p_requested_at timestamptz
+)
+returns table (
+  job_id bigint,
+  prior_state varchar(32),
+  next_state varchar(32),
+  reason_code varchar(128),
+  transition_recorded boolean
+)
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  v_prior_state varchar(32);
+  v_attempt_count integer;
+begin
+  if p_job_id is null or p_job_id <= 0 then
+    raise exception using
+      errcode = '22023',
+      message = 'job id must be positive';
+  end if;
+  if p_actor_account_id is null or p_actor_account_id <= 0 then
+    raise exception using
+      errcode = '22023',
+      message = 'actor account id must be positive';
+  end if;
+  if p_requested_at is null then
+    raise exception using
+      errcode = '22023',
+      message = 'requested timestamp is required';
+  end if;
+
+  select jobs.state, jobs.attempt_count
+    into v_prior_state, v_attempt_count
+    from ops.jobs as jobs
+   where jobs.id = p_job_id
+     and jobs.account_id = p_actor_account_id
+   for update;
+
+  if not found then
+    return query
+      select p_job_id, null::varchar(32), null::varchar(32),
+             'not_found'::varchar(128), false;
+    return;
+  end if;
+
+  if exists (
+    select 1
+    from ops.cover_remote_save_checkpoints as checkpoint_row
+    where checkpoint_row.job_id = p_job_id
+      and checkpoint_row.checkpoint in (
+        'authority_committed', 'runtime_published', 'publication_completed'
+      )
+  ) then
+    return query select p_job_id, v_prior_state, v_prior_state,
+      'cover_finalization_required'::varchar(128), false;
+    return;
+  end if;
+
+  if v_prior_state in ('queued', 'retry_wait') then
+    update ops.jobs as jobs
+       set state = 'canceled',
+           cancel_requested_at = p_requested_at,
+           cancel_requested_by_account_id = p_actor_account_id,
+           cancel_reason_code = 'owner_request',
+           completed_at = p_requested_at,
+           outcome_code = 'owner_request',
+           updated_at = p_requested_at
+     where jobs.id = p_job_id
+       and jobs.state = v_prior_state;
+
+    insert into ops.job_transitions (
+      job_id, prior_state, next_state, attempt_count, reason_code,
+      retry_decision, transitioned_at
+    ) values (
+      p_job_id, v_prior_state, 'canceled', v_attempt_count, 'owner_request',
+      'none', p_requested_at
+    );
+
+    return query
+      select p_job_id, v_prior_state, 'canceled'::varchar(32),
+             'canceled'::varchar(128), true;
+    return;
+  end if;
+
+  if v_prior_state = 'running' then
+    update ops.jobs as jobs
+       set cancel_requested_at = coalesce(jobs.cancel_requested_at, p_requested_at),
+           cancel_requested_by_account_id = coalesce(
+             jobs.cancel_requested_by_account_id, p_actor_account_id
+           ),
+           cancel_reason_code = coalesce(jobs.cancel_reason_code, 'owner_request'),
+           updated_at = p_requested_at
+     where jobs.id = p_job_id
+       and jobs.state = 'running';
+
+    return query
+      select p_job_id, v_prior_state, v_prior_state,
+             'cancel_requested'::varchar(128), false;
+    return;
+  end if;
+
+  return query
+    select p_job_id, v_prior_state, v_prior_state,
+           'terminal_noop'::varchar(128), false;
+end;
+$$;
+
+do $loader$
+begin
+  if pg_catalog.to_regprocedure(
+    'ops.load_claimed_cover_remote_save_legacy_0243(text,bigint,bigint,bigint,integer,text,text,timestamp with time zone)'
+  ) is null then
+    alter function ops.load_claimed_cover_remote_save(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) rename to load_claimed_cover_remote_save_legacy_0243;
+  else
+    drop function if exists ops.load_claimed_cover_remote_save(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    );
+  end if;
+end;
+$loader$;
+
+create or replace function ops.load_claimed_cover_remote_save(
+  requested_task_key text,
+  requested_task_id bigint,
+  requested_library_id bigint,
+  requested_job_id bigint,
+  requested_attempt integer,
+  requested_worker_id text,
+  requested_lease_token text,
+  observed_at timestamptz
+)
+returns table (
+  checkpoint_id bigint, checkpoint text, checkpoint_revision bigint,
+  task_revision bigint, candidate_generation uuid, candidate_id text,
+  selected_candidate jsonb, library_root_path text, track_paths text[],
+  library_id bigint, local_album_id bigint, task_id bigint,
+  authority_cover_mutation_revision bigint, current_cover_mutation_revision bigint,
+  selected_cover_path text, selected_cover_revision text,
+  committed_cover_revision text, artifact_sha256 text
+)
+language plpgsql
+security definer
+set search_path = pg_catalog, ops, library
+as $loader$
+begin
+  return query
+  select checkpoint_row.id, checkpoint_row.checkpoint::text,
+         checkpoint_row.row_revision, task.row_revision,
+         checkpoint_row.candidate_generation, checkpoint_row.candidate_id::text,
+         coalesce((
+           select candidate.value
+           from jsonb_array_elements(case
+             when jsonb_typeof(task.provider_payload -> 'possible_matches') = 'array'
+             then task.provider_payload -> 'possible_matches' else '[]'::jsonb
+           end) as candidate(value)
+           where candidate.value ->> 'id' = checkpoint_row.candidate_id
+           limit 1
+         ), '{}'::jsonb),
+         root.root_path::text,
+         array(
+           select file.private_path::text
+           from library.local_tracks as track
+           join library.local_track_files as file on file.track_id = track.id
+           where track.album_id = album.id and track.library_id = album.library_id
+           order by file.id
+         ),
+         checkpoint_row.library_id, checkpoint_row.local_album_id, task.id,
+         checkpoint_row.authority_cover_mutation_revision,
+         coalesce(cover_state.cover_mutation_revision, 0),
+         case when checkpoint_row.authority_cover_mutation_revision is null
+              then task.selected_cover_private_path else album.cover_path end,
+         album.metadata ->> 'cover_revision', checkpoint_row.cover_revision::text,
+         checkpoint_row.artifact_sha256::text
+  from ops.jobs as job
+  join ops.cover_remote_save_checkpoints as checkpoint_row
+    on checkpoint_row.job_id = job.id
+    and checkpoint_row.library_id = requested_library_id
+  join ops.cover_lookup_tasks as task
+    on task.id = checkpoint_row.task_id
+    and task.id = requested_task_id
+    and task.task_key = requested_task_key
+    and task.job_id = job.id
+    and task.library_id = checkpoint_row.library_id
+    and task.local_album_id = checkpoint_row.local_album_id
+  join library.local_albums as album
+    on album.id = checkpoint_row.local_album_id
+    and album.library_id = checkpoint_row.library_id
+  left join library.cover_mutation_state as cover_state
+    on cover_state.library_id = checkpoint_row.library_id
+  left join library.library_roots as root
+    on root.id = checkpoint_row.library_root_id
+    and root.library_id = checkpoint_row.library_id
+  where job.id = requested_job_id
+    and job.kind = 'cover_remote_save'
+    and job.library_id = requested_library_id
+    and job.state = 'running'
+    and job.attempt_count = requested_attempt
+    and job.lease_owner = requested_worker_id
+    and job.lease_token = requested_lease_token
+    and job.lease_expires_at > clock_timestamp()
+    and (
+      (checkpoint_row.checkpoint in (
+        'authority_committed', 'runtime_published', 'publication_completed'
+      ) and checkpoint_row.authority_cover_mutation_revision is not null
+        and checkpoint_row.cover_revision is not null
+        and task.status in ('running', 'completed'))
+      or (checkpoint_row.checkpoint = 'publication_completed'
+        and checkpoint_row.authority_cover_mutation_revision is null
+        and task.status = 'completed')
+    );
+  if found then return; end if;
+
+  return query
+  select scope.checkpoint_id, scope.checkpoint, scope.checkpoint_revision,
+         scope.task_revision, scope.candidate_generation, scope.candidate_id,
+         scope.selected_candidate, scope.library_root_path, scope.track_paths,
+         checkpoint_row.library_id, checkpoint_row.local_album_id,
+         checkpoint_row.task_id, checkpoint_row.authority_cover_mutation_revision,
+         coalesce(cover_state.cover_mutation_revision, 0), album.cover_path,
+         album.metadata ->> 'cover_revision', checkpoint_row.cover_revision::text,
+         checkpoint_row.artifact_sha256::text
+  from ops.load_claimed_cover_remote_save_legacy_0243(
+    requested_task_key, requested_task_id, requested_library_id, requested_job_id,
+    requested_attempt, requested_worker_id, requested_lease_token, observed_at
+  ) as scope
+  join ops.cover_remote_save_checkpoints as checkpoint_row
+    on checkpoint_row.id = scope.checkpoint_id
+  join library.local_albums as album
+    on album.id = checkpoint_row.local_album_id
+    and album.library_id = checkpoint_row.library_id
+  left join library.cover_mutation_state as cover_state
+    on cover_state.library_id = checkpoint_row.library_id
+  where checkpoint_row.checkpoint not in (
+    'authority_committed', 'runtime_published', 'publication_completed'
+  );
+end;
+$loader$;
+
+revoke all on function ops.load_claimed_cover_remote_save_legacy_0243(
+  text, bigint, bigint, bigint, integer, text, text, timestamptz
+) from public;
+revoke all on function ops.load_claimed_cover_remote_save(
+  text, bigint, bigint, bigint, integer, text, text, timestamptz
+) from public;
+do $loader_grants$
+begin
+  if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then
+    revoke all on function ops.load_claimed_cover_remote_save_legacy_0243(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) from album_haven_worker;
+    grant execute on function ops.load_claimed_cover_remote_save(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) to album_haven_worker;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
+    revoke all on function ops.load_claimed_cover_remote_save_legacy_0243(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) from album_haven_app;
+    revoke all on function ops.load_claimed_cover_remote_save(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) from album_haven_app;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
+    revoke all on function ops.load_claimed_cover_remote_save_legacy_0243(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) from album_haven_readonly;
+    revoke all on function ops.load_claimed_cover_remote_save(
+      text, bigint, bigint, bigint, integer, text, text, timestamptz
+    ) from album_haven_readonly;
+  end if;
+end;
+$loader_grants$;
+
+create or replace function ops.publish_claimed_cover_remote_save(
+  requested_checkpoint_id bigint,
+  requested_task_id bigint,
+  requested_job_id bigint,
+  requested_attempt integer,
+  requested_worker_id text,
+  requested_lease_token text,
+  observed_at timestamptz,
+  expected_checkpoint_revision bigint,
+  expected_task_revision bigint,
+  selected_cover_path text,
+  linked_remote boolean
+)
+returns table (checkpoint_revision bigint, task_revision bigint)
+language plpgsql
+security definer
+set search_path = pg_catalog, ops
+as $$
+declare
+  selected_job ops.jobs%rowtype;
+  modern_checkpoint ops.cover_remote_save_checkpoints%rowtype;
+  modern_task ops.cover_lookup_tasks%rowtype;
+  modern_cover_path text;
+  published_revision numeric;
+begin
+  select checkpoint_row.* into modern_checkpoint
+  from ops.jobs as job
+  join ops.cover_remote_save_checkpoints as checkpoint_row
+    on checkpoint_row.job_id = job.id
+  where job.id = requested_job_id
+    and job.kind = 'cover_remote_save'
+    and job.state = 'running'
+    and job.attempt_count = requested_attempt
+    and job.lease_owner = requested_worker_id
+    and job.lease_token = requested_lease_token
+    and job.lease_expires_at > clock_timestamp()
+    and checkpoint_row.id = requested_checkpoint_id
+    and checkpoint_row.task_id = requested_task_id
+    and checkpoint_row.library_id = job.library_id
+    and checkpoint_row.checkpoint in ('runtime_published', 'publication_completed')
+    and checkpoint_row.authority_cover_mutation_revision is not null
+    and checkpoint_row.cover_revision is not null
+  for update of job, checkpoint_row;
+
+  if found then
+    if modern_checkpoint.row_revision is distinct from expected_checkpoint_revision then
+      return;
+    end if;
+    select task.* into modern_task
+    from ops.cover_lookup_tasks as task
+    where task.id = requested_task_id
+      and task.job_id = requested_job_id
+      and task.library_id = modern_checkpoint.library_id
+      and task.local_album_id = modern_checkpoint.local_album_id
+      and task.row_revision = expected_task_revision
+      and task.status in ('running', 'completed')
+    for update of task;
+    if not found then return; end if;
+
+    perform 1 from ops.jobs as job
+    where job.id = requested_job_id
+      and job.lease_expires_at > clock_timestamp();
+    if not found then return; end if;
+
+    published_revision = case
+      when jsonb_typeof(modern_task.metadata -> 'cover_mutation_revision') = 'number'
+      then (modern_task.metadata ->> 'cover_mutation_revision')::numeric
+      else -1
+    end;
+    if modern_task.status = 'completed'
+       and published_revision >= modern_checkpoint.authority_cover_mutation_revision then
+      checkpoint_revision = modern_checkpoint.row_revision;
+      task_revision = modern_task.row_revision;
+      return next;
+      return;
+    end if;
+    if modern_checkpoint.checkpoint = 'publication_completed' then return; end if;
+
+    select album.cover_path into modern_cover_path
+    from library.local_albums as album
+    where album.id = modern_checkpoint.local_album_id
+      and album.library_id = modern_checkpoint.library_id;
+    if not found then return; end if;
+    perform 1 from ops.jobs as job
+    where job.id = requested_job_id
+      and job.lease_expires_at > clock_timestamp();
+    if not found then return; end if;
+
+    update ops.cover_lookup_tasks as task
+    set status = 'completed',
+        completed_at = observed_at,
+        selected_cover_private_path = modern_cover_path,
+        provider_payload = coalesce(task.provider_payload, '{}'::jsonb)
+          || jsonb_build_object('result_kind', 'cover-updated', 'progress', 100,
+               'progress_label', 'Completed'),
+        metadata = coalesce(task.metadata, '{}'::jsonb) || jsonb_build_object(
+          'notification_action_taken', true,
+          'notification_completed_at', observed_at,
+          'cover_mutation_revision', modern_checkpoint.authority_cover_mutation_revision
+        ),
+        row_revision = task.row_revision + 1
+    where task.id = modern_task.id
+      and task.row_revision = modern_task.row_revision
+    returning task.row_revision into task_revision;
+    checkpoint_revision = modern_checkpoint.row_revision;
+    return next;
+    return;
+  end if;
+
+  return query
+  select checkpoint_row.row_revision, task.row_revision
+  from ops.jobs as job
+  join ops.cover_remote_save_checkpoints as checkpoint_row
+    on checkpoint_row.job_id = job.id
+    and checkpoint_row.library_id = job.library_id
+  join ops.cover_lookup_tasks as task
+    on task.id = checkpoint_row.task_id
+    and task.job_id = job.id
+    and task.library_id = checkpoint_row.library_id
+    and task.local_album_id = checkpoint_row.local_album_id
+  join library.local_albums as album
+    on album.id = checkpoint_row.local_album_id
+    and album.library_id = checkpoint_row.library_id
+  where job.id = requested_job_id
+    and job.kind = 'cover_remote_save'
+    and job.state = 'running'
+    and job.attempt_count = requested_attempt
+    and job.lease_owner = requested_worker_id
+    and job.lease_token = requested_lease_token
+    and job.lease_expires_at > clock_timestamp()
+    and checkpoint_row.id = requested_checkpoint_id
+    and task.id = requested_task_id
+    and checkpoint_row.authority_cover_mutation_revision is null
+    and checkpoint_row.checkpoint = 'publication_completed'
+    and task.status = 'completed'
+    and task.selected_cover_private_path is not distinct from
+      case when linked_remote then null else selected_cover_path end
+    and (
+      (checkpoint_row.row_revision = expected_checkpoint_revision
+        and task.row_revision = expected_task_revision)
+      or (checkpoint_row.row_revision > 0 and task.row_revision > 0
+        and checkpoint_row.row_revision - 1 = expected_checkpoint_revision
+        and task.row_revision - 1 = expected_task_revision)
+    );
+  if found then return; end if;
+
+  select job.* into selected_job
+    from ops.jobs as job
+   where job.id = requested_job_id
+     and job.kind = 'cover_remote_save'
+     and job.state = 'running'
+     and job.attempt_count = requested_attempt
+     and job.lease_owner = requested_worker_id
+     and job.lease_token = requested_lease_token
+     and job.lease_expires_at > clock_timestamp()
+     and job.cancel_requested_at is null
+   for update;
+  if not found then return; end if;
+
+  perform 1
+    from ops.cover_lookup_tasks as task
+   where task.id = requested_task_id
+     and task.job_id = requested_job_id
+     and task.row_revision = expected_task_revision
+     and task.status = 'running'
+     and task.cancel_requested_at is null
+   for update;
+  if not found then return; end if;
+
+  perform 1
+    from ops.cover_remote_save_checkpoints as checkpoint_row
+   where checkpoint_row.id = requested_checkpoint_id
+     and checkpoint_row.job_id = requested_job_id
+     and checkpoint_row.row_revision = expected_checkpoint_revision
+     and checkpoint_row.checkpoint = 'promotion_completed'
+   for update;
+  if not found then
+    raise exception 'remote cover publication checkpoint changed';
+  end if;
+  if selected_job.lease_expires_at <= clock_timestamp() then return; end if;
+
+  update ops.cover_lookup_tasks as task
+     set status = 'completed',
+         completed_at = observed_at,
+         selected_cover_private_path = case when linked_remote then null else selected_cover_path end,
+         provider_payload = task.provider_payload || jsonb_build_object(
+           'result_kind', 'cover-updated',
+           'progress', 100,
+           'progress_label', 'Completed'
+         ),
+         metadata = task.metadata || jsonb_build_object(
+           'notification_action_taken', true,
+           'notification_completed_at', observed_at
+         ),
+         row_revision = task.row_revision + 1
+    from ops.jobs as job
+   where task.id = requested_task_id
+     and task.job_id = requested_job_id
+     and task.row_revision = expected_task_revision
+     and task.status = 'running'
+     and task.cancel_requested_at is null
+     and job.id = requested_job_id
+     and job.cancel_requested_at is null
+  returning task.row_revision into task_revision;
+  if task_revision is null then return; end if;
+  update ops.cover_remote_save_checkpoints as checkpoint_row
+     set checkpoint = 'publication_completed', completed_at = observed_at,
+         updated_at = observed_at, row_revision = checkpoint_row.row_revision + 1
+   where checkpoint_row.id = requested_checkpoint_id
+     and checkpoint_row.job_id = requested_job_id
+     and checkpoint_row.row_revision = expected_checkpoint_revision
+     and checkpoint_row.checkpoint = 'promotion_completed'
+  returning checkpoint_row.row_revision into checkpoint_revision;
+  return next;
+end;
+$$;
+
 create or replace function ops.load_claimed_cover_finalization(
   requested_job_id bigint,
   requested_attempt integer,
@@ -4807,7 +5348,7 @@ begin
       lease_token = null,
       lease_expires_at = null,
       heartbeat_at = null,
-      outcome_code = reason_code,
+      outcome_code = retry_claimed_cover_finalization.reason_code,
       updated_at = observed_at
   from ops.cover_remote_save_checkpoints as checkpoint_row
   where job.id = requested_job_id
@@ -4827,7 +5368,7 @@ begin
     retry_decision, next_due_at, worker_instance_id, transitioned_at
   ) values (
     moved_job.id, 'running', 'retry_wait', moved_job.attempt_count,
-    reason_code, 'scheduled', retry_at, requested_worker_id, observed_at
+    retry_claimed_cover_finalization.reason_code, 'scheduled', retry_at, requested_worker_id, observed_at
   );
   return true;
 end;
@@ -6526,10 +7067,22 @@ declare
     'ops.requeue_expired_cover_finalization(timestamp with time zone)',
     'ops.reconcile_stale_job_leases(timestamp with time zone,integer)'
   ];
+  cover_baseline_function constant text :=
+    'library.load_cover_mutation_baseline(bigint,bigint)';
   required record;
 begin
   if not ops.validate_durable_worker_startup_baseline_0105(p_registered_kinds) then
     return false;
+  end if;
+  if p_registered_kinds && array[
+    'cover_lookup', 'cover_bulk_refresh', 'cover_remote_save', 'post_scan_cover_refresh'
+  ]::text[] then
+    if pg_catalog.to_regprocedure(cover_baseline_function) is null
+       or not pg_catalog.has_function_privilege(
+         session_user, cover_baseline_function, 'EXECUTE'
+       ) then
+      return false;
+    end if;
   end if;
   for required in select pg_catalog.unnest(required_functions) as signature
   loop

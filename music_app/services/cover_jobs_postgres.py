@@ -6,7 +6,7 @@ import base64
 import binascii
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -21,7 +21,10 @@ except ImportError:  # pragma: no cover
     InterfaceError = OperationalError = None
     dict_row = None
 
-from music_app.services.cover_mutation_coordinator import CommitOutcomeUnknown
+from music_app.services.cover_mutation_coordinator import (
+    CommitOutcomeUnknown, CoverMutationOutcome, CoverMutationStatus,
+)
+from music_app.services.jobs.models import ClaimedJob, JobLeaseLost
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
 
 
@@ -109,6 +112,14 @@ class ClaimedCoverRemoteSaveScope:
     selected_candidate: Mapping[str, object]
     library_root_path: str
     track_paths: tuple[str, ...]
+    selected_cover_path: str | None = None
+    library_id: int | None = None
+    local_album_id: int | None = None
+    task_id: int | None = None
+    authority_cover_mutation_revision: int | None = None
+    current_cover_mutation_revision: int | None = None
+    selected_cover_revision: str | None = None
+    committed_cover_revision: str | None = None
 
 
 def _default_connect(database_url: str) -> Any:
@@ -1069,6 +1080,118 @@ class PostgresCoverJobRepository:
             ),
         )
 
+    @staticmethod
+    def _finalization_claim_values(claim: ClaimedJob, observed_at: datetime) -> dict[str, object]:
+        return {
+            "job_id": _positive("job_id", claim.job_id),
+            "attempt": _positive("attempt", claim.attempt),
+            "worker_id": _bounded("worker_id", claim.worker_id, maximum=128),
+            "lease_token": _bounded("lease_token", claim.lease_token, maximum=256),
+            "observed_at": observed_at,
+        }
+
+    def load_claimed_finalization(
+        self, *, claim: ClaimedJob, observed_at: datetime
+    ) -> CoverMutationOutcome | None:
+        parameters = self._finalization_claim_values(claim, observed_at)
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                "select * from ops.load_claimed_cover_finalization(%(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(observed_at)s)",
+                parameters,
+            ).fetchone())
+        if not row:
+            return None
+        checkpoint = _bounded("checkpoint", row.get("checkpoint"), maximum=32)
+        if checkpoint not in {"authority_committed", "runtime_published", "publication_completed"}:
+            raise ValueError("invalid cover finalization checkpoint")
+        cover_revision = row.get("cover_mutation_revision")
+        if type(cover_revision) is not int or cover_revision < 0:
+            raise ValueError("cover mutation revision must be non-negative")
+        return CoverMutationOutcome(
+            status=CoverMutationStatus.COMMITTED,
+            checkpoint=checkpoint,
+            cover_mutation_revision=cover_revision,
+            selected_cover_revision=_bounded("selected_cover_revision", row.get("selected_cover_revision"), maximum=256),
+            library_id=_positive("library_id", row.get("library_id")),
+            local_album_id=_positive("local_album_id", row.get("local_album_id")),
+            task_id=_positive("task_id", row.get("task_id")),
+            finalization_checkpoint_id=_positive("checkpoint_id", row.get("checkpoint_id")),
+            finalization_checkpoint_revision=_positive("checkpoint_revision", row.get("checkpoint_revision")),
+        )
+
+    def advance_finalization(
+        self, *, claim: ClaimedJob, checkpoint_id: int,
+        expected_checkpoint_revision: int, checkpoint: str, observed_at: datetime,
+    ) -> int | None:
+        if checkpoint not in {"runtime_published", "publication_completed"}:
+            raise ValueError("invalid cover finalization checkpoint")
+        parameters = self._finalization_claim_values(claim, observed_at)
+        parameters.update(
+            checkpoint_id=_positive("checkpoint_id", checkpoint_id),
+            expected_checkpoint_revision=_positive("expected_checkpoint_revision", expected_checkpoint_revision),
+            checkpoint=checkpoint,
+        )
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                "select ops.advance_claimed_cover_finalization(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(expected_checkpoint_revision)s, %(checkpoint)s, %(observed_at)s) as row_revision",
+                parameters,
+            ).fetchone())
+        revision = row.get("row_revision")
+        return int(revision) if revision is not None else None
+
+    def publish_runtime_if_revision(
+        self, *, claim: ClaimedJob, library_id: int, local_album_id: int,
+        cover_mutation_revision: int, selected_cover_revision: str,
+    ) -> None:
+        scope = self.load_claimed_remote_save(
+            task_key=claim.subject_ref, task_id=claim.parameters.get("task_id"),
+            library_id=claim.library_id, job_id=claim.job_id, attempt=claim.attempt,
+            worker_id=claim.worker_id, lease_token=claim.lease_token,
+            now=datetime.now(timezone.utc),
+        )
+        if scope is None:
+            raise JobLeaseLost(claim.job_id)
+        if (scope.library_id, scope.local_album_id, scope.authority_cover_mutation_revision, scope.committed_cover_revision) != (
+            library_id, local_album_id, cover_mutation_revision, selected_cover_revision,
+        ):
+            raise ValueError("cover finalization identity changed")
+        if scope.current_cover_mutation_revision is None or scope.current_cover_mutation_revision < cover_mutation_revision or (
+            scope.current_cover_mutation_revision == cover_mutation_revision
+            and scope.selected_cover_revision != selected_cover_revision
+        ):
+            raise ValueError("cover authority does not prove committed publication")
+        # Web reads observe this durable revision through the existing cache invalidator.
+
+    def publish_task_if_revision(
+        self, *, claim: ClaimedJob, task_id: int,
+        cover_mutation_revision: int, terminal_state: str,
+    ) -> None:
+        if terminal_state != "completed":
+            raise ValueError("cover finalization only publishes completion")
+        if type(cover_mutation_revision) is not int or cover_mutation_revision < 0:
+            raise ValueError("cover mutation revision must be non-negative")
+        observed_at = datetime.now(timezone.utc)
+        scope = self.load_claimed_remote_save(
+            task_key=claim.subject_ref, task_id=task_id,
+            library_id=claim.library_id, job_id=claim.job_id, attempt=claim.attempt,
+            worker_id=claim.worker_id, lease_token=claim.lease_token, now=observed_at,
+        )
+        if scope is None:
+            raise JobLeaseLost(claim.job_id)
+        if scope.task_id != task_id or scope.authority_cover_mutation_revision != cover_mutation_revision:
+            raise ValueError("cover finalization task identity changed")
+        published = self.publish_claimed_remote_save(
+            checkpoint_id=scope.checkpoint_id, task_id=task_id,
+            expected_checkpoint_revision=scope.checkpoint_revision,
+            expected_task_revision=scope.task_revision,
+            selected_cover_path=scope.selected_cover_path,
+            linked_remote=scope.selected_cover_path is None,
+            library_id=claim.library_id, job_id=claim.job_id, attempt=claim.attempt,
+            worker_id=claim.worker_id, lease_token=claim.lease_token, now=observed_at,
+        )
+        if published is None:
+            raise JobLeaseLost(claim.job_id)
+
     def load_claimed_remote_save(self, **values: object) -> ClaimedCoverRemoteSaveScope | None:
         parameters = self._claim_values(**values)
         with self._connect() as connection:
@@ -1094,10 +1217,26 @@ class PostgresCoverJobRepository:
             ),
             candidate_id=_bounded("candidate_id", row.get("candidate_id"), maximum=256),
             selected_candidate=(dict(candidate) if isinstance(candidate, Mapping) else {}),
-            library_root_path=_bounded(
-                "library_root_path", row.get("library_root_path"), maximum=8192
+            library_root_path=(
+                str(row.get("library_root_path") or "")
+                if row.get("checkpoint") in {"authority_committed", "runtime_published", "publication_completed"}
+                else _bounded("library_root_path", row.get("library_root_path"), maximum=8192)
             ),
             track_paths=tuple(str(path) for path in (row.get("track_paths") or ())),
+            selected_cover_path=str(row.get("selected_cover_path") or "") or None,
+            library_id=int(row["library_id"]) if row.get("library_id") is not None else None,
+            local_album_id=int(row["local_album_id"]) if row.get("local_album_id") is not None else None,
+            task_id=int(row["task_id"]) if row.get("task_id") is not None else None,
+            authority_cover_mutation_revision=(
+                int(row["authority_cover_mutation_revision"])
+                if row.get("authority_cover_mutation_revision") is not None else None
+            ),
+            current_cover_mutation_revision=(
+                int(row["current_cover_mutation_revision"])
+                if row.get("current_cover_mutation_revision") is not None else None
+            ),
+            selected_cover_revision=str(row.get("selected_cover_revision") or "") or None,
+            committed_cover_revision=str(row.get("committed_cover_revision") or "") or None,
         )
 
     def checkpoint_claimed_remote_save(

@@ -262,21 +262,9 @@ class PostgresCoverMutationRepository:
             self._set_timeout(connection)
             row = connection.execute(
                 """
-                select
-                    coalesce(
-                        nullif(library_row.metadata ->> 'inventory_mutation_revision', '')::bigint,
-                        0
-                    ) as inventory_revision,
-                    coalesce(state.cover_mutation_revision, 0) as cover_mutation_revision,
-                    nullif(album.metadata ->> 'cover_revision', '') as selected_cover_revision,
-                    nullif(album.cover_path, '') as selected_cover_path
-                from library.libraries library_row
-                join library.local_albums album
-                  on album.library_id = library_row.id
-                 and album.id = %(album_id)s
-                left join library.cover_mutation_state state
-                  on state.library_id = library_row.id
-                where library_row.id = %(library_id)s
+                select * from library.load_cover_mutation_baseline(
+                    %(library_id)s, %(album_id)s
+                )
                 """,
                 parameters,
             ).fetchone()

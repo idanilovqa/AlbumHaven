@@ -257,8 +257,10 @@ test('window replacement restores keyboard focus to the same artist link', () =>
   assert.equal(focused, true);
 });
 
-test('bounded interaction: sidebar window scroll renders only the new window at 14,000 artists', async () => {
-  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+// One sidebar scroll that moves the virtual window. `frameOnly` measures just the
+// animation frame the scroll schedules, which renders the new window.
+async function sidebarWindowScroll(cardinality, { frameOnly = false } = {}) {
+  const { countedCollection, createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
   const coreSource = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'core-state-and-helpers.js'),
     'utf8',
@@ -267,7 +269,7 @@ test('bounded interaction: sidebar window scroll renders only the new window at 
     path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'browser-scheduling-helpers.js'),
     'utf8',
   );
-  const run = async (cardinality) => {
+  {
     const counter = createInteractionCounter();
     class CountedElement {
       constructor() {
@@ -337,22 +339,42 @@ test('bounded interaction: sidebar window scroll renders only the new window at 
     flushFrames();
     const scroll = sidebar.listeners.get('scroll');
     assert.equal(typeof scroll, 'function');
-    const work = await counter.measure(() => {
-      sidebar.scrollTop = 200 * 47;
+    sidebar.scrollTop = 200 * 47;
+    if (frameOnly) {
       scroll();
+      assert.equal(frames.length, 1, 'the scroll schedules one render frame');
+    }
+    const work = await counter.measure(() => {
+      if (!frameOnly) scroll();
       flushFrames();
     });
     const indexes = [...sidebarList.markup.matchAll(/data-sidebar-virtual-index="(\d+)"/g)].map(match => Number(match[1]));
     assert.deepEqual([indexes[0], indexes.length], [160, 160], 'the scroll must mount the window that holds row 200');
     assert.ok(sidebarList.dataset.sidebarStructureSignature.length <= 32, 'the signature names the list, not its artists');
     return work;
-  };
+  }
+}
+
+test('bounded interaction: sidebar window scroll renders only the new window at 14,000 artists', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter.js');
   await measureScalePair({
     id: 'js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners',
     small: 400,
     large: 14000,
-    run,
+    run: sidebarWindowScroll,
     budgets: { itemsVisited: 160, renderCommits: 1, domMutations: 1, markupBytes: 64000, domQueries: 2, animationFrames: 2, listeners: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: sidebar window render frame renders only the new window at 14,000 artists', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  await measureScalePair({
+    id: 'js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners#2',
+    small: 400,
+    large: 14000,
+    run: cardinality => sidebarWindowScroll(cardinality, { frameOnly: true }),
+    budgets: { itemsVisited: 160, renderCommits: 1, domMutations: 1, markupBytes: 64000, domQueries: 2, animationFrames: 1, listeners: 0 },
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });

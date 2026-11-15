@@ -1975,18 +1975,44 @@
     },
     {
       "id": "js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners#2",
-      "action": "scheduleBrowserAnimationFrame timers installed by ensureSidebarVirtualScrollListeners",
+      "action": "Render the sidebar artist window on the frame a window-changing scroll schedules",
       "entrypoints": [
         "js:music_app/static/js/runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/core-state-and-helpers.js"
+        "music_app/static/js/runtime/core-state-and-helpers.js",
+        "music_app/static/js/navigation-tree.js",
+        "music_app/static/js/runtime/render-markup-helpers.js",
+        "music_app/static/js/runtime/browser-navigation-helpers.js"
       ],
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 400,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 160,
+        "renderCommits": 1,
+        "domMutations": 1,
+        "markupBytes": 64000,
+        "domQueries": 2,
+        "animationFrames": 1,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/sidebar-virtualization.test.js",
+      "testIdentity": "bounded interaction: sidebar window render frame renders only the new window at 14,000 artists",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only contract; the sidebar window render is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/core-state-and-helpers.js#renderSidebar",

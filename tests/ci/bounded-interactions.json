@@ -3295,18 +3295,38 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage#2",
-      "action": "scheduleBrowserAnimationFrame timers installed by loadNextRootGalleryPage",
+      "action": "Load the next root gallery page from the continuation frame; only that page is merged, applied, modelled and laid out, with no work over the loaded gallery",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 120,
+        "requests": 1,
+        "animationFrames": 3
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the root gallery append path; every continuation then re-merges, re-applies and regroups the whole loaded gallery again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage",
@@ -3467,18 +3487,38 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#renderView",
-      "action": "scheduleBrowserAnimationFrame timers installed by renderView",
+      "action": "Load the next root gallery page from the frames a render schedules; only that page is merged, applied, modelled and laid out, with no work over the loaded gallery",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#renderView:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 120,
+        "requests": 1,
+        "animationFrames": 3
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the root gallery append path; every continuation then re-merges, re-applies and regroups the whole loaded gallery again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",
@@ -3575,7 +3615,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#scheduleStatusPoll",
-      "action": "Reschedule the self-rescheduling library status poll; an unchanged status does no presentation or library work",
+      "action": "Reschedule the self-rescheduling library status poll; an unchanged status does no presentation or library work, and an unchanged MusicBrainz artist status is a bodiless revision match",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#scheduleStatusPoll:timer:scheduleBrowserTimeout"
       ],
@@ -3595,20 +3635,22 @@
         "production": 14000
       },
       "budgets": {
-        "requests": 1,
+        "requests": 2,
+        "responseBytes": 0,
+        "responseRows": 0,
         "itemsVisited": 0,
         "renderCommits": 0,
         "domMutations": 0,
         "timers": 1
       },
       "growth": {
-        "metric": "itemsVisited",
+        "metric": "responseBytes",
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
       "testIdentity": "BI an unchanged status poll does no presentation or library work at production scale",
       "performanceTargets": [],
-      "rollback": "Revert the stored MusicBrainz pending flag; every status poll then walks every owner-only artist repair state again, with no data or API change."
+      "rollback": "Revert the stored MusicBrainz pending flag and the artist status revision; every status poll then walks every owner-only artist repair state again and every due artist status read downloads every artist, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",
@@ -4297,7 +4339,7 @@
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
-      "action": "requestAnimationFrame timers installed by scheduleFloatingNotificationPlacement",
+      "action": "Place floating notifications on the next frame after a layout change; a blocked lane keeps only its newest never-shown toast, so a frame reads the fixed surfaces, the open modal's controls and a constant number of notifications",
       "entrypoints": [
         "js:music_app/static/js/runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement:timer:requestAnimationFrame"
       ],
@@ -4308,7 +4350,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 14,
+        "domQueries": 4,
+        "animationFrames": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/notification-ui-helpers.test.js",
+      "testIdentity": "BI a blocked notification lane keeps one waiting toast and constant placement work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the waiting-toast replacement; toasts shown while a modal blocks their lane then accumulate and every placement frame measures all of them again, with no data or API change."
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#showRepairAlert",

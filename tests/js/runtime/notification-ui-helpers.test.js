@@ -960,3 +960,89 @@ test('bounded interaction: notification lane observers place only the visible no
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });
+
+const MODAL_CONTROL_COUNT = 12;
+
+// Real showToast and placement while an open modal leaves no room: toasts are
+// shown one at a time, each frame running as it would in the browser.
+function blockedToastLanes(counter) {
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const { CountedElement } = createCountedDom(counter);
+  const { context, scheduledTimeouts, toasts } = createContext();
+  const frames = [];
+  let mutations = null;
+  const counted = (tagName, rect, properties = {}) => {
+    const node = new CountedElement(tagName, { rect, ...properties });
+    const read = node.getBoundingClientRect.bind(node);
+    node.getBoundingClientRect = () => { counter.count('itemsVisited'); return read(); };
+    node.removeAttribute = name => { delete node.attributes[name]; };
+    return node;
+  };
+  const viewport = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
+  const header = counted('HEADER', { ...viewport, bottom: 48, height: 48 });
+  // A full-screen control blocks every lane until the modal closes.
+  const controls = [counted('BUTTON', viewport), ...Array.from({ length: MODAL_CONTROL_COUNT - 1 }, (_, index) => (
+    counted('BUTTON', { left: 40 * index, top: 100, right: 40 * index + 32, bottom: 132, width: 32, height: 32 })
+  ))];
+  const modal = counted('SECTION', viewport);
+  modal.setAttribute('aria-modal', 'true');
+  modal.querySelectorAll = () => { counter.count('domQueries'); return controls; };
+  context.document.createElement = () => {
+    const toast = counted('DIV', { left: 0, top: 0, right: 240, bottom: 40, width: 240, height: 40 }, { offsetHeight: 40 });
+    Object.defineProperty(toast, 'offsetWidth', { get: () => { counter.count('itemsVisited'); return 240; } });
+    toast.remove = () => toasts.splice(toasts.indexOf(toast), 1);
+    return toast;
+  };
+  Object.assign(context.window, { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+  Object.assign(context.document, {
+    body: {}, documentElement: {}, addEventListener() {}, removeEventListener() {},
+    querySelectorAll: () => { counter.count('domQueries'); return [header, modal]; },
+  });
+  Object.assign(context, {
+    requestAnimationFrame: callback => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+    cancelAnimationFrame() {},
+    getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+    MutationObserver: class { constructor(callback) { mutations = callback; } observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+  });
+  const flushFrames = () => { while (frames.length) frames.shift()(); };
+  const showToast = (index) => {
+    context.showToast(`Update ${index}`, 'success', 3600);
+    flushFrames();
+  };
+  const layoutChange = () => {
+    mutations([{ target: modal }]);
+    flushFrames();
+  };
+  return { context, controls, layoutChange, scheduledTimeouts, showToast, toasts };
+}
+
+test('BI a blocked notification lane keeps one waiting toast and constant placement work at production scale', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (shownToasts) => {
+    const counter = createInteractionCounter();
+    const { context, controls, layoutChange, scheduledTimeouts, showToast, toasts } = blockedToastLanes(counter);
+    for (let index = 0; index < shownToasts; index += 1) showToast(index);
+    assert.equal(toasts.length, 1, 'never-shown toasts are replaced, not piled up');
+    const [waiting] = toasts;
+    assert.equal(waiting.attributes['data-notification-deferred'], '');
+    assert.equal(scheduledTimeouts.length, 0, 'a waiting toast has not started its lifetime');
+    const work = await counter.measure(layoutChange);
+    controls.shift();
+    layoutChange();
+    assert.equal(waiting.attributes['data-notification-deferred'], undefined, 'the newest toast shows once the lane clears');
+    assert.equal(scheduledTimeouts.length, 1, 'and starts its lifetime');
+    assert.match(waiting.markup, new RegExp(`Update ${shownToasts - 1}`));
+    return work;
+  };
+  // One frame reads the header, the open modal's controls and the one waiting toast.
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement',
+    small: 20,
+    large: 14000,
+    run,
+    budgets: { itemsVisited: MODAL_CONTROL_COUNT + 2, domQueries: 4, animationFrames: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+});

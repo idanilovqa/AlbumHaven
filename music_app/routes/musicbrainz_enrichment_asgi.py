@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Mapping
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.current_actor_asgi import current_actor_from_request
@@ -80,7 +81,7 @@ async def list_artist_status(request: Request):
     rows = await _call_service(request, "list_artist_attention")
     if not isinstance(rows, (list, tuple)):
         raise _unavailable()
-    return {"artists": [
+    payload = {"artists": [
         {
             **{field: row.get(field) for field in _STATUS_FIELDS},
             # The Gallery uses app wording, which differs from Problematic Files for pending metadata.
@@ -88,6 +89,22 @@ async def list_artist_status(request: Request):
         }
         for row in rows if isinstance(row, Mapping)
     ]}
+    # The revision names this exact answer. A poller that already holds it gets
+    # a bodiless 304, so an unchanged status costs no per-artist transfer.
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
+    revision = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
+    headers = {"ETag": revision, "Cache-Control": "private, no-store"}
+    if revision in _if_none_match_revisions(request):
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="application/json", headers=headers)
+
+
+def _if_none_match_revisions(request: Request) -> set[str]:
+    return {
+        candidate.strip().removeprefix("W/")
+        for candidate in request.headers.get("if-none-match", "").split(",")
+        if candidate.strip()
+    }
 
 
 @router.get("/{local_artist_id}")

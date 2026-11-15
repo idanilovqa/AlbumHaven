@@ -3797,11 +3797,53 @@ function notificationSurfaceIsHidden(node) {
   return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
 }
 
+// The open modal's controls a notification must not cover. Each control the modal renders joins
+// the set at once; an IntersectionObserver then keeps only those on screen as the modal scrolls, so
+// a placement frame reads them instead of every control of a long modal list.
+let modalControlWatch = null;
+
+function releaseModalControls() {
+  modalControlWatch?.disconnect();
+  modalControlWatch = null;
+}
+
+function watchModalControls(modal) {
+  if (modalControlWatch?.modal === modal) return modalControlWatch.controls;
+  releaseModalControls();
+  const controls = new Set();
+  const onScreen = new IntersectionObserver((entries) => {
+    entries.forEach(({ target, isIntersecting }) => {
+      if (isIntersecting && target.isConnected) controls.add(target);
+      else controls.delete(target);
+    });
+    scheduleFloatingNotificationPlacement();
+  });
+  const isControl = node => Boolean(node.matches?.(NOTIFICATION_MODAL_CONTROL_SELECTOR));
+  const controlsIn = node => [...(isControl(node) ? [node] : []), ...(node.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])];
+  // Observing again brings a fresh report, so a control watched twice still leaves once off screen.
+  const watch = (control) => { controls.add(control); onScreen.unobserve(control); onScreen.observe(control); };
+  const unwatch = (control) => { controls.delete(control); onScreen.unobserve(control); };
+  // Rendered, removed, and newly focusable controls change the set by their own nodes only.
+  const rendering = new MutationObserver(records => records.forEach((record) => {
+    record.addedNodes?.forEach(node => controlsIn(node).forEach(watch));
+    record.removedNodes?.forEach(node => controlsIn(node).forEach(unwatch));
+    if (record.type === 'attributes') (isControl(record.target) ? watch : unwatch)(record.target);
+  }));
+  Array.from(modal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || []).forEach(watch);
+  rendering.observe(modal, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['tabindex', 'role', 'href', 'type', 'contenteditable', 'data-loop-range-surface'],
+  });
+  modalControlWatch = { modal, controls, disconnect() { onScreen.disconnect(); rendering.disconnect(); } };
+  return controls;
+}
+
 function getNotificationCollisionNodes() {
   const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
   const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
   const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
-  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+  if (!activeModal) releaseModalControls();
+  else fixed.push(...Array.from(watchModalControls(activeModal))
     .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
   return fixed;
 }
@@ -3955,6 +3997,7 @@ function registerFloatingNotification(node, options = {}) {
       targets.forEach(([target, event]) => target.removeEventListener(event, scheduleFloatingNotificationPlacement, true));
       if (floatingNotificationFrame !== null) cancelAnimationFrame(floatingNotificationFrame);
       floatingNotificationFrame = null;
+      releaseModalControls();
     } };
   } else floatingNotificationCleanup.resize.observe(node);
   scheduleFloatingNotificationPlacement();

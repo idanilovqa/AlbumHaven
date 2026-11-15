@@ -297,8 +297,25 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 5,
+        "production": 5000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "requests": 2,
+        "outputEmissions": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "bounded interaction: a save message reads no kept cover or asset when 5,000 covers are kept",
+      "performanceTargets": [],
+      "rollback": "Revert the once-read cover and versioned-asset index with its running byte total and the in-place fill batch; each save message then lists every kept cache entry again, sums every kept cover per kept cover, and copies the whole unseen-cover backlog. No data or API change."
     },
     {
       "id": "js:app-copy-worker.js#asset",
@@ -630,7 +647,27 @@
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 0,
+        "listeners": 0,
+        "domQueries": 220,
+        "domMutations": 1690,
+        "renderCommits": 30,
+        "markupBytes": 2040
+      },
+      "growth": {
+        "metric": "domQueries",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/appearance-editor-theme.test.js",
+      "testIdentity": "bounded interaction: Main elements color input stays bounded after 500 editor mounts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the editor already redraws a fixed control set over a draft whose histories and errors are capped by their fixed fields, and each mount drops the previous editor's subscription. Reverting returns this entry to static proof, which the guard rejects for its input listener."
     },
     {
       "id": "js:appearance-backgrounds.js#mountAlbumPage",
@@ -731,7 +768,27 @@
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 0,
+        "listeners": 0,
+        "domQueries": 220,
+        "domMutations": 1340,
+        "renderCommits": 10,
+        "markupBytes": 0
+      },
+      "growth": {
+        "metric": "domQueries",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/appearance-editor-theme.test.js",
+      "testIdentity": "bounded interaction: Selection & Hover accent input stays bounded after 500 editor mounts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the editor already redraws a fixed control set for a two-field accent, and each mount drops the previous editor's subscription. Reverting returns this entry to static proof, which the guard rejects for its input listener."
     },
     {
       "id": "js:audio-worklets/gapless-playback-processor.js#GaplessPlaybackProcessor.constructor",
@@ -929,7 +986,23 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 3,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 9,
+        "outputEmissions": 3
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/android-bridge-client.test.js",
+      "testIdentity": "bounded interaction: a shell message reaches only its own handler among 1,000 registered and pending",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each shell message already looks up its one event handler, command answer or pending request by name or id. Reverting returns this entry to static proof, which the guard rejects for the unresolved handler and answer calls."
     },
     {
       "id": "js:runtime/android-bridge-client.js#requestAndroidNativePlaybackRefs",
@@ -4432,7 +4505,24 @@
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 12,
+        "production": 2000
+      },
+      "budgets": {
+        "itemsVisited": 140,
+        "domQueries": 10,
+        "animationFrames": 10
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/notification-ui-helpers.test.js",
+      "testIdentity": "bounded interaction: scrolling a 2,000-control modal places a notification from its on-screen controls only",
+      "performanceTargets": [],
+      "rollback": "Revert the open modal's on-screen control watch; each scroll or layout frame then queries every control of the open modal again and reads all their rectangles. No data or API change."
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
@@ -4512,6 +4602,40 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/notification-ui-helpers.js#watchModalControls",
+      "action": "IntersectionObserver/MutationObserver observers installed by watchModalControls",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#watchModalControls:observer:IntersectionObserver",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#watchModalControls:observer:MutationObserver"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/notification-ui-helpers.js"
+      ],
+      "rules": [
+        "BI-09"
+      ],
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 24,
+        "production": 2000
+      },
+      "budgets": {
+        "itemsVisited": 24,
+        "domQueries": 3,
+        "subscriptions": 36,
+        "animationFrames": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/notification-ui-helpers.test.js",
+      "testIdentity": "bounded interaction: the modal control watch handles one scrolled and one rendered row of a 2,000-control modal",
+      "performanceTargets": [],
+      "rollback": "Revert the open modal's on-screen control watch together with its registerFloatingNotification#2 contract; placement then reads every control of the open modal on each frame again. No data or API change."
     },
     {
       "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",
@@ -7461,7 +7585,26 @@
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 0,
+        "listeners": 0,
+        "domQueries": 30,
+        "domMutations": 80,
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "domMutations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/selection-accent.test.js",
+      "testIdentity": "bounded interaction: selection accent color input stays bounded after 500 editor mounts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; controller.setDraft normalizes a two-field draft and notifies only the mounted editor, which redraws a fixed control set; each mount releases the previous editor's subscription and listeners. Reverting returns this entry to static proof, which the guard rejects for the unresolved controller.setDraft call."
     },
     {
       "id": "js:selection-accent.js#save",

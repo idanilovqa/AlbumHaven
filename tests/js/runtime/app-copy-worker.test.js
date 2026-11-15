@@ -1,8 +1,11 @@
 // The app-copy service worker: routing, per-account copies, age limit, deletion, asset versions and
 // cover eviction (instant return, IAR-001..IAR-009).
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
+const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
 
 const {
   createAppCopyWorker, CACHE_PREFIX, COPY_HEADER, VERSION_HEADER, MAX_COPY_AGE_MS,
@@ -11,7 +14,8 @@ const {
 const ORIGIN = 'https://sandbox9.albumhaven.org';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function fakeCaches() {
+// With [counter], every request a cache lists counts as one visited item.
+function fakeCaches(counter) {
   const stores = new Map();
   const keyOf = request => new URL(typeof request === 'string' ? request : request.url, ORIGIN).href;
   const open = (name) => {
@@ -38,7 +42,10 @@ function fakeCaches() {
           matches.forEach(url => entries.delete(url));
           return matches.length > 0;
         },
-        async keys() { return [...entries.keys()].map(url => new Request(url)); },
+        async keys() {
+          const requests = [...entries.keys()].map(url => new Request(url));
+          return counter ? countedCollection(requests, counter) : requests;
+        },
       });
     }
     return stores.get(name);
@@ -647,5 +654,64 @@ test('request capture: saving the view fetches its page once and at most one bat
     assert.equal(repeat.paths.length - 1, Math.min(Math.max(covers - 120, 0), 120));
     assert.equal(repeat.paths.slice(1).some(path => coverPaths.includes(path)), false);
     return metrics;
+  });
+});
+
+// The installed worker as the Android shell runs it: the file's own listeners on a service-worker scope.
+function installedWorker({ caches, fetch }) {
+  const listeners = new Map();
+  const scope = {
+    registration: {}, caches, fetch, location: { origin: ORIGIN }, crypto: globalThis.crypto,
+    clients: { claim: async () => {} }, skipWaiting: async () => {},
+    addEventListener: (type, listener) => listeners.set(type, listener),
+  };
+  const file = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js');
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { self: scope, URL, Request, Response, TextEncoder }, { filename: file });
+  return {
+    async post(data) {
+      const replies = [];
+      let work;
+      listeners.get('message')({ data, ports: [{ postMessage: reply => replies.push({ ...reply }) }], waitUntil: (promise) => { work = promise; } });
+      await work;
+      return replies;
+    },
+  };
+}
+
+test('bounded interaction: a save message reads no kept cover or asset when 5,000 covers are kept', async () => {
+  await measureScalePair({
+    id: 'js:app-copy-worker.js#<top-level>',
+    small: 5,
+    large: 5000,
+    budgets: { itemsVisited: 0, requests: 2, outputEmissions: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    async run(keptCovers) {
+      const counter = createInteractionCounter();
+      const caches = fakeCaches(counter);
+      // Covers kept by an earlier session, which the started worker reads once.
+      const kept = await caches.open(`${CACHE_PREFIX}acct-a`);
+      for (let index = 0; index < keptCovers; index += 1) {
+        await kept.put(`${ORIGIN}/__album-haven-cover/kept-${index}?bytes=4`, coverResponse(4));
+      }
+      let pageCovers = 0;
+      const worker = installedWorker({
+        caches,
+        fetch: async (request) => {
+          counter.count('requests');
+          return new URL(request.url).pathname === '/' ? coveredPage(pageCovers) : coverResponse(4);
+        },
+      });
+      pageCovers = 3;
+      assert.deepEqual(await worker.post({ type: 'save', url: `${ORIGIN}/` }), [{ stored: true }]);
+      // The next save names one cover more: the page and that one cover are fetched, nothing is listed.
+      pageCovers = 4;
+      const work = await counter.measure(async () => {
+        const replies = await worker.post({ type: 'save', url: `${ORIGIN}/` });
+        replies.forEach(() => counter.count('outputEmissions'));
+        assert.deepEqual(replies, [{ stored: true }]);
+      });
+      assert.equal([...kept.entries.keys()].filter(url => url.includes('/__album-haven-cover/')).length, keptCovers + 4);
+      return work;
+    },
   });
 });

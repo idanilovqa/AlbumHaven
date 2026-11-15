@@ -3987,9 +3987,11 @@ function loadCountedPlayer(counter, loopCount) {
 
 test('bounded interaction: global seekbar drag and input stay album-bounded with 1,000 saved loops', async () => {
   const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
-  for (const [event, budgets] of [
-    ['pointermove', { itemsVisited: 0, domQueries: 0, domMutations: 10, outputEmissions: 0 }],
-    ['input', { itemsVisited: 120, domQueries: 10, domMutations: 10, outputEmissions: 10 }],
+  // Both hot events measure under the entry's registered budgets; a drag move
+  // additionally proves it visits, queries, and persists nothing.
+  for (const [event, dragMoveLimits] of [
+    ['pointermove', { itemsVisited: 0, domQueries: 0, outputEmissions: 0 }],
+    ['input', null],
   ]) {
     const run = async (cardinality) => {
       const counter = createInteractionCounter();
@@ -4010,14 +4012,17 @@ test('bounded interaction: global seekbar drag and input stay album-bounded with
       assert.equal(player.time.textContent, event === 'pointermove' ? '2:30 / 5:00' : '1:40 / 5:00');
       return work;
     };
-    await measureScalePair({
-      id: `js:runtime/player-loop-playback.js#attachPlayerEvents ${event}`,
+    const results = await measureScalePair({
+      id: 'js:runtime/player-loop-playback.js#attachPlayerEvents',
       small: 20,
       large: 1000,
       run,
-      budgets,
+      budgets: { itemsVisited: 120, domQueries: 10, domMutations: 10, outputEmissions: 10 },
       growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
     });
+    for (const [metric, limit] of Object.entries(dragMoveLimits || {})) {
+      for (const work of [results.small, results.large]) assert.ok(work[metric] <= limit, `${event} ${metric}=${work[metric]} exceeds ${limit}`);
+    }
   }
 });
 

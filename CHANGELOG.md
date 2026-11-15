@@ -1,10 +1,14 @@
 # Changelog
 
-## 0.11.8 - 2026-11-14
+## Unreleased
 
 - Covers are addressed by opaque references (`/cover/<reference>`): no page or payload carries a local cover file path or the music folder any more. Migration 0200 stores the references and 0201 names every stored cover without changing any cover choice.
 - Only images the library names as covers can be fetched; the legacy `/cover?path=` route no longer serves other files under a library root and will be removed in a later release.
 - Cover responses are cached privately by the viewer's browser only.
+
+## 0.11.8 - 2026-11-14
+
+- A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.
 
 ## 0.11.7 - 2026-11-14
 

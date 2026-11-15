@@ -115,6 +115,39 @@ test('a static proof with reachable hazards requires a runtime contract', () => 
   assert.match(errors.join('\n'), /1 reachable hazard\(s\) need a runtime contract \(forEach at .*:9\)/);
 });
 
+test('only hot-path hazards require a contract; a hazard without the mark always counts', () => {
+  const entry = contractEntry({ proof: 'static' });
+  const hazard = { entrypoint: KEY, rule: 'BI-01', operation: 'forEach', path: OWNER, line: 9, reject: false, via: ['sync'] };
+  const errorsFor = extra => validateInventory(registry([entry]), { entrypoints: [entrypoint()], hazards: [{ ...hazard, ...extra }] });
+  assert.deepEqual(errorsFor({ hot: false }), []);
+  assert.match(errorsFor({ hot: true }).join('\n'), /1 reachable hazard\(s\) need a runtime contract/);
+  // Python routes and background entrypoints report hazards without the mark.
+  assert.match(errorsFor({}).join('\n'), /1 reachable hazard\(s\) need a runtime contract/);
+});
+
+test('a one-shot entrypoint still fails route ownership, request ownership, and dynamic targets', () => {
+  const click = `js:${OWNER}#install:event:click`;
+  const request = `js:${OWNER}#install:request:fetch`;
+  const entry = {
+    id: 'one-shot', action: 'Open Home', entrypoints: [click, request], owners: [OWNER], rules: ['BI-03'], workClass: 'constant', proof: 'static',
+    requestOwnership: { allowed: ['/home-data'], forbidden: ['/view-data'] },
+  };
+  const discovery = target => ({
+    entrypoints: [
+      entrypoint(click, { trigger: 'click', hot: false }),
+      entrypoint(request, { kind: 'request', trigger: 'fetch', hot: false, targets: [{ target, line: 3 }] }),
+    ],
+    hazards: [{
+      entrypoint: `js:${OWNER}#install:route:route-owner:/view-data?surface=home`, rule: 'BI-04', operation: 'route-owner:/view-data?surface=home',
+      path: OWNER, line: 3, reject: true, hot: true, via: [],
+    }],
+  });
+  const errors = validateInventory(registry([entry]), discovery('/view-data?surface=home')).join('\n');
+  assert.match(errors, /rejected BI-04 route-owner:\/view-data\?surface=home/);
+  assert.match(errors, /request target \/view-data is not an allowed endpoint/);
+  assert.match(validateInventory(registry([entry]), discovery(null)).join('\n'), /needs a request-capture contract/);
+});
+
 test('a contract covers hazards in helper files without listing them as owners', () => {
   const errors = validateInventory(registry([contractEntry()]), {
     entrypoints: [entrypoint()],

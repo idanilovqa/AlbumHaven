@@ -5,7 +5,7 @@
 //
 // Every discovered frontend/backend entrypoint must be registered exactly once.
 // An entry proves boundedness either statically (no hazard reachable from any
-// of its entrypoints) or with a deterministic runtime contract, which is rerun
+// of its hot-path entrypoints) or with a deterministic runtime contract, which is rerun
 // for a change to its owners or to any file hosting one of its hazards. Rejected
 // hazards (direct broad work in a high-frequency handler, a dedicated surface
 // routed through a generic endpoint, direct filesystem enumeration in a route,
@@ -205,8 +205,12 @@ function validateInventory(registry, discovery) {
     const via = hazard.via?.length ? ` via ${hazard.via.join(' > ')}` : '';
     errors.push(`rejected ${hazard.rule} ${hazard.operation} at ${hazard.path}:${hazard.line} from ${hazard.entrypoint}${via}`);
   }
+  // Only hot-path hazards demand a contract. JavaScript discovery marks
+  // hazards of one-shot events, one-shot timeouts, and request owners
+  // `hot: false`; a hazard without the mark (every Python route and
+  // background entrypoint) is always counted.
   const hazardsByEntrypoint = new Map();
-  for (const hazard of discovery.hazards.filter(item => !item.reject)) {
+  for (const hazard of discovery.hazards.filter(item => !item.reject && item.hot !== false)) {
     if (!hazardsByEntrypoint.has(hazard.entrypoint)) hazardsByEntrypoint.set(hazard.entrypoint, []);
     hazardsByEntrypoint.get(hazard.entrypoint).push(hazard);
   }

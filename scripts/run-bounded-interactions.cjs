@@ -13,6 +13,10 @@
 // evidence only for what it measured: every measurement against the checked-in
 // registry records its id and measuring test, and the run fails unless each
 // selected entry's own test measured the entry's id (or every id it `measures`).
+//
+// --node-only runs just the JavaScript contract stage with the same skip, todo,
+// and evidence checks. CI uses it in the portable JavaScript job, where the
+// inventory is validated separately and Python contracts run in the Python job.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -126,13 +130,13 @@ function pytestReportErrors(report, selections) {
   return errors;
 }
 
-function buildCommands({ registry, changedPaths = null, discovery, python = process.env.PYTHON || 'python', reportDir = os.tmpdir() }) {
+function buildCommands({ registry, changedPaths = null, discovery, python = process.env.PYTHON || 'python', reportDir = os.tmpdir(), nodeOnly = false }) {
   const entries = selectedEntries(registry, changedPaths, discovery);
   const selections = selectedTests(entries, changedPaths);
   const isPython = selection => fileOf(selection).endsWith('.py');
   const nodeFiles = [...new Set(selections.filter(selection => !isPython(selection)).map(fileOf))];
   const pythonSelections = selections.filter(isPython);
-  const commands = [[process.execPath, ['scripts/ci/validate-bounded-interactions.cjs']]];
+  const commands = nodeOnly ? [] : [[process.execPath, ['scripts/ci/validate-bounded-interactions.cjs']]];
   if (nodeFiles.length) {
     const report = path.join(reportDir, 'bounded-interactions-node.xml');
     commands.push([process.execPath, [
@@ -142,13 +146,16 @@ function buildCommands({ registry, changedPaths = null, discovery, python = proc
       ...nodeFiles,
     ], () => nodeReportErrors(report)]);
   }
-  if (pythonSelections.length) {
+  if (pythonSelections.length && !nodeOnly) {
     const report = path.join(reportDir, 'bounded-interactions-pytest.xml');
     commands.push([python, ['-m', 'pytest', '-q', '-rs', `--junitxml=${report}`, ...pythonSelections],
       () => pytestReportErrors(report, pythonSelections)]);
   }
   // A check-only final stage: every selected contract measured its entry.
-  if (entries.length) commands.push([null, [], () => evidenceErrors(entries, evidencePath(reportDir))]);
+  const measured = nodeOnly
+    ? entries.filter(entry => testSelections(entry.command).every(selection => !isPython(selection)))
+    : entries;
+  if (measured.length) commands.push([null, [], () => evidenceErrors(measured, evidencePath(reportDir))]);
   return commands;
 }
 
@@ -181,7 +188,7 @@ async function main(argv = process.argv.slice(2)) {
   const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-interactions-'));
   process.env[EVIDENCE_ENV] = evidencePath(reportDir);
   try {
-    return runCommands(buildCommands({ registry, changedPaths, discovery, reportDir }));
+    return runCommands(buildCommands({ registry, changedPaths, discovery, reportDir, nodeOnly: argv.includes('--node-only') }));
   } finally {
     fs.rmSync(reportDir, { recursive: true, force: true });
   }

@@ -276,6 +276,11 @@ jobs:
       - name: Validate bounded interaction inventory
         run: node scripts/ci/validate-bounded-interactions.cjs
 
+      # The JavaScript contracts again, failing on any skipped or todo test and
+      # on a contract that did not measure its registered entry.
+      - name: Run bounded interaction JavaScript contracts without skips
+        run: node scripts/run-bounded-interactions.cjs --node-only
+
       # Records web-only, existing-bridge or native-impact for the whole pull request and fails a
       # site the latest or previous stable APK cannot run (docs/android-release-signing.md).
       - name: Classify Android release and enforce release order

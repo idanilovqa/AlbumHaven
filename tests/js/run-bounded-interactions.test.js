@@ -134,3 +134,14 @@ test('a check-only stage fails the run without spawning anything', () => {
   assert.equal(runCommands([[null, [], () => ['x: its test "t" did not measure x']]], spawn), 1);
   assert.equal(runCommands([[null, [], () => []]], spawn), 0);
 });
+
+test('node-only runs just the JavaScript contracts and checks only their evidence', () => {
+  const commands = buildCommands({ registry, python: 'py', reportDir: REPORTS, nodeOnly: true });
+  assert.deepEqual(commands.map(([command]) => command), [process.execPath, null]);
+  assert.match(args(commands)[0], /^--test .*tests\/js\/runtime\/a\.test\.js$/);
+  const evidence = path.join(REPORTS, 'bounded-interactions-evidence.jsonl');
+  const errors = commands[1][2]();
+  assert.ok(errors.every(error => !error.includes('route')), 'Python contracts are measured in the Python job');
+  assert.ok(errors.some(error => error.includes('drag')), `missing JS evidence must still fail: ${errors.join('; ')}`);
+  assert.equal(fs.existsSync(evidence), false);
+});

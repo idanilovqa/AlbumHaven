@@ -70,8 +70,6 @@ begin
 end
 $function$;
 
-revoke all on function ops.reject_schema_migration_attestation_change() from public;
-
 drop trigger if exists schema_migration_attestations_append_only
   on ops.schema_migration_attestations;
 create trigger schema_migration_attestations_append_only
@@ -84,14 +82,14 @@ create trigger schema_migration_attestations_no_truncate
   before truncate on ops.schema_migration_attestations
   for each statement execute function ops.reject_schema_migration_attestation_change();
 
-revoke all on table ops.schema_migration_attestations from public;
 revoke update, delete, truncate on table ops.schema_migration_attestations from current_user;
 
+-- The runtime role gets nothing here today; the explicit revoke keeps it that way even if
+-- default privileges in ops ever widen.
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
     revoke all on table ops.schema_migration_attestations from album_haven_app;
-    revoke all on sequence ops.schema_migration_attestations_id_seq from album_haven_app;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
     grant select on table ops.schema_migration_attestations to album_haven_readonly;

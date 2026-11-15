@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.8 - 2026-11-14
+
+- Added the append-only migration attestation table (migration 0210) used to reconcile the production migration ledger with the repository without rewriting its history. Fresh databases need no attestations; production applies it only through the owner-approved reconciliation plan.
+
 ## 0.11.7 - 2026-11-14
 
 - Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.

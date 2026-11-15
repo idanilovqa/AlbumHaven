@@ -247,19 +247,22 @@ function getAlbumIdentity(album) {
   return getAlbumPathSignature(album) || getAlbumRequestKey(album);
 }
 
-function rebuildAlbumIndex(groupsList) {
-  const nextIndex = new Map();
+function indexGalleryAlbums(groupsList, albumIndex) {
   (Array.isArray(groupsList) ? groupsList : []).forEach((group) => {
     (Array.isArray(group?.albums) ? group.albums : []).forEach((album) => {
       const key = getAlbumIdentity(album);
       const requestKey = getAlbumRequestKey(album);
       const versionKey = getAlbumCardVersionKey(album);
-      if (key) nextIndex.set(key, album);
-      if (requestKey) nextIndex.set(requestKey, album);
-      if (versionKey) nextIndex.set(versionKey, album);
+      if (key) albumIndex.set(key, album);
+      if (requestKey) albumIndex.set(requestKey, album);
+      if (versionKey) albumIndex.set(versionKey, album);
     });
   });
-  state.gallery.albumIndex = nextIndex;
+  return albumIndex;
+}
+
+function rebuildAlbumIndex(groupsList) {
+  state.gallery.albumIndex = indexGalleryAlbums(groupsList, new Map());
 }
 
 function getIndexedAlbum(albumKey) {
@@ -306,12 +309,29 @@ const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
 // instead of relaying out the whole loaded gallery.
 class VirtualSectionShifts {
   constructor(length) {
+    this.length = length;
     this.tree = new Float64Array(length + 1);
   }
 
   add(index, delta) {
-    for (let position = index + 1; position < this.tree.length; position += position & -position) {
+    for (let position = index + 1; position <= this.length; position += position & -position) {
       this.tree[position] += delta;
+    }
+  }
+
+  // Trailing sections can be dropped and appended without a full layout:
+  // appended sections start unshifted, so each new node holds only the earlier
+  // shifts it covers. Capacity doubles, keeping appends amortized constant.
+  resize(length) {
+    if (length >= this.tree.length) {
+      const grown = new Float64Array(Math.max(length + 1, this.tree.length * 2));
+      grown.set(this.tree.subarray(0, this.length + 1));
+      this.tree = grown;
+    }
+    const previousLength = Math.min(this.length, length);
+    this.length = length;
+    for (let position = previousLength + 1; position <= length; position += 1) {
+      this.tree[position] = this.before(position - 1) - this.before(position - (position & -position));
     }
   }
 
@@ -369,6 +389,8 @@ class VirtualArtistGrid {
     this.sections = [];
     this.albumCardNodeCache = new Map();
     this.sectionByKey = new Map();
+    this._sectionOccurrences = new Map();
+    this._rowLayout = null;
     this._sectionShifts = new VirtualSectionShifts(0);
     this._layoutRowEstimateFromMeasurement = false;
     this._layoutRowEstimateMeasured = false;
@@ -1152,30 +1174,9 @@ class VirtualArtistGrid {
         .filter((section) => section.kind === 'artist' && section.measurementKey)
         .map((section) => [section.measurementKey, section]),
     );
-    const measurementOccurrenceByArtist = new Map();
+    this._sectionOccurrences = new Map();
     sections.forEach((section) => {
-      if (section.kind !== 'artist') return;
-      const measurementArtistKey = `${section.sectionType}\u0000${String(
-        section.group?.display_artist_key || section.group?.artist || '',
-      )}`;
-      const measurementOccurrence = Number(measurementOccurrenceByArtist.get(measurementArtistKey) || 0);
-      measurementOccurrenceByArtist.set(measurementArtistKey, measurementOccurrence + 1);
-      section.measurementKey = `${measurementArtistKey}\u0000${measurementOccurrence}`;
-      section.sectionKey = `${section.sectionType}:${String(
-        section.group?.display_artist_key || section.group?.artist || '',
-      )}:${measurementOccurrence}`;
-      const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
-      if (!previousSection) return;
-      section.rowGeometryKey = previousSection.rowGeometryKey;
-      section.blockHeights = Array.isArray(previousSection.blockHeights)
-        ? previousSection.blockHeights.slice()
-        : [];
-      section.blockMeasureKeys = Array.isArray(previousSection.blockMeasureKeys)
-        ? previousSection.blockMeasureKeys.slice()
-        : [];
-      section.measuredBlockKeys = Array.isArray(previousSection.measuredBlockKeys)
-        ? previousSection.measuredBlockKeys.slice()
-        : [];
+      if (section.kind === 'artist') this.keyArtistSection(section, previousSectionsByMeasurementKey);
     });
     this.sections = sections;
     rebuildAlbumIndex(
@@ -1278,6 +1279,77 @@ class VirtualArtistGrid {
     }
   }
 
+  // Keys an artist section by type, artist and occurrence, carrying over the
+  // row measurements of the section it replaces.
+  keyArtistSection(section, previousSectionsByMeasurementKey) {
+    const artistKey = String(section.group?.display_artist_key || section.group?.artist || '');
+    const measurementArtistKey = `${section.sectionType}\u0000${artistKey}`;
+    const occurrence = Number(this._sectionOccurrences.get(measurementArtistKey) || 0);
+    this._sectionOccurrences.set(measurementArtistKey, occurrence + 1);
+    section.measurementKey = `${measurementArtistKey}\u0000${occurrence}`;
+    section.sectionKey = `${section.sectionType}:${artistKey}:${occurrence}`;
+    const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
+    if (!previousSection) return;
+    section.rowGeometryKey = previousSection.rowGeometryKey;
+    section.blockHeights = Array.isArray(previousSection.blockHeights) ? previousSection.blockHeights.slice() : [];
+    section.blockMeasureKeys = Array.isArray(previousSection.blockMeasureKeys) ? previousSection.blockMeasureKeys.slice() : [];
+    section.measuredBlockKeys = Array.isArray(previousSection.measuredBlockKeys) ? previousSection.measuredBlockKeys.slice() : [];
+  }
+
+  // A root gallery continuation replaces the trailing sections showing
+  // `replacedGroups` (an artist split across the page boundary) and appends
+  // `groups`. Only those sections are keyed, laid out and indexed; earlier
+  // sections keep their geometry, measurements and mounted DOM. Returns false,
+  // changing nothing, when the mounted sections cannot take the append, so the
+  // caller regroups instead.
+  appendGroups(groups, replacedGroups = []) {
+    const sections = this._sections;
+    const firstReplaced = sections.length - replacedGroups.length;
+    const sectionShows = (section, group) => section?.kind === 'artist' && section.sectionType === 'all'
+      && String(section.group?.display_artist_key || section.group?.artist || '')
+        === String(group?.display_artist_key || group?.artist || '');
+    if (
+      this._deferredSetGroups || !this._rowLayout || firstReplaced < 0
+      || !this.hasMeasurableScrollSurface()
+      || (sections.length && !sectionShows(sections[sections.length - 1], replacedGroups.at(-1) || sections[sections.length - 1].group))
+      || replacedGroups.some((group, offset) => !sectionShows(sections[firstReplaced + offset], group))
+    ) return false;
+    // Only a replaced section can move mounted content; earlier sections keep their place.
+    const anchor = replacedGroups.length ? this.captureScrollAnchor() : null;
+    const replaced = sections.splice(firstReplaced);
+    const replacedByMeasurementKey = new Map();
+    for (const section of replaced) {
+      replacedByMeasurementKey.set(section.measurementKey, section);
+      const measurementArtistKey = section.measurementKey.slice(0, section.measurementKey.lastIndexOf('\u0000'));
+      this._sectionOccurrences.set(measurementArtistKey, this._sectionOccurrences.get(measurementArtistKey) - 1);
+      this.sectionByRenderedKey.delete(this.getRenderedSectionKey(section));
+      this.sectionByKey.delete(section.sectionKey);
+      const artist = String(section.group?.artist || '');
+      if (this.artistSectionByName.get(artist) === section) this.artistSectionByName.delete(artist);
+      this.totalHeight -= section.height;
+    }
+    this._sectionShifts.resize(firstReplaced + groups.length);
+    // Appended sections are unshifted, so every one stores its true top less
+    // the shifts recorded before it.
+    let layoutTop = this.totalHeight - this._sectionShifts.before(firstReplaced);
+    groups.forEach((group, offset) => {
+      const section = { kind: 'artist', group, sectionType: 'all', sectionKey: '' };
+      this.keyArtistSection(section, replacedByMeasurementKey);
+      this.layoutArtistSection(section, this._rowLayout);
+      this.placeSection(section, firstReplaced + offset, layoutTop);
+      layoutTop += section.height;
+      this.totalHeight += section.height;
+      sections.push(section);
+      this.sectionByRenderedKey.set(this.getRenderedSectionKey(section), section);
+      const artist = String(group?.artist || '');
+      if (!this.artistSectionByName.has(artist)) this.artistSectionByName.set(artist, section);
+    });
+    indexGalleryAlbums(groups, state.gallery.albumIndex ??= new Map());
+    this.render(false, { preserveExistingChildren: true });
+    if (anchor?.albumKey || anchor?.sectionKey) this.restoreOwnedScrollAnchor(anchor);
+    return true;
+  }
+
   getBlocksForSection(section) {
         const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
         const uniqueAlbums = [];
@@ -1364,6 +1436,7 @@ class VirtualArtistGrid {
   }
 
   recalculate(options = {}) {
+    this._rowLayout = null;
     if (!this.hasMeasurableScrollSurface()) return false;
     this.sectionHeaderHeight = this.showArtistSectionHeaders ? 42 : 0;
     const layoutConfig = this.getLayoutConfig();
@@ -1422,55 +1495,55 @@ class VirtualArtistGrid {
       || this.collapsedRowHeight;
     this._layoutRowEstimateFromMeasurement = !mobileGeometry?.estimatedRowHeight && displayMode !== 'covers';
     this._layoutRowEstimateMeasured = Boolean(measuredRowHeight);
+    const rowLayout = { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight };
     this._sectionShifts = new VirtualSectionShifts(this.sections.length);
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section, index) => {
-      if (section.kind === 'label') {
-        section.height = this.labelHeight;
-        this.placeSection(section, index, offsetTop);
-        offsetTop += section.height;
-        return;
-      }
-
-      // Measurements only survive while the card geometry stays the same.
-      // In particular, picture-only rows are square from their first render.
-      if (section.rowGeometryKey !== rowGeometryKey) {
-        section.blockHeights = [];
-        section.blockMeasureKeys = [];
-        section.measuredBlockKeys = [];
-      }
-      section.rowGeometryKey = rowGeometryKey;
-      const blocks = this.getBlocksForSection(section);
-      const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
-      const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
-      const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
-      section.blocksData = blocks;
-      const previousBlockHeights = Array.isArray(section.blockHeights)
-        ? section.blockHeights
-        : [];
-      const sectionMeasuredRowHeight = findMeasuredRowHeight(previousBlockHeights, previousMeasureKeys, previousMeasuredKeys);
-      const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
-        || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
-        || estimatedRowHeight;
-      section.blockHeights = blocks.map((block, index) => {
-        if (block.kind === 'subheading') return this.subsectionLabelHeight;
-        const measureKey = nextMeasureKeys[index];
-        const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
-          && previousMeasuredKeys[index] === measureKey
-          && Number(previousBlockHeights[index]) > 0;
-        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
-      });
-      section.blockMeasureKeys = nextMeasureKeys;
-      section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
-        previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
-      ));
-      this.layoutSectionBlocks(section);
+      if (section.kind === 'label') section.height = this.labelHeight;
+      else this.layoutArtistSection(section, rowLayout);
       this.placeSection(section, index, offsetTop);
       offsetTop += section.height;
-      this.sectionByKey.set(section.sectionKey, section);
     });
     this.totalHeight = offsetTop;
+    this._rowLayout = rowLayout;
+  }
+
+  layoutArtistSection(section, { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight }) {
+    // Measurements only survive while the card geometry stays the same.
+    // In particular, picture-only rows are square from their first render.
+    if (section.rowGeometryKey !== rowGeometryKey) {
+      section.blockHeights = [];
+      section.blockMeasureKeys = [];
+      section.measuredBlockKeys = [];
+    }
+    section.rowGeometryKey = rowGeometryKey;
+    const blocks = this.getBlocksForSection(section);
+    const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
+    const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
+    const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
+    section.blocksData = blocks;
+    const previousBlockHeights = Array.isArray(section.blockHeights)
+      ? section.blockHeights
+      : [];
+    const sectionMeasuredRowHeight = findMeasuredRowHeight(previousBlockHeights, previousMeasureKeys, previousMeasuredKeys);
+    const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
+      || estimatedRowHeight;
+    section.blockHeights = blocks.map((block, index) => {
+      if (block.kind === 'subheading') return this.subsectionLabelHeight;
+      const measureKey = nextMeasureKeys[index];
+      const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
+        && previousMeasuredKeys[index] === measureKey
+        && Number(previousBlockHeights[index]) > 0;
+      return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
+    });
+    section.blockMeasureKeys = nextMeasureKeys;
+    section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
+      previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
+    ));
+    this.layoutSectionBlocks(section);
+    this.sectionByKey.set(section.sectionKey, section);
   }
 
   layoutSectionBlocks(section) {

@@ -7034,3 +7034,173 @@ test('BI mobile gallery return frame restores the saved anchor by index at produ
   });
   assert.deepEqual(large, small);
 });
+
+// Root gallery continuation: the real page request, merge, view application,
+// gallery model and grid append, with the loaded groups and grid sections counted.
+const responseStateHelpersPath = path.join(path.dirname(helperPath), 'response-state-helpers.js');
+const galleryRefreshPath = path.join(path.dirname(helperPath), 'gallery-refresh-and-status.js');
+const ROOT_PAGE_SIZE = 50;
+
+// A next page that continues the last loaded artist, then adds the following artists.
+function rootContinuationPage(first) {
+  const artist = index => ({ artist: `Artist ${index}`, albums: [{ key: `album-${index}`, name: `Album ${index}`, year: '2000' }] });
+  return {
+    artist_groups: [
+      { artist: `Artist ${first - 1}`, albums: [{ key: `album-${first - 1}-b`, name: `Album ${first - 1} b`, year: '2001' }] },
+      ...Array.from({ length: ROOT_PAGE_SIZE - 1 }, (_, offset) => artist(first + offset)),
+    ],
+    gallery_page: { revision: 'r1', has_more: true, next_cursor: `after-${first + ROOT_PAGE_SIZE - 2}` },
+  };
+}
+
+function loadCountedRootContinuation(loadedCount) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter');
+  const gallery = loadCountedGallery(loadedCount);
+  const { context, counter, frames, scrollEl, virtualGrid } = gallery;
+  for (const sourcePath of [responseStateHelpersPath, galleryRefreshPath]) {
+    vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  }
+  const pages = new Map();
+  Object.assign(context, { AbortController, URL, structuredClone, appBootstrap: { getInitialView: () => ({}) } });
+  context.window.location = { href: 'http://localhost/' };
+  context.fetchRetryingPendingProjection = (url) => {
+    counter.count('requests');
+    const payload = pages.get(new URL(url, 'http://localhost').searchParams.get('gallery_cursor'));
+    return Promise.resolve({ ok: true, status: 200, json: async () => structuredClone(payload) });
+  };
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.showToast = (message) => { throw new Error(message); };
+  context.state.busy = false;
+  context.state.ui = { viewStateRevision: 1 };
+  context.state.view = {
+    ...context.state.view,
+    surface_request: 'albums',
+    artist_groups: context.state.view.artist_groups,
+    gallery_page: { revision: 'r1', has_more: true, next_cursor: `after-${loadedCount - 1}` },
+  };
+  // The gallery bar shows the loaded totals; it starts current, as after the first render.
+  const fakeNode = () => ({
+    hidden: false, textContent: '', innerHTML: '', dataset: {},
+    remove() {}, setAttribute() {}, removeAttribute() {}, insertAdjacentHTML() {},
+  });
+  const summary = fakeNode();
+  const parts = { '[data-gallery-context-name]': fakeNode(), '[data-gallery-context-summary]': summary };
+  const bar = { ...fakeNode(), querySelector: selector => parts[selector] || null };
+  context.document.querySelector = selector => (selector === '[data-gallery-bar-instance="gallery"]' ? bar : null);
+  context.updateGalleryMainChrome();
+  const chrome = () => {
+    const { context: inputs } = vm.runInContext('galleryMainChromeInputs', context);
+    return { artistCount: inputs.artistCount, albumCount: inputs.albumCount, name: parts['[data-gallery-context-name]'].textContent, summary: summary.textContent };
+  };
+  // Serves the next page for the cursor the loaded gallery ends at, with the viewport near the end.
+  const prepareNextPage = () => {
+    const { artist_groups: groups, gallery_page: page } = context.state.view;
+    pages.set(page.next_cursor, rootContinuationPage(groups.length));
+    scrollEl.scrollHeight = virtualGrid.totalHeight;
+    scrollEl.scrollTop = Math.max(0, virtualGrid.totalHeight - scrollEl.clientHeight * 2);
+  };
+  // Counts every read of the loaded groups and grid sections from here on. A
+  // list that is already counted keeps its identity; a replaced one is counted anew.
+  const countedLists = new WeakSet();
+  const counted = (list) => {
+    if (countedLists.has(list)) return list;
+    const proxy = countedCollection(list, counter);
+    countedLists.add(proxy);
+    return proxy;
+  };
+  const countLoaded = () => {
+    context.state.view.artist_groups = counted(context.state.view.artist_groups);
+    virtualGrid._sections = counted(virtualGrid._sections);
+  };
+  virtualGrid._sections = Array.from(virtualGrid._sections);
+  countLoaded();
+  return { ...gallery, chrome, countLoaded, prepareNextPage };
+}
+
+const settleRootContinuation = async () => { for (let turn = 0; turn < 10; turn += 1) await new Promise(setImmediate); };
+
+// Each entry's frame loads and appends the next page: the frame a continuation
+// schedules for the following page, and the double frame renderView schedules.
+const ROOT_CONTINUATION_FRAMES = {
+  'js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage#2': async ({ context, frames, runFrame }) => {
+    assert.equal(await context.loadNextRootGalleryPage(), true, 'the first page warms the loaded-artist index');
+    return () => runFrame(Math.max(...frames.keys()));
+  },
+  'js:runtime/gallery-refresh-and-status.js#renderView': async ({ context, frames, runFrame }) => {
+    assert.equal(await context.loadNextRootGalleryPage(), true, 'the first page warms the loaded-artist index');
+    frames.clear();
+    Object.assign(context, { HTMLFormElement: class {}, renderRelated() {}, renderLibraryLoader() {}, renderSidebar() {} });
+    context.renderView({ preserveMountedGallery: true });
+    const outer = Math.max(...frames.keys());
+    return () => {
+      runFrame(outer);
+      runFrame(Math.max(...frames.keys()));
+    };
+  },
+};
+
+for (const [id, warmUp] of Object.entries(ROOT_CONTINUATION_FRAMES)) test(`BI a root gallery continuation appends one page with constant work at production scale (${id.split('#').slice(1).join('#')})`, async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const appendPage = async (loadedCount) => {
+    const gallery = loadCountedRootContinuation(loadedCount);
+    const { chrome, context, countLoaded, counter, prepareNextPage, virtualGrid } = gallery;
+    prepareNextPage();
+    const runFrames = await warmUp(gallery);
+    const loadedBefore = context.state.view.artist_groups.length;
+    prepareNextPage();
+    countLoaded();
+    const { scrollEl } = gallery;
+    const visible = [scrollEl.scrollTop, ...Array.from(virtualGrid.sections.slice(0, -1), section => section.top)];
+    const counts = await counter.measure(async () => {
+      runFrames();
+      await settleRootContinuation();
+    });
+    assert.deepEqual([scrollEl.scrollTop, ...Array.from(virtualGrid.sections.slice(0, loadedBefore - 1), section => section.top)], visible,
+      'the viewport and every earlier section keep their place');
+    const groups = Array.from(context.state.view.artist_groups);
+    const names = groups.map(group => group.artist);
+    assert.equal(groups.length, loadedBefore + ROOT_PAGE_SIZE - 1, 'the split artist merges and the rest append');
+    assert.equal(new Set(names).size, names.length, 'no artist appears twice');
+    assert.deepEqual(
+      Array.from(groups[loadedBefore - 1].albums, album => album.key),
+      [`album-${loadedBefore - 1}`, `album-${loadedBefore - 1}-b`],
+      'the split artist keeps its albums from both pages in order',
+    );
+    assert.deepEqual(Array.from(virtualGrid.sections, section => section.group.artist), names, 'sections follow the loaded groups');
+    const appendedChrome = chrome();
+    assert.deepEqual([appendedChrome.artistCount, appendedChrome.albumCount], [groups.length, groups.length + 2]);
+    context.updateGalleryMainChrome();
+    assert.deepEqual(chrome(), appendedChrome, 'the appended bar equals a full chrome update');
+    const appended = Array.from(virtualGrid.sections, section => [section.sectionKey, section.top, section.height]);
+    virtualGrid.recalculate({ preserveColumnGeometry: true });
+    assert.deepEqual(Array.from(virtualGrid.sections, section => [section.sectionKey, section.top, section.height]), appended,
+      'the appended layout equals a full relayout');
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id,
+    small: 20,
+    large: 14000,
+    run: appendPage,
+    budgets: { itemsVisited: 120, requests: 1, animationFrames: 3 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 24 },
+  });
+  assert.ok(small.itemsVisited > 0 && large.itemsVisited > 0, 'the counted groups and sections were read');
+});
+
+test('a superseded root gallery continuation neither appends nor repaints', async () => {
+  const gallery = loadCountedRootContinuation(40);
+  const { context, prepareNextPage, virtualGrid } = gallery;
+  prepareNextPage();
+  const mountedView = context.state.view;
+  const mountedSections = virtualGrid.sections;
+  const lastKey = virtualGrid.lastKey;
+  const load = context.loadNextRootGalleryPage();
+  context.state.ui.viewStateRevision += 1;
+  assert.equal(await load, false);
+  assert.equal(context.state.view, mountedView);
+  assert.equal(context.state.view.artist_groups.length, 40);
+  assert.equal(virtualGrid.sections, mountedSections);
+  assert.equal(virtualGrid.sections.length, 40);
+  assert.equal(virtualGrid.lastKey, lastKey, 'nothing was rendered');
+});

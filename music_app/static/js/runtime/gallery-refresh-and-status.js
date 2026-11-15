@@ -41,6 +41,71 @@ function mergeRootGalleryPageGroups(existing, incoming) {
   return groups;
 }
 
+function rootGalleryGroupKey(group) {
+  return String(group?.display_artist_key || group?.artist || '');
+}
+
+// First loaded position of each root artist, per loaded list. Pages extend the
+// list in place, so its index only reads groups added since its last use; a
+// replaced list is indexed again once.
+const rootGalleryArtistIndexes = new WeakMap();
+
+function indexedRootGalleryArtistPositions(groups) {
+  let index = rootGalleryArtistIndexes.get(groups);
+  if (!index || index.length > groups.length) {
+    index = { length: 0, positions: new Map() };
+    rootGalleryArtistIndexes.set(groups, index);
+  }
+  for (let position = index.length; position < groups.length; position += 1) {
+    const key = rootGalleryGroupKey(groups[position]);
+    if (!index.positions.has(key)) index.positions.set(key, position);
+  }
+  index.length = groups.length;
+  return index.positions;
+}
+
+// Splits a next page into the last loaded artist it continues and the artists
+// it adds. Null when the page repeats any other loaded artist or one of its
+// own, which only the full merge reconciles.
+function splitRootGalleryContinuation(groups, incoming) {
+  const positions = indexedRootGalleryArtistPositions(groups);
+  const pageKeys = new Set();
+  const continuation = { continued: null, added: [] };
+  for (const [offset, group] of incoming.entries()) {
+    const key = rootGalleryGroupKey(group);
+    if (pageKeys.has(key)) return null;
+    pageKeys.add(key);
+    const position = positions.get(key);
+    if (position === undefined) continuation.added.push(group);
+    else if (offset === 0 && position === groups.length - 1) continuation.continued = group;
+    else return null;
+  }
+  return continuation;
+}
+
+// Appends a next page whose artists follow the loaded ones. Only the page's
+// groups are merged, applied, modelled and laid out, so the cost does not grow
+// with the loaded gallery. False, changing nothing, when the page needs the
+// full merge.
+function appendRootGalleryPage(artistGroups, galleryPage, renderOptions) {
+  const groups = state.view.artist_groups;
+  if (!Array.isArray(groups) || state.view.primary_artist_groups?.length || state.view.family_artist_groups?.length
+    || typeof virtualGrid === 'undefined' || typeof virtualGrid?.appendGroups !== 'function') return false;
+  const continuation = splitRootGalleryContinuation(groups, artistGroups);
+  if (!continuation) return false;
+  const lastGroup = continuation.continued ? groups[groups.length - 1] : null;
+  const replacedGroups = lastGroup ? buildGalleryMainRootPageGroups([lastGroup]) : [];
+  const chromeWasCurrent = isGalleryMainChromeCurrent();
+  const pageGroups = buildGalleryMainRootPageGroups(appendRootGalleryViewPage({
+    mergedLastGroup: lastGroup && mergeRootGalleryPageGroups([lastGroup], [continuation.continued])[0],
+    appendedGroups: continuation.added,
+    galleryPage,
+  }));
+  if (!virtualGrid.appendGroups(pageGroups, replacedGroups)) renderArtistGroups(renderOptions);
+  else if (typeof document?.querySelector === 'function') appendGalleryMainChromeGroups(chromeWasCurrent, replacedGroups, pageGroups);
+  return true;
+}
+
 function buildRootGalleryPageUrl(view) {
   return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
 }
@@ -143,6 +208,21 @@ async function loadNextRootGalleryPage() {
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
         || (!restarted && data.gallery_page.next_cursor === request.cursor)))
       || !Array.isArray(data.artist_groups)) return false;
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
+    const continuedPage = restarted ? null : {
+      ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
+      previous_cursor: state.view.gallery_page?.previous_cursor || null,
+      has_previous: Boolean(state.view.gallery_page?.has_previous),
+    };
+    if (continuedPage && appendRootGalleryPage(data.artist_groups, continuedPage, renderOptions)) {
+      scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+      return true;
+    }
     const artistGroups = restarted
       ? data.artist_groups
       : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
@@ -157,13 +237,7 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: restarted
-        ? data.gallery_page
-        : {
-          ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
-          previous_cursor: state.view.gallery_page?.previous_cursor || null,
-          has_previous: Boolean(state.view.gallery_page?.has_previous),
-        },
+      gallery_page: continuedPage || data.gallery_page,
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,
@@ -171,12 +245,6 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = {
-      preserveScroll: true,
-      preserveMountedGalleryChildren: true,
-      semanticScrollAnchor: request.semanticScrollAnchor,
-      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
-    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking

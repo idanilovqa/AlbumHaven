@@ -717,7 +717,14 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  // Without a selected artist the summary counts distinct loaded albums; those
+  // counts are kept so a root page append can extend them.
+  const loadedTotals = primaryArtist
+    ? null
+    : countGalleryLoadedAlbums({ artistCount: 0, albumKeys: new Map(), unkeyedCount: 0 }, model.groups, 1);
+  const summaryTotals = loadedTotals
+    ? resolveGalleryLoadedSummaryTotals(loadedTotals)
+    : resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const contextInputs = {
     primaryArtist,
     artistCount: summaryTotals.artistCount,
@@ -725,9 +732,62 @@ function updateGalleryMainChrome() {
     hasFamily,
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   };
-  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs };
+  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
   renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
   updateGalleryFamilyPanelChrome(primaryArtist);
+}
+
+function countGalleryLoadedAlbums(totals, groups, step) {
+  for (const group of groups) {
+    for (const album of group.albums || []) {
+      const key = String(album.key || '').trim();
+      if (!key) {
+        totals.unkeyedCount += step;
+        continue;
+      }
+      const count = (totals.albumKeys.get(key) || 0) + step;
+      if (count > 0) totals.albumKeys.set(key, count);
+      else totals.albumKeys.delete(key);
+    }
+  }
+  totals.artistCount += step * groups.length;
+  return totals;
+}
+
+function resolveGalleryLoadedSummaryTotals(loadedTotals) {
+  return resolveGallerySummaryTotals(state.view, {
+    artistCount: loadedTotals.artistCount,
+    albumCount: loadedTotals.albumKeys.size + loadedTotals.unkeyedCount,
+  }, state.gallery.mainState);
+}
+
+function isGalleryMainChromeCurrent() {
+  return Boolean(galleryMainChromeInputs && galleryMainChromeTokenMatches(galleryMainChromeInputs.token));
+}
+
+// A root page append replaces `removedGroups` (an artist split across the page
+// boundary) and adds `addedGroups` to the counted bar inputs instead of
+// re-filtering and re-counting the loaded gallery. Inputs that were not current
+// before the append (`wasCurrent`) take a full chrome update.
+function appendGalleryMainChromeGroups(wasCurrent, removedGroups, addedGroups) {
+  const inputs = galleryMainChromeInputs;
+  if (!wasCurrent || !inputs?.loadedTotals) {
+    updateGalleryMainChrome();
+    return;
+  }
+  countGalleryLoadedAlbums(inputs.loadedTotals, removedGroups, -1);
+  countGalleryLoadedAlbums(inputs.loadedTotals, addedGroups, 1);
+  const summaryTotals = resolveGalleryLoadedSummaryTotals(inputs.loadedTotals);
+  inputs.context = { ...inputs.context, artistCount: summaryTotals.artistCount, albumCount: summaryTotals.albumCount };
+  inputs.token = galleryMainChromeToken();
+  updateGalleryMainScrollContext();
+}
+
+// Root continuation groups as the gallery model shows them: filtering and
+// display splitting work per artist group, so a page's share of the root model
+// is built from that page alone.
+function buildGalleryMainRootPageGroups(groups) {
+  return buildDisplayGroups(filterGalleryModel({ groups, filterState: ensureGalleryMainState() }).groups);
 }
 
 function renderGalleryMainContext(bar, context) {

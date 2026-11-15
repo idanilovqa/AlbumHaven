@@ -3295,18 +3295,38 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage#2",
-      "action": "scheduleBrowserAnimationFrame timers installed by loadNextRootGalleryPage",
+      "action": "Load the next root gallery page from the continuation frame; only that page is merged, applied, modelled and laid out, with no work over the loaded gallery",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 120,
+        "requests": 1,
+        "animationFrames": 3
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the root gallery append path; every continuation then re-merges, re-applies and regroups the whole loaded gallery again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage",
@@ -3467,18 +3487,38 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#renderView",
-      "action": "scheduleBrowserAnimationFrame timers installed by renderView",
+      "action": "Load the next root gallery page from the frames a render schedules; only that page is merged, applied, modelled and laid out, with no work over the loaded gallery",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#renderView:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 120,
+        "requests": 1,
+        "animationFrames": 3
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the root gallery append path; every continuation then re-merges, re-applies and regroups the whole loaded gallery again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",

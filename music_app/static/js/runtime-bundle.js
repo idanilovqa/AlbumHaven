@@ -1903,6 +1903,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
+  return commitViewPayload(previousView, nextView, options);
+}
+
+// Mounts a normalized view and reconciles the browse state that follows it.
+function commitViewPayload(previousView, nextView, options = {}) {
   const previousViewWasReusableRootBrowse = isReusableRootBrowseViewCandidate(previousView);
   const nextViewIsReusableRootBrowse = isReusableRootBrowseViewCandidate(nextView);
   const syncSearchDraftQuery = shouldSyncSearchDraftQuery(previousView, nextView);
@@ -1976,6 +1981,29 @@ function applyViewPayload(payload, options = {}) {
     resetPreSearchViewState();
   }
   return nextView;
+}
+
+// A root gallery continuation appends one page to the mounted, already
+// normalized root view: only the page's groups are compacted and given the
+// retained cover authority, and the loaded group list is extended in place
+// instead of being copied. `mergedLastGroup` replaces the last loaded group
+// when the page continues that artist. Returns the mounted page groups.
+function appendRootGalleryViewPage({ mergedLastGroup = null, appendedGroups = [], galleryPage }) {
+  const previousView = state.view;
+  const page = { artist_groups: [...(mergedLastGroup ? [mergedLastGroup] : []), ...appendedGroups].map(compactRuntimeArtistGroupPayload) };
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (retainedCoverAuthority?.coverMutationRevision === Number(state.ui.albumCoverMutationRevision || 0)) {
+    preserveMissingRuntimeAlbumCoverAuthority(page, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
+  const groups = previousView.artist_groups;
+  if (mergedLastGroup) groups[groups.length - 1] = page.artist_groups[0];
+  groups.push(...page.artist_groups.slice(mergedLastGroup ? 1 : 0));
+  commitViewPayload(previousView, { ...previousView, gallery_page: { ...galleryPage }, initial_view_partial: false }, {
+    trackSidebarReveal: false,
+  });
+  return page.artist_groups;
 }
 
 function mergeViewPayload(patch, options = {}) {
@@ -7517,7 +7545,14 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  // Without a selected artist the summary counts distinct loaded albums; those
+  // counts are kept so a root page append can extend them.
+  const loadedTotals = primaryArtist
+    ? null
+    : countGalleryLoadedAlbums({ artistCount: 0, albumKeys: new Map(), unkeyedCount: 0 }, model.groups, 1);
+  const summaryTotals = loadedTotals
+    ? resolveGalleryLoadedSummaryTotals(loadedTotals)
+    : resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const contextInputs = {
     primaryArtist,
     artistCount: summaryTotals.artistCount,
@@ -7525,9 +7560,62 @@ function updateGalleryMainChrome() {
     hasFamily,
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   };
-  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs };
+  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
   renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
   updateGalleryFamilyPanelChrome(primaryArtist);
+}
+
+function countGalleryLoadedAlbums(totals, groups, step) {
+  for (const group of groups) {
+    for (const album of group.albums || []) {
+      const key = String(album.key || '').trim();
+      if (!key) {
+        totals.unkeyedCount += step;
+        continue;
+      }
+      const count = (totals.albumKeys.get(key) || 0) + step;
+      if (count > 0) totals.albumKeys.set(key, count);
+      else totals.albumKeys.delete(key);
+    }
+  }
+  totals.artistCount += step * groups.length;
+  return totals;
+}
+
+function resolveGalleryLoadedSummaryTotals(loadedTotals) {
+  return resolveGallerySummaryTotals(state.view, {
+    artistCount: loadedTotals.artistCount,
+    albumCount: loadedTotals.albumKeys.size + loadedTotals.unkeyedCount,
+  }, state.gallery.mainState);
+}
+
+function isGalleryMainChromeCurrent() {
+  return Boolean(galleryMainChromeInputs && galleryMainChromeTokenMatches(galleryMainChromeInputs.token));
+}
+
+// A root page append replaces `removedGroups` (an artist split across the page
+// boundary) and adds `addedGroups` to the counted bar inputs instead of
+// re-filtering and re-counting the loaded gallery. Inputs that were not current
+// before the append (`wasCurrent`) take a full chrome update.
+function appendGalleryMainChromeGroups(wasCurrent, removedGroups, addedGroups) {
+  const inputs = galleryMainChromeInputs;
+  if (!wasCurrent || !inputs?.loadedTotals) {
+    updateGalleryMainChrome();
+    return;
+  }
+  countGalleryLoadedAlbums(inputs.loadedTotals, removedGroups, -1);
+  countGalleryLoadedAlbums(inputs.loadedTotals, addedGroups, 1);
+  const summaryTotals = resolveGalleryLoadedSummaryTotals(inputs.loadedTotals);
+  inputs.context = { ...inputs.context, artistCount: summaryTotals.artistCount, albumCount: summaryTotals.albumCount };
+  inputs.token = galleryMainChromeToken();
+  updateGalleryMainScrollContext();
+}
+
+// Root continuation groups as the gallery model shows them: filtering and
+// display splitting work per artist group, so a page's share of the root model
+// is built from that page alone.
+function buildGalleryMainRootPageGroups(groups) {
+  return buildDisplayGroups(filterGalleryModel({ groups, filterState: ensureGalleryMainState() }).groups);
 }
 
 function renderGalleryMainContext(bar, context) {
@@ -18730,6 +18818,71 @@ function mergeRootGalleryPageGroups(existing, incoming) {
   return groups;
 }
 
+function rootGalleryGroupKey(group) {
+  return String(group?.display_artist_key || group?.artist || '');
+}
+
+// First loaded position of each root artist, per loaded list. Pages extend the
+// list in place, so its index only reads groups added since its last use; a
+// replaced list is indexed again once.
+const rootGalleryArtistIndexes = new WeakMap();
+
+function indexedRootGalleryArtistPositions(groups) {
+  let index = rootGalleryArtistIndexes.get(groups);
+  if (!index || index.length > groups.length) {
+    index = { length: 0, positions: new Map() };
+    rootGalleryArtistIndexes.set(groups, index);
+  }
+  for (let position = index.length; position < groups.length; position += 1) {
+    const key = rootGalleryGroupKey(groups[position]);
+    if (!index.positions.has(key)) index.positions.set(key, position);
+  }
+  index.length = groups.length;
+  return index.positions;
+}
+
+// Splits a next page into the last loaded artist it continues and the artists
+// it adds. Null when the page repeats any other loaded artist or one of its
+// own, which only the full merge reconciles.
+function splitRootGalleryContinuation(groups, incoming) {
+  const positions = indexedRootGalleryArtistPositions(groups);
+  const pageKeys = new Set();
+  const continuation = { continued: null, added: [] };
+  for (const [offset, group] of incoming.entries()) {
+    const key = rootGalleryGroupKey(group);
+    if (pageKeys.has(key)) return null;
+    pageKeys.add(key);
+    const position = positions.get(key);
+    if (position === undefined) continuation.added.push(group);
+    else if (offset === 0 && position === groups.length - 1) continuation.continued = group;
+    else return null;
+  }
+  return continuation;
+}
+
+// Appends a next page whose artists follow the loaded ones. Only the page's
+// groups are merged, applied, modelled and laid out, so the cost does not grow
+// with the loaded gallery. False, changing nothing, when the page needs the
+// full merge.
+function appendRootGalleryPage(artistGroups, galleryPage, renderOptions) {
+  const groups = state.view.artist_groups;
+  if (!Array.isArray(groups) || state.view.primary_artist_groups?.length || state.view.family_artist_groups?.length
+    || typeof virtualGrid === 'undefined' || typeof virtualGrid?.appendGroups !== 'function') return false;
+  const continuation = splitRootGalleryContinuation(groups, artistGroups);
+  if (!continuation) return false;
+  const lastGroup = continuation.continued ? groups[groups.length - 1] : null;
+  const replacedGroups = lastGroup ? buildGalleryMainRootPageGroups([lastGroup]) : [];
+  const chromeWasCurrent = isGalleryMainChromeCurrent();
+  const pageGroups = buildGalleryMainRootPageGroups(appendRootGalleryViewPage({
+    mergedLastGroup: lastGroup && mergeRootGalleryPageGroups([lastGroup], [continuation.continued])[0],
+    appendedGroups: continuation.added,
+    galleryPage,
+  }));
+  if (!virtualGrid.appendGroups(pageGroups, replacedGroups)) renderArtistGroups(renderOptions);
+  else if (typeof document?.querySelector === 'function') appendGalleryMainChromeGroups(chromeWasCurrent, replacedGroups, pageGroups);
+  return true;
+}
+
 function buildRootGalleryPageUrl(view) {
   return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
 }
@@ -18832,6 +18985,21 @@ async function loadNextRootGalleryPage() {
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
         || (!restarted && data.gallery_page.next_cursor === request.cursor)))
       || !Array.isArray(data.artist_groups)) return false;
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
+    const continuedPage = restarted ? null : {
+      ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
+      previous_cursor: state.view.gallery_page?.previous_cursor || null,
+      has_previous: Boolean(state.view.gallery_page?.has_previous),
+    };
+    if (continuedPage && appendRootGalleryPage(data.artist_groups, continuedPage, renderOptions)) {
+      scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+      return true;
+    }
     const artistGroups = restarted
       ? data.artist_groups
       : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
@@ -18846,13 +19014,7 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: restarted
-        ? data.gallery_page
-        : {
-          ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
-          previous_cursor: state.view.gallery_page?.previous_cursor || null,
-          has_previous: Boolean(state.view.gallery_page?.has_previous),
-        },
+      gallery_page: continuedPage || data.gallery_page,
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,
@@ -18860,12 +19022,6 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = {
-      preserveScroll: true,
-      preserveMountedGalleryChildren: true,
-      semanticScrollAnchor: request.semanticScrollAnchor,
-      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
-    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking
@@ -42473,19 +42629,22 @@ function getAlbumIdentity(album) {
   return getAlbumPathSignature(album) || getAlbumRequestKey(album);
 }
 
-function rebuildAlbumIndex(groupsList) {
-  const nextIndex = new Map();
+function indexGalleryAlbums(groupsList, albumIndex) {
   (Array.isArray(groupsList) ? groupsList : []).forEach((group) => {
     (Array.isArray(group?.albums) ? group.albums : []).forEach((album) => {
       const key = getAlbumIdentity(album);
       const requestKey = getAlbumRequestKey(album);
       const versionKey = getAlbumCardVersionKey(album);
-      if (key) nextIndex.set(key, album);
-      if (requestKey) nextIndex.set(requestKey, album);
-      if (versionKey) nextIndex.set(versionKey, album);
+      if (key) albumIndex.set(key, album);
+      if (requestKey) albumIndex.set(requestKey, album);
+      if (versionKey) albumIndex.set(versionKey, album);
     });
   });
-  state.gallery.albumIndex = nextIndex;
+  return albumIndex;
+}
+
+function rebuildAlbumIndex(groupsList) {
+  state.gallery.albumIndex = indexGalleryAlbums(groupsList, new Map());
 }
 
 function getIndexedAlbum(albumKey) {
@@ -42532,12 +42691,29 @@ const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
 // instead of relaying out the whole loaded gallery.
 class VirtualSectionShifts {
   constructor(length) {
+    this.length = length;
     this.tree = new Float64Array(length + 1);
   }
 
   add(index, delta) {
-    for (let position = index + 1; position < this.tree.length; position += position & -position) {
+    for (let position = index + 1; position <= this.length; position += position & -position) {
       this.tree[position] += delta;
+    }
+  }
+
+  // Trailing sections can be dropped and appended without a full layout:
+  // appended sections start unshifted, so each new node holds only the earlier
+  // shifts it covers. Capacity doubles, keeping appends amortized constant.
+  resize(length) {
+    if (length >= this.tree.length) {
+      const grown = new Float64Array(Math.max(length + 1, this.tree.length * 2));
+      grown.set(this.tree.subarray(0, this.length + 1));
+      this.tree = grown;
+    }
+    const previousLength = Math.min(this.length, length);
+    this.length = length;
+    for (let position = previousLength + 1; position <= length; position += 1) {
+      this.tree[position] = this.before(position - 1) - this.before(position - (position & -position));
     }
   }
 
@@ -42595,6 +42771,8 @@ class VirtualArtistGrid {
     this.sections = [];
     this.albumCardNodeCache = new Map();
     this.sectionByKey = new Map();
+    this._sectionOccurrences = new Map();
+    this._rowLayout = null;
     this._sectionShifts = new VirtualSectionShifts(0);
     this._layoutRowEstimateFromMeasurement = false;
     this._layoutRowEstimateMeasured = false;
@@ -43378,30 +43556,9 @@ class VirtualArtistGrid {
         .filter((section) => section.kind === 'artist' && section.measurementKey)
         .map((section) => [section.measurementKey, section]),
     );
-    const measurementOccurrenceByArtist = new Map();
+    this._sectionOccurrences = new Map();
     sections.forEach((section) => {
-      if (section.kind !== 'artist') return;
-      const measurementArtistKey = `${section.sectionType}\u0000${String(
-        section.group?.display_artist_key || section.group?.artist || '',
-      )}`;
-      const measurementOccurrence = Number(measurementOccurrenceByArtist.get(measurementArtistKey) || 0);
-      measurementOccurrenceByArtist.set(measurementArtistKey, measurementOccurrence + 1);
-      section.measurementKey = `${measurementArtistKey}\u0000${measurementOccurrence}`;
-      section.sectionKey = `${section.sectionType}:${String(
-        section.group?.display_artist_key || section.group?.artist || '',
-      )}:${measurementOccurrence}`;
-      const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
-      if (!previousSection) return;
-      section.rowGeometryKey = previousSection.rowGeometryKey;
-      section.blockHeights = Array.isArray(previousSection.blockHeights)
-        ? previousSection.blockHeights.slice()
-        : [];
-      section.blockMeasureKeys = Array.isArray(previousSection.blockMeasureKeys)
-        ? previousSection.blockMeasureKeys.slice()
-        : [];
-      section.measuredBlockKeys = Array.isArray(previousSection.measuredBlockKeys)
-        ? previousSection.measuredBlockKeys.slice()
-        : [];
+      if (section.kind === 'artist') this.keyArtistSection(section, previousSectionsByMeasurementKey);
     });
     this.sections = sections;
     rebuildAlbumIndex(
@@ -43504,6 +43661,77 @@ class VirtualArtistGrid {
     }
   }
 
+  // Keys an artist section by type, artist and occurrence, carrying over the
+  // row measurements of the section it replaces.
+  keyArtistSection(section, previousSectionsByMeasurementKey) {
+    const artistKey = String(section.group?.display_artist_key || section.group?.artist || '');
+    const measurementArtistKey = `${section.sectionType}\u0000${artistKey}`;
+    const occurrence = Number(this._sectionOccurrences.get(measurementArtistKey) || 0);
+    this._sectionOccurrences.set(measurementArtistKey, occurrence + 1);
+    section.measurementKey = `${measurementArtistKey}\u0000${occurrence}`;
+    section.sectionKey = `${section.sectionType}:${artistKey}:${occurrence}`;
+    const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
+    if (!previousSection) return;
+    section.rowGeometryKey = previousSection.rowGeometryKey;
+    section.blockHeights = Array.isArray(previousSection.blockHeights) ? previousSection.blockHeights.slice() : [];
+    section.blockMeasureKeys = Array.isArray(previousSection.blockMeasureKeys) ? previousSection.blockMeasureKeys.slice() : [];
+    section.measuredBlockKeys = Array.isArray(previousSection.measuredBlockKeys) ? previousSection.measuredBlockKeys.slice() : [];
+  }
+
+  // A root gallery continuation replaces the trailing sections showing
+  // `replacedGroups` (an artist split across the page boundary) and appends
+  // `groups`. Only those sections are keyed, laid out and indexed; earlier
+  // sections keep their geometry, measurements and mounted DOM. Returns false,
+  // changing nothing, when the mounted sections cannot take the append, so the
+  // caller regroups instead.
+  appendGroups(groups, replacedGroups = []) {
+    const sections = this._sections;
+    const firstReplaced = sections.length - replacedGroups.length;
+    const sectionShows = (section, group) => section?.kind === 'artist' && section.sectionType === 'all'
+      && String(section.group?.display_artist_key || section.group?.artist || '')
+        === String(group?.display_artist_key || group?.artist || '');
+    if (
+      this._deferredSetGroups || !this._rowLayout || firstReplaced < 0
+      || !this.hasMeasurableScrollSurface()
+      || (sections.length && !sectionShows(sections[sections.length - 1], replacedGroups.at(-1) || sections[sections.length - 1].group))
+      || replacedGroups.some((group, offset) => !sectionShows(sections[firstReplaced + offset], group))
+    ) return false;
+    // Only a replaced section can move mounted content; earlier sections keep their place.
+    const anchor = replacedGroups.length ? this.captureScrollAnchor() : null;
+    const replaced = sections.splice(firstReplaced);
+    const replacedByMeasurementKey = new Map();
+    for (const section of replaced) {
+      replacedByMeasurementKey.set(section.measurementKey, section);
+      const measurementArtistKey = section.measurementKey.slice(0, section.measurementKey.lastIndexOf('\u0000'));
+      this._sectionOccurrences.set(measurementArtistKey, this._sectionOccurrences.get(measurementArtistKey) - 1);
+      this.sectionByRenderedKey.delete(this.getRenderedSectionKey(section));
+      this.sectionByKey.delete(section.sectionKey);
+      const artist = String(section.group?.artist || '');
+      if (this.artistSectionByName.get(artist) === section) this.artistSectionByName.delete(artist);
+      this.totalHeight -= section.height;
+    }
+    this._sectionShifts.resize(firstReplaced + groups.length);
+    // Appended sections are unshifted, so every one stores its true top less
+    // the shifts recorded before it.
+    let layoutTop = this.totalHeight - this._sectionShifts.before(firstReplaced);
+    groups.forEach((group, offset) => {
+      const section = { kind: 'artist', group, sectionType: 'all', sectionKey: '' };
+      this.keyArtistSection(section, replacedByMeasurementKey);
+      this.layoutArtistSection(section, this._rowLayout);
+      this.placeSection(section, firstReplaced + offset, layoutTop);
+      layoutTop += section.height;
+      this.totalHeight += section.height;
+      sections.push(section);
+      this.sectionByRenderedKey.set(this.getRenderedSectionKey(section), section);
+      const artist = String(group?.artist || '');
+      if (!this.artistSectionByName.has(artist)) this.artistSectionByName.set(artist, section);
+    });
+    indexGalleryAlbums(groups, state.gallery.albumIndex ??= new Map());
+    this.render(false, { preserveExistingChildren: true });
+    if (anchor?.albumKey || anchor?.sectionKey) this.restoreOwnedScrollAnchor(anchor);
+    return true;
+  }
+
   getBlocksForSection(section) {
         const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
         const uniqueAlbums = [];
@@ -43590,6 +43818,7 @@ class VirtualArtistGrid {
   }
 
   recalculate(options = {}) {
+    this._rowLayout = null;
     if (!this.hasMeasurableScrollSurface()) return false;
     this.sectionHeaderHeight = this.showArtistSectionHeaders ? 42 : 0;
     const layoutConfig = this.getLayoutConfig();
@@ -43648,55 +43877,55 @@ class VirtualArtistGrid {
       || this.collapsedRowHeight;
     this._layoutRowEstimateFromMeasurement = !mobileGeometry?.estimatedRowHeight && displayMode !== 'covers';
     this._layoutRowEstimateMeasured = Boolean(measuredRowHeight);
+    const rowLayout = { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight };
     this._sectionShifts = new VirtualSectionShifts(this.sections.length);
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section, index) => {
-      if (section.kind === 'label') {
-        section.height = this.labelHeight;
-        this.placeSection(section, index, offsetTop);
-        offsetTop += section.height;
-        return;
-      }
-
-      // Measurements only survive while the card geometry stays the same.
-      // In particular, picture-only rows are square from their first render.
-      if (section.rowGeometryKey !== rowGeometryKey) {
-        section.blockHeights = [];
-        section.blockMeasureKeys = [];
-        section.measuredBlockKeys = [];
-      }
-      section.rowGeometryKey = rowGeometryKey;
-      const blocks = this.getBlocksForSection(section);
-      const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
-      const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
-      const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
-      section.blocksData = blocks;
-      const previousBlockHeights = Array.isArray(section.blockHeights)
-        ? section.blockHeights
-        : [];
-      const sectionMeasuredRowHeight = findMeasuredRowHeight(previousBlockHeights, previousMeasureKeys, previousMeasuredKeys);
-      const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
-        || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
-        || estimatedRowHeight;
-      section.blockHeights = blocks.map((block, index) => {
-        if (block.kind === 'subheading') return this.subsectionLabelHeight;
-        const measureKey = nextMeasureKeys[index];
-        const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
-          && previousMeasuredKeys[index] === measureKey
-          && Number(previousBlockHeights[index]) > 0;
-        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
-      });
-      section.blockMeasureKeys = nextMeasureKeys;
-      section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
-        previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
-      ));
-      this.layoutSectionBlocks(section);
+      if (section.kind === 'label') section.height = this.labelHeight;
+      else this.layoutArtistSection(section, rowLayout);
       this.placeSection(section, index, offsetTop);
       offsetTop += section.height;
-      this.sectionByKey.set(section.sectionKey, section);
     });
     this.totalHeight = offsetTop;
+    this._rowLayout = rowLayout;
+  }
+
+  layoutArtistSection(section, { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight }) {
+    // Measurements only survive while the card geometry stays the same.
+    // In particular, picture-only rows are square from their first render.
+    if (section.rowGeometryKey !== rowGeometryKey) {
+      section.blockHeights = [];
+      section.blockMeasureKeys = [];
+      section.measuredBlockKeys = [];
+    }
+    section.rowGeometryKey = rowGeometryKey;
+    const blocks = this.getBlocksForSection(section);
+    const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
+    const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
+    const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
+    section.blocksData = blocks;
+    const previousBlockHeights = Array.isArray(section.blockHeights)
+      ? section.blockHeights
+      : [];
+    const sectionMeasuredRowHeight = findMeasuredRowHeight(previousBlockHeights, previousMeasureKeys, previousMeasuredKeys);
+    const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
+      || estimatedRowHeight;
+    section.blockHeights = blocks.map((block, index) => {
+      if (block.kind === 'subheading') return this.subsectionLabelHeight;
+      const measureKey = nextMeasureKeys[index];
+      const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
+        && previousMeasuredKeys[index] === measureKey
+        && Number(previousBlockHeights[index]) > 0;
+      return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
+    });
+    section.blockMeasureKeys = nextMeasureKeys;
+    section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
+      previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
+    ));
+    this.layoutSectionBlocks(section);
+    this.sectionByKey.set(section.sectionKey, section);
   }
 
   layoutSectionBlocks(section) {

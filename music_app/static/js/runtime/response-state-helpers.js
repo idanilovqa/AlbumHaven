@@ -1559,6 +1559,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
+  return commitViewPayload(previousView, nextView, options);
+}
+
+// Mounts a normalized view and reconciles the browse state that follows it.
+function commitViewPayload(previousView, nextView, options = {}) {
   const previousViewWasReusableRootBrowse = isReusableRootBrowseViewCandidate(previousView);
   const nextViewIsReusableRootBrowse = isReusableRootBrowseViewCandidate(nextView);
   const syncSearchDraftQuery = shouldSyncSearchDraftQuery(previousView, nextView);
@@ -1632,6 +1637,29 @@ function applyViewPayload(payload, options = {}) {
     resetPreSearchViewState();
   }
   return nextView;
+}
+
+// A root gallery continuation appends one page to the mounted, already
+// normalized root view: only the page's groups are compacted and given the
+// retained cover authority, and the loaded group list is extended in place
+// instead of being copied. `mergedLastGroup` replaces the last loaded group
+// when the page continues that artist. Returns the mounted page groups.
+function appendRootGalleryViewPage({ mergedLastGroup = null, appendedGroups = [], galleryPage }) {
+  const previousView = state.view;
+  const page = { artist_groups: [...(mergedLastGroup ? [mergedLastGroup] : []), ...appendedGroups].map(compactRuntimeArtistGroupPayload) };
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (retainedCoverAuthority?.coverMutationRevision === Number(state.ui.albumCoverMutationRevision || 0)) {
+    preserveMissingRuntimeAlbumCoverAuthority(page, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
+  const groups = previousView.artist_groups;
+  if (mergedLastGroup) groups[groups.length - 1] = page.artist_groups[0];
+  groups.push(...page.artist_groups.slice(mergedLastGroup ? 1 : 0));
+  commitViewPayload(previousView, { ...previousView, gallery_page: { ...galleryPage }, initial_view_partial: false }, {
+    trackSidebarReveal: false,
+  });
+  return page.artist_groups;
 }
 
 function mergeViewPayload(patch, options = {}) {

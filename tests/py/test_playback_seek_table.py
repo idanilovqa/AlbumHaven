@@ -106,7 +106,7 @@ def test_flac_entries_start_real_frames_after_the_streams_header(ffmpeg, tmp_pat
 
 def test_the_shared_client_vectors_are_the_reference_lookups_answers():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    for section in (fixture, fixture["flac"]):
+    for section in (fixture, fixture["flac"], fixture["seekStream"]):
         raw = section["table"]
         table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
         for case in section["cases"]:
@@ -149,10 +149,9 @@ def test_a_stream_open_waits_for_the_scan_already_running_instead_of_reading_the
     assert module._scans == {}
 
 
-
 def test_the_shared_splice_vectors_are_the_reference_whole_through_answers():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    for section in (fixture, fixture["flac"]):
+    for section in (fixture, fixture["flac"], fixture["seekStream"]):
         raw = section["table"]
         table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
         assert section["wholeThroughCases"]

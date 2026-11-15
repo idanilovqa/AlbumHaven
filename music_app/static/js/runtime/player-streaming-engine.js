@@ -14,6 +14,8 @@ const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 5000];
 const STREAMING_DETACHED_SILENCE_MS = 30_000;
 // After a network change, a socket that owes bytes and sent none for this long is presumed lost.
 const STREAMING_SILENT_SOCKET_MS = 3000;
+// A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
+const STREAMING_CONNECT_DEADLINE_MS = 4000;
 // The server's own refusals: another socket would be refused too.
 const STREAMING_REFUSED_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4408, 4409, 4429]);
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
@@ -773,16 +775,32 @@ function jumpWhileDetached(track, startSeconds) {
   stopStreamingReconnectTimers(detached);
   detached.kind = 'reopen';
   detached.spliceFrame = null;
-  detached.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   waitForStreamingTransport();
-  return startStreamingTrack(track, { startSeconds, autoplay: true });
+  return startStreamingTrack(track, { startSeconds, autoplay: true, keepDetached: true });
+}
+
+function streamingSocketConnecting(socket) {
+  return socket?.readyState === (Number.isInteger(WebSocket.CONNECTING) ? WebSocket.CONNECTING : 0);
+}
+
+// Gives up a reconnect attempt that has not opened: it counts as a lost reconnect.
+function abandonStreamingConnectingSocket(socket) {
+  const engine = streamingEngineState();
+  if (!engine.detached || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+  engine.expectedSocketClose = socket;
+  socket.close();
+  void recoverUnexpectedStreamingSocketClose(socket, { code: 1006, reason: 'connect timeout' });
 }
 
 // After a network change, a socket that owes bytes and has sent none for a while is presumed
-// lost: it is replaced rather than waited on until TCP gives up.
+// lost: it is replaced rather than waited on until TCP gives up. Only Chromium reports a
+// connection change; Firefox and Safari raise `online` only after being fully offline, so there a
+// silent socket is replaced only then.
 function handleStreamingNetworkChange() {
   const engine = streamingEngineState();
   if (engine.detached) {
+    // An attempt begun on the previous network is replaced by one on this network.
+    abandonStreamingConnectingSocket(engine.socket);
     reconnectStreamingTransport();
     return;
   }
@@ -870,7 +888,7 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   if (!closeStreamingRoleStream(continuity, reason)) return false;
   const options = continuity.continuityOptions;
   if (releaseWorklet && engine.node) {
-    if (options?.kind === 'queued-next') {
+    if (options?.kind === 'queued-next' || options?.kind === 'splice') {
       engine.node.port.postMessage({
         type: 'drop-continuity',
         generation: continuity.generation,
@@ -2476,7 +2494,11 @@ function connectStreamingSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
   socket.binaryType = 'arraybuffer';
+  const connectDeadline = engine.detached
+    ? window.setTimeout(() => abandonStreamingConnectingSocket(socket), STREAMING_CONNECT_DEADLINE_MS)
+    : 0;
   socket.onopen = () => {
+    window.clearTimeout(connectDeadline);
     flushStreamingControls();
     keepStreamingSocketAlive(socket);
     if (engine.socket === socket) resumeStreamingTransport();
@@ -2491,6 +2513,7 @@ function connectStreamingSocket() {
     publishStreamingDiagnostics();
   };
   socket.onclose = (event) => {
+    window.clearTimeout(connectDeadline);
     if (engine.expectedSocketClose === socket) {
       engine.expectedSocketClose = null;
       return;
@@ -2883,14 +2906,15 @@ async function startBrowserStreamingTrack(track, {
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
   transportRecoveryAttempt = null,
+  keepDetached = false,
 } = {}) {
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
-  // Another track or place than an offline seek's: the lost socket's audio is left behind.
-  if (engine.detached?.startRequestId !== startRequestId) endStreamingDetach();
+  // Any start but an offline seek's leaves the lost socket's audio behind.
+  if (!keepDetached) endStreamingDetach();
   settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
     await primeStreamingCachedTrack(track);
@@ -3240,7 +3264,7 @@ async function seekBrowserStreaming(seconds) {
     return jumpWhileDetached(currentTrack, startSeconds);
   }
   // The next socket is open: the seek asks it, and no splice is needed any more.
-  if (detached && !offline) endStreamingDetach({ resumed: true });
+  if (detached && !offline) endStreamingDetach();
   const currentFrame = Math.round(
     Math.max(0, Number(engine.snapshot.currentTime) || 0) * engine.sampleRate,
   );

@@ -17,7 +17,7 @@ class SeekTableTest {
     fun lookupMatchesTheServersReferenceVectors() {
         val root = JSONObject(fixture.readText())
         var checked = 0
-        for (section in listOf(root, root.getJSONObject("flac"))) {
+        for (section in listOf(root, root.getJSONObject("flac"), root.getJSONObject("seekStream"))) {
             val table = section.getJSONObject("table").toSeekTable()
             val cases: JSONArray = section.getJSONArray("cases")
             for (index in 0 until cases.length()) {
@@ -40,7 +40,7 @@ class SeekTableTest {
     fun wholeThroughMatchesTheServersReferenceVectors() {
         val root = JSONObject(fixture.readText())
         var checked = 0
-        for (section in listOf(root, root.getJSONObject("flac"))) {
+        for (section in listOf(root, root.getJSONObject("flac"), root.getJSONObject("seekStream"))) {
             val table = section.getJSONObject("table").toSeekTable()
             val cases = section.getJSONArray("wholeThroughCases")
             for (index in 0 until cases.length()) {

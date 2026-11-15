@@ -1,5 +1,5 @@
 {
- "description": "Seek-table lookups and splice frames every client must answer exactly as music_app/services/playback_seek_table.lookup and whole_through do. Generated from it; tests/py/test_playback_seek_table.py keeps them equal.",
+ "description": "Seek-table lookups and splice frames every client must answer exactly as music_app/services/playback_seek_table.lookup and whole_through do. Generated from it; tests/py/test_playback_seek_table.py keeps them equal. seekStream is a stream opened mid-track whose table runs past the frames it keeps.",
  "table": {
   "prefixBytes": 0,
   "prerollFrames": 9216,
@@ -406,5 +406,155 @@
    "receivedBytes": 1000000,
    "frame": 133679
   }
- ]
+ ],
+ "seekStream": {
+  "table": {
+   "prefixBytes": 0,
+   "prerollFrames": 9216,
+   "offsets": [
+    0,
+    800,
+    1600,
+    2400,
+    3200,
+    4000,
+    4800,
+    5600,
+    6400,
+    7200,
+    8000,
+    8800,
+    9600,
+    10400,
+    11200,
+    12000,
+    12400
+   ],
+   "samples": [
+    0,
+    2304,
+    4608,
+    6912,
+    9216,
+    11520,
+    13824,
+    16128,
+    18432,
+    20736,
+    23040,
+    25344,
+    27648,
+    29952,
+    32256,
+    34560,
+    36864
+   ]
+  },
+  "initialSkip": 1105,
+  "initialTotal": 30000,
+  "streamStart": 100000,
+  "cases": [
+   {
+    "target": 99999,
+    "receivedBytes": 12400,
+    "ended": true,
+    "window": null
+   },
+   {
+    "target": 100000,
+    "receivedBytes": 12400,
+    "ended": true,
+    "window": {
+     "prefixBytes": 0,
+     "byteOffset": 0,
+     "skipFrames": 1105,
+     "totalFrames": 30000
+    }
+   },
+   {
+    "target": 100000,
+    "receivedBytes": 800,
+    "ended": false,
+    "window": {
+     "prefixBytes": 0,
+     "byteOffset": 0,
+     "skipFrames": 1105,
+     "totalFrames": 30000
+    }
+   },
+   {
+    "target": 110000,
+    "receivedBytes": 4000,
+    "ended": false,
+    "window": {
+     "prefixBytes": 0,
+     "byteOffset": 0,
+     "skipFrames": 11105,
+     "totalFrames": 20000
+    }
+   },
+   {
+    "target": 110000,
+    "receivedBytes": 12400,
+    "ended": false,
+    "window": {
+     "prefixBytes": 0,
+     "byteOffset": 0,
+     "skipFrames": 11105,
+     "totalFrames": 20000
+    }
+   },
+   {
+    "target": 129999,
+    "receivedBytes": 12400,
+    "ended": true,
+    "window": {
+     "prefixBytes": 0,
+     "byteOffset": 7200,
+     "skipFrames": 10368,
+     "totalFrames": 1
+    }
+   },
+   {
+    "target": 130000,
+    "receivedBytes": 12400,
+    "ended": true,
+    "window": null
+   }
+  ],
+  "wholeThroughCases": [
+   {
+    "receivedBytes": 0,
+    "frame": null
+   },
+   {
+    "receivedBytes": 800,
+    "frame": null
+   },
+   {
+    "receivedBytes": 1600,
+    "frame": 101199
+   },
+   {
+    "receivedBytes": 8000,
+    "frame": 119631
+   },
+   {
+    "receivedBytes": 12000,
+    "frame": 130000
+   },
+   {
+    "receivedBytes": 12399,
+    "frame": 130000
+   },
+   {
+    "receivedBytes": 12400,
+    "frame": 130000
+   },
+   {
+    "receivedBytes": 99999,
+    "frame": 130000
+   }
+  ]
+ }
 }

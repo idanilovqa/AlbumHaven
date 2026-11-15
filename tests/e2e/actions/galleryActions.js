@@ -187,7 +187,7 @@ export function readVisibleGalleryCoverReadiness(selectors) {
           const url = new URL(entry.productionSrc, window.location.href);
           isReady = Boolean(entry.productionSrc)
             && url.origin === window.location.origin
-            && url.pathname === '/cover';
+            && url.pathname.startsWith('/cover/');
           reason = isReady ? 'decoded local image' : 'decoded image lacks local cover authority';
         } catch {
           isReady = false;

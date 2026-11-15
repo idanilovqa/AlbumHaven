@@ -81,7 +81,7 @@ const localTrack = {
   title: 'Local Track',
   artist: 'Local Artist',
   album: 'Local Album',
-  coverPath: '',
+  coverRef: '',
 };
 
 function activeOwnershipState() {

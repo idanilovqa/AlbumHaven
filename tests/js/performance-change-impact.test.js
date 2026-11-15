@@ -201,3 +201,18 @@ test('shared browse changes retain every search gate in focused CI', () => {
     assert.ok(result.focusedPerformanceShards.includes('synthetic-large-library'));
   }
 });
+
+test('cover reference owners require the search, Problematic Files and HTML reload gates', () => {
+  for (const changedPath of [
+    'music_app/services/cover_reference_boundary.py',
+    'music_app/services/cover_references.py',
+    'migrations/postgres/0201_backfill_cover_references.sql',
+  ]) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of ['artist-family', 'search-all-artists', 'search-browse', 'utility-problematic-files',
+      'problematic-files-focused', 'app-open-all-artists', 'artist-tree-scroll-navigation']) {
+      assert.ok(targets.includes(target), `${changedPath} must require ${target}`);
+    }
+  }
+});

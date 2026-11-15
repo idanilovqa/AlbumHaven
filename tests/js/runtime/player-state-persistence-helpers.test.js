@@ -65,7 +65,7 @@ function loadHelper(overrides = {}) {
           title: 'Song',
           artist: 'Artist',
           album: 'Album',
-          coverPath: 'C:/Music/cover.jpg',
+          coverRef: 'C:/Music/cover.jpg',
         },
         lastKnownWasPlaying: true,
         lastPersistedSnapshot: '',
@@ -87,7 +87,7 @@ function loadHelper(overrides = {}) {
       title: 'Song',
       artist: 'Artist',
       album: 'Album',
-      coverPath: 'C:/Music/cover.jpg',
+      coverRef: 'C:/Music/cover.jpg',
       durationSeconds: 240.111,
     },
     playbackQueue: null,
@@ -104,7 +104,7 @@ function loadHelper(overrides = {}) {
     title: 'Streamed Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const context = loadHelper({
     state: {
@@ -175,7 +175,7 @@ test('album artist, year and album snapshot survive streaming persistence and re
     albumArtist: 'Various Artists',
     album: 'Featured Signal Collection',
     year: '2011',
-    coverPath: 'C:/Music/Various Artists/Featured Signal Collection/cover.jpg',
+    coverRef: 'C:/Music/Various Artists/Featured Signal Collection/cover.jpg',
     durationSeconds: 30,
   };
   const buildContext = loadHelper({
@@ -252,7 +252,7 @@ test('album artist, year and album snapshot survive streaming persistence and re
           title: 'Song',
           artist: 'Artist',
           album: 'Album',
-          coverPath: '',
+          coverRef: '',
         },
         lastKnownWasPlaying: true,
         lastPersistedSnapshot: '',
@@ -282,7 +282,7 @@ test('album artist, year and album snapshot survive streaming persistence and re
       title: 'Song',
       artist: 'Artist',
       album: 'Album',
-      coverPath: '',
+      coverRef: '',
       durationSeconds: 10,
     },
     playbackQueue: null,
@@ -304,7 +304,7 @@ test('cancelled beforeunload is inert and pagehide preserves its first rendered 
     title: 'Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const context = loadHelper({
     state: {
@@ -412,7 +412,7 @@ test('active restore awaits server ownership before requesting autoplay', async 
     title: 'Restored',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const context = loadHelper({
     state: {
@@ -470,7 +470,7 @@ test('unload preserves the rendered playhead before playback ownership teardown'
     title: 'Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const context = loadHelper({
     state: {
@@ -515,7 +515,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
     title: 'Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const context = loadHelper({
     state: {
@@ -556,7 +556,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
           title: 'Song 2',
           artist: 'Artist',
           album: 'Album',
-          coverPath: '',
+          coverRef: '',
         },
         playbackQueue: {
           tracks: [
@@ -566,7 +566,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
               title: 'Song 1',
               artist: 'Artist',
               album: 'Album',
-              coverPath: '',
+              coverRef: '',
             },
             {
               src: '/track?path=song2.flac',
@@ -574,7 +574,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
               title: 'Song 2',
               artist: 'Artist',
               album: 'Album',
-              coverPath: '',
+              coverRef: '',
             },
             {
               src: '/track?path=song3.flac',
@@ -582,7 +582,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
               title: 'Song 3',
               artist: 'Artist',
               album: 'Album',
-              coverPath: '',
+              coverRef: '',
             },
           ],
           currentIndex: 1,
@@ -607,7 +607,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
       title: 'Song 2',
       artist: 'Artist',
       album: 'Album',
-      coverPath: '',
+      coverRef: '',
       durationSeconds: 10,
     },
     playbackQueue: {
@@ -618,7 +618,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
           title: 'Song 1',
           artist: 'Artist',
           album: 'Album',
-          coverPath: '',
+          coverRef: '',
         },
         {
           src: '/track?path=song2.flac',
@@ -626,7 +626,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
           title: 'Song 2',
           artist: 'Artist',
           album: 'Album',
-          coverPath: '',
+          coverRef: '',
         },
         {
           src: '/track?path=song3.flac',
@@ -634,7 +634,7 @@ test('BFCache restoration re-enables normal player-state persistence after pageh
           title: 'Song 3',
           artist: 'Artist',
           album: 'Album',
-          coverPath: '',
+          coverRef: '',
         },
       ],
       currentIndex: 1,
@@ -671,7 +671,7 @@ test('restore accepts a legacy path-signature album ref before same-name resolut
         title: 'Signal',
         artist: 'Solo Voice',
         album: queueSnapshot.name,
-        coverPath: '',
+        coverRef: '',
       },
       playbackQueue: {
         tracks: [{
@@ -680,7 +680,7 @@ test('restore accepts a legacy path-signature album ref before same-name resolut
           title: 'Signal',
           artist: 'Solo Voice',
           album: queueSnapshot.name,
-          coverPath: '',
+          coverRef: '',
         }],
         currentIndex: 0,
         albumRef: legacyAlbumRef,
@@ -742,7 +742,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
       },
       playbackQueue: {
         tracks: [
@@ -752,7 +752,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
             title: 'Song',
             artist: 'Artist',
             album: 'Album',
-            coverPath: '',
+            coverRef: '',
           },
           {
             src: '/track?path=next.flac',
@@ -760,7 +760,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
             title: 'Next Song',
             artist: 'Artist',
             album: 'Album',
-            coverPath: '',
+            coverRef: '',
           },
           {
             src: '/track?path=other.flac',
@@ -768,7 +768,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
             title: 'Other Song',
             artist: 'Other Artist',
             album: 'Other Album',
-            coverPath: '',
+            coverRef: '',
           },
         ],
         currentIndex: 0,
@@ -828,7 +828,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
         artist: 'Artist',
         albumArtist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
       },
       {
         src: '/track?path=next.flac',
@@ -837,7 +837,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
         artist: 'Artist',
         albumArtist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
       },
       {
         src: '/track?path=other.flac',
@@ -845,7 +845,7 @@ test('restore normalizes a persisted queue before opening the fresh streaming ro
         title: 'Other Song',
         artist: 'Other Artist',
         album: 'Other Album',
-        coverPath: '',
+        coverRef: '',
       },
     ],
     currentIndex: 0,
@@ -892,7 +892,7 @@ test('restore refreshes a stale album snapshot while preserving queue order', as
         title: 'Current',
         artist: 'Solo Voice',
         album: 'Featured Signal Collection',
-        coverPath: '',
+        coverRef: '',
       },
       playbackQueue: {
         tracks: [
@@ -902,7 +902,7 @@ test('restore refreshes a stale album snapshot while preserving queue order', as
             title: 'First',
             artist: 'Lead Voice',
             album: 'Featured Signal Collection',
-            coverPath: '',
+            coverRef: '',
           },
           {
             src: '/track?path=current.flac',
@@ -910,7 +910,7 @@ test('restore refreshes a stale album snapshot while preserving queue order', as
             title: 'Current',
             artist: 'Solo Voice',
             album: 'Featured Signal Collection',
-            coverPath: '',
+            coverRef: '',
           },
         ],
         currentIndex: 1,
@@ -972,7 +972,7 @@ test('restore clears a missing persisted queue', async () => {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
       },
       playbackQueue: null,
       currentTime: 5,
@@ -1011,7 +1011,7 @@ test('restore honors ownership denial by keeping a saved playing track suspended
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
       },
       playbackQueue: null,
       currentTime: 12,
@@ -1048,7 +1048,7 @@ test('restore exposes the full persisted track before browser audio startup can 
     title: 'Restored Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 181,
   };
   const calls = {
@@ -1102,7 +1102,7 @@ test('paused restore requests waveform peaks after the restored streaming role i
     title: 'Restored Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 181,
   };
   const context = loadHelper({
@@ -1155,7 +1155,7 @@ test('blocked active restore reconciles waveform and persists the retained pause
     title: 'Blocked Restore',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 181,
   };
   const context = loadHelper({
@@ -1229,7 +1229,7 @@ test('restore replaces stale streaming roles on the prepared transport at the sa
     title: 'Restored Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const context = loadHelper({
     state: {
@@ -1360,7 +1360,7 @@ test('immediate restore autoplay starts one listen session and persists the play
     title: 'Immediate Autoplay',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 181,
   };
   const listenSessionCalls = [];
@@ -1433,7 +1433,7 @@ test('late restore autoplay completion transitions the persisted fallback once',
     title: 'Late Autoplay',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 181,
   };
   const listenSessionCalls = [];
@@ -1517,7 +1517,7 @@ test('restore keeps saved loop boundaries but never re-enters loop edit mode', a
     title: 'Looped Song',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 180,
   };
   const context = loadHelper({

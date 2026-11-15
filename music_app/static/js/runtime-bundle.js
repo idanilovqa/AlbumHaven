@@ -15365,7 +15365,7 @@ function showAlbumCardContextMenu(x, y, album) {
     : {};
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
-  const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
+  const canEditTags = canEditAlbumTags(album);
   // Versions grouped under this card (or the card itself, when it is a version) can be separated.
   const releases = albumKey && typeof getAlbumReleaseSet === 'function' ? getAlbumReleaseSet(album).releases : [];
   const versions = releases.slice(1).filter((release) => release?.key);
@@ -15393,6 +15393,19 @@ function showAlbumCardContextMenu(x, y, album) {
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
   }
+}
+
+// allowed_actions is projected per request, so albums rebuilt in the browser after a tag
+// edit lack it; fall back to the session capability. Missing albums never allow edits.
+function canEditAlbumTags(album) {
+  if (!album || album.inventory_status === 'missing') return false;
+  const allowedActions = album.allowed_actions;
+  if (allowedActions && typeof allowedActions === 'object'
+      && Object.prototype.hasOwnProperty.call(allowedActions, 'library.files.edit_tags')) {
+    return Boolean(allowedActions['library.files.edit_tags']);
+  }
+  const capabilities = typeof window === 'undefined' ? null : window.AlbumHavenCapabilities;
+  return Boolean(capabilities?.allows?.('library.files.edit_tags'));
 }
 
 function ensureArtistTreeContextMenu() {
@@ -52525,7 +52538,7 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'edit-tags') {
-      if (album?.allowed_actions?.['library.files.edit_tags']) {
+      if (canEditAlbumTags(album)) {
         openTagEditor(album, { tracksMode: 'all' });
       }
       return;

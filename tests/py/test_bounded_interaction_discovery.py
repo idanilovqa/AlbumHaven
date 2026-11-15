@@ -285,12 +285,88 @@ def lookup(request, root):
     ]
 
 
-def test_a_call_chain_deeper_than_the_limit_is_a_hazard(tmp_path: Path):
-    chain = "\n".join(f"def step{level}():\n    step{level + 1}()\n" for level in range(1, 10))
-    _write(tmp_path, "music_app/routes/read.py", f"{chain}\ndef step10():\n    pass\n\n@router.get('/deep')\ndef deep():\n    step1()\n")
+def test_every_call_chain_is_followed_to_its_end_whatever_its_depth(tmp_path: Path):
+    # Traversal is exhaustive, so depth never hides work: a probe twenty calls
+    # down is reported where it happens, and a long chain of helpers that does
+    # no such work reports nothing.
+    probe = "\n".join(f"def step{level}(paths):\n    step{level + 1}(paths)\n" for level in range(1, 20))
+    quiet = "\n".join(f"def hop{level}():\n    hop{level + 1}()\n" for level in range(1, 20))
+    _write(tmp_path, "music_app/routes/read.py", f"""
+{probe}
+def step20(paths):
+    return [path.stat() for path in paths]
+
+{quiet}
+def hop20():
+    return None
+
+@router.get('/deep')
+def deep(paths):
+    step1(paths)
+
+@router.get('/quiet')
+def quiet():
+    hop1()
+""")
     hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
-    assert [(item["operation"], item["function"], item["reject"]) for item in hazards] == [
-        ("call-depth-exceeded", "step9", False),
+    assert [(item["entrypoint"].split("#")[1], item["operation"], item["function"], len(item["via"])) for item in hazards] == [
+        ("deep:route:GET /deep", "Path.stat", "step20", 20),
+    ]
+
+
+def test_a_cyclic_call_graph_terminates_and_reports_each_reachable_probe_once(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/read.py", """
+def ping(paths):
+    pong(paths)
+    return [path.exists() for path in paths]
+
+def pong(paths):
+    ping(paths)
+
+@router.get('/cycle')
+def cycle(paths):
+    ping(paths)
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert [(item["operation"], item["function"]) for item in hazards] == [("Path.exists", "ping")]
+
+
+def test_a_loop_iterable_runs_once_and_a_loop_over_constants_does_not_repeat_per_item(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/read.py", """
+def tags(path):
+    with path.open("rb") as handle:
+        return {"size": handle.tell()}
+
+def variant(base):
+    for extension in (".png", ".webp", ".jpg"):
+        if base.with_suffix(extension).exists():
+            return extension
+    return [attempt for attempt in range(2) if base.is_file()]
+
+@router.get("/one")
+def one(path):
+    for key, value in tags(path).items():
+        print(key, value)
+    return [name for name in sorted(tags(path)) if name]
+
+@router.get("/variant")
+def variant_route(base):
+    return variant(base)
+
+@router.get("/each")
+def each(paths, roots):
+    for path in paths:
+        tags(path)
+    for extension in (".png", ".jpg"):
+        for root in roots:
+            variant(root)
+    return [tags(path) for path in paths]
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert sorted((item["entrypoint"].split("#")[1].split(":")[0], item["operation"], item["function"]) for item in hazards) == [
+        ("each", "Path.exists", "variant"),
+        ("each", "Path.is_file", "variant"),
+        ("each", "Path.open", "tags"),
     ]
 
 

@@ -31,8 +31,27 @@ const DOM_COLLECTION_QUERIES = new Set(['querySelectorAll', 'getElementsByClassN
 const OBJECT_ENUMERATION = new Set(['keys', 'values', 'entries']);
 const STORAGE_OBJECTS = new Set(['localStorage', 'sessionStorage']);
 const STRING_METHODS = new Set(['split', 'trim', 'toLowerCase', 'toUpperCase', 'replace', 'replaceAll', 'match', 'matchAll']);
+const STRING_ARRAY_METHODS = new Set(['split', 'match', 'matchAll']);
 // Global calls that return a primitive, never a shared collection.
 const PRIMITIVE_RESULTS = new Set(['String', 'Number', 'Boolean', 'encodeURIComponent', 'decodeURIComponent', 'parseInt', 'parseFloat']);
+// Methods whose result is always a primitive, whatever the receiver.
+const SCALAR_METHODS = new Set([
+  'join', 'toString', 'toFixed', 'toPrecision', 'toISOString', 'toLocaleString', 'padStart', 'padEnd', 'substring',
+  'charAt', 'charCodeAt', 'codePointAt', 'trimStart', 'trimEnd', 'localeCompare', 'normalize', 'startsWith',
+  'endsWith', 'getAttribute',
+]);
+// Copying methods: the result is no longer than a bounded receiver.
+const BOUNDED_COPY_METHODS = new Set(['map', 'filter', 'slice', 'reverse']);
+// Reads and copies that return part of their receiver and never merge in
+// another value: on a value bounded by construction, the result is too.
+const DERIVED_READ_METHODS = new Set(['filter', 'slice', 'reverse', 'at', 'find', 'findLast', 'keys', 'values', 'entries', 'get', 'getAll']);
+const MUTATOR_METHODS = new Set(['push', 'unshift', 'splice', 'fill', 'copyWithin', 'set', 'add', 'append']);
+const FIXED_LENGTH_CONSTRUCTORS = new Set([
+  'Array', 'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array',
+  'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
+]);
+// Calls that read an argument without retaining or mutating it.
+const READ_ONLY_CALLS = new Set(['Object.keys', 'Object.values', 'Object.entries', 'Object.freeze', 'JSON.stringify', 'String', 'Boolean', 'Number']);
 const MARKUP_PROPERTIES = new Set(['innerHTML', 'outerHTML']);
 const GENERIC_ENDPOINTS = ['/view-data'];
 const DEDICATED_SURFACES = new Map([['home', '/home-data']]);
@@ -120,7 +139,7 @@ function stringValue(node) {
 // anonymous callbacks nested inside it.
 function annotateOwners(ast) {
   const owners = new Map();
-  const visit = (node, owner, className, scope) => {
+  const visit = (node, owner, className, scope, parent) => {
     if (!node || typeof node.type !== 'string') return;
     let nextOwner = owner;
     let nextClass = className;
@@ -138,16 +157,16 @@ function annotateOwners(ast) {
     }
     // `scope` is the enclosing function of the node; a function's own scope is
     // its parent, and its children are scoped to it.
-    owners.set(node, { owner: nextOwner, className: nextClass, scope });
+    owners.set(node, { owner: nextOwner, className: nextClass, scope, parent });
     const childScope = isFunction(node) ? node : scope;
     for (const key of Object.keys(node)) {
       if (key === 'loc') continue;
       const child = node[key];
-      if (Array.isArray(child)) child.forEach(item => visit(item, nextOwner, nextClass, childScope));
-      else if (child && typeof child.type === 'string') visit(child, nextOwner, nextClass, childScope);
+      if (Array.isArray(child)) child.forEach(item => visit(item, nextOwner, nextClass, childScope, node));
+      else if (child && typeof child.type === 'string') visit(child, nextOwner, nextClass, childScope, node);
     }
   };
-  visit(ast, '<top-level>', '', null);
+  visit(ast, '<top-level>', '', null, null);
   return owners;
 }
 
@@ -194,7 +213,7 @@ function indexDefinitions(files) {
       }
     });
   }
-  return { functions, methods, instances };
+  return { files, functions, methods, instances };
 }
 
 function unwrapChain(node) {
@@ -257,14 +276,335 @@ function collectBindings(fnNode) {
   return bindings;
 }
 
+// ---------------------------------------------------------------------------
+// Value shapes proven from how a value is constructed, never from its name.
+//   scalar   a primitive (a string's methods are not collection work);
+//   derived  content wholly fixed by construction: a fixed-length typed array,
+//            a URL parsed from one string, a string's split, or a copy of one;
+//   bounded  a fixed number of elements (an array literal), elements unknown;
+//   fixed    an object with a static key set, values unknown: only spreading or
+//            enumerating its keys is bounded.
+// Anything else is unknown (null) and keeps being reported.
+const SHAPE_RANK = { scalar: 0, derived: 1, bounded: 2, fixed: 3 };
+const COLLECTION_SHAPES = new Set(['scalar', 'derived', 'bounded']);
+
+function joinShapes(shapes) {
+  if (shapes.some(shape => !shape)) return null;
+  return shapes.reduce((a, b) => (SHAPE_RANK[a] >= SHAPE_RANK[b] ? a : b), 'scalar');
+}
+
+function qualifiedCallee(call) {
+  const callee = unwrapChain(call.callee);
+  if (callee?.type === 'Identifier') return callee.name;
+  if (callee?.type === 'MemberExpression' && callee.object.type === 'Identifier') return `${callee.object.name}.${memberProperty(callee)}`;
+  return '';
+}
+
+function isFixedLengthArray(node) {
+  const value = unwrapChain(node);
+  if (value?.type === 'CallExpression' && calleeName(value) === 'getRandomValues') return isFixedLengthArray(value.arguments[0]);
+  return value?.type === 'NewExpression' && FIXED_LENGTH_CONSTRUCTORS.has(value.callee?.name) && value.arguments.length === 1
+    && value.arguments[0].type === 'Literal' && typeof value.arguments[0].value === 'number';
+}
+
+// Walks a subtree, passing each node's parent and the parent field holding it.
+function walkWithParent(node, visit, parent = null, key = '') {
+  if (!node || typeof node.type !== 'string') return;
+  visit(node, parent, key);
+  for (const childKey of Object.keys(node)) {
+    if (childKey === 'loc') continue;
+    const child = node[childKey];
+    if (Array.isArray(child)) child.forEach(item => walkWithParent(item, visit, node, childKey));
+    else if (child && typeof child.type === 'string') walkWithParent(child, visit, node, childKey);
+  }
+}
+
+function patternNames(pattern) {
+  const names = [];
+  walkAst(pattern, (node) => {
+    if (node.type === 'Identifier') names.push(node.name);
+    if (node.type === 'MemberExpression' || node.type === 'AssignmentPattern') {
+      if (node.type === 'AssignmentPattern') names.push(...patternNames(node.left));
+      return false;
+    }
+    return undefined;
+  });
+  return names;
+}
+
+// Names declared directly in one scope (a function, or the file when null). A
+// name bound any way other than one plain `x = init` declarator is opaque.
+const scopeDeclarationCache = new WeakMap();
+function scopeDeclarations(file, scope) {
+  const owner = scope || file.ast;
+  if (scopeDeclarationCache.has(owner)) return scopeDeclarationCache.get(owner);
+  const declarations = new Map();
+  const opaque = (name) => declarations.set(name, null);
+  const declare = (name, value) => (declarations.has(name) ? opaque(name) : declarations.set(name, value));
+  if (scope) scope.params.forEach(param => patternNames(param).forEach(opaque));
+  walkAst(scope ? scope.body : file.ast, (node) => {
+    if (isFunction(node) && node.type !== 'FunctionDeclaration') return false;
+    if (node.type === 'VariableDeclarator') {
+      if (node.id.type === 'Identifier') declare(node.id.name, node);
+      else patternNames(node.id).forEach(opaque);
+    } else if ((node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') && node.id) {
+      opaque(node.id.name);
+      if (node.type === 'FunctionDeclaration') return false;
+    } else if (node.type === 'CatchClause' && node.param) {
+      patternNames(node.param).forEach(opaque);
+    } else if (node.type === 'ImportSpecifier' || node.type === 'ImportDefaultSpecifier' || node.type === 'ImportNamespaceSpecifier') {
+      opaque(node.local.name);
+    } else if ((node.type === 'ForOfStatement' || node.type === 'ForInStatement') && node.left.type === 'VariableDeclaration') {
+      // A loop variable holds one element of the iterated value, not an init.
+      for (const declarator of node.left.declarations) loopHeaders.set(declarator, node);
+    }
+    return undefined;
+  });
+  scopeDeclarationCache.set(owner, declarations);
+  return declarations;
+}
+
+const loopHeaders = new WeakMap();
+
+// The single plain declarator a reference resolves to, searching outward
+// through enclosing functions; null when the name is opaque or global.
+function lexicalDeclaration(file, reference) {
+  for (let scope = ownerOf(file, reference).scope; ; scope = ownerOf(file, scope).scope) {
+    const declarations = scopeDeclarations(file, scope);
+    if (declarations.has(reference.name)) {
+      const declarator = declarations.get(reference.name);
+      return declarator ? { declarator, scope } : null;
+    }
+    if (!scope) return null;
+  }
+}
+
+// How a binding is used across its whole scope, nested closures included:
+// every later value it is assigned, whether it can grow by a computed-key write
+// or a mutating method, and whether it escapes (aliased, returned, passed on),
+// after which its size is no longer known.
+const usageCache = new WeakMap();
+function bindingUsage(file, scope) {
+  const owner = scope || file.ast;
+  if (usageCache.has(owner)) return usageCache.get(owner);
+  const usage = new Map();
+  const of = name => (usage.has(name) || usage.set(name, { assigned: [], grows: false, escapes: false }), usage.get(name));
+  const parentOf = node => ownerOf(file, node).parent;
+  walkWithParent(scope ? scope.body : file.ast, (node, parent, key) => {
+    if (node.type !== 'Identifier' || !parent) return;
+    if ((parent.type === 'MemberExpression' && key === 'property' && !parent.computed)
+      || (parent.type === 'Property' && key === 'key' && !parent.computed && !parent.shorthand)
+      || ((parent.type === 'MethodDefinition' || parent.type === 'PropertyDefinition') && key === 'key')
+      || (parent.type === 'VariableDeclarator' && key === 'id')
+      || (isFunction(parent) && key !== 'body')
+      || ['LabeledStatement', 'BreakStatement', 'ContinueStatement'].includes(parent.type)) return;
+    const facts = of(node.name);
+    const inPattern = ['ArrayPattern', 'RestElement', 'AssignmentPattern'].includes(parent.type)
+      || (parent.type === 'Property' && parentOf(parent)?.type === 'ObjectPattern')
+      || (['ForOfStatement', 'ForInStatement'].includes(parent.type) && key === 'left');
+    if (inPattern) {
+      facts.assigned.push(null);
+    } else if (parent.type === 'AssignmentExpression' && key === 'left') {
+      facts.assigned.push(['=', '||=', '&&=', '??='].includes(parent.operator) ? parent.right : 'scalar');
+    } else if (parent.type === 'UpdateExpression') {
+      facts.assigned.push('scalar');
+    } else if (parent.type === 'MemberExpression' && key === 'object') {
+      // `x[key] = value` adds keys; `x.items.push(value)` grows a member.
+      const above = parentOf(parent);
+      if (parent.computed && ((above?.type === 'AssignmentExpression' && above.left === parent) || above?.type === 'UpdateExpression'
+        || (above?.type === 'UnaryExpression' && above.operator === 'delete'))) facts.grows = true;
+      let top = parent;
+      while (parentOf(top)?.type === 'MemberExpression' && parentOf(top).object === top) top = parentOf(top);
+      const call = parentOf(top);
+      if (call?.type === 'CallExpression' && call.callee === top && MUTATOR_METHODS.has(memberProperty(top))) facts.grows = true;
+    } else if (['CallExpression', 'NewExpression'].includes(parent.type) && key === 'arguments') {
+      if (!READ_ONLY_CALLS.has(qualifiedCallee(parent))) facts.escapes = true;
+    } else if (!['SpreadElement', 'BinaryExpression', 'UnaryExpression', 'TemplateLiteral', 'IfStatement', 'WhileStatement',
+      'DoWhileStatement', 'SwitchStatement', 'SwitchCase', 'ForOfStatement', 'ForInStatement', 'ExpressionStatement', 'CallExpression',
+      'NewExpression'].includes(parent.type) && !(parent.type === 'ConditionalExpression' && key === 'test')) {
+      facts.escapes = true;
+    }
+  });
+  usageCache.set(owner, usage);
+  return usage;
+}
+
+// A function or binding whose shape depends on itself is solved as a least
+// fixpoint: start from the narrowest assumption and widen it until the result
+// agrees (`path = path.slice(1)` stays a string; `rows = rows.concat(more)`
+// becomes unknown). Results reached through an unsettled assumption are not
+// cached, so the order of analysis never changes a result.
+const shapeAssumptions = new Map();
+const returnShapeCache = new WeakMap();
+let shapeCycles = 0;
+
+function guardedShape(key, compute) {
+  if (shapeAssumptions.has(key)) {
+    shapeCycles += 1;
+    return shapeAssumptions.get(key);
+  }
+  let assumption = 'scalar';
+  try {
+    // Shapes only widen, so this settles within the lattice height.
+    for (let round = 0; round <= Object.keys(SHAPE_RANK).length; round += 1) {
+      shapeAssumptions.set(key, assumption);
+      const shape = compute();
+      if (shape === assumption || !shape) return shape;
+      assumption = shape;
+    }
+    return null;
+  } finally {
+    shapeAssumptions.delete(key);
+  }
+}
+
+function returnShape(def, index) {
+  if (returnShapeCache.has(def.node)) return returnShapeCache.get(def.node);
+  const cycles = shapeCycles;
+  const shape = guardedShape(def.node, () => {
+    if (def.node.async || def.node.generator) return null;
+    const implicit = def.node.body?.type === 'BlockStatement' ? ['scalar'] : [];
+    return joinShapes([...implicit, ...returnExpressions(def.node).map(value => valueShape(value, def.file, index))]);
+  });
+  if (cycles === shapeCycles) returnShapeCache.set(def.node, shape);
+  return shape;
+}
+
+// Every top-level runtime script shares one global scope, so a top-level
+// binding is only proven when no other script redeclares, grows, or leaks it.
+function bindingFacts(file, scope, name, index) {
+  const files = scope ? [file] : index.files;
+  const facts = { assigned: [], grows: false, escapes: false };
+  for (const other of files) {
+    if (other !== file && scopeDeclarations(other, null).has(name)) return null;
+    const found = bindingUsage(other, scope).get(name);
+    if (!found) continue;
+    facts.assigned.push(...found.assigned);
+    facts.grows ||= found.grows;
+    facts.escapes ||= found.escapes;
+  }
+  return facts;
+}
+
+function identifierShape(reference, file, index) {
+  if (reference.name === 'undefined') return 'scalar';
+  const found = lexicalDeclaration(file, reference);
+  if (!found) return null;
+  const { declarator, scope } = found;
+  return guardedShape(declarator, () => {
+    const facts = bindingFacts(file, scope, reference.name, index);
+    if (!facts) return null;
+    const header = loopHeaders.get(declarator);
+    let initial;
+    if (header?.type === 'ForInStatement') initial = 'scalar';
+    else if (header) initial = ['scalar', 'derived'].includes(valueShape(header.right, file, index)) ? 'derived' : null;
+    else initial = declarator.init ? valueShape(declarator.init, file, index) : 'scalar';
+    const shape = joinShapes([initial, ...facts.assigned.map(value => (
+      value === 'scalar' || value === null ? value : valueShape(value, file, index)
+    ))]);
+    if (!shape || shape === 'scalar') return shape;
+    if (facts.escapes) return null;
+    // Index writes into a fixed-length typed array never grow it.
+    if (facts.grows && !(isFixedLengthArray(declarator.init) && !facts.assigned.length)) return null;
+    return shape;
+  });
+}
+
+function callShape(call, file, index) {
+  const callee = unwrapChain(call.callee);
+  const name = calleeName(call);
+  const qualified = qualifiedCallee(call);
+  const argument = call.arguments[0] && call.arguments[0].type !== 'SpreadElement' ? call.arguments[0] : null;
+  const argumentShape = () => (argument ? valueShape(argument, file, index) : null);
+  if (DOM_COLLECTION_QUERIES.has(name)) return null;
+  if (callee.type === 'Identifier' && PRIMITIVE_RESULTS.has(name)) return 'scalar';
+  if (qualified === 'Object.keys') return argumentShape() ? 'derived' : null;
+  if (qualified === 'Object.values' || qualified === 'Object.entries') {
+    const shape = argumentShape();
+    return shape === 'scalar' || shape === 'derived' ? 'derived' : shape ? 'bounded' : null;
+  }
+  if (qualified === 'Array.from') {
+    const shape = argumentShape();
+    if (shape === 'scalar' || shape === 'derived') return call.arguments.length > 1 ? 'bounded' : 'derived';
+    return shape === 'bounded' ? 'bounded' : null;
+  }
+  if (callee.type === 'MemberExpression' && !(callee.object.type === 'ThisExpression' || GLOBAL_OBJECTS.has(callee.object.name))) {
+    if (name === 'getRandomValues') return isFixedLengthArray(argument) ? 'derived' : null;
+    if (SCALAR_METHODS.has(name)) return 'scalar';
+    // Only strings define these: a string, or a split of that one string.
+    if (STRING_METHODS.has(name)) return STRING_ARRAY_METHODS.has(name) ? 'derived' : 'scalar';
+    const receiver = valueShape(callee.object, file, index);
+    if (receiver === 'scalar') return STRING_ARRAY_METHODS.has(name) ? 'derived' : 'scalar';
+    if (receiver === 'derived') return name === 'map' ? 'bounded' : DERIVED_READ_METHODS.has(name) ? 'derived' : null;
+    if (receiver === 'bounded' && BOUNDED_COPY_METHODS.has(name)) return 'bounded';
+    return null;
+  }
+  const defs = resolveCallable(callee, { file, className: ownerOf(file, call).className }, index);
+  return defs.length ? joinShapes(defs.map(def => returnShape(def, index))) : null;
+}
+
+function valueShape(node, file, index) {
+  const value = unwrapChain(node);
+  switch (value?.type) {
+    case 'Literal':
+    case 'TemplateLiteral':
+    case 'BinaryExpression':
+    case 'UnaryExpression':
+    case 'UpdateExpression':
+      return 'scalar';
+    case 'ArrayExpression':
+      return joinShapes(['derived', ...value.elements.map((element) => {
+        if (!element) return 'derived';
+        if (element.type !== 'SpreadElement') {
+          return ['scalar', 'derived'].includes(valueShape(element, file, index)) ? 'derived' : 'bounded';
+        }
+        const shape = valueShape(element.argument, file, index);
+        return shape === 'scalar' ? 'derived' : COLLECTION_SHAPES.has(shape) ? shape : null;
+      })]);
+    case 'ObjectExpression':
+      return value.properties.every(property => property.type !== 'SpreadElement' || valueShape(property.argument, file, index))
+        ? 'fixed' : null;
+    case 'ConditionalExpression':
+      return joinShapes([valueShape(value.consequent, file, index), valueShape(value.alternate, file, index)]);
+    case 'LogicalExpression':
+      return joinShapes([valueShape(value.left, file, index), valueShape(value.right, file, index)]);
+    case 'SequenceExpression':
+      return valueShape(value.expressions.at(-1), file, index);
+    case 'NewExpression':
+      if (isFixedLengthArray(value)) return 'derived';
+      // A URL parsed from one string is bounded by that string.
+      if (value.callee.name === 'URL') return 'derived';
+      if (value.callee.name === 'URLSearchParams' && value.arguments.every(arg => valueShape(arg, file, index) === 'scalar')) return 'derived';
+      return null;
+    case 'MemberExpression': {
+      if (!value.computed && memberProperty(value) === 'length') return 'scalar';
+      const owner = valueShape(value.object, file, index);
+      return owner === 'scalar' || owner === 'derived' ? owner : null;
+    }
+    case 'Identifier':
+      return identifierShape(value, file, index);
+    case 'CallExpression':
+      return callShape(value, file, index);
+    default:
+      return null;
+  }
+}
+
 // True when a receiver can carry a shared collection whose size is unrelated to
 // the event: DOM collection queries, instance state, globals, or aliases of them.
-function isSharedCollection(node, bindings) {
+// A value whose construction proves it a primitive or a bounded copy is not.
+function isSharedCollection(node, analysis) {
+  const { bindings, shapeOf } = analysis;
+  if (COLLECTION_SHAPES.has(shapeOf(node))) return false;
   let current = node;
   while (current) {
     if (current.type === 'CallExpression') {
       const name = calleeName(current);
       if (DOM_COLLECTION_QUERIES.has(name)) return true;
+      // `Object.entries(x)` and `Array.from(x)` are as large as `x`.
+      if (['Object.keys', 'Object.values', 'Object.entries', 'Array.from'].includes(qualifiedCallee(current))) {
+        return Boolean(current.arguments[0]) && isSharedCollection(current.arguments[0], analysis);
+      }
       if (STRING_METHODS.has(name)) return false;
       if (current.callee.type === 'Identifier' && PRIMITIVE_RESULTS.has(name)) return false;
       if (current.callee.type === 'MemberExpression') {
@@ -301,38 +641,43 @@ function hazardAt(rule, operation, node, file, scale = true) {
 }
 
 // True for `i < shared.length` style loop bounds.
-function isSharedLengthBound(test, bindings) {
-  if (test?.type === 'LogicalExpression') return isSharedLengthBound(test.left, bindings) || isSharedLengthBound(test.right, bindings);
+function isSharedLengthBound(test, analysis) {
+  if (test?.type === 'LogicalExpression') return isSharedLengthBound(test.left, analysis) || isSharedLengthBound(test.right, analysis);
   if (test?.type !== 'BinaryExpression' || !LOOP_BOUND_OPERATORS.has(test.operator)) return false;
-  return [test.left, test.right].some(side => memberProperty(side) === 'length' && isSharedCollection(side.object, bindings));
+  return [test.left, test.right].some(side => memberProperty(side) === 'length' && isSharedCollection(side.object, analysis));
 }
 
 // Direct hazards inside one function body (nested inline callbacks included,
 // because they run on the same event).
 const hazardCache = new WeakMap();
 
-function functionHazards(fnNode, file) {
-  if (!hazardCache.has(fnNode)) hazardCache.set(fnNode, computeFunctionHazards(fnNode, file));
+function functionHazards(fnNode, file, index) {
+  if (!hazardCache.has(fnNode)) hazardCache.set(fnNode, computeFunctionHazards(fnNode, file, index));
   return hazardCache.get(fnNode);
 }
 
-function computeFunctionHazards(fnNode, file) {
-  const bindings = collectBindings(fnNode);
+function computeFunctionHazards(fnNode, file, index) {
+  const analysis = { bindings: collectBindings(fnNode), shapeOf: node => valueShape(node, file, index) };
+  const shared = node => isSharedCollection(node, analysis);
+  // Spreading or enumerating the keys of a fixed-shape object is bounded.
+  const sharedKeys = node => shared(node) && !analysis.shapeOf(node);
+  const objectSpreads = new Set();
   const hazards = [];
   walkAst(fnNode.body || fnNode, (node) => {
+    if (node.type === 'ObjectExpression') node.properties.forEach(property => property.type === 'SpreadElement' && objectSpreads.add(property));
     if (node.type === 'CallExpression') {
       const name = calleeName(node);
       const callee = node.callee;
       const at = callee.type === 'MemberExpression' ? callee.property : callee;
       if (DOM_COLLECTION_QUERIES.has(name)) hazards.push(hazardAt('BI-01', name, at, file));
-      else if (ITERATION_METHODS.has(name) && callee.type === 'MemberExpression' && isSharedCollection(callee.object, bindings)) {
+      else if (ITERATION_METHODS.has(name) && callee.type === 'MemberExpression' && shared(callee.object)) {
         hazards.push(hazardAt('BI-01', name, at, file));
-      } else if (name === 'from' && callee.object?.name === 'Array' && node.arguments[0] && isSharedCollection(node.arguments[0], bindings)) {
+      } else if (name === 'from' && callee.object?.name === 'Array' && node.arguments[0] && shared(node.arguments[0])) {
         hazards.push(hazardAt('BI-01', 'Array.from', at, file));
-      } else if (OBJECT_ENUMERATION.has(name) && callee.object?.name === 'Object' && node.arguments[0] && isSharedCollection(node.arguments[0], bindings)) {
+      } else if (OBJECT_ENUMERATION.has(name) && callee.object?.name === 'Object' && node.arguments[0] && sharedKeys(node.arguments[0])) {
         hazards.push(hazardAt('BI-01', `Object.${name}`, at, file));
       } else if ((name === 'stringify' || name === 'parse') && callee.object?.name === 'JSON') {
-        const scale = name === 'stringify' && Boolean(node.arguments[0]) && isSharedCollection(node.arguments[0], bindings);
+        const scale = name === 'stringify' && Boolean(node.arguments[0]) && shared(node.arguments[0]);
         hazards.push(hazardAt('BI-13', `JSON.${name}`, at, file, scale));
       } else if (name === 'fetch' && callee.type === 'Identifier') {
         hazards.push(hazardAt('BI-03', name, at, file, false));
@@ -341,13 +686,13 @@ function computeFunctionHazards(fnNode, file) {
       } else if (name === 'insertAdjacentHTML') {
         hazards.push(hazardAt('BI-02', name, at, file, false));
       }
-    } else if (node.type === 'NewExpression' && ['Set', 'Map'].includes(node.callee?.name) && node.arguments[0] && isSharedCollection(node.arguments[0], bindings)) {
+    } else if (node.type === 'NewExpression' && ['Set', 'Map'].includes(node.callee?.name) && node.arguments[0] && shared(node.arguments[0])) {
       hazards.push(hazardAt('BI-01', `new ${node.callee.name}`, node, file));
-    } else if ((node.type === 'ForOfStatement' || node.type === 'ForInStatement') && isSharedCollection(node.right, bindings)) {
+    } else if ((node.type === 'ForOfStatement' && shared(node.right)) || (node.type === 'ForInStatement' && sharedKeys(node.right))) {
       hazards.push(hazardAt('BI-01', node.type === 'ForOfStatement' ? 'for-of' : 'for-in', node, file));
-    } else if (['ForStatement', 'WhileStatement', 'DoWhileStatement'].includes(node.type) && isSharedLengthBound(node.test, bindings)) {
+    } else if (['ForStatement', 'WhileStatement', 'DoWhileStatement'].includes(node.type) && isSharedLengthBound(node.test, analysis)) {
       hazards.push(hazardAt('BI-01', 'indexed-loop', node, file));
-    } else if (node.type === 'SpreadElement' && isSharedCollection(node.argument, bindings)) {
+    } else if (node.type === 'SpreadElement' && (objectSpreads.has(node) ? sharedKeys(node.argument) : shared(node.argument))) {
       hazards.push(hazardAt('BI-01', 'spread', node, file));
     } else if (node.type === 'AssignmentExpression' && MARKUP_PROPERTIES.has(memberProperty(node.left))) {
       hazards.push(hazardAt('BI-02', memberProperty(node.left), node.left.property, file, false));
@@ -372,7 +717,7 @@ function calledFunctions(fnNode, context, index) {
 // A call chain deeper than MAX_CALL_DEPTH is not proven bounded: the first
 // function past the limit is reported as a hazard instead of silently ignored.
 function reachableHazards(handler, context, index) {
-  const direct = functionHazards(handler.node, handler.file).map(hazard => ({ ...hazard, via: [] }));
+  const direct = functionHazards(handler.node, handler.file, index).map(hazard => ({ ...hazard, via: [] }));
   const indirect = [];
   const seen = new Set([handler.node]);
   const queue = calledFunctions(handler.node, context, index).map(def => ({ def, via: [def.name] }));
@@ -384,7 +729,7 @@ function reachableHazards(handler, context, index) {
       indirect.push({ ...hazardAt('BI-01', 'call-depth-exceeded', def.node, def.file), via });
       continue;
     }
-    for (const hazard of functionHazards(def.node, def.file)) indirect.push({ ...hazard, via });
+    for (const hazard of functionHazards(def.node, def.file, index)) indirect.push({ ...hazard, via });
     const defContext = { file: def.file, className: ownerOf(def.file, def.node).className };
     for (const next of calledFunctions(def.node, defContext, index)) queue.push({ def: next, via: [...via, next.name] });
   }

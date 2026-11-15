@@ -3,9 +3,13 @@
 Discovery proves coverage, not boundedness. Entrypoints are routes, background
 owners found by name, and every thread or executor target. Direct filesystem
 enumeration in an interactive entrypoint is rejected outright; filesystem/media
-work reached through helpers, and any call chain past the depth limit, is
-reported so the registry can demand a runtime contract; and any interactive
-path that reaches a registered library-scale operation is rejected at any depth.
+work reached through helpers is reported so the registry can demand a runtime
+contract; and any interactive path that reaches a registered library-scale
+operation is rejected at any depth.
+
+The traversal is exhaustive: every (function, looped) pair reachable from an
+entrypoint is analyzed once, so no call chain is left unexamined and no depth
+limit is needed.
 """
 
 from __future__ import annotations
@@ -52,7 +56,6 @@ MEDIA_CALLS = {"MutagenFile": "mutagen.File"}
 # Dispatchers whose callable runs before the caller continues: the callable is
 # the first argument, or the second for `loop.run_in_executor(executor, fn)`.
 SYNCHRONOUS_DISPATCH = {"run_in_threadpool": 0, "to_thread": 0, "run_in_executor": 1}
-MAX_CALL_DEPTH = 8
 # Method names of builtin containers, strings, paths, files, loggers, DB-API
 # connections and cursors, threads, futures, and locks. Such a call on a
 # receiver of unknown type is far more likely a library call than one of
@@ -209,6 +212,31 @@ LOOP_NODES = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.D
 ITERATING_LAMBDA_CONSUMERS = {"sorted", "sort", "min", "max", "map", "filter", "any", "all", "sum"}
 
 
+def _is_constant_literal(node: ast.AST) -> bool:
+    """A literal tuple, list or set of constants, or ``range`` over constants."""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
+        return bool(node.args) and not node.keywords and all(isinstance(arg, ast.Constant) for arg in node.args)
+    return isinstance(node, (ast.Tuple, ast.List, ast.Set)) and all(isinstance(item, ast.Constant) for item in node.elts)
+
+
+def _loop_source(node: ast.AST) -> ast.AST | None:
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return node.iter
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return node.generators[0].iter
+    return None
+
+
+def _iterates_literal(node: ast.AST) -> bool:
+    """A loop over a literal of constants, such as ``for ext in (".png", ".jpg")``,
+    runs a fixed number of times: work inside it is not repeated per item."""
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return _is_constant_literal(node.iter)
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return all(_is_constant_literal(generator.iter) for generator in node.generators)
+    return False
+
+
 @dataclass
 class BodyFacts:
     calls: list[tuple[ast.Call, bool]]
@@ -232,8 +260,10 @@ def _facts(definition: Definition) -> BodyFacts:
     has_while = False
     lambda_loops: dict[int, bool] = {}
     stack = [(child, False) for child in ast.iter_child_nodes(definition.node)]
+    evaluated_once: dict[int, bool] = {}
     while stack:
         node, in_loop = stack.pop()
+        in_loop = evaluated_once.pop(id(node), in_loop)
         if isinstance(node, ast.Lambda):
             if id(node) not in lambda_loops:
                 continue
@@ -259,7 +289,12 @@ def _facts(definition: Definition) -> BodyFacts:
             )
         if isinstance(node, NESTED_SCOPES):
             continue
-        child_in_loop = in_loop or isinstance(node, LOOP_NODES)
+        child_in_loop = in_loop or (isinstance(node, LOOP_NODES) and not _iterates_literal(node))
+        # The iterable of a `for` (or of a comprehension's first `for`) is
+        # evaluated once, before the loop repeats anything.
+        source = _loop_source(node)
+        if source is not None:
+            evaluated_once[id(source)] = in_loop
         for name in node._fields:
             value = getattr(node, name, None)
             if isinstance(value, list):
@@ -526,20 +561,6 @@ def analyze_python_repository(
                     "depth": depth,
                     "via": via,
                     "reject": True,
-                })
-                continue
-            if len(via) > MAX_CALL_DEPTH:
-                # A chain past the depth limit is not proven bounded.
-                hazards.append({
-                    "rule": "BI-04",
-                    "operation": "call-depth-exceeded",
-                    "path": current.path,
-                    "function": current.qualname,
-                    "line": current.node.lineno,
-                    "entrypoint": entry["key"],
-                    "depth": depth,
-                    "via": via,
-                    "reject": False,
                 })
                 continue
             cache_key = (id(current.node), looped)

@@ -3,9 +3,13 @@
 Discovery proves coverage, not boundedness. Entrypoints are routes, background
 owners found by name, and every thread or executor target. Direct filesystem
 enumeration in an interactive entrypoint is rejected outright; filesystem/media
-work reached through helpers, and any call chain past the depth limit, is
-reported so the registry can demand a runtime contract; and any interactive
-path that reaches a registered library-scale operation is rejected at any depth.
+work reached through helpers is reported so the registry can demand a runtime
+contract; and any interactive path that reaches a registered library-scale
+operation is rejected at any depth.
+
+The traversal is exhaustive: every (function, looped) pair reachable from an
+entrypoint is analyzed once, so no call chain is left unexamined and no depth
+limit is needed.
 """
 
 from __future__ import annotations
@@ -52,7 +56,6 @@ MEDIA_CALLS = {"MutagenFile": "mutagen.File"}
 # Dispatchers whose callable runs before the caller continues: the callable is
 # the first argument, or the second for `loop.run_in_executor(executor, fn)`.
 SYNCHRONOUS_DISPATCH = {"run_in_threadpool": 0, "to_thread": 0, "run_in_executor": 1}
-MAX_CALL_DEPTH = 8
 # Method names of builtin containers, strings, paths, files, loggers, DB-API
 # connections and cursors, threads, futures, and locks. Such a call on a
 # receiver of unknown type is far more likely a library call than one of
@@ -526,20 +529,6 @@ def analyze_python_repository(
                     "depth": depth,
                     "via": via,
                     "reject": True,
-                })
-                continue
-            if len(via) > MAX_CALL_DEPTH:
-                # A chain past the depth limit is not proven bounded.
-                hazards.append({
-                    "rule": "BI-04",
-                    "operation": "call-depth-exceeded",
-                    "path": current.path,
-                    "function": current.qualname,
-                    "line": current.node.lineno,
-                    "entrypoint": entry["key"],
-                    "depth": depth,
-                    "via": via,
-                    "reject": False,
                 })
                 continue
             cache_key = (id(current.node), looped)

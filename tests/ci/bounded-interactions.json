@@ -2456,14 +2456,55 @@
         "js:music_app/static/js/runtime/gallery-main-interactions.js#initGalleryMain:timer:requestAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-main-interactions.js"
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-device-profiles.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/browser-dialog-helpers.js",
+        "music_app/static/js/runtime/client-preferences-helpers.js",
+        "music_app/static/js/runtime/core-state-and-helpers.js",
+        "music_app/static/js/runtime/gallery-display-preference-helpers.js",
+        "music_app/static/js/runtime/gallery-main-components.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/gallery-main-state.js",
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/in-page-tabs.js",
+        "music_app/static/js/runtime/mobile-home.js",
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/view-value-helpers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js",
+        "music_app/static/js/selection-accent.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 32,
+        "renderCommits": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-scroll-bounded.test.js",
+      "testIdentity": "BI gallery scroll frame finds the visible artist by binary search at production scale",
+      "performanceTargets": [
+        "search-all-artists",
+        "search-browse"
+      ],
+      "rollback": "Revert the scroll-only gallery bar update; retain this contract."
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#observeArtistFamilyPanelBounds",

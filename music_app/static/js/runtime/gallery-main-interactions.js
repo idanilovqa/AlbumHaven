@@ -583,6 +583,83 @@ function syncGalleryBarSearchVisibility() {
     : Boolean(draftQuery || committedQuery);
 }
 
+// Scroll-independent bar inputs from the last full chrome update, keyed by the
+// view, its group lists, and the (small) filter state, so a scroll frame never
+// re-filters or re-counts the loaded gallery.
+let galleryMainChromeInputs = null;
+
+function galleryMainChromeToken() {
+  const view = state.view || {};
+  return [
+    view, view.artist_groups, view.artist_groups?.length,
+    view.primary_artist_groups?.length, view.family_artist_groups?.length,
+    JSON.stringify(ensureGalleryMainState()),
+  ];
+}
+
+function galleryMainChromeTokenMatches(token) {
+  const current = galleryMainChromeToken();
+  return token.length === current.length && token.every((part, index) => part === current[index]);
+}
+
+// Sections are laid out top-down, so the artist whose label the viewport has
+// passed is found by binary search over the grid's live section positions.
+function findGalleryMainContextSection(threshold) {
+  const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
+    ? virtualGrid.sections
+    : [];
+  let low = 0;
+  let high = sections.length - 1;
+  let index = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (Number(sections[middle]?.top || 0) <= threshold) {
+      index = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const scroll = document.getElementById('albums-scroll');
+  const viewportTop = scroll?.getBoundingClientRect?.().top || 0;
+  for (; index >= 0; index -= 1) {
+    const section = sections[index];
+    if (section?.kind !== 'artist' && !section?.group) continue;
+    const artist = galleryMainGroupArtist(section.group);
+    if (!artist) continue;
+    const label = scroll?.querySelector?.(`[data-scroll-artist="${cssEscape(artist)}"] .artist-name`);
+    const labelBottom = label
+      ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
+      : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0);
+    if (labelBottom <= threshold) {
+      return {
+        artist,
+        albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+        artist_musicbrainz: section.group?.artist_musicbrainz || null,
+        top: Number(section.top || 0),
+        labelBottom,
+      };
+    }
+  }
+  return null;
+}
+
+function updateGalleryMainScrollContext() {
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
+  const scroll = document.getElementById('albums-scroll');
+  if (!bar || !scroll) return;
+  if (!galleryMainChromeInputs || !galleryMainChromeTokenMatches(galleryMainChromeInputs.token)) {
+    updateGalleryMainChrome();
+    return;
+  }
+  const current = findGalleryMainContextSection(scroll.scrollTop);
+  renderGalleryMainContext(bar, resolveGalleryBarContext({
+    ...galleryMainChromeInputs.context,
+    scrollTop: scroll.scrollTop,
+    groups: current ? [current] : [],
+  }));
+}
+
 function updateGalleryMainChrome() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
@@ -594,15 +671,19 @@ function updateGalleryMainChrome() {
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
   const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
-  const context = resolveGalleryBarContext({
-    scrollTop: scroll.scrollTop,
+  const contextInputs = {
     primaryArtist,
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
-    groups: sections,
     hasFamily,
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
-  });
+  };
+  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs };
+  renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  updateGalleryFamilyPanelChrome(primaryArtist);
+}
+
+function renderGalleryMainContext(bar, context) {
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
@@ -648,6 +729,10 @@ function updateGalleryMainChrome() {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  positionGalleryFamilyPanel(bar);
+}
+
+function updateGalleryFamilyPanelChrome(primaryArtist) {
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -670,6 +755,9 @@ function updateGalleryMainChrome() {
     const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
     if (panelTotal.textContent !== total) panelTotal.textContent = total;
   }
+}
+
+function positionGalleryFamilyPanel(bar) {
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
@@ -907,7 +995,7 @@ function initGalleryMain() {
         && (scroll.scrollTop !== active.openingScrollPosition.top
           || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false, { reason: 'gallery-scroll' });
     if (galleryMainScrollFrame) return;
-    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
+    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainScrollContext(); });
   }, { passive: true });
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();

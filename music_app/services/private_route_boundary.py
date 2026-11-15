@@ -56,6 +56,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/password"): "account.self.password.change",
     ("POST", "/account/password-suggestion/dismiss"): "account.self.password_suggestion.dismiss",
     ("GET", "/"): "app.shell.read",
+    # Same app shell as "/"; reloading a gallery or Loose Tracks address must not need more.
+    ("GET", "/albums"): "app.shell.read",
+    ("GET", "/loose-tracks"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
     ("GET", "/app-copy/account"): "app.shell.read",

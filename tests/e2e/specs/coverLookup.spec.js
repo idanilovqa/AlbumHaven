@@ -25,7 +25,7 @@ const {
   providerStoragePolicy: PROVIDER_STORAGE_POLICY_TARGET,
 } = COVER_LOOKUP_TEST_TARGETS;
 
-const COVER_LOOKUP_FILTERED_URL = `/?surface=albums&q=${encodeURIComponent(COVER_LOOKUP_TARGET.artist.toLowerCase())}&artist=${encodeURIComponent(COVER_LOOKUP_TARGET.artist)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
+const COVER_LOOKUP_FILTERED_URL = `/albums?q=${encodeURIComponent(COVER_LOOKUP_TARGET.artist.toLowerCase())}&artist=${encodeURIComponent(COVER_LOOKUP_TARGET.artist)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
 const SPLIT_FIXTURE = Object.freeze({
   artist: 'ДДТ',
   album: 'Студийные записи',

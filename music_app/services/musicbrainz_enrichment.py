@@ -249,9 +249,7 @@ class MusicBrainzArtistEnrichmentProcessor:
                 credit_name=outcome.get("credit_name"),
                 album_evidence=outcome.get("album_evidence"),
                 album_identities=outcome.get("album_identities"),
-                # A person's albums credited to their band keep the band's MBID.
                 identity_artists=outcome.get("artists"),
-                associated_artist_mbids=outcome.get("associated_artists"),
             )
         elif classification == "per_album":
             # Several MusicBrainz artists share this local name; each album keeps its own.
@@ -636,19 +634,9 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
             # With the budget spent, the name the albums' credits gave is enough to list it.
             artists.append(dict(lookup["artist"]) if lookup else {
                 key: owner.get(key) for key in ("mbid", "canonical_name", "disambiguation", "artist_type")})
-        # Same name means each artist's own MusicBrainz name, not an alias: "Ольга Арефьева
-        # и Ковчег" is her group, a separate artist from her solo work (owner, 2026-11-10).
-        person = _person_of_member_bands(artists, mirror) if all(
-            name_keys(artist.get("canonical_name")) & local_keys for artist in artists) else None
-        if person is not None:
-            # Owner 2026-11-09: a person and the same-named groups they belong to are one
-            # artist (Alice Cooper and his 1969-74 band). The person is the artist; each
-            # album keeps its certain MBID, and the groups are stored so those resolve.
-            person["preferred_native_name"] = native_name({**context, "name": local_name}, person)
-            return {"classification": "found", "artist": person, "artists": artists, "confidence": 1,
-                    "associated_artists": [artist["mbid"] for artist in artists if artist["mbid"] != person["mbid"]],
-                    "album_identities": _album_identities(decision["certain"], albums),
-                    "evidence_summary": "MusicBrainz album evidence agreed."}
+        # Owner 2026-11-14 (reversing 2026-11-09): a person and the same-named band they are a
+        # member of are separate artists with their own MBIDs (Alice Cooper and his 1969-73
+        # band), split per album like any other same-named artists.
         return {"classification": "per_album", "artists": artists, "confidence": 1,
                 "album_identities": _album_identities(decision["certain"], albums),
                 "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}
@@ -683,18 +671,6 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
             if lookup and lookup.get("classification") == "matched":
                 outcome["refreshed_artist"] = lookup["artist"]
     return outcome
-
-
-def _person_of_member_bands(artists: list[dict[str, object]], mirror) -> dict[str, object] | None:
-    """The one person among a split's same-named artists when every other one is a group
-    that person is a member of on MusicBrainz; None for unrelated artists (Amarok's two
-    bands)."""
-    people = [artist for artist in artists if str(artist.get("artist_type") or "").lower() == "person"]
-    if len(people) != 1 or len(artists) < 2:
-        return None
-    others = {str(artist.get("mbid")) for artist in artists if artist is not people[0]}
-    memberships = mirror.call("band_memberships", people[0]["mbid"])
-    return dict(people[0]) if memberships and others <= set(memberships.get("groups") or ()) else None
 
 
 def _album_identities(certain: dict[int, dict[str, object]], albums: list[dict[str, object]]) -> list[dict[str, object]]:

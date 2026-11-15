@@ -439,3 +439,48 @@ def test_postgres_saved_loops_adapter_saves_scoped_upserts_and_links_parents(mon
     assert "track_id = coalesce(child_loop.track_id, parent_loop_match.track_id)" in parent_links[0]["sql"].lower()
     assert connection.closed
 
+
+
+def test_scoped_loop_delete_contract_probes_its_previews_at_production_loop_count(tmp_path, monkeypatch):
+    from music_app.services import loops as loops_module
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    scope = {"account_id": 7, "library_id": 3}
+
+    class ScopedAdapter:
+        def __init__(self, _config):
+            pass
+
+        def delete_scoped_loop(self, *, loop_id, account_id, library_id):
+            return True, []
+
+    def run(loop_count: int) -> OperationCounts:
+        config = {"DATA_DIR": tmp_path / f"data-{loop_count}"}
+        loop_media = loops_module.loops_dir(config, **scope) / "loop-1.mp3"
+        loop_media.write_bytes(b"loop")
+        previews = loops_module.loop_previews_dir(config, **scope)
+        owned = [previews / "loop-1_pplus1.mp3", previews / "loop-1_pminus12.mp3"]
+        prefix_sibling = previews / "loop-1_pzz_pplus1.mp3"
+        for path in (*owned, prefix_sibling):
+            path.write_bytes(b"preview")
+        for index in range(loop_count):
+            for pitch in ("pplus1", "pminus1", "pplus7"):
+                (previews / f"other-{index:04d}_{pitch}.mp3").write_bytes(b"preview")
+        monkeypatch.setattr(loops_module, "get_loop", lambda _config, _loop_id, **_scope: {"id": "loop-1", "path": str(loop_media)})
+        monkeypatch.setattr(loops_module, "SavedLoopsPostgresAdapter", ScopedAdapter)
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            assert loops_module.delete_loop(config, "loop-1", **scope)[0] is True
+        assert not loop_media.exists() and not any(path.exists() for path in owned)
+        assert prefix_sibling.exists()
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/api_wave_b_asgi_routes.py#delete_saved_loop",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 83, "open_calls": 0},
+        growth=("stat_calls", 0),
+    )

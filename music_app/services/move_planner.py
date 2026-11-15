@@ -359,8 +359,6 @@ def _iter_child_directories(path: Path) -> list[Path]:
 
 
 def _find_child_directory(parent: Path, name: str) -> Path | None:
-    normalized_name = name.casefold()
-    for child in _iter_child_directories(parent):
-        if child.name.casefold() == normalized_name:
-            return child
-    return None
+    # Probe the one candidate instead of listing every artist folder.
+    candidate = parent / name
+    return candidate if candidate.is_dir() else None

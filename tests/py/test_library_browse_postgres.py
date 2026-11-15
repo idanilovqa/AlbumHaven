@@ -5,6 +5,7 @@ from decimal import Decimal
 import json
 from pathlib import Path, PureWindowsPath
 from threading import Event, Lock
+from types import SimpleNamespace
 
 import pytest
 
@@ -18593,3 +18594,47 @@ def test_problematic_page_rows_stay_scoped_to_the_selected_albums():
     assert "from selected_track_file_rows\n          join physical_file_context" in _cte_body(
         sql, "selected_active_track_file_rows"
     )
+
+
+def test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size(tmp_path, monkeypatch):
+    from music_app.services import covers
+    from music_app.services import library_browse_postgres as browse
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    queued: list[Path] = []
+    monkeypatch.setattr(covers, "queue_cover_display_variant_generation", lambda source, **_kwargs: queued.append(source))
+
+    def run(album_count: int) -> OperationCounts:
+        folder = tmp_path / f"covers-{album_count}"
+        folder.mkdir()
+        albums = []
+        for index in range(album_count):
+            cover = folder / f"{index:04d}.jpg"
+            cover.write_bytes(b"cover")
+            albums.append({"cover_path": str(cover), "cover_revision": f"{index:064x}"})
+        groups = [{"albums": albums[start:start + 10]} for start in range(0, album_count, 10)]
+        # A running preview move: each probed cover checks the move's source root.
+        moving_policy = SimpleNamespace(
+            relocation_source_root=lambda _source: tmp_path / "previews-being-moved",
+            write_cache_root=lambda _source: tmp_path / "previews",
+        )
+        queued.clear()
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            browse._queue_display_cover_variants_for_groups(
+                {"DATA_DIR": str(tmp_path / "data"), "_GENERATED_PREVIEW_STORAGE_POLICY": moving_policy},
+                groups,
+            )
+        assert len(queued) == browse._DISPLAY_COVER_QUEUE_LIMIT
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/web_asgi.py#index",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 6, "open_calls": 0, "media_parses": 0},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

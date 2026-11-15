@@ -944,7 +944,7 @@ def test_asgi_library_settings_write_returns_scan_blocked_without_bridge_context
     }
 
 
-def test_asgi_rules_routes_preserve_payloads_mutations_and_cold_start_hydration(app, asgi_app, monkeypatch):
+def test_asgi_rules_routes_preserve_payloads_mutations_and_background_cold_start_hydration(app, asgi_app, monkeypatch):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
     from music_app.services import ignored_versions as ignored_versions_module
     from music_app.services import state as state_service
@@ -1024,7 +1024,13 @@ def test_asgi_rules_routes_preserve_payloads_mutations_and_cold_start_hydration(
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository, raising=False)
     monkeypatch.setattr(state_service, "state", fail_flask_global_lookup, raising=False)
     assert not hasattr(state_service, "hydrate_library_from_disk")
-    monkeypatch.setattr(asgi_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(state_service, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    queued_hydrations: list[tuple[object, tuple, dict]] = []
+    monkeypatch.setattr(
+        state_service,
+        "_HYDRATE_EXECUTOR",
+        type("RecordingExecutor", (), {"submit": lambda _self, *call, **kwargs: queued_hydrations.append((call, kwargs))})(),
+    )
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
 
     rules_status, _rules_headers, rules_body = _run_asgi_request(
@@ -1038,6 +1044,15 @@ def test_asgi_rules_routes_preserve_payloads_mutations_and_cold_start_hydration(
         "/versions/ignore",
         json_body={"album_key": "a-album"},
     )
+    pending_status, _pending_headers, pending_body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/versions/mark",
+        json_body={"album_key": "child", "parent_album_key": "parent"},
+    )
+    assert hydrate_calls == []
+    (worker, *worker_args), worker_kwargs = queued_hydrations.pop()
+    worker(*worker_args, **worker_kwargs)
     mark_status, _mark_headers, mark_body = _run_asgi_request(
         asgi_app,
         "POST",
@@ -1054,6 +1069,9 @@ def test_asgi_rules_routes_preserve_payloads_mutations_and_cold_start_hydration(
         "ok": True,
         "ignored_version_keys": ["a-album", "z-album"],
     }
+    assert pending_status == 503
+    assert _decode_json(pending_body)["code"] == "gallery_projection_pending"
+    assert queued_hydrations == []
     assert mark_status == 404
     assert _decode_json(mark_body) == {"ok": False, "error": "Album could not be found"}
     assert hydrate_calls == [
@@ -1301,7 +1319,7 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     ]
 
 
-def test_asgi_mark_album_version_hydrates_cold_start_asgi_state_without_flask_globals(
+def test_asgi_mark_album_version_answers_pending_until_background_hydration_publishes(
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
@@ -1365,15 +1383,30 @@ def test_asgi_mark_album_version_hydrates_cold_start_asgi_state_without_flask_gl
     assert not hasattr(asgi_routes, "_flask_app")
     monkeypatch.setattr(state_service, "state", fail_flask_global_lookup, raising=False)
     assert not hasattr(state_service, "hydrate_library_from_disk")
+    monkeypatch.setattr(state_service, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    queued_hydrations: list[tuple[object, tuple, dict]] = []
     monkeypatch.setattr(
-        asgi_routes,
-        "hydrate_library_state_for_config",
-        fake_hydrate_library_state_for_config,
-        raising=False,
+        state_service,
+        "_HYDRATE_EXECUTOR",
+        type("RecordingExecutor", (), {"submit": lambda _self, *call, **kwargs: queued_hydrations.append((call, kwargs))})(),
     )
     monkeypatch.setattr(asgi_routes, "load_manual_version_links", fake_load_manual_version_links)
     monkeypatch.setattr(asgi_routes, "save_manual_version_links", fake_save_manual_version_links)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
+
+    pending_status, _pending_headers, pending_body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/versions/mark",
+        json_body={"album_key": "child", "parent_album_key": "parent"},
+    )
+
+    assert pending_status == 503
+    assert _decode_json(pending_body)["code"] == "gallery_projection_pending"
+    assert hydrate_calls == []
+    assert manual_links == {}
+    (worker, *worker_args), worker_kwargs = queued_hydrations.pop()
+    worker(*worker_args, **worker_kwargs)
 
     status, _headers, body = _run_asgi_request(
         asgi_app,

@@ -157,6 +157,9 @@ def resolve_loop_media_path(config, loop_id: str, *, account_id=None, library_id
     return path if path.is_file() else None
 
 
+_PREVIEW_SEMITONES = range(-12, 13)
+
+
 def _preview_id(loop_id: str, semitones: int) -> str:
     safe_loop_id = "".join(ch for ch in str(loop_id or "") if ch.isalnum() or ch in {"-", "_"})
     pitch_part = f"p{semitones:+d}".replace("+", "plus").replace("-", "minus")
@@ -372,8 +375,10 @@ def delete_loop(config, loop_id: str, **scope) -> tuple[bool, list[dict[str, obj
             root = loops_dir(config,**scope)
             _safe_unlink_child(Path(str(target.get('path') or '')),root)
             if re.fullmatch(r'[A-Za-z0-9_-]+',loop_id):
-                for preview in loop_previews_dir(config,**scope).glob(f'{loop_id}_p*.mp3'):
-                    _safe_unlink_child(preview,loop_previews_dir(config,**scope))
+                # Previews have closed names; probing them never lists other loops' files.
+                preview_root = loop_previews_dir(config,**scope)
+                for semitones in _PREVIEW_SEMITONES:
+                    _safe_unlink_child(preview_root / f'{_preview_id(loop_id, semitones)}.mp3', preview_root)
         return deleted, remaining
     target_id = str(loop_id or "")
     loops = load_loops(config)

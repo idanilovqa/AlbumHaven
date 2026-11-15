@@ -283,6 +283,7 @@ def _refresh_cache_after_move(
     exception_overrides = load_exception_overrides(config)
     image_extensions = set(config["IMAGE_EXTENSIONS"])
     new_track_paths: set[str] = set()
+    covers_by_folder: dict[Path, Path | None] = {}
 
     for old_path, new_path in track_path_map.items():
         previous_entry = previous_file_cache.get(old_path)
@@ -304,7 +305,9 @@ def _refresh_cache_after_move(
             refreshed_entry["library_root_category"] = library_category_slug(matched_root.get("category"))
 
         apply_exception_override(refreshed_entry, exception_overrides)
-        cover_path = find_cover_for_track_folder(new_track.parent, image_extensions)
+        if new_track.parent not in covers_by_folder:
+            covers_by_folder[new_track.parent] = find_cover_for_track_folder(new_track.parent, image_extensions)
+        cover_path = covers_by_folder[new_track.parent]
         refreshed_entry["cover_path"] = str(cover_path) if cover_path else None
         if cover_path is not None and cover_path.exists():
             width, height = image_dimensions(cover_path)

@@ -464,6 +464,7 @@ def test_dead_no_arg_state_wrappers_are_absent():
         "scan_percent",
         "relations_percent",
         "refresh_cached_cover_paths_in_state",
+        "refresh_cached_cover_paths_for_state",
         "cover_file_cache_snapshot",
         "hydrate_library_from_disk",
         "start_background_library_hydration",
@@ -1160,6 +1161,7 @@ def test_hydrate_library_state_worker_uses_explicit_dependencies_without_flask_c
         },
     )]
     assert library_state["hydrate_in_progress"] is False
+    assert library_state["hydration_settled"] is True
     assert library_state["last_error"] is None
     assert logger.exception_messages == []
 
@@ -1235,6 +1237,68 @@ def test_hydrate_library_state_worker_records_and_logs_exceptions_without_flask_
     assert library_state["last_error"] == "disk hydrate failed"
     assert logger.exception_messages == [("Background library hydration failed", ())]
 
+
+class _RecordingHydrateExecutor:
+    def __init__(self):
+        self.queued = []
+
+    def submit(self, function, *args, **kwargs):
+        self.queued.append((function, args, kwargs))
+
+
+def test_request_library_hydration_queues_one_background_owner_and_never_hydrates_inline(config, logger, monkeypatch):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    monkeypatch.setattr(
+        state_module,
+        "hydrate_library_state_for_config",
+        lambda *_args, **_kwargs: pytest.fail("readers must not hydrate inline"),
+    )
+    library_state = {"albums": [], "scan_in_progress": False, "hydrate_in_progress": False, "hydration_settled": False}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+
+    assert executor.queued == [(
+        state_module._hydrate_library_state_worker,
+        (library_state, config, logger),
+        {"ensure_relations": False, "validate_cache": False},
+    )]
+    assert library_state["hydrate_in_progress"] is True
+
+
+@pytest.mark.parametrize("published_state", [
+    {"albums": ["album"]},
+    {"scan_in_progress": True},
+    {"hydration_settled": True},
+])
+def test_request_library_hydration_reads_published_state_without_queueing(config, logger, monkeypatch, published_state):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    library_state = {"albums": [], "hydrate_in_progress": False, **published_state}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is True
+    assert executor.queued == []
+
+
+def test_request_library_hydration_retries_after_a_failed_background_attempt(config, logger, monkeypatch):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    monkeypatch.setattr(
+        state_module,
+        "hydrate_library_state_for_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    library_state = {"albums": [], "hydrate_in_progress": False, "hydration_settled": False, "last_error": None}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    function, args, kwargs = executor.queued.pop()
+    function(*args, **kwargs)
+
+    assert library_state["hydration_settled"] is False
+    assert library_state["hydrate_in_progress"] is False
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    assert len(executor.queued) == 1
 
 def test_hydrate_library_state_for_config_returns_false_when_runtime_persistence_adapter_is_unavailable(monkeypatch):
     library_state = {"albums": [], "last_error": None}
@@ -2700,37 +2764,6 @@ def test_guarded_relation_repair_waits_for_database_before_acquiring_cache_lock(
         "publication-commit",
         "database-lock-released",
     ]
-
-
-def test_refresh_cached_cover_paths_for_state_uses_explicit_dependencies_without_flask_context(config, monkeypatch):
-    library_state = {"file_cache": {"track-1": {"path": "track-1"}}}
-    captured = []
-
-    def fake_refresh_cached_cover_paths_in_library_state(state_arg, config_arg, **kwargs):
-        captured.append((state_arg, config_arg, kwargs))
-        return True
-
-    monkeypatch.setattr(
-        state_module,
-        "refresh_cached_cover_paths_in_library_state",
-        fake_refresh_cached_cover_paths_in_library_state,
-    )
-    monkeypatch.setattr(state_module.time, "time", lambda: 456.75)
-
-    assert state_module.refresh_cached_cover_paths_for_state(
-        library_state,
-        config,
-        min_interval_seconds=12.0,
-    ) is True
-
-    assert captured == [(
-        library_state,
-        config,
-        {
-            "min_interval_seconds": 12.0,
-            "now": 456.75,
-        },
-    )]
 
 
 def test_cover_file_cache_snapshot_for_state_uses_provided_state_without_flask_context():

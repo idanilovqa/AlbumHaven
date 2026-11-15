@@ -500,3 +500,49 @@ def test_image_dimensions_reuses_cached_result_for_unchanged_file(tmp_path: Path
     assert image_dimensions(cover_path) == (32, 32)
     assert image_dimensions(cover_path) == (32, 32)
     assert open_calls == 1
+
+
+def test_cover_gallery_contract_reads_only_the_selected_album_at_production_library_size(tmp_path: Path, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(album_count: int) -> OperationCounts:
+        library_root = tmp_path / f"library-{album_count}"
+        for index in range(album_count):
+            _write_jpeg(library_root / f"Artist {index:04d}" / "Album" / "cover.jpg", (index % 255, 40, 40))
+        album_root = (library_root / "Selected" / "Album").resolve()
+        track_path = album_root / "CD1" / "01.flac"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        (album_root / "CD2").mkdir()
+        active_cover = album_root / "CD1" / "folder.jpg"
+        _write_jpeg(active_cover, (220, 40, 40))
+        _write_jpeg(album_root / "CD1" / "back.jpg", (40, 220, 40))
+        _write_jpeg(album_root / "CD1" / "scans" / "booklet.jpg", (40, 40, 220))
+        file_cache = {
+            f"{library_root}/Other {index}/track.flac": {"cover_path": None}
+            for index in range(album_count * 160)
+        }
+        file_cache[str(track_path)] = {"cover_path": str(active_cover)}
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers_module,)):
+            payload = serialize_cover_gallery_payload(
+                album_root=album_root,
+                track_paths={str(track_path)},
+                file_cache=file_cache,
+                image_extensions={".jpg"},
+                image_dimensions=image_dimensions,
+                is_squareish_cover=lambda width, height: width == height,
+            )
+        assert sorted(item["filename"] for item in payload["local_covers"]) == ["back.jpg", "booklet.jpg", "folder.jpg"]
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_gallery",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 3, "stat_calls": 12, "open_calls": 3, "media_parses": 3},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

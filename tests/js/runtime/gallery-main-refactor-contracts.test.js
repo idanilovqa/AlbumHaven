@@ -2229,3 +2229,10 @@ test('the artist panel ends its text with one disabled Open full page and lists 
   assert.match(disabled, /color:\s*color-mix\(in srgb, var\(--appearance-accent,[^)]*\)\) 45%, transparent\)/, 'dimmed like Full page was');
   assert.doesNotMatch(disabled, /opacity/, 'dimming the colour keeps the fade behind it opaque');
 });
+
+test('Loose Tracks opens only from the Custom Collections tree, never a separate GalleryBar button', () => {
+  // Owner NAV-01: "that separate Loose tracks button ... freezes the app. get rid of it."
+  const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/index.html'), 'utf8');
+  assert.doesNotMatch(template, /data-open-non-album-tracks="1"[^>]*data-library-wide="1"/);
+  assert.doesNotMatch(template, /class="gallery-action-button"[^>]*aria-label="Loose Tracks"/);
+});

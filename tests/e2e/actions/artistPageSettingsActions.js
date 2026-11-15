@@ -52,8 +52,12 @@ export class ArtistPageSettingsActions {
 
   async openLibraryWideNonAlbumTracks(options = {}) {
     const timeout = options.timeout || 10000;
-    await expect(this.artistPageSettings.libraryWideNonAlbumTracksButton).toBeEnabled({ timeout });
-    await this.artistPageSettings.libraryWideNonAlbumTracksButton.click({ noWaitAfter: true });
+    // Library-wide Loose Tracks opens only from the Custom Collections tree (owner NAV-01).
+    const page = this.artistPageSettings.page;
+    await page.locator('[data-library-navigation-mode="custom-collections"]:visible').first().click();
+    const allLooseTracks = page.locator('#sidebar-list [data-open-loose-tracks]');
+    await expect(allLooseTracks).toBeVisible({ timeout });
+    await allLooseTracks.click({ noWaitAfter: true });
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeVisible({ timeout });
   }
 

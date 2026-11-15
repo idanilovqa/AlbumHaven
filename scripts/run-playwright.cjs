@@ -1212,7 +1212,9 @@ async function prewarmFunctionalFixture(port, options = {}) {
         },
       )),
     );
-    const failedResponse = responses.find((response) => !response?.ok);
+    // A cover the library names but whose file a fixture left dangling has nothing to warm (the app
+    // shows its placeholder); every other failure still stops the run.
+    const failedResponse = responses.find((response) => !response?.ok && Number(response?.statusCode) !== 404);
     if (failedResponse) {
       reportFailure('cover-preview', failedResponse);
       return false;

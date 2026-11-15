@@ -99,11 +99,10 @@ export async function readDisplayedBlobBytes(element, expected) {
   return Array.from(bytes);
 }
 
-// The server's reference <-> fixture file mapping, read from the isolated E2E database.
-const FIXTURE_COVER_REFERENCES = { coverPathForReference, coverReferenceForPath };
-
 export class CoverLookupActions {
-  constructor(coverLookup, { coverReferences = FIXTURE_COVER_REFERENCES } = {}) {
+  // [coverReferences] is the server's reference <-> fixture file mapping, read from the isolated
+  // E2E database unless a unit test supplies its own.
+  constructor(coverLookup, { coverReferences = { coverPathForReference, coverReferenceForPath } } = {}) {
     this.coverLookup = coverLookup;
     this.coverReferences = coverReferences;
     this.laterProviderFixtureHeld = false;

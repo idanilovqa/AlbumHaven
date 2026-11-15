@@ -3475,15 +3475,39 @@ test('functional fixture warmup reports only the failed stage and HTTP status', 
           }),
         };
       }
-      if (url.includes('/cover/')) return { ok: false, statusCode: 404, body: '' };
+      if (url.includes('/cover/')) return { ok: false, statusCode: 500, body: '' };
       return { ok: true, statusCode: 200, body: '' };
     },
   });
 
   assert.equal(warmed, false);
   assert.deepEqual(diagnostics, [
-    '[functional-warmup-failure] {"stage":"cover-preview","statusCode":404}\n',
+    '[functional-warmup-failure] {"stage":"cover-preview","statusCode":500}\n',
   ]);
+});
+
+test('functional fixture warmup passes over a named cover whose file is missing', async () => {
+  const diagnostics = [];
+  const requested = [];
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    diagnosticWriteFn: (line) => diagnostics.push(line),
+    fetchHttpResponseCompleteFn: async (url) => {
+      requested.push(url);
+      if (url.includes('/view-data?')) {
+        return {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({ albums: [{ cover_ref: FIXTURE_COVER_REF }, { cover_ref: 'danglingCoverReference' }] }),
+        };
+      }
+      if (url.includes('/cover/danglingCoverReference')) return { ok: false, statusCode: 404, body: '' };
+      return { ok: true, statusCode: 200, body: '' };
+    },
+  });
+
+  assert.equal(warmed, true);
+  assert.deepEqual(diagnostics, []);
+  assert.ok(requested.some((url) => url.includes(`/cover/${FIXTURE_COVER_REF}`)));
 });
 
 test('waitForManagedIsolatedAppReady rejects an app that exits before status readiness', async () => {

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target.
+- The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target. As on Android, a playback-claim renewal that goes unanswered no longer stops playback while the claim's lease runs; it retries every 2 seconds, and the next play no longer shows "Playback unavailable" because of its own earlier claim.
 
 ## 0.11.9 - 2026-11-15
 

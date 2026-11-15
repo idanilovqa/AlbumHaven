@@ -14118,6 +14118,7 @@ const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
+const PLAYBACK_OWNERSHIP_RETRY_MS = 2000;
 let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
 let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
   ? createPlaybackOwnershipToken() : '';
@@ -14201,12 +14202,20 @@ async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBA
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
-      signal: controller.signal,
-      ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+    let response;
+    try {
+      response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
+        signal: controller.signal,
+        ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+    } catch (error) {
+      throw Object.assign(new Error(`Playback ownership request was not answered: ${error?.message || error}`),
+        { unanswered: true });
+    }
     if (!response.ok) {
       const error = new Error('Playback ownership is unavailable.');
       error.status = response.status;
+      // An overloaded server's answer says no more about the lease than no answer does.
+      error.unanswered = response.status >= 500 || response.status === 429;
       throw error;
     }
     return await response.json();
@@ -14404,6 +14413,21 @@ async function expirePlaybackClaim(claim) {
   else losePlaybackOwnership();
 }
 
+// As Android's PlaybackClaimOwner: a claim request the server did not answer, as during a network
+// switch, keeps a claim whose lease still runs and retries in 2 s. Only a refusal, or no answer past
+// the lease, gives the claim up; dropping its token earlier made the next play an anonymous acquire
+// the server refuses while this client's own lease runs.
+function keepUnansweredPlaybackClaim(claim, error) {
+  if (!error?.unanswered || !(claim.leaseDeadline > performance.now())) return false;
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
+  ownership.retryTimer = setTimeout(() => {
+    ownership.retryTimer = 0;
+    if (ownership.activeClaim === claim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+  }, PLAYBACK_OWNERSHIP_RETRY_MS);
+  return true;
+}
+
 async function refreshPlaybackOwnershipClaim(track = null) {
   const ownership = getPlaybackOwnershipState();
   if (!ownership.activeClaim || ownership.renewing) return false;
@@ -14424,8 +14448,9 @@ async function refreshPlaybackOwnershipClaim(track = null) {
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
-      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+    } catch (error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)
+          && !keepUnansweredPlaybackClaim(claim, error)) losePlaybackOwnership();
       return false;
     }
   })().finally(() => { ownership.renewing = false; });
@@ -14483,8 +14508,9 @@ async function claimPlaybackOwnership(track, options = {}) {
       }
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
+    } catch (error) {
       if (version === ownership.requestVersion) {
+        if (claim && ownership.activeClaim === claim && keepUnansweredPlaybackClaim(claim, error)) return true;
         losePlaybackOwnership();
         await handlePlaybackOwnershipEvent();
         if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();

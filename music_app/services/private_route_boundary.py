@@ -129,6 +129,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/artifacts/android/attest"): "account.self.android_updates",
     ("GET", "/artifacts/android/{channel}/manifest.json"): "account.self.android_updates",
     ("POST", "/artifacts/android/{channel}/{name}"): "account.self.android_updates",
+    ("GET", "/artifacts/android/sandbox/index.json"): "account.self.android_updates",
+    # The owner only: dispatches a CI rebuild of a sandbox's build (also signed by an attested key).
+    ("POST", "/artifacts/android/sandbox/rebuild/{sandbox}"): "system.android_sandbox_rebuild",
     # Self-service for any active account (no capability); the route also runs the linked
     # download route's own authorization, then and whenever the link is fetched.
     ("POST", "/downloads/links"): "account.self.downloads",

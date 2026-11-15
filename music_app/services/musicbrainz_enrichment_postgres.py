@@ -852,6 +852,8 @@ PROBLEM_LABELS = {
 }
 # Every other app surface, such as the Gallery, says only "Metadata pending".
 APP_PROBLEM_LABELS = {**PROBLEM_LABELS, **{reason: "Metadata pending" for reason in _PENDING_REASONS}}
+# Owner decision 2026-11-15 (C2): an artist MusicBrainz lacks (an automatic contribution flag).
+MUSICBRAINZ_HAS_NO_INFO_LABEL = "MusicBrainz has no info"
 
 
 def _problem_label_sql() -> str:
@@ -901,7 +903,15 @@ def _artist_attention_sql() -> str:
             from library.local_albums local_albums
             where local_albums.library_id = active_library.library_id
               and local_albums.artist_id = artists.id
-          ) as local_album_count
+          ) as local_album_count,
+          exists (
+            select 1
+            from library.musicbrainz_contribution_flags flags
+            where flags.library_id = active_library.library_id
+              and flags.target_kind = 'artist'
+              and flags.local_artist_id = artists.id
+              and flags.source = 'automatic'
+          ) as musicbrainz_has_no_info
         from active_library
         join wanted problem on true
         join library.local_artists artists
@@ -1044,6 +1054,7 @@ _ATTENTION_FIELDS = (
     "problem_reason_code",
     "unresolved_reason",
     "local_album_count",
+    "musicbrainz_has_no_info",
 )
 
 

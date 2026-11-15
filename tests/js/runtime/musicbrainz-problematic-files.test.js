@@ -560,3 +560,17 @@ test('a MusicBrainz status change reloads only the Gallery view, never Problemat
   assert.doesNotMatch(body('refreshCurrentViewAfterBackgroundCompletion'), /loadProblematicFiles|\/utilities\/problematic-files/);
   assert.doesNotMatch(body('fetchAndRender'), /loadProblematicFiles|\/utilities\/problematic-files/);
 });
+
+test('an artist MusicBrainz lacks shows the "MusicBrainz has no info" info label beside its problem', async () => {
+  const notFound = detail({ match_state: 'not_found', problem_reason_code: 'musicbrainz_artist_not_found', unresolved_reason: 'MBID: Not found', candidates: [] });
+  const labels = async (problemReasons) => {
+    const item = artistItem({ problem_reasons: problemReasons });
+    const { context } = loadContext({ item, responses: { 'GET /api/musicbrainz/artists/7': { status: 200, body: { artist: notFound } } } });
+    await context.loadMusicBrainzArtistProblemDetail(item, { render: false });
+    return context.buildMusicBrainzArtistProblemDetail(item).match(/<div class="utility-album-problem-labels">.*?<\/div>/s)[0];
+  };
+  const flagged = await labels(['MBID: Not found', 'MusicBrainz has no info']);
+  assert.match(flagged, /alert-label--warning"[^>]*>MBID: Not found</);
+  assert.match(flagged, /alert-label--info"[^>]*>MusicBrainz has no info</);
+  assert.doesNotMatch(await labels(['MBID: Not found']), /MusicBrainz has no info/);
+});

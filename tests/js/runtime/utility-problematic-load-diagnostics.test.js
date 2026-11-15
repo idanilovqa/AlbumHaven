@@ -597,6 +597,43 @@ test('clearing server search restores the canonical base page order', async () =
   assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), (item) => item.key), ['base-a', 'base-b']);
 });
 
+test('server search preserves selected problem filters and returns only matching rows', async () => {
+  const { context, runTimers } = loadSearchHelper({
+    items: [
+      { key: 'matching', name: 'Art Zoyd Match', problem_reasons: ['Missing year'] },
+      { key: 'outside-filter', name: 'Art Zoyd Other', problem_reasons: ['Poor art quality'] },
+    ],
+  });
+  const filterSource = listBuilderSource.slice(
+    listBuilderSource.indexOf('function normalizeProblemFilterReason('),
+    listBuilderSource.indexOf('function getProblematicAlbumIssueLabel('),
+  );
+  vm.runInContext(filterSource, context, { filename: listBuilderPath });
+  context.state.utility.problematicFiles = [
+    { key: 'base-match', name: 'Base Match', problem_reasons: ['Missing year'] },
+    { key: 'base-other', name: 'Base Other', problem_reasons: ['Poor art quality'] },
+  ];
+  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.state.utility.searchQuery = 'art zoyd';
+
+  context.scheduleProblematicServerSearch();
+  await runTimers();
+
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Missing year']);
+  assert.deepEqual(
+    Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
+    ['matching'],
+  );
+
+  context.state.utility.searchQuery = '';
+  context.scheduleProblematicServerSearch();
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Missing year']);
+  assert.deepEqual(
+    Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
+    ['base-match'],
+  );
+});
+
 test('clearing server search retains its selected result for mutation continuity', async () => {
   const { context, runTimers } = loadSearchHelper({
     items: [{ key: 'search-only', name: 'Needle', detail_loaded: true }],

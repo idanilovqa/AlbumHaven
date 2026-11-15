@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('./pending-projection-fetch');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
@@ -344,6 +345,7 @@ function createGalleryRefreshContext() {
   };
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   const runtimeRenderView = context.renderView;
   context.renderView = function renderViewStub(options) {

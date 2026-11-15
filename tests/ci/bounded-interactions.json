@@ -1007,7 +1007,8 @@
         "music_app/static/js/appearance-device-profiles.js",
         "music_app/static/js/client-layout-bootstrap.js",
         "music_app/static/js/runtime/client-preferences-helpers.js",
-        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-01",
@@ -2593,12 +2594,12 @@
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
       "action": "Navigate Home, to an artist with repeated presses, to a queued search, and to a pending search",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetch",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetchAndRender",
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:retryPendingGalleryViewResponse"
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchAndRender:request:fetchGalleryViewResponse"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -2687,11 +2688,11 @@
       "id": "js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse",
       "action": "Load a root gallery page while its projection is pending, then cancel a pending load",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:fetch",
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:retryPendingGalleryViewResponse"
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse:request:fetchRetryingPendingProjection"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -2865,15 +2866,15 @@
       }
     },
     {
-      "id": "js:runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse",
-      "action": "Retry a pending gallery projection once per second until it answers or is cancelled",
+      "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",
+      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:event:abort",
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:request:fetch",
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse:timer:setTimeout"
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:event:abort",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:timer:setTimeout"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -2883,13 +2884,15 @@
       "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/view-data"
-        ],
-        "forbidden": [
-          "/home-data",
           "/album-details",
-          "/utilities/problematic-files"
-        ]
+          "/home-data",
+          "/utilities/problematic-files",
+          "/utilities/problematic-files/detail",
+          "/versions/mark",
+          "/view-data",
+          "/view-data*"
+        ],
+        "forbidden": []
       },
       "cardinalities": {
         "small": 50,
@@ -2907,9 +2910,11 @@
       "performanceTargets": [
         "idle-memory",
         "selected-artist",
-        "artist-tree-scroll-navigation"
+        "artist-tree-scroll-navigation",
+        "utility-problematic-files",
+        "problematic-files-focused"
       ],
-      "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+      "rollback": "Revert the shared pending-projection retry; gallery requests keep their own retry and Album Details, Problematic Files and version marking answer a cold process with the pending error again."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",
@@ -4566,10 +4571,11 @@
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#markAlbumVersion",
       "action": "fetch requests installed by markAlbumVersion",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#markAlbumVersion:request:fetch"
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#markAlbumVersion:request:fetchRetryingPendingProjection"
       ],
       "owners": [
-        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -4835,10 +4841,11 @@
       "id": "js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails",
       "action": "Open the same album repeatedly, then an album whose album_id an older server rejects",
       "entrypoints": [
-        "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails:request:fetch"
+        "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails:request:fetchRetryingPendingProjection"
       ],
       "owners": [
-        "music_app/static/js/runtime/track-modal-lightbox-helpers.js"
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -4974,10 +4981,11 @@
       "id": "js:runtime/utility-list-builders.js#openPlayerTrackAlbum",
       "action": "fetch requests installed by openPlayerTrackAlbum",
       "entrypoints": [
-        "js:music_app/static/js/runtime/utility-list-builders.js#openPlayerTrackAlbum:request:fetch"
+        "js:music_app/static/js/runtime/utility-list-builders.js#openPlayerTrackAlbum:request:fetchRetryingPendingProjection"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-list-builders.js"
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -5187,10 +5195,11 @@
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#fetchSummary",
       "action": "Open Problematic Files: one bounded first page, then one complete summary shared by concurrent loads",
       "entrypoints": [
-        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#fetchSummary:request:fetch"
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#fetchSummary:request:fetchRetryingPendingProjection"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -5275,10 +5284,11 @@
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicAlbumDetail",
       "action": "fetch requests installed by loadProblematicAlbumDetail",
       "entrypoints": [
-        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicAlbumDetail:request:fetch"
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicAlbumDetail:request:fetchRetryingPendingProjection"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-03",
@@ -5931,7 +5941,8 @@
         "music_app/static/js/runtime/utility-list-builders.js",
         "music_app/static/js/runtime/view-value-helpers.js",
         "music_app/static/js/runtime/virtual-artist-grid.js",
-        "music_app/static/js/selection-accent.js"
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js"
       ],
       "rules": [
         "BI-01",

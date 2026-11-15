@@ -172,6 +172,34 @@ def test_delete_loop_removes_owned_media_and_previews_but_ignores_outside_paths(
     assert resolve_loop_media_path(config, "loop-2") is None
 
 
+def test_unscoped_delete_loop_keeps_previews_of_loops_sharing_its_id_prefix(tmp_path, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    monkeypatch.setattr("music_app.services.saved_loops_postgres.psycopg", _FakePsycopg())
+    monkeypatch.setattr("music_app.services.loops.SavedLoopsPostgresAdapter", _FakeSavedLoopsAdapter)
+    config = {
+        "DATA_DIR": tmp_path,
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+        "PERSISTENCE_BACKENDS": {"saved_loops": "postgres"},
+    }
+    previews = tmp_path / "loop_previews"
+    previews.mkdir(parents=True)
+    owned = [previews / "loop_pplus1.mp3", previews / "loop_pminus12.mp3"]
+    prefix_siblings = [previews / "loop_a_pplus1.mp3", previews / "loop_pplus1_pminus2.mp3"]
+    for path in (*owned, *prefix_siblings):
+        path.write_bytes(b"preview")
+    _FakeSavedLoopsAdapter.rows = [{"id": "loop", "path": ""}, {"id": "loop_a", "path": ""}]
+
+    counts = OperationCounts()
+    with count_filesystem_and_media(monkeypatch, counts):
+        assert delete_loop(config, "loop")[0] is True
+
+    assert not any(path.exists() for path in owned)
+    assert all(path.exists() for path in prefix_siblings)
+    assert counts.filesystem_enumerations == 0
+
+
 def test_resolve_loop_media_path_uses_current_data_root_for_legacy_persisted_path(
     tmp_path,
     monkeypatch,

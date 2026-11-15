@@ -437,7 +437,7 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
   };
-  let response = await fetch(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
+  let response = await fetchRetryingPendingProjection(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
@@ -451,7 +451,7 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     && Array.isArray(payload.unsupported_parameters)
     && payload.unsupported_parameters.includes('album_id')
   ) {
-    response = await fetch(albumKeyUrl, requestOptions);
+    response = await fetchRetryingPendingProjection(albumKeyUrl, requestOptions);
     try {
       payload = await response.json();
     } catch (_error) {

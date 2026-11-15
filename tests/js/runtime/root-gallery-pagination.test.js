@@ -3,13 +3,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 const source = fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/gallery-refresh-and-status.js'), 'utf8');
+// The visible-artist lookup a refresh falls back to when no album anchor is captured.
+const galleryMainSource = fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/gallery-main-interactions.js'), 'utf8');
 function fixture({ mobile = false } = {}) {
   const pending = [], renders = [], timers = [];
   const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 1000 };
   const semanticScrollAnchor = { albumKey: 'a1', offset: 24, scrollLeft: 0, scrollTop: 400 };
   const state = { ui: {}, busy: false, view: { query: '', selected_artist: '', surface_request: 'albums', artist_count: 6045, album_count: 20000, artists_sidebar: [{ artist: 'A', count: 5 }], artist_groups: [{ artist: 'A', albums: [{ key: 'a1' }] }], gallery_page: { next_cursor: 'page-1', revision: 'r1', has_more: true, page_size: 8 } } };
   const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { innerWidth: mobile ? 390 : 1024, location: { href: 'https://localhost/', assign() {} }, matchMedia: query => ({ matches: mobile && /max-width/.test(query) }) }, document: { documentElement: { clientWidth: mobile ? 390 : 1024 }, getElementById: id => id === 'albums-scroll' ? scroll : null }, virtualGrid: { captureScrollAnchor: () => semanticScrollAnchor, getUserScrollIntentGeneration: () => 7 }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolveResponse: resolve, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
+  loadPendingProjectionFetch(context);
+  vm.runInContext(galleryMainSource, context);
   vm.runInContext(source, context);
   return { context, state, scroll, pending, renders, timers, semanticScrollAnchor };
 }

@@ -445,13 +445,13 @@ test(`pending search cancellation clears its retry timer without another request
   const cleared = [];
   context.setTimeout = () => 17;
   context.clearTimeout = (timer) => cleared.push(timer);
-  const response = { status: 503, clone: () => ({ json: async () => ({ code: pendingCode }) }) };
-  const request = context.retryPendingGalleryViewResponse(response, '/view-data?q=old', controller.signal);
+  const request = context.fetchRetryingPendingProjection('/view-data?q=old', { signal: controller.signal });
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: pendingCode });
   await new Promise(setImmediate);
   controller.abort();
   await assert.rejects(request, { name: 'AbortError' });
   assert.deepEqual(cleared, [17]);
-  assert.equal(pendingRequests.length, 0);
+  assert.equal(pendingRequests.length, 1);
 });
 
 test(`a superseding query cancels pending recovery and never applies the old search (${pendingCode})`, async () => {
@@ -482,14 +482,14 @@ test(`pending search recovery stops retrying at its deadline (${pendingCode})`, 
     queueMicrotask(callback);
     return 1;
   };
-  const response = { status: 503, clone: () => ({ json: async () => ({ code: pendingCode }) }) };
-  const request = context.retryPendingGalleryViewResponse(response, '/view-data?q=missing');
-  await new Promise(setImmediate);
-  assert.equal(pendingRequests.length, 1);
+  const request = context.fetchRetryingPendingProjection('/view-data?q=missing', {});
   pendingRequests[0].resolveWith({ status: 503, ok: false, code: pendingCode });
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 2);
+  pendingRequests[1].resolveWith({ status: 503, ok: false, code: pendingCode });
   const result = await request;
   assert.equal(result.status, 503);
-  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests.length, 2);
 });
 
 }
@@ -497,9 +497,10 @@ test(`pending search recovery stops retrying at its deadline (${pendingCode})`, 
 test('unrelated service errors never schedule search recovery', async () => {
   const { context, pendingRequests } = createContext();
   context.setTimeout = () => { throw new Error('unexpected retry'); };
-  const response = { status: 503, clone: () => ({ json: async () => ({ error: 'unavailable' }) }) };
-  assert.equal(await context.retryPendingGalleryViewResponse(response, '/view-data'), response);
-  assert.equal(pendingRequests.length, 0);
+  const request = context.fetchRetryingPendingProjection('/view-data', {});
+  pendingRequests[0].resolveWith({ status: 503, ok: false, error: 'unavailable' });
+  assert.equal((await request).status, 503);
+  assert.equal(pendingRequests.length, 1);
 });
 
 test('fetchAndRender skips the loaded-album snapshot when no album modal is open', async () => {
@@ -602,8 +603,7 @@ function seedMorseArtistFamily(context) {
 }
 
 async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise(setImmediate);
 }
 
 test('selected-family view fetch opens prefetch reconciliation before the replacement payload arrives', async () => {
@@ -7182,7 +7182,7 @@ test('request capture: root gallery scrolling requests one /view-data cursor pag
 test('request capture: a pending gallery projection retries the same page once per second until cancelled', async () => {
   for (const id of [
     'js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse',
-    'js:runtime/gallery-refresh-and-status.js#retryPendingGalleryViewResponse',
+    'js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection',
   ]) {
     await measureInteractionContract(id, async (albums) => {
       let answers = 0;
@@ -7233,14 +7233,37 @@ function rootWindowPayload(anchorIndex, counter) {
   };
 }
 
-function deepRootRefresh(albums, visibleIndex, respond) {
+const ROOT_SECTION_HEIGHT = 300;
+
+function deepRootRefresh(albums, visibleIndex, respond, scrollTop = visibleIndex * ROOT_SECTION_HEIGHT) {
   const gallery = capturedGallery(respond);
   gallery.context.state.view = { ...retainedRootView(albums), gallery_scope: 'all' };
   gallery.context.virtualGrid = { captureScrollAnchor: () => ({ albumKey: `album-${visibleIndex}`, offsetTop: 24 }) };
+  gallery.context.document.getElementById('albums-scroll').scrollTop = scrollTop;
   return gallery;
 }
 
 const anchorOf = url => new URL(url, 'http://localhost').searchParams.get('gallery_anchor_artist');
+
+test('preserveScroll root refresh deep inside the first artist anchors at that artist', async () => {
+  const gallery = deepRootRefresh(2000, 0, () => jsonResponse(rootWindowPayload(0)), 900);
+  assert.equal(await gallery.context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
+  assert.deepEqual(gallery.capture.urls().map(anchorOf), [viewportArtist(0)]);
+});
+
+test('preserveScroll root refresh without a captured album anchors at the artist on screen', async () => {
+  const gallery = deepRootRefresh(2000, 1200, () => jsonResponse(rootWindowPayload(1200)));
+  const galleryMainPath = path.join(path.dirname(helperPath), 'gallery-main-interactions.js');
+  vm.runInContext(fs.readFileSync(galleryMainPath, 'utf8'), gallery.context, { filename: galleryMainPath });
+  gallery.context.virtualGrid = {
+    captureScrollAnchor: () => null,
+    sectionHeaderHeight: 40,
+    sections: gallery.context.state.view.artist_groups.map((group, index) => ({ kind: 'artist', group, top: index * ROOT_SECTION_HEIGHT })),
+  };
+  gallery.context.document.getElementById('albums-scroll').scrollTop = 1200 * ROOT_SECTION_HEIGHT + 100;
+  assert.equal(await gallery.context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
+  assert.deepEqual(gallery.capture.urls().map(anchorOf), [viewportArtist(1200)]);
+});
 
 test('preserveScroll root refresh reloads only the window on screen', async () => {
   const gallery = deepRootRefresh(20000, 12000, url => jsonResponse(rootWindowPayload(12000)));
@@ -7254,7 +7277,7 @@ test('preserveScroll root refresh reloads only the window on screen', async () =
   assert.equal(gallery.calls.renderView[0].preserveScroll, true);
 });
 
-test('preserveScroll root refresh at the first loaded artist stays an unanchored first page', async () => {
+test('preserveScroll root refresh at the top of the gallery stays an unanchored first page', async () => {
   const gallery = deepRootRefresh(2000, 0, () => jsonResponse(rootWindowPayload(0)));
   assert.equal(await gallery.context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
   assert.deepEqual(gallery.capture.urls().map(anchorOf), [null]);

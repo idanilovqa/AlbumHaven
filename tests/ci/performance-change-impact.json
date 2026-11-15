@@ -36,6 +36,7 @@
     "music_app/static/js/runtime/notification-ui-helpers.js",
     "music_app/static/js/runtime/render-markup-helpers.js",
     "music_app/static/js/runtime/response-state-helpers.js",
+    "music_app/static/js/runtime/pending-projection-fetch.js",
     "music_app/static/js/runtime/status-ui-helpers.js",
     "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
     "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
@@ -104,6 +105,7 @@
         "music_app/static/js/runtime/core-state-and-helpers.js",
         "music_app/static/js/runtime/gallery-main-state.js",
         "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js",
         "music_app/static/js/runtime/view-state-helpers.js"
       ],
       "targets": [
@@ -218,6 +220,7 @@
         "music_app/services/save_tasks.py",
         "music_app/services/state.py",
         "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/pending-projection-fetch.js",
         "music_app/static/js/runtime/problematic-files-virtual-list.js",
         "music_app/static/js/runtime/problematic-album-helpers.js",
         "music_app/static/js/runtime/problem-exclusion-mutations.js",

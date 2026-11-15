@@ -584,16 +584,20 @@ function syncGalleryBarSearchVisibility() {
 }
 
 // Scroll-independent bar inputs from the last full chrome update, keyed by the
-// view, its group lists, and the (small) filter state, so a scroll frame never
-// re-filters or re-counts the loaded gallery.
+// view, its group lists, and each filter field, so a scroll frame never
+// re-filters or re-counts the loaded gallery. Filter fields are compared one by
+// one because they are assigned in place; their arrays are always replaced.
 let galleryMainChromeInputs = null;
 
 function galleryMainChromeToken() {
   const view = state.view || {};
+  const filters = ensureGalleryMainState();
   return [
     view, view.artist_groups, view.artist_groups?.length,
     view.primary_artist_groups?.length, view.family_artist_groups?.length,
-    JSON.stringify(ensureGalleryMainState()),
+    filters, filters.sources?.main_library, filters.sources?.new_arrivals, filters.sources?.hoard,
+    filters.view, filters.showFeaturedOn, filters.showSplitAlbums, filters.familySelectionExplicit,
+    filters.albumTypes, filters.familyArtists, filters.familyArtistOrder,
   ];
 }
 

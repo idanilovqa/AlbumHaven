@@ -801,21 +801,15 @@ def hydrate_library_state_for_config(
             ).album_to_dict(album, config=config),
         )
     with _CACHE_LOCK:
-        try:
-            return _call_hydrate_library_state_from_disk(
-                library_state,
-                config,
-                ensure_relations=ensure_relations,
-                validate_cache=validate_cache,
-                queue_problematic_albums_prewarm=queue_problematic_albums_prewarm,
-                queue_utility_rules_prewarm=queue_utility_rules_prewarm,
-                logger=logger_for_prewarm,
-            )
-        except ValueError as exc:
-            if "runtime persistence adapter is unavailable" not in str(exc):
-                raise
-            library_state["last_error"] = str(exc)
-            return False
+        return _call_hydrate_library_state_from_disk(
+            library_state,
+            config,
+            ensure_relations=ensure_relations,
+            validate_cache=validate_cache,
+            queue_problematic_albums_prewarm=queue_problematic_albums_prewarm,
+            queue_utility_rules_prewarm=queue_utility_rules_prewarm,
+            logger=logger_for_prewarm,
+        )
 
 
 def refresh_relation_views_for_state(
@@ -1426,6 +1420,14 @@ def _refresh_library_worker(
     refresh_library_for_state(library_state, config, logger, force=force)
 
 
+def _library_inventory_ready(library_state: dict[str, object]) -> bool:
+    return bool(
+        library_state.get("albums")
+        or library_state.get("scan_in_progress")
+        or library_state.get("hydration_settled")
+    )
+
+
 def request_library_hydration_for_state(
     library_state: dict[str, object],
     config: dict[str, object],
@@ -1439,13 +1441,11 @@ def request_library_hydration_for_state(
     scans publish the inventory from then on; a failed attempt is retried by
     the next reader.
     """
-    if (
-        library_state.get("albums")
-        or library_state.get("scan_in_progress")
-        or library_state.get("hydration_settled")
-    ):
+    if _library_inventory_ready(library_state):
         return True
     with _HYDRATION_REQUEST_LOCK:
+        if _library_inventory_ready(library_state):
+            return True
         if library_state.get("hydrate_in_progress"):
             return False
         library_state["hydrate_in_progress"] = True
@@ -1468,6 +1468,7 @@ def _hydrate_library_state_worker(
     validate_cache: bool,
     enable_prewarm: bool = True,
 ) -> None:
+    settled = False
     try:
         hydrated = hydrate_library_state_for_config(
             library_state,
@@ -1476,15 +1477,21 @@ def _hydrate_library_state_worker(
             validate_cache=validate_cache,
             logger_for_prewarm=logger if enable_prewarm else None,
         )
-        library_state["hydration_settled"] = True
+        settled = True
         if hydrated and not enable_prewarm:
             _prewarm_root_browse_payload_for_state(library_state, config, logger)
     except Exception as exc:
+        # A failed attempt stays unsettled so the next reader queues a retry.
         library_state["last_error"] = str(exc)
         if logger is not None:
-            logger.exception("Background library hydration failed")
+            if "runtime persistence adapter is unavailable" in str(exc):
+                logger.warning("Background library hydration deferred: %s", exc)
+            else:
+                logger.exception("Background library hydration failed")
     finally:
-        with _CACHE_LOCK:
+        with _HYDRATION_REQUEST_LOCK:
+            if settled:
+                library_state["hydration_settled"] = True
             library_state["hydrate_in_progress"] = False
 
 

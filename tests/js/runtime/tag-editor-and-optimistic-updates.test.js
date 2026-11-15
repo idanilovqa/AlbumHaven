@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 const ButtonComponent = require(path.join(
   __dirname,
   '..',
@@ -177,6 +178,7 @@ function loadHelper(albums, overrides = {}) {
   Object.assign(context, overrides);
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }

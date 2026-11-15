@@ -63,7 +63,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     try {
       const fetchSummary = async (url) => {
         const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetch(url, { headers: { Accept: 'application/json' } });
+        const response = await fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' } });
         requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
         responseStatus = Number(response.status || 0);
         const parseStartedAt = getProblematicUtilityNow();
@@ -262,7 +262,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
     let loadError = '';
     try {
       const requestStartedAt = getProblematicUtilityNow();
-      const response = await fetch(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
+      const response = await fetchRetryingPendingProjection(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
         headers: { Accept: 'application/json' },
       });
       requestMs = roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);

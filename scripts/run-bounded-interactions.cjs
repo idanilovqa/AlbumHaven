@@ -9,7 +9,10 @@
 //
 // A contract that did not run is not evidence: Python contracts run by the
 // exact node ids their commands name, and a stage fails when any selected test
-// was skipped, marked todo, or (Python) not collected.
+// was skipped, marked todo, or (Python) not collected. A contract that ran is
+// evidence only for what it measured: every measurement against the checked-in
+// registry records its id and measuring test, and the run fails unless each
+// selected entry's own test measured the entry's id (or every id it `measures`).
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -18,6 +21,8 @@ const { spawnSync } = require('node:child_process');
 const { discoverRepository, interactionsForPaths, loadRegistry } = require('./ci/validate-bounded-interactions.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
+const EVIDENCE_ENV = 'BOUNDED_INTERACTION_EVIDENCE';
+const EVIDENCE_PRELOAD = 'tests/js/helpers/bounded-interaction-evidence.js';
 const GUARD_SELF_TESTS = [
   'tests/js/bounded-interaction-discovery.test.js',
   'tests/js/bounded-interaction-registry.test.js',
@@ -39,20 +44,39 @@ function testSelections(command) {
 
 const fileOf = selection => selection.split('::')[0];
 
-function selectedTests(registry, changedPaths, discovery) {
+function selectedEntries(registry, changedPaths, discovery) {
   const ids = changedPaths
     ? new Set(interactionsForPaths(registry, changedPaths, discovery))
     : null;
-  const selections = registry.interactions
-    .filter(entry => entry.proof === 'contract' && (!ids || ids.has(entry.id)))
-    .flatMap(entry => testSelections(entry.command));
+  return registry.interactions.filter(entry => entry.proof === 'contract' && (!ids || ids.has(entry.id)));
+}
+
+function selectedTests(entries, changedPaths) {
+  const selections = entries.flatMap(entry => testSelections(entry.command));
   const guardChanged = !changedPaths || changedPaths.some(file => GUARD_OWNERS.test(file.replaceAll('\\', '/')));
   const all = new Set([...(guardChanged ? GUARD_SELF_TESTS : []), ...selections]);
   // A whole file already covers its node ids.
   return [...all].filter(selection => !selection.includes('::') || !all.has(fileOf(selection))).sort();
 }
 
-const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const evidencePath = reportDir => path.join(reportDir, 'bounded-interactions-evidence.jsonl');
+
+// Each selected entry's own test must have measured the entry's id, or every id
+// in its explicit `measures` list.
+function evidenceErrors(entries, file) {
+  let lines = [];
+  try {
+    lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const measured = new Set(lines.map(({ id, test }) => JSON.stringify([id, test])));
+  return entries.flatMap(entry => (entry.measures || [entry.id])
+    .filter(id => !measured.has(JSON.stringify([id, entry.testIdentity])))
+    .map(id => `${entry.id}: its test "${entry.testIdentity}" did not measure ${id}`));
+}
+
+const XML_ENTITIES ={ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
 function junitTestcases(xml) {
   const cases = [];
@@ -103,7 +127,8 @@ function pytestReportErrors(report, selections) {
 }
 
 function buildCommands({ registry, changedPaths = null, discovery, python = process.env.PYTHON || 'python', reportDir = os.tmpdir() }) {
-  const selections = selectedTests(registry, changedPaths, discovery);
+  const entries = selectedEntries(registry, changedPaths, discovery);
+  const selections = selectedTests(entries, changedPaths);
   const isPython = selection => fileOf(selection).endsWith('.py');
   const nodeFiles = [...new Set(selections.filter(selection => !isPython(selection)).map(fileOf))];
   const pythonSelections = selections.filter(isPython);
@@ -111,7 +136,7 @@ function buildCommands({ registry, changedPaths = null, discovery, python = proc
   if (nodeFiles.length) {
     const report = path.join(reportDir, 'bounded-interactions-node.xml');
     commands.push([process.execPath, [
-      '--test', '--test-concurrency=1',
+      '--test', '--test-concurrency=1', '--require', `./${EVIDENCE_PRELOAD}`,
       '--test-reporter=spec', '--test-reporter-destination=stdout',
       '--test-reporter=junit', `--test-reporter-destination=${report}`,
       ...nodeFiles,
@@ -122,19 +147,24 @@ function buildCommands({ registry, changedPaths = null, discovery, python = proc
     commands.push([python, ['-m', 'pytest', '-q', '-rs', `--junitxml=${report}`, ...pythonSelections],
       () => pytestReportErrors(report, pythonSelections)]);
   }
+  // A check-only final stage: every selected contract measured its entry.
+  if (entries.length) commands.push([null, [], () => evidenceErrors(entries, evidencePath(reportDir))]);
   return commands;
 }
 
 function runCommands(commands, spawn = spawnSync) {
   for (const [command, args, check] of commands) {
-    process.stdout.write(`\n> ${[path.basename(command), ...args].join(' ')}\n`);
-    const result = spawn(command, args, { cwd: REPO_ROOT, stdio: 'inherit', windowsHide: true });
-    if (result.error) throw result.error;
-    if (result.signal) throw new Error(`${path.basename(command)} stopped by ${result.signal}`);
-    if (result.status !== 0) return result.status;
+    if (command !== null) {
+      process.stdout.write(`\n> ${[path.basename(command), ...args].join(' ')}\n`);
+      const result = spawn(command, args, { cwd: REPO_ROOT, stdio: 'inherit', windowsHide: true });
+      if (result.error) throw result.error;
+      if (result.signal) throw new Error(`${path.basename(command)} stopped by ${result.signal}`);
+      if (result.status !== 0) return result.status;
+    }
     const errors = check ? check() : [];
     if (errors.length) {
-      process.stderr.write(`${errors.join('\n')}\nbounded interaction stage did not run every selected test\n`);
+      const reason = command === null ? 'contracts did not measure their entries' : 'stage did not run every selected test';
+      process.stderr.write(`${errors.join('\n')}\nbounded interaction ${reason}\n`);
       return 1;
     }
   }
@@ -149,6 +179,7 @@ async function main(argv = process.argv.slice(2)) {
   const registry = loadRegistry(REPO_ROOT);
   const discovery = changedPaths ? await discoverRepository({ registry }) : undefined;
   const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-interactions-'));
+  process.env[EVIDENCE_ENV] = evidencePath(reportDir);
   try {
     return runCommands(buildCommands({ registry, changedPaths, discovery, reportDir }));
   } finally {
@@ -163,4 +194,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildCommands, nodeReportErrors, pytestReportErrors, runCommands };
+module.exports = { buildCommands, evidenceErrors, nodeReportErrors, pytestReportErrors, runCommands };

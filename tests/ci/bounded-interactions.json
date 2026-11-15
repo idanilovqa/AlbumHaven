@@ -3324,7 +3324,7 @@
         "largeMinusSmallMax": 24
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
-      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale",
+      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale (loadNextRootGalleryPage#2)",
       "performanceTargets": [],
       "rollback": "Revert the root gallery append path; every continuation then re-merges, re-applies and regroups the whole loaded gallery again, with no data or API change."
     },
@@ -3516,7 +3516,7 @@
         "largeMinusSmallMax": 24
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
-      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale",
+      "testIdentity": "BI a root gallery continuation appends one page with constant work at production scale (renderView)",
       "performanceTargets": [],
       "rollback": "Revert the root gallery append path; every continuation then re-merges, re-applies and regroups the whole loaded gallery again, with no data or API change."
     },
@@ -5773,7 +5773,7 @@
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/utility-search-input-bounded.test.js",
-      "testIdentity": "BI Utility search keystroke stores the query without scanning the list",
+      "testIdentity": "BI Utility search keystroke stores the query without scanning the list (loops)",
       "performanceTargets": [
         "utility-problematic-files"
       ],

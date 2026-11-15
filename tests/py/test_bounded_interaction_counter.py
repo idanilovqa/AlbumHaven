@@ -17,9 +17,23 @@ from tests.py.bounded_interactions import (
 )
 
 
+def _self_registered_pair(*, interaction_id, small, large, budgets, growth=None, **rest):
+    """Measures a self-test contract against a registry that declares exactly it."""
+    entry = {
+        "id": interaction_id,
+        "cardinalities": {"small": small, "production": large},
+        "budgets": budgets,
+        "growth": None if growth is None else {"metric": growth[0], "largeMinusSmallMax": growth[1]},
+    }
+    return measure_scale_pair(
+        interaction_id=interaction_id, small=small, large=large, budgets=budgets, growth=growth,
+        registry={"interactions": [entry]}, **rest,
+    )
+
+
 def test_scale_pair_rejects_linear_query_growth():
     with pytest.raises(AssertionError, match=r"sql_statements=1001.*budget 2"):
-        measure_scale_pair(
+        _self_registered_pair(
             interaction_id="example",
             small=20,
             large=1_000,
@@ -33,7 +47,7 @@ def test_unknown_metrics_fail_closed():
     with pytest.raises(AttributeError, match="unknown operation counter"):
         OperationCounts().count("queries")
     with pytest.raises(AssertionError, match="unknown budget metric queries"):
-        measure_scale_pair(interaction_id="x", small=1, large=2, run=lambda _: OperationCounts(), budgets={"queries": 1})
+        _self_registered_pair(interaction_id="x", small=1, large=2, run=lambda _: OperationCounts(), budgets={"queries": 1})
 
 
 def test_plateau_rejects_generation_growth_after_warmup():
@@ -76,7 +90,7 @@ def _duplicate_lookup(size: int, *, strategy: str) -> OperationCounts:
 )
 def test_selected_album_lookup_rejects_global_and_n_plus_one_reads(strategy, message):
     with pytest.raises(AssertionError, match=message):
-        measure_scale_pair(
+        _self_registered_pair(
             interaction_id="BI-H08-selected-album-duplicates",
             small=26,
             large=1_600,
@@ -87,7 +101,7 @@ def test_selected_album_lookup_rejects_global_and_n_plus_one_reads(strategy, mes
 
 
 def test_selected_album_lookup_accepts_one_batched_selected_set_query():
-    _, large = measure_scale_pair(
+    _, large = _self_registered_pair(
         interaction_id="BI-H08-selected-album-duplicates",
         small=26,
         large=1_600,
@@ -131,8 +145,8 @@ def test_cache_miss_rejects_synchronous_global_rebuild():
         growth=("candidate_rows", 0),
     )
     with pytest.raises(AssertionError, match=r"builder_calls=1 at cardinality 20"):
-        measure_scale_pair(run=lambda size: _search_cache_miss(size, rebuild=True), **contract)
-    measure_scale_pair(run=lambda size: _search_cache_miss(size, rebuild=False), **contract)
+        _self_registered_pair(run=lambda size: _search_cache_miss(size, rebuild=True), **contract)
+    _self_registered_pair(run=lambda size: _search_cache_miss(size, rebuild=False), **contract)
 
 
 # BI-H16 shape: save finalization that keeps its database lease during media I/O.
@@ -239,8 +253,8 @@ def test_targeted_reconciliation_rejects_unrelated_backlog_absorption():
         growth=("affected_rows", 0),
     )
     with pytest.raises(AssertionError, match=r"unrelated_writes=1000 at cardinality 1000"):
-        measure_scale_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=True), **contract)
-    measure_scale_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=False), **contract)
+        _self_registered_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=True), **contract)
+    _self_registered_pair(run=lambda size: _reconcile_one_track(size, absorb_backlog=False), **contract)
 
 
 _REGISTERED = {
@@ -287,8 +301,37 @@ def test_scale_pair_under_registry_id_rejects_drift_from_the_registry(overrides,
         _registered_pair(**overrides)
 
 
-def test_scale_pair_under_unregistered_id_checks_only_its_own_budgets():
-    _registered_pair(interaction_id="example", large=500, budgets={"sql_statements": 20})
+def test_scale_pair_under_unregistered_id_is_rejected():
+    with pytest.raises(AssertionError, match=r"example: measured id is not a registered interaction"):
+        _registered_pair(interaction_id="example", large=500, budgets={"sql_statements": 20})
+    with pytest.raises(AssertionError, match=r"py:services/helper\.py#helper: measured id is not a registered interaction"):
+        measure_scale_pair(
+            interaction_id="py:services/helper.py#helper", small=1, large=2,
+            run=lambda size: OperationCounts(), budgets={"sql_statements": 1},
+        )
+
+
+def test_checked_in_measurement_records_the_measuring_test_under_the_gate(tmp_path, monkeypatch):
+    from tests.py import bounded_interactions
+
+    evidence = tmp_path / "evidence.jsonl"
+    monkeypatch.setenv(bounded_interactions.EVIDENCE_ENV, str(evidence))
+    registry = json.loads(bounded_interactions.REGISTRY_PATH.read_text(encoding="utf-8"))
+    contract = next(entry for entry in registry["interactions"] if entry["proof"] == "contract" and entry["id"].startswith("py:"))
+    growth = contract["growth"]
+    measure_scale_pair(
+        interaction_id=contract["id"],
+        small=contract["cardinalities"]["small"],
+        large=contract["cardinalities"]["production"],
+        run=lambda size: OperationCounts(),
+        budgets=contract["budgets"],
+        growth=(growth["metric"], growth["largeMinusSmallMax"]),
+    )
+    # A measurement against an explicit registry is never evidence.
+    _registered_pair()
+    assert [json.loads(line) for line in evidence.read_text(encoding="utf-8").splitlines()] == [
+        {"id": contract["id"], "test": "test_checked_in_measurement_records_the_measuring_test_under_the_gate"},
+    ]
 
 
 def test_scale_pair_uses_the_checked_in_registry_by_default():

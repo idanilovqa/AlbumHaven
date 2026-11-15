@@ -10,11 +10,13 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
+import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 REGISTRY_PATH = Path(__file__).resolve().parents[1] / "ci" / "bounded-interactions.json"
+EVIDENCE_ENV = "BOUNDED_INTERACTION_EVIDENCE"
 
 
 @dataclass
@@ -191,14 +193,15 @@ def _registry_mismatches(
     actual: Mapping[str, object],
     registry: Mapping[str, object] | None,
 ) -> list[str]:
-    """A contract measured under a registry interaction id must measure exactly
-    the cardinalities, budgets, and growth the registry declares for it."""
+    """A contract is measured under a registered interaction id and must measure
+    exactly the cardinalities, budgets, and growth the registry declares for it.
+    An unknown id is an error: a contract never proves an entry it does not name."""
     if registry is None:
         entry = _checked_in_entries().get(interaction_id)
     else:
         entry = next((item for item in registry["interactions"] if item["id"] == interaction_id), None)
     if entry is None:
-        return []
+        return [f"{interaction_id}: measured id is not a registered interaction"]
     cardinalities = entry.get("cardinalities") or {}
     declared_growth = entry.get("growth")
     expected = {
@@ -247,7 +250,22 @@ def measure_scale_pair(
             )
     if violations:
         raise AssertionError("\n".join(violations))
+    if registry is None:
+        _record_measured_id(interaction_id)
     return small_counts, large_counts
+
+
+def _record_measured_id(interaction_id: str) -> None:
+    """Under the gate runner, records which test measured which id so the runner
+    can prove each contract entry's own test measured it."""
+    evidence = os.environ.get(EVIDENCE_ENV)
+    if not evidence:
+        return
+    # "tests/py/test_x.py::test_name[param] (call)" -> "test_name"
+    current = os.environ.get("PYTEST_CURRENT_TEST", "")
+    test = current.rsplit(" ", 1)[0].split("::")[-1].split("[", 1)[0] or None
+    with open(evidence, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"id": interaction_id, "test": test}) + "\n")
 
 
 def assert_plateau(samples: Iterable[float], *, warmup_samples: int = 0, max_increase_after_warmup: float = 0, label: str = "retained resources") -> float:

@@ -2960,7 +2960,7 @@ begin
              is distinct from nullif(item.cover_path, '')
        )
        or coalesce(item.cover_state, '{}'::jsonb) - array[
-         'cover_path', 'cover_revision', 'cover_selection_origin',
+         'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height',
          'remote_cover_url', 'remote_cover_thumbnail_url',
          'remote_cover_source', 'remote_cover_source_label',
          'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
@@ -3023,21 +3023,32 @@ begin
   ), desired as materialized (
     select
       observation.album_id,
-      observation.cover_path,
+      case when coalesce(album.metadata, '{}'::jsonb) @> jsonb_build_object(
+        'cover_selection_origin', 'user', 'cover_selection_provenance', 'explicit'
+      ) then album.cover_path else observation.cover_path end as cover_path,
       observation.track_paths,
-      (
-        coalesce(album.metadata, '{}'::jsonb)
-        - array[
-          'cover_path', 'cover_revision', 'cover_selection_origin',
-          'remote_cover_url', 'remote_cover_thumbnail_url',
-          'remote_cover_source', 'remote_cover_source_label',
-          'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
-        ]::text[]
-      )
-      || (observation.cover_state - 'cover_path')
-      || jsonb_strip_nulls(jsonb_build_object(
-        'cover_path', observation.cover_path
-      )) as album_metadata
+      case when coalesce(album.metadata, '{}'::jsonb) @> jsonb_build_object(
+        'cover_selection_origin', 'user', 'cover_selection_provenance', 'explicit'
+      ) then coalesce(album.metadata, '{}'::jsonb)
+      else
+        (coalesce(album.metadata, '{}'::jsonb) - array[
+          'cover_path', 'cover_revision', 'remote_cover_url', 'remote_cover_thumbnail_url',
+          'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url',
+          'remote_cover_width', 'remote_cover_height'
+        ]::text[] - case when (
+          album.cover_path, album.metadata ->> 'cover_revision'
+        ) is distinct from (
+          observation.cover_path, observation.cover_state ->> 'cover_revision'
+        ) then array['local_cover_width', 'local_cover_height']::text[]
+          else array[]::text[] end)
+        || (observation.cover_state - array[
+          'cover_path', 'cover_selection_origin', 'cover_selection_provenance'
+        ]::text[])
+        || case when observation.cover_state ->> 'cover_selection_origin' = 'automatic'
+             then jsonb_build_object('cover_selection_origin', 'automatic')
+             else '{}'::jsonb end
+        || jsonb_strip_nulls(jsonb_build_object('cover_path', observation.cover_path))
+      end as album_metadata
     from observations as observation
     join library.local_albums as album
       on album.id = observation.album_id
@@ -3061,7 +3072,7 @@ begin
       (
         coalesce(file.metadata #> '{scan_cache,file_entry}', '{}'::jsonb)
         - array[
-          'cover_path', 'cover_revision', 'cover_selection_origin',
+          'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height',
           'remote_cover_url', 'remote_cover_thumbnail_url',
           'remote_cover_source', 'remote_cover_source_label',
           'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
@@ -3070,7 +3081,7 @@ begin
         select jsonb_object_agg(entry.key, entry.value)
         from jsonb_each(desired.album_metadata) as entry(key, value)
         where entry.key = any(array[
-          'cover_path', 'cover_revision', 'cover_selection_origin',
+          'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height',
           'remote_cover_url', 'remote_cover_thumbnail_url',
           'remote_cover_source', 'remote_cover_source_label',
           'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
@@ -3093,7 +3104,7 @@ begin
             (
               coalesce(file.metadata #> '{scan_cache,file_entry}', '{}'::jsonb)
               - array[
-                'cover_path', 'cover_revision', 'cover_selection_origin',
+                'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height',
                 'remote_cover_url', 'remote_cover_thumbnail_url',
                 'remote_cover_source', 'remote_cover_source_label',
                 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
@@ -3102,7 +3113,7 @@ begin
               select jsonb_object_agg(entry.key, entry.value)
               from jsonb_each(desired.album_metadata) as entry(key, value)
               where entry.key = any(array[
-                'cover_path', 'cover_revision', 'cover_selection_origin',
+                'cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height',
                 'remote_cover_url', 'remote_cover_thumbnail_url',
                 'remote_cover_source', 'remote_cover_source_label',
                 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height'
@@ -5818,7 +5829,7 @@ begin
   insert into library.local_albums
     (library_id, artist_id, album_key, title, release_year, metadata)
   select claimed_library_id, artist.id, input.album_key, input.title,
-         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
+         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
     from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
       as input(artist_key text, album_key text, title text, release_year integer,
                cover_path text, metadata jsonb)
@@ -5878,7 +5889,7 @@ begin
          to_timestamp(input.modified_at_epoch),
          case when input.metadata #> '{scan_cache,file_entry}' is not null
            then jsonb_set(input.metadata, '{scan_cache,file_entry}',
-             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
            else input.metadata end
     from jsonb_to_recordset(coalesce(p_inventory -> 'track_files', '[]'::jsonb))
       as input(track_key text, private_path text, relative_path text,
@@ -5902,7 +5913,7 @@ begin
               from jsonb_each(coalesce(
                 library.local_track_files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb
               )) as entry(key, value)
-              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
             ), '{}'::jsonb))
         ) #- '{scan_cache,stale_marked_at}';
 
@@ -6452,7 +6463,7 @@ begin
     library_id, artist_id, album_key, title, release_year, metadata
   )
   select claimed_library_id, artist.id, album_map.target_album_key, input.title,
-         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
+         input.release_year, coalesce(input.metadata, '{}'::jsonb) - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[]
     from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
       as input(artist_key text, album_key text, title text, release_year integer,
                cover_path text, metadata jsonb)
@@ -6529,7 +6540,7 @@ begin
          to_timestamp(input.modified_at_epoch),
          case when input.metadata #> '{scan_cache,file_entry}' is not null
            then jsonb_set(input.metadata, '{scan_cache,file_entry}',
-             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+             (input.metadata #> '{scan_cache,file_entry}') - array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
            else input.metadata end
     from jsonb_to_recordset(coalesce(p_inventory -> 'track_files', '[]'::jsonb))
       as input(track_key text, private_path text, relative_path text,
@@ -6556,7 +6567,7 @@ begin
               from jsonb_each(coalesce(
                 library.local_track_files.metadata #> '{scan_cache,file_entry}', '{}'::jsonb
               )) as entry(key, value)
-              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
+              where entry.key = any(array['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance', 'local_cover_width', 'local_cover_height', 'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url', 'remote_cover_width', 'remote_cover_height']::text[])
             ), '{}'::jsonb))
         ) #- '{scan_cache,stale_marked_at}';
 
@@ -6672,6 +6683,149 @@ begin
 end;
 $$;
 
+create or replace function library.enqueue_stale_scan_cover_reconciliation(
+  p_source_kind text,
+  p_source_intent_id bigint,
+  p_observed_covers jsonb,
+  p_now timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  v_source record;
+  v_scope record;
+  v_accepted record;
+  v_request_key varchar(256);
+  v_request_digest varchar(64);
+  v_job_id bigint;
+begin
+  select intent.library_id, intent.deployment_mode, intent.client_surface
+  into v_source
+  from (
+    select source.library_id, source.job_id, source.deployment_mode, source.client_surface
+    from library.full_scan_intents as source
+    where p_source_kind = 'full_scan' and source.id = p_source_intent_id
+      and source.committed_inventory_revision is not null
+      and source.committed_cover_publication_stale is true
+    union all
+    select source.library_id, source.job_id, source.deployment_mode, source.client_surface
+    from library.targeted_reconciliation_intents as source
+    where p_source_kind = 'targeted_reconciliation' and source.id = p_source_intent_id
+      and source.committed_inventory_revision is not null
+      and source.committed_cover_publication_stale is true
+  ) as intent
+  join ops.jobs as job
+    on job.id = intent.job_id and job.library_id = intent.library_id
+   and job.kind = p_source_kind and job.state = 'running'
+   and job.lease_expires_at > pg_catalog.clock_timestamp();
+  if not found then
+    raise exception 'stale cover reconciliation source is invalid';
+  end if;
+
+  for v_scope in
+    with changed as materialized (
+      select observation.album_id, observation.track_paths
+      from jsonb_to_recordset(p_observed_covers) as observation(
+        album_id bigint, cover_path text, cover_state jsonb, track_paths text[]
+      )
+      join library.local_albums as album
+        on album.id = observation.album_id and album.library_id = v_source.library_id
+      where not (coalesce(album.metadata, '{}'::jsonb) @> jsonb_build_object(
+        'cover_selection_origin', 'user', 'cover_selection_provenance', 'explicit'
+      ))
+      and (album.cover_path, coalesce(album.metadata, '{}'::jsonb)) is distinct from (
+        observation.cover_path,
+        (coalesce(album.metadata, '{}'::jsonb) - array[
+          'cover_path', 'cover_revision', 'remote_cover_url', 'remote_cover_thumbnail_url',
+          'remote_cover_source', 'remote_cover_source_label', 'remote_cover_album_url',
+          'remote_cover_width', 'remote_cover_height'
+        ]::text[] - case when (
+          album.cover_path, album.metadata ->> 'cover_revision'
+        ) is distinct from (
+          observation.cover_path, observation.cover_state ->> 'cover_revision'
+        ) then array['local_cover_width', 'local_cover_height']::text[]
+          else array[]::text[] end)
+        || (coalesce(observation.cover_state, '{}'::jsonb) - array[
+          'cover_path', 'cover_selection_origin', 'cover_selection_provenance'
+        ]::text[])
+        || case when observation.cover_state ->> 'cover_selection_origin' = 'automatic'
+             then jsonb_build_object('cover_selection_origin', 'automatic')
+             else '{}'::jsonb end
+        || jsonb_strip_nulls(jsonb_build_object('cover_path', observation.cover_path))
+      )
+    ), paths as materialized (
+      select distinct changed.album_id, root.id as root_id, file.private_path
+      from changed
+      join library.local_tracks as track
+        on track.library_id = v_source.library_id and track.album_id = changed.album_id
+      join library.local_track_files as file
+        on file.track_id = track.id and file.private_path = any(changed.track_paths)
+      join library.library_roots as root
+        on root.id = file.library_root_id and root.library_id = v_source.library_id
+       and root.is_active is true
+    ), ranked as (
+      -- Each existing targeted intent accepts at most 4096 paths.
+      select paths.*, (row_number() over (
+        partition by album_id, root_id order by private_path collate "C"
+      ) - 1) / 4096 as batch_number
+      from paths
+    )
+    select album_id, root_id, batch_number,
+           array_agg(private_path order by private_path collate "C") as active_paths
+    from ranked
+    group by root_id, album_id, batch_number
+    order by root_id, album_id, batch_number
+  loop
+    v_request_key := 'scan-cover-followup:' || p_source_kind || ':'
+      || p_source_intent_id::text || ':' || v_scope.album_id::text || ':'
+      || v_scope.root_id::text || ':' || v_scope.batch_number::text;
+    -- Match the existing Python producer's compact, sorted-key JSON bytes.
+    v_request_digest := encode(sha256(convert_to(
+      '{"active_paths":' || array_to_json(v_scope.active_paths)::text
+      || ',"deleted_paths":[],"deleted_subtrees":[],"moves":[],"preserved_subtrees":[]'
+      || ',"primary_root_id":' || v_scope.root_id::text || '}',
+      'UTF8'
+    )), 'hex');
+    select * into v_accepted
+    from library.create_targeted_reconciliation_intent(
+      v_source.library_id, v_scope.root_id, v_request_key, v_request_digest,
+      v_source.deployment_mode, v_source.client_surface,
+      v_scope.active_paths, array[]::text[], array[]::text[], array[]::text[],
+      '[]'::jsonb, p_now
+    );
+    if v_accepted.job_id is not null then
+      continue;
+    end if;
+    insert into ops.jobs (
+      kind, subject_kind, subject_ref, parameters, account_id, library_id,
+      capability_key, request_origin_id, deployment_mode, client_surface,
+      idempotency_key, priority, scheduled_at, max_attempts, recovery_policy
+    ) values (
+      'targeted_reconciliation', 'targeted_reconciliation_intent', v_accepted.intent_id::text,
+      jsonb_build_object('intent_id', v_accepted.intent_id), null, v_source.library_id,
+      null, null, v_source.deployment_mode, v_source.client_surface,
+      'targeted-reconciliation-request:' || v_request_key, 0, p_now, 3, 'retry_safe'
+    ) on conflict do nothing
+    returning id into v_job_id;
+    if v_job_id is null then
+      select job.id into v_job_id
+      from ops.jobs as job
+      where job.kind = 'targeted_reconciliation'
+        and job.library_id = v_source.library_id
+        and job.subject_kind = 'targeted_reconciliation_intent'
+        and job.subject_ref = v_accepted.intent_id::text
+        and job.idempotency_key = 'targeted-reconciliation-request:' || v_request_key;
+    end if;
+    perform library.link_scan_intent_job('targeted_reconciliation', v_accepted.intent_id, v_job_id);
+  end loop;
+end;
+$$;
+
+revoke all on function library.enqueue_stale_scan_cover_reconciliation(text,bigint,jsonb,timestamptz) from public;
+
 create or replace function library.publish_claimed_full_scan(
   p_intent_id bigint,
   p_job_id bigint,
@@ -6786,6 +6940,8 @@ begin
         'cover_revision', submitted_album.metadata -> 'cover_revision',
         'cover_selection_origin', submitted_album.metadata -> 'cover_selection_origin',
         'cover_selection_provenance', submitted_album.metadata -> 'cover_selection_provenance',
+        'local_cover_width', submitted_album.metadata -> 'local_cover_width',
+        'local_cover_height', submitted_album.metadata -> 'local_cover_height',
         'remote_cover_url', submitted_album.metadata -> 'remote_cover_url',
         'remote_cover_thumbnail_url', submitted_album.metadata -> 'remote_cover_thumbnail_url',
         'remote_cover_source', submitted_album.metadata -> 'remote_cover_source',
@@ -6823,6 +6979,11 @@ begin
     set committed_cover_mutation_revision = v_cover_mutation_revision,
         committed_cover_publication_stale = v_cover_publication_stale
     where intent.id = p_intent_id;
+    if v_cover_publication_stale then
+      perform library.enqueue_stale_scan_cover_reconciliation(
+        'full_scan', p_intent_id, v_observed_covers, p_now
+      );
+    end if;
   end if;
   if coalesce(v_publication.publication_won, false)
      and v_repair_id is not null then
@@ -6971,6 +7132,8 @@ begin
         'cover_revision', submitted_album.metadata -> 'cover_revision',
         'cover_selection_origin', submitted_album.metadata -> 'cover_selection_origin',
         'cover_selection_provenance', submitted_album.metadata -> 'cover_selection_provenance',
+        'local_cover_width', submitted_album.metadata -> 'local_cover_width',
+        'local_cover_height', submitted_album.metadata -> 'local_cover_height',
         'remote_cover_url', submitted_album.metadata -> 'remote_cover_url',
         'remote_cover_thumbnail_url', submitted_album.metadata -> 'remote_cover_thumbnail_url',
         'remote_cover_source', submitted_album.metadata -> 'remote_cover_source',
@@ -7010,6 +7173,11 @@ begin
     set committed_cover_mutation_revision = v_cover_mutation_revision,
         committed_cover_publication_stale = v_cover_publication_stale
     where intent.id = p_intent_id;
+    if v_cover_publication_stale then
+      perform library.enqueue_stale_scan_cover_reconciliation(
+        'targeted_reconciliation', p_intent_id, v_observed_covers, p_now
+      );
+    end if;
     perform library.retire_claimed_targeted_reconciliation_vacated_albums(
       p_intent_id, p_job_id, p_attempt, p_worker_id, p_lease_token, p_now
     );
@@ -7112,6 +7280,7 @@ begin
     revoke all on function library.publish_claimed_full_scan_inventory_0106(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz) from album_haven_app;
     revoke all on function library.publish_claimed_targeted_reconciliation_inventory_0106(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz) from album_haven_app;
     revoke all on function library.apply_scanned_cover_observations(bigint,bigint,jsonb,timestamptz) from album_haven_app;
+    revoke all on function library.enqueue_stale_scan_cover_reconciliation(text,bigint,jsonb,timestamptz) from album_haven_app;
     revoke all on function library.publish_claimed_full_scan(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz) from album_haven_app;
     revoke all on function library.publish_claimed_targeted_reconciliation(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz) from album_haven_app;
     revoke all on function ops.validate_durable_worker_startup(text[]) from album_haven_app;
@@ -7120,6 +7289,7 @@ begin
     revoke all on function library.publish_claimed_full_scan_inventory_0106(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz) from album_haven_worker;
     revoke all on function library.publish_claimed_targeted_reconciliation_inventory_0106(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz) from album_haven_worker;
     revoke all on function library.apply_scanned_cover_observations(bigint,bigint,jsonb,timestamptz) from album_haven_worker;
+    revoke all on function library.enqueue_stale_scan_cover_reconciliation(text,bigint,jsonb,timestamptz) from album_haven_worker;
     revoke all on function library.publish_claimed_full_scan(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz) from album_haven_worker;
     revoke all on function library.publish_claimed_targeted_reconciliation(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz) from album_haven_worker;
     revoke all on function ops.validate_durable_worker_startup(text[]) from album_haven_worker;
@@ -7131,6 +7301,7 @@ begin
     revoke all on function library.publish_claimed_full_scan_inventory_0106(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz) from album_haven_readonly;
     revoke all on function library.publish_claimed_targeted_reconciliation_inventory_0106(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz) from album_haven_readonly;
     revoke all on function library.apply_scanned_cover_observations(bigint,bigint,jsonb,timestamptz) from album_haven_readonly;
+    revoke all on function library.enqueue_stale_scan_cover_reconciliation(text,bigint,jsonb,timestamptz) from album_haven_readonly;
     revoke all on function library.publish_claimed_full_scan(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz) from album_haven_readonly;
     revoke all on function library.publish_claimed_targeted_reconciliation(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz) from album_haven_readonly;
     revoke all on function ops.validate_durable_worker_startup(text[]) from album_haven_readonly;

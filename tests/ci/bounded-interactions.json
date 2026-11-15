@@ -54,6 +54,16 @@
       "reason": "Loads every cached file entry and rebuilds every album, and optionally all relation views, from persisted storage."
     }
   ],
+  "libraryStateCollections": [
+    {
+      "collection": "albums",
+      "reason": "Every album in the library; iterating or copying it is proportional to library size."
+    },
+    {
+      "collection": "file_cache",
+      "reason": "One entry per indexed track file; iterating or copying it is proportional to library track count."
+    }
+  ],
   "interactions": [
     {
       "id": "js:account.js#mount",
@@ -11871,10 +11881,42 @@
       "proof": "static"
     },
     {
+      "id": "py:services/edit_state.py#apply_repairs_worker",
+      "action": "Run background apply_repairs_worker",
+      "entrypoints": [
+        "py:music_app/services/edit_state.py#apply_repairs_worker:background:executor"
+      ],
+      "owners": [
+        "music_app/services/edit_state.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/gallery_projection_postgres.py#_publish_gallery_projection_on_connection",
       "action": "Run publisher _publish_gallery_projection_on_connection",
       "entrypoints": [
         "py:music_app/services/gallery_projection_postgres.py#_publish_gallery_projection_on_connection:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/gallery_projection_postgres.py#ensure_gallery_projection_ready",
+      "action": "Run background ensure_gallery_projection_ready",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#ensure_gallery_projection_ready:background:executor"
       ],
       "owners": [
         "music_app/services/gallery_projection_postgres.py"

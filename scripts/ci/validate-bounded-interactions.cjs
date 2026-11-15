@@ -23,7 +23,7 @@ const { syncRegistry } = require('./bounded-interaction-registry-sync.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const REGISTRY_PATH = 'tests/ci/bounded-interactions.json';
 const WORK_CLASSES = ['constant', 'delta', 'page', 'selected-set', 'affected-set', 'background-batch'];
-const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryScaleOperations', 'interactions']);
+const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryScaleOperations', 'libraryStateCollections', 'interactions']);
 const INTERACTION_KEYS = new Set([
   'id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof', 'requestOwnership',
   'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'measures', 'performanceTargets', 'rollback',
@@ -138,6 +138,10 @@ function validateSchema(registry, { fileExists, readFile }) {
     if (!match) errors.push(`libraryScaleOperations[${index}] must name py:<path>#<function>`);
     else if (!fileExists(match[1])) errors.push(`libraryScaleOperations[${index}] source ${match[1]} does not exist`);
     if (!String(operation?.reason || '').trim()) errors.push(`libraryScaleOperations[${index}] must give a reason`);
+  }
+  for (const [index, item] of (registry?.libraryStateCollections || []).entries()) {
+    if (!/^\w+$/.test(String(item?.collection || ''))) errors.push(`libraryStateCollections[${index}] must name a library_state key`);
+    if (!String(item?.reason || '').trim()) errors.push(`libraryStateCollections[${index}] must give a reason`);
   }
   const ids = new Set();
   const contractIds = new Set((registry?.interactions || []).filter(entry => entry?.proof === 'contract').map(entry => entry.id));

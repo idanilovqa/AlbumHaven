@@ -298,6 +298,36 @@ const DEFECTS = [
     expected: /^py:routes\/api_read_asgi_routes\.py#album_opinions_crowd_read_reserved: \d+ reachable hazard\(s\) need a runtime contract \(.*Path\.exists at music_app\/routes\/api_read_asgi_routes\.py:\d+/,
   },
   {
+    id: 'BI-07 gallery rebuild queued as a lambda through a helper parameter (helper-launched work was invisible)',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: "        payload = await request.json()\n        if not isinstance(payload, dict):\n            raise LogHistoryQueryError('Invalid history export request')\n",
+    replacement: "        payload = await request.json()\n        if not isinstance(payload, dict):\n            raise LogHistoryQueryError('Invalid history export request')\n"
+      + '        _seeded_queue(_app_config(request), "rebuild", lambda: _seeded_rebuild_gallery(_app_config(request)))\n',
+    prelude: '_SEEDED_QUEUE_POOL = ThreadPoolExecutor(max_workers=1)\n\n\ndef _seeded_queue(config, key, action):\n    return _SEEDED_QUEUE_POOL.submit(action)\n\n\n'
+      + 'def _seeded_rebuild_gallery(config):\n    return None\n',
+    expected: /^unregistered entrypoint py:music_app\/routes\/api_read_asgi_routes\.py#_seeded_rebuild_gallery:background:executor$/,
+  },
+  {
+    id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
+    language: 'py',
+    file: 'music_app/services/cover_lookup_tasks.py',
+    anchor: '    claimed_at = monotonic()\n    with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:\n',
+    replacement: '    claimed_at = monotonic()\n    _seeded_build_relation_views([], config)\n    with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:\n',
+    prelude: 'from music_app.services.relations import build_relation_views as _seeded_build_relation_views\n',
+    expected: /^py:services\/cover_lookup_tasks\.py#_reconcile_stale_cover_lookup_tasks: \d+ reachable hazard\(s\) need a runtime contract \(.*library-scale:py:music_app\/services\/relations\.py#build_relation_views at /,
+  },
+  {
+    id: 'BI-04 read route that scans every album in the in-memory library state',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: '    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item)',
+    replacement: '    library_state = request.app.state.library_state\n'
+      + '    [album for album in library_state.get("albums", []) if getattr(album, "loops", None)]\n'
+      + '    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item)',
+    expected: /^py:routes\/api_read_asgi_routes\.py#utilities_loops: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:albums at music_app\/routes\/api_read_asgi_routes\.py:\d+/,
+  },
+  {
     id: 'BI-07 thread target that escapes name-based background discovery',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',

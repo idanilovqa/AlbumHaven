@@ -103,6 +103,95 @@ def refresh_now(state):
     assert rejected == ["py:music_app/routes/read.py#refresh_now:route:POST /refresh-now"]
 
 
+def test_work_queued_through_a_launcher_parameter_is_a_background_entrypoint(tmp_path: Path):
+    _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
+    _write(tmp_path, "music_app/services/queueing.py", """
+import functools
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from music_app.services.relations import build_relation_views
+
+_POOL = ThreadPoolExecutor(max_workers=1)
+
+def _queue(config, key, action, *, trailing=False):
+    return _POOL.submit(action)
+
+def _queue_later(config, job):
+    return _queue(config, "later", job)
+
+class Runner:
+    def start(self, work):
+        threading.Thread(target=work, daemon=True).start()
+
+def ensure_views(config):
+    return build_relation_views(config["albums"])
+
+def warm_cache(config):
+    return None
+
+def rebuild_now(config):
+    return None
+
+@router.post("/refresh")
+def request_refresh(config):
+    _queue(config, "refresh", lambda: ensure_views(config), trailing=True)
+    _queue_later(config, functools.partial(warm_cache, config))
+    Runner().start(work=rebuild_now)
+""")
+    analysis = discovery.analyze_python_repository(
+        tmp_path,
+        library_scale_operations=["py:music_app/services/relations.py#build_relation_views"],
+    )
+    keys = {item["key"] for item in analysis["entrypoints"]}
+    assert {
+        "py:music_app/services/queueing.py#ensure_views:background:executor",
+        "py:music_app/services/queueing.py#warm_cache:background:executor",
+        "py:music_app/services/queueing.py#rebuild_now:background:thread",
+    } <= keys
+    # The queued rebuild needs a contract; the route that only queues it does not reach it.
+    library_scale = [(item["entrypoint"].split("#")[1], item["reject"]) for item in analysis["hazards"] if item["operation"].startswith("library-scale")]
+    assert library_scale == [("ensure_views:background:executor", False)]
+
+
+def test_route_scanning_a_registered_library_state_collection_needs_a_contract(tmp_path: Path):
+    _write(tmp_path, "music_app/services/lookup.py", """
+def album_index(library_state):
+    return {album.key: album for album in library_state.get("albums", [])}
+
+def selected(library_state, key):
+    return library_state.get("albums_by_key", {}).get(key)
+""")
+    _write(tmp_path, "music_app/routes/read.py", """
+from music_app.services.lookup import album_index, selected
+
+@router.post("/versions/mark")
+def mark(request):
+    state = _library_state(request)
+    albums = state.get("albums") or []
+    by_key = {album.key: album for album in albums}
+    return sorted(state["file_cache"].items())
+
+@router.get("/indexed")
+def indexed(request):
+    return album_index(request.app.state.library_state)
+
+@router.get("/one")
+def one(request, payload):
+    count = len(_library_state(request)["albums"])
+    return selected(_library_state(request), payload["key"]), [row for row in payload["albums"]], count
+""")
+    analysis = discovery.analyze_python_repository(tmp_path, library_state_collections=["albums", "file_cache"])
+    scans = sorted(
+        (item["entrypoint"].split("#")[1], item["operation"], item["line"], item["depth"], item["reject"])
+        for item in analysis["hazards"]
+    )
+    assert scans == [
+        ("indexed:route:GET /indexed", "library-state-scan:albums", 3, "indirect", False),
+        ("mark:route:POST /versions/mark", "library-state-scan:albums", 8, "direct", False),
+        ("mark:route:POST /versions/mark", "library-state-scan:file_cache", 9, "direct", False),
+    ]
+
+
 def test_direct_enumeration_in_route_is_rejected_while_helper_reads_are_inventoried(tmp_path: Path):
     _write(tmp_path, "music_app/services/covers.py", """
 def first_image(folder):

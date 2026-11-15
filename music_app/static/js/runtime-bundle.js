@@ -5091,20 +5091,24 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
     : '';
 }
 
-function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
+function buildGalleryArtistGenresHtml(artistMusicBrainz = null) {
   const genres = (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
     .map((genre) => String(genre || '').trim())
     .filter(Boolean);
-  const genreHtml = genres.map((genre) => (
+  return genres.map((genre) => (
     genre === 'Genre unavailable'
       ? '<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span></span>'
       : `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span></span>`
   )).join('');
+}
+
+function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
+  const genreHtml = buildGalleryArtistGenresHtml(artistMusicBrainz);
   return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${genreHtml}</span>`;
 }
 
 function buildGalleryArtistMobileSummaryHtml(albumCount, artistMusicBrainz = null) {
-  return `${escapeHtml(galleryMainPlural(albumCount, 'album'))}${buildGalleryArtistMetadataHtml(artistMusicBrainz)}`;
+  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span>${buildGalleryArtistMetadataHtml(artistMusicBrainz)}<span class="gallery-bar__artist-genres">${buildGalleryArtistGenresHtml(artistMusicBrainz)}</span>`;
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
@@ -5300,6 +5304,32 @@ function buildFilterPillHtml(config = {}) {
   return `<button class="ui-filter-pill${config.className ? ` ${escapeHtml(config.className)}` : ''}${selected ? ' is-active' : ''}${config.modifierClassName ? ` ${escapeHtml(config.modifierClassName)}` : ''}" type="button" title="${escapeHtml(config.title || label)}" aria-label="${escapeHtml(config.ariaLabel || label)}" aria-pressed="${selected ? 'true' : 'false'}"${dataAttributes}${config.draggable === false ? ' draggable="false"' : ''}><span class="${partClass('marker')}" aria-hidden="true"></span>${artwork ? `<span class="${partClass('artwork')}" aria-hidden="true">${artwork}</span>` : ''}<span class="${partClass('label')}">${escapeHtml(label)}</span>${count}</button>`;
 }
 
+function buildGalleryBarContentsHtml(config = {}) {
+  const pageHeading = config.pageHeading === true;
+  const titleHtml = Object.hasOwn(config, 'titleHtml')
+    ? String(config.titleHtml || '')
+    : escapeHtml(config.title || '');
+  const summaryHtml = Object.hasOwn(config, 'summaryHtml')
+    ? String(config.summaryHtml || '')
+    : escapeHtml(config.summary || '');
+  const titleId = config.titleId ? ` id="${escapeHtml(config.titleId)}"` : '';
+  const summaryId = config.summaryId ? ` id="${escapeHtml(config.summaryId)}"` : '';
+  const summaryLive = config.summaryLive ? ` aria-live="${escapeHtml(config.summaryLive)}"` : '';
+  const title = pageHeading
+    ? `<h1 class="gallery-bar__title"${titleId}>${titleHtml}</h1>`
+    : `<div class="gallery-bar__title"${titleId}>${titleHtml}</div>`;
+  const summary = config.showSummary === false
+    ? ''
+    : `${pageHeading ? '<p' : '<span'} class="gallery-bar__summary"${summaryId}${summaryLive}${config.dynamicContext ? ' data-gallery-context-summary' : ''}>${summaryHtml}${pageHeading ? '</p>' : '</span>'}`;
+  const mobileSummary = config.dynamicContext
+    ? `<span class="gallery-bar__artist-mobile-summary" data-gallery-context-mobile-summary${config.mobileSummaryHidden ? ' hidden' : ''}>${String(config.mobileSummaryHtml || '')}</span>`
+    : '';
+  const actionClasses = ['gallery-bar__actions', String(config.actionsClassName || '').trim()].filter(Boolean).join(' ');
+  const actionId = config.actionsId ? ` id="${escapeHtml(config.actionsId)}"` : '';
+  const actionHidden = config.actionsHidden ? ' hidden' : '';
+  return `${String(config.leadingHtml || '')}<div class="gallery-bar__context">${title}${mobileSummary}${summary}</div><div class="${actionClasses}"${actionId}${actionHidden}>${String(config.actionsHtml || '')}</div>`;
+}
+
 function buildGalleryBarHtml(config = {}) {
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
@@ -5316,12 +5346,18 @@ function buildGalleryBarHtml(config = {}) {
   const mobileSummaryHtml = isArtist
     ? buildGalleryArtistMobileSummaryHtml(config.albumCount, config.artist_musicbrainz)
     : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__artist-mobile-summary" data-gallery-context-mobile-summary${isArtist ? '' : ' hidden'}>${mobileSummaryHtml}</span><span class="gallery-bar__summary" data-gallery-context-summary>${summaryHtml}</span></div>
-    <div class="gallery-bar__actions">
+  const actionsHtml = `
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
-      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
-    </div>`;
+      <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>`;
+  return buildGalleryBarContentsHtml({
+    titleHtml: `<span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span>`,
+    summaryHtml,
+    mobileSummaryHtml,
+    mobileSummaryHidden: !isArtist,
+    dynamicContext: true,
+    actionsHtml,
+  });
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
@@ -5888,9 +5924,15 @@ function buildLooseTracksHeaderActionsHtml() {
 }
 
 function buildLooseTracksPageHeaderHtml(config = {}) {
-  const leadingHtml = String(config.leadingHtml || '');
-  const actionsHtml = String(config.actionsHtml || '');
-  return `${leadingHtml}<div class="gallery-bar__context"><h1 class="gallery-bar__title" id="non-album-modal-title">Loose Tracks</h1><p class="gallery-bar__summary" id="non-album-modal-subtitle">${escapeHtml(config.subtitle || '')}</p></div>${actionsHtml ? `<div class="gallery-bar__actions">${actionsHtml}</div>` : ''}`;
+  return buildGalleryBarContentsHtml({
+    pageHeading: true,
+    leadingHtml: config.leadingHtml,
+    title: 'Loose Tracks',
+    titleId: 'non-album-modal-title',
+    summary: config.subtitle,
+    summaryId: 'non-album-modal-subtitle',
+    actionsHtml: config.actionsHtml,
+  });
 }
 
 const MISSING_ALBUM_REASON_TEXT = {
@@ -6762,18 +6804,20 @@ let detachedGalleryBarParent = null;
 let detachedGalleryBarNextSibling = null;
 
 function buildLibraryStatusBarHtml() {
-  return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
-    <div class="gallery-bar__context">
-      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
-      <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library State</span></div>
-        <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
-      </div>
-    </div>
-    <div class="gallery-bar__actions library-loader-actions" id="library-loader-actions" hidden>
+  return `<section class="gallery-bar page-gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" data-gallery-bar-layout="mobile-primary" aria-label="Library Status Page controls">
+    ${buildGalleryBarContentsHtml({
+      leadingHtml: ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button page-gallery-bar__back', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } }),
+      titleHtml: '<span>Library State</span>',
+      summary: 'Preparing status...',
+      summaryId: 'library-scan-gallery-summary',
+      summaryLive: 'polite',
+      actionsClassName: 'library-loader-actions',
+      actionsId: 'library-loader-actions',
+      actionsHidden: true,
+      actionsHtml: `
       <button class="button ui-button ui-button--secondary ui-button--medium library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
-      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
-    </div>
+      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>`,
+    })}
   </section>`;
 }
 
@@ -8757,14 +8801,17 @@ function syncGalleryBarNameFit(bar, name) {
   bar.classList.remove('is-controls-below');
   if (contextKind === 'artist' || contextKind === 'single-artist') {
     if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-controls-below');
-    const genreContainer = bar.querySelector?.('.gallery-bar__artist-genres');
     const genrePills = Array.from(bar.querySelectorAll?.('.gallery-bar__artist-genre') || []);
     genrePills.forEach((pill) => { pill.hidden = false; });
-    const right = genreContainer?.getBoundingClientRect?.().right;
-    if (Number.isFinite(right)) {
-      genrePills.forEach((pill) => {
-        if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
-      });
+    if (Number(window.innerWidth) > 900) {
+      const genreContainer = bar.querySelector?.('.gallery-bar__summary .gallery-bar__artist-genres');
+      const desktopGenrePills = Array.from(genreContainer?.querySelectorAll?.('.gallery-bar__artist-genre') || []);
+      const right = genreContainer?.getBoundingClientRect?.().right;
+      if (Number.isFinite(right)) {
+        desktopGenrePills.forEach((pill) => {
+          if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
+        });
+      }
     }
     return;
   }

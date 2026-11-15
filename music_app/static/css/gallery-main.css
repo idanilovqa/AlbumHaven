@@ -1,7 +1,7 @@
 .app-bar [data-shell-horizontal-align="gallery-body"] { margin-left: 0; }
 .app-bar--library { padding-right: 32px; }
 .gallery-top-row { flex: 0 0 auto; min-height: 0; margin-bottom: 0; }
-.gallery-bar { position: relative; z-index: 60; min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; border-bottom: 0; background: transparent; border-radius: 8px; padding: 0; margin-bottom: 14px; }
+.gallery-bar { position: relative; z-index: 60; width: 100%; min-height: 54px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; border-bottom: 0; background: transparent; border-radius: 8px; padding: 0; margin-bottom: 14px; }
 .gallery-bar[hidden] { display: none; }
 .gallery-bar__context { flex: 1 1 auto; min-width: 0; }
 .gallery-bar__title { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 1.08rem; font-weight: 750; }
@@ -20,9 +20,22 @@
 .gallery-bar__artist-genre::before { content: "\2022"; flex: 0 0 auto; margin: 0 6px; font-size: 1.25em; line-height: 0; vertical-align: -.08em; }
 .gallery-bar__summary[hidden], .gallery-bar__artist-metadata[hidden] { display: none; }
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-main-surface, var(--panel)); }
+.gallery-bar__actions:empty { display: none; }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }
 .gallery-action-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--gallery-toolbar-button-background, var(--appearance-main-surface, var(--panel))); color: var(--text); cursor: pointer; }
 @media (min-width: 901px) {
+  .gallery-bar.page-gallery-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-content: center; row-gap: 0; padding: 0; }
+  .gallery-bar.page-gallery-bar:not(:has(> .gallery-bar__actions:not(:empty):not([hidden]))) { grid-template-columns: minmax(0, 1fr); }
+  .gallery-bar.page-gallery-bar:has(> .page-gallery-bar__back) { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .gallery-bar.page-gallery-bar:has(> .page-gallery-bar__back):not(:has(> .gallery-bar__actions:not(:empty):not([hidden]))) { grid-template-columns: 40px minmax(0, 1fr); }
+  .page-gallery-bar > .gallery-bar__context { display: contents; }
+  .page-gallery-bar__back { position: absolute; left: 0; top: -4px; width: 40px; height: 40px; display: inline-grid; place-items: center; }
+  .page-gallery-bar .gallery-bar__title { grid-column: 1; grid-row: 1; align-self: end; transform: translateY(.5px); }
+  .page-gallery-bar .gallery-bar__summary { grid-column: 1; grid-row: 2; align-self: start; transform: translateY(.5px); }
+  .page-gallery-bar:has(> .page-gallery-bar__back) :is(.gallery-bar__title, .gallery-bar__summary) { grid-column: 2; }
+  .page-gallery-bar > .gallery-bar__actions { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+  .page-gallery-bar:has(> .page-gallery-bar__back) > .gallery-bar__actions { grid-column: 3; }
+  .page-gallery-bar:not(:has(.gallery-bar__summary)) .gallery-bar__title { grid-row: 1 / span 2; align-self: center; }
   .gallery-bar__actions { --gallery-toolbar-button-background: var(--appearance-control, var(--panel)); }
   .gallery-action-button { background: var(--gallery-toolbar-button-background, var(--appearance-control, var(--panel))); }
   .gallery-bar.is-controls-below { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 16px; }

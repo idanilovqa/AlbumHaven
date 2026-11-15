@@ -1386,14 +1386,17 @@ function syncGalleryBarNameFit(bar, name) {
   bar.classList.remove('is-controls-below');
   if (contextKind === 'artist' || contextKind === 'single-artist') {
     if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-controls-below');
-    const genreContainer = bar.querySelector?.('.gallery-bar__artist-genres');
     const genrePills = Array.from(bar.querySelectorAll?.('.gallery-bar__artist-genre') || []);
     genrePills.forEach((pill) => { pill.hidden = false; });
-    const right = genreContainer?.getBoundingClientRect?.().right;
-    if (Number.isFinite(right)) {
-      genrePills.forEach((pill) => {
-        if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
-      });
+    if (Number(window.innerWidth) > 900) {
+      const genreContainer = bar.querySelector?.('.gallery-bar__summary .gallery-bar__artist-genres');
+      const desktopGenrePills = Array.from(genreContainer?.querySelectorAll?.('.gallery-bar__artist-genre') || []);
+      const right = genreContainer?.getBoundingClientRect?.().right;
+      if (Number.isFinite(right)) {
+        desktopGenrePills.forEach((pill) => {
+          if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
+        });
+      }
     }
     return;
   }

@@ -9,15 +9,15 @@ const source = fs.readFileSync(path.join(root, 'music_app/static/js/runtime/gall
 const start = source.indexOf('function syncGalleryBarNameFit(');
 const fitSource = source.slice(start, source.indexOf('\n}', start) + 2);
 
-const header = (name) => `<main class="shell-main-surface" style="display:block">
+const header = (name, genres) => `<main class="shell-main-surface" style="display:block">
   <header class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" data-gallery-bar-layout="mobile-primary" data-gallery-context-kind="artist">
-    <div class="gallery-bar__context"><div class="gallery-bar__title"><button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button><span data-gallery-context-name>${name}</span><button class="gallery-info-button" data-artist-info-trigger="1" aria-label="Information"><span class="gallery-info-button__glyph">i</span></button><span class="gallery-bar__artist-metadata" data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span></span><span class="gallery-bar__artist-divider gallery-divider__line" hidden></span><span class="gallery-bar__artist-total" hidden></span></div><span class="gallery-bar__artist-mobile-summary">9 albums<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span></span><span class="gallery-bar__summary" data-gallery-context-summary><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Progressive rock</span></span><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Art rock</span></span><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Symphonic rock</span></span></span></span></div>
+    <div class="gallery-bar__context"><div class="gallery-bar__title"><button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button><span data-gallery-context-name>${name}</span><button class="gallery-info-button" data-artist-info-trigger="1" aria-label="Information"><span class="gallery-info-button__glyph">i</span></button><span class="gallery-bar__artist-metadata" data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span></span><span class="gallery-bar__artist-divider gallery-divider__line" hidden></span><span class="gallery-bar__artist-total" hidden></span></div><span class="gallery-bar__artist-mobile-summary"><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia</span></span><span class="gallery-bar__artist-genres">${genres.map((genre) => `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${genre}</span></span>`).join('')}</span></span><span class="gallery-bar__summary" data-gallery-context-summary><span class="gallery-bar__summary-count">9 albums</span><span class="gallery-bar__artist-genres">${genres.map((genre) => `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${genre}</span></span>`).join('')}</span></span></div>
     <div class="gallery-bar__actions"><button class="gallery-action-button" aria-label="Artist family">F</button><button class="gallery-action-button" aria-label="View">V</button><button class="gallery-action-button" aria-label="Album types">T</button></div>
   </header></main>`;
 
-async function mount(page, name, width = 390) {
+async function mount(page, name, width = 390, genres = ['Rock', 'Pop']) {
   await page.setViewportSize({ width, height: 844 });
-  await page.setContent(`<!doctype html><html><body>${header(name)}</body></html>`);
+  await page.setContent(`<!doctype html><html><body>${header(name, genres)}</body></html>`);
   for (const file of ['base.css', 'app-chrome.css', 'button-component.css', 'gallery-main.css', 'mobile-layout.css']) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
   }
@@ -30,8 +30,8 @@ async function mount(page, name, width = 390) {
     const desktopCountry = bar.querySelector('.gallery-bar__artist-metadata .gallery-bar__artist-country');
     const mobileSummary = bar.querySelector('.gallery-bar__artist-mobile-summary');
     const mobileCountry = mobileSummary.querySelector('.gallery-bar__artist-country');
-    const summary = bar.querySelector('.gallery-bar__summary');
-    const genres = [...bar.querySelectorAll('.gallery-bar__artist-genre')];
+    const genres = [...mobileSummary.querySelectorAll('.gallery-bar__artist-genre')];
+    const count = mobileSummary.querySelector('.gallery-bar__summary-count');
     syncGalleryBarNameFit(bar, name);
     const box = (node) => node.getBoundingClientRect();
     return {
@@ -49,12 +49,13 @@ async function mount(page, name, width = 390) {
       desktopCountryCenter: (box(desktopCountry).top + box(desktopCountry).bottom) / 2,
       desktopCountryDot: getComputedStyle(desktopCountry, '::before').content,
       mobileSummaryTop: box(mobileSummary).top,
-      mobileSummaryCenter: (box(mobileSummary).top + box(mobileSummary).bottom) / 2,
+      countCenter: (box(count).top + box(count).bottom) / 2,
       mobileCountryCenter: (box(mobileCountry).top + box(mobileCountry).bottom) / 2,
-      summaryTop: box(summary).top,
+      labelOrder: [...mobileSummary.querySelectorAll('.gallery-bar__summary-count, .gallery-bar__artist-country, .gallery-bar__artist-genre')].map((node) => node.textContent.trim()),
       genreTops: genres.filter((genre) => !genre.hidden).map((genre) => box(genre).top),
-      visibleGenreCount: genres.filter((genre) => !genre.hidden).length,
-      summaryLeft: box(summary).left,
+      visibleGenreCount: genres.filter((genre) => !genre.hidden && box(genre).width > 0).length,
+      metadataBottom: box(mobileSummary).bottom,
+      metadataHeight: box(mobileSummary).height,
       nameLeft: box(name).left,
     };
   });
@@ -74,10 +75,9 @@ test('an artist takeover keeps the album count below the aligned artist and info
   expect(layout.titleAlignment).toBe('center');
   expect(Math.abs(layout.infoCenter - layout.nameCenter)).toBeLessThanOrEqual(1);
   expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.nameBottom);
-  expect(Math.abs(layout.mobileCountryCenter - layout.mobileSummaryCenter)).toBeLessThanOrEqual(1);
+  expect(Math.abs(layout.mobileCountryCenter - layout.countCenter)).toBeLessThanOrEqual(1);
   expect(layout.genreTops.every((top) => top >= layout.mobileSummaryTop)).toBe(true);
-  expect(layout.summaryTop).toBeGreaterThan(layout.mobileSummaryTop);
-  expect(Math.abs(layout.summaryLeft - layout.nameLeft)).toBeLessThanOrEqual(1);
+  expect(layout.labelOrder).toEqual(['9 albums', 'Russia', 'Rock', 'Pop']);
 });
 
 test('desktop aligns artist, info, and country without a separator dot', async ({ page }) => {
@@ -87,10 +87,21 @@ test('desktop aligns artist, info, and country without a separator dot', async (
   expect(layout.desktopCountryDot).toBe('none');
 });
 
-test('mobile keeps several genres on one third line and drops overflow as whole pills', async ({ page }) => {
-  const layout = await mount(page, '65daysofstatic', 320);
-  expect(layout.visibleGenreCount).toBeGreaterThan(1);
+test('mobile keeps country then genres on one line when they fit', async ({ page }) => {
+  const layout = await mount(page, 'Yes', 390, ['Rock', 'Pop']);
+  expect(layout.labelOrder).toEqual(['9 albums', 'Russia', 'Rock', 'Pop']);
   expect(new Set(layout.genreTops).size).toBe(1);
+  await expect(page.locator('[data-gallery-bar-instance="gallery"]')).toHaveScreenshot('gallery-header-mobile-labels-one-line.png', { animations: 'disabled' });
+});
+
+test('mobile wraps labels to a second line without moving the right-side actions', async ({ page }) => {
+  const layout = await mount(page, 'Yes', 320, ['Progressive rock', 'Art rock', 'Symphonic rock']);
+  expect(layout.visibleGenreCount).toBe(3);
+  expect(new Set(layout.genreTops).size).toBe(2);
+  expect(layout.actionsTop).toBeLessThan(layout.mobileSummaryTop);
+  expect(layout.metadataBottom).toBeGreaterThan(layout.actionsBottom);
+  expect(layout.metadataHeight).toBeLessThanOrEqual(50);
+  await expect(page.locator('[data-gallery-bar-instance="gallery"]')).toHaveScreenshot('gallery-header-mobile-labels-two-lines.png', { animations: 'disabled' });
 });
 
 test('artist controls move down before a fitting artist name is ellipsized on mobile', async ({ page }) => {
@@ -99,4 +110,5 @@ test('artist controls move down before a fitting artist name is ellipsized on mo
   expect(layout.wrapping).toBe(false);
   expect(layout.nameFull).toBe(true);
   expect(layout.actionsTop).toBeGreaterThanOrEqual(layout.nameBottom - 1);
+  expect(layout.mobileSummaryTop).toBeGreaterThanOrEqual(layout.actionsBottom);
 });

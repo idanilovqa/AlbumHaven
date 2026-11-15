@@ -149,9 +149,15 @@ function buildLooseTracksHeaderActionsHtml() {
 }
 
 function buildLooseTracksPageHeaderHtml(config = {}) {
-  const leadingHtml = String(config.leadingHtml || '');
-  const actionsHtml = String(config.actionsHtml || '');
-  return `${leadingHtml}<div class="gallery-bar__context"><h1 class="gallery-bar__title" id="non-album-modal-title">Loose Tracks</h1><p class="gallery-bar__summary" id="non-album-modal-subtitle">${escapeHtml(config.subtitle || '')}</p></div>${actionsHtml ? `<div class="gallery-bar__actions">${actionsHtml}</div>` : ''}`;
+  return buildGalleryBarContentsHtml({
+    pageHeading: true,
+    leadingHtml: config.leadingHtml,
+    title: 'Loose Tracks',
+    titleId: 'non-album-modal-title',
+    summary: config.subtitle,
+    summaryId: 'non-album-modal-subtitle',
+    actionsHtml: config.actionsHtml,
+  });
 }
 
 const MISSING_ALBUM_REASON_TEXT = {

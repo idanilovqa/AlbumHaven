@@ -24,7 +24,6 @@ const HIGH_FREQUENCY_EVENTS = new Set([
 // hot paths without rejecting per-event work outright.
 const REPEATING_EVENTS = new Set([...HIGH_FREQUENCY_EVENTS, 'message', 'timeupdate', 'selectionchange', 'drag', 'pointerrawupdate']);
 const TIMER_CALLS = new Set(['setInterval', 'setTimeout', 'requestAnimationFrame']);
-const REPEATING_TIMERS = new Set(['setInterval', 'requestAnimationFrame']);
 const DEFERRED_CALLBACK_CALLS = new Set(['setTimeout', 'requestAnimationFrame', 'queueMicrotask', 'requestIdleCallback']);
 const OBSERVERS = new Set(['MutationObserver', 'ResizeObserver', 'IntersectionObserver', 'PerformanceObserver']);
 const MAX_RESOLUTION_DEPTH = 8;
@@ -722,15 +721,18 @@ function computeFunctionHazards(fnNode, file, index) {
   return hazards.sort((a, b) => a.position - b.position);
 }
 
-// Functions called (or scheduled) from a function body.
+// Functions called (or scheduled) from a function body. A callback passed to a
+// timer or a timer helper runs as part of the caller's work, so a one-shot
+// frame or timeout scheduled from a hot handler is analyzed with that handler.
 function calledFunctions(fnNode, context, index) {
   const callees = [];
   walkAst(fnNode.body || fnNode, (node) => {
     if (node.type !== 'CallExpression') return;
     callees.push(...resolveCallable(node.callee, context, index));
-    if (DEFERRED_CALLBACK_CALLS.has(calleeName(node)) && node.arguments[0] && !isFunction(node.arguments[0])) {
-      callees.push(...resolveCallable(node.arguments[0], context, index));
-    }
+    const name = calleeName(node);
+    const helper = node.callee.type === 'Identifier' ? index.timers?.get(name) : undefined;
+    const callback = DEFERRED_CALLBACK_CALLS.has(name) ? node.arguments[0] : helper && node.arguments[helper.param];
+    if (callback && !isFunction(callback)) callees.push(...resolveCallable(callback, context, index));
   });
   return callees;
 }
@@ -776,16 +778,19 @@ function reachableFunctions(handler, index) {
 
 // Hot paths need every reachable hazard proven by a contract: high-frequency
 // and repeating events, observers, workers, and repeating timers. A timer is
-// repeating when it is `setInterval` or `requestAnimationFrame`, or a
+// repeating when it is `setInterval`, or a `requestAnimationFrame` or
 // `setTimeout` whose callback can reach the function that schedules it again
-// (a poller); a call to a timer helper is classified by the timer the helper
-// uses. Every other entrypoint (one-shot events and timeouts, request
-// owners) is not hot: it keeps route, request, and registration checks only.
+// (an animation loop or a poller); a call to a timer helper is classified by
+// the timer the helper uses. A one-shot frame or timeout is not hot by itself:
+// when a hot entrypoint schedules it, that entrypoint's reachable analysis
+// already includes the callback (see calledFunctions). Every other entrypoint
+// (one-shot events, frames, and timeouts, request owners) is not hot: it keeps
+// route, request, and registration checks only.
 function isHotEntrypoint(found, file, handlers, index) {
   if (found.kind === 'event') return REPEATING_EVENTS.has(found.trigger);
   if (found.kind === 'observer' || found.kind === 'worker') return true;
   if (found.kind !== 'timer') return false;
-  if (REPEATING_TIMERS.has(found.timer)) return true;
+  if (found.timer === 'setInterval') return true;
   const reached = new Set(handlers.flatMap(handler => [...reachableFunctions(handler, index)]));
   for (let scope = ownerOf(file, found.node).scope; scope; scope = ownerOf(file, scope).scope) {
     if (reached.has(scope)) return true;
@@ -1082,6 +1087,7 @@ function analyzeFiles(files) {
   const index = indexDefinitions(files);
   const helpers = requestHelpers(files, index);
   const timers = timerHelpers(files, index);
+  index.timers = timers;
   const entrypoints = [];
   const hazards = [];
   const hotKeys = new Set();

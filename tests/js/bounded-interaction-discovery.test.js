@@ -159,7 +159,7 @@ test('a call chain deeper than the depth limit is a hazard, never a silent pass'
 
 // Owner decision "Hot paths only": full reachable-hazard proof applies to hot
 // paths; one-shot entrypoints keep route, request, and registration checks.
-test('classifies hot paths by entrypoint kind: repeating events, observers, repeating timers, and pollers', () => {
+test('classifies hot paths by entrypoint kind: repeating events, observers, intervals, animation loops, and pollers', () => {
   const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
   const { entrypoints } = analyzeJavaScriptSources({ [FILE]: `
     function onEvents(root, worker) {
@@ -188,7 +188,7 @@ test('classifies hot paths by entrypoint kind: repeating events, observers, repe
     'onEvents:event:message': true,
     'onEvents:event:scroll': true,
     'onEvents:event:timeupdate': true,
-    'paint:timer:requestAnimationFrame': true,
+    'paint:timer:requestAnimationFrame': false,
     'poll:request:fetch': false,
     'poll:timer:setTimeout': true,
     'retry:timer:setTimeout': true,
@@ -236,15 +236,52 @@ test('a function that schedules its own callback parameter is a timer helper who
   ` });
   const hot = Object.fromEntries(entrypoints.map(item => [item.key.split('#')[1], item.hot]));
   assert.deepEqual(hot, {
-    'afterPaint:timer:scheduleFrame': true,
-    'openMenu:timer:afterPaint': true,
+    'afterPaint:timer:scheduleFrame': false,
+    'openMenu:timer:afterPaint': false,
     'openMenu:timer:scheduleTimeout': false,
-    'scheduleFrame:timer:requestAnimationFrame': true,
+    'scheduleFrame:timer:requestAnimationFrame': false,
     'schedulePoll:timer:scheduleTimeout': true,
     'scheduleTimeout:timer:setTimeout': false,
   });
   assert.deepEqual(hazards.map(hazard => [hazard.entrypoint.split('#')[1], hazard.operation, hazard.hot]), [
     ['schedulePoll:timer:scheduleTimeout', 'forEach', true],
+  ]);
+});
+
+// Owner decision: "animation loops" are hot paths, so a requestAnimationFrame
+// is hot only when its callback can schedule it again, directly or through a
+// timer helper. A one-shot frame scheduled from a hot handler stays covered as
+// part of that handler's reachable work.
+test('a one-shot animation frame is not hot, an animation loop is, and a hot handler covers the frames it schedules', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { entrypoints, hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function scheduleFrame(callback) { return window.requestAnimationFrame(callback); }
+    function openPanel() { requestAnimationFrame(() => state.rows.forEach(row => row.open = true)); }
+    function afterPaint() { scheduleFrame(measureRows); }
+    function measureRows() { state.rows.forEach(row => row.measured = true); }
+    function animate() { state.rows.forEach(row => row.step()); requestAnimationFrame(animate); }
+    function tween() { scheduleFrame(step); }
+    function step() { state.rows.forEach(row => row.step()); tween(); }
+    function install(root) {
+      root.addEventListener('scroll', () => { scheduleFrame(renderRows); });
+    }
+    function renderRows() { state.rows.forEach(row => row.render()); }
+  ` });
+  const hot = Object.fromEntries(entrypoints.map(item => [item.key.split('#')[1], item.hot]));
+  assert.deepEqual(hot, {
+    'afterPaint:timer:scheduleFrame': false,
+    'animate:timer:requestAnimationFrame': true,
+    'install:event:scroll': true,
+    'install:timer:scheduleFrame': false,
+    'openPanel:timer:requestAnimationFrame': false,
+    'scheduleFrame:timer:requestAnimationFrame': false,
+    'tween:timer:scheduleFrame': true,
+  });
+  const hotHazards = hazards.filter(hazard => hazard.hot).map(hazard => [hazard.entrypoint.split('#')[1], hazard.operation, hazard.via.at(-1) || '<handler>']);
+  assert.deepEqual(hotHazards, [
+    ['animate:timer:requestAnimationFrame', 'forEach', '<handler>'],
+    ['install:event:scroll', 'forEach', 'renderRows'],
+    ['tween:timer:scheduleFrame', 'forEach', '<handler>'],
   ]);
 });
 

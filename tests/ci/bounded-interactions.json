@@ -8364,22 +8364,6 @@
       "proof": "static"
     },
     {
-      "id": "py:services/edit_state.py#refresh_changed_files_in_cache",
-      "action": "Run refresh refresh_changed_files_in_cache",
-      "entrypoints": [
-        "py:music_app/services/edit_state.py#refresh_changed_files_in_cache:refresh:name"
-      ],
-      "owners": [
-        "music_app/services/edit_state.py"
-      ],
-      "rules": [
-        "BI-07",
-        "BI-08"
-      ],
-      "workClass": "background-batch",
-      "proof": "static"
-    },
-    {
       "id": "py:services/gallery_projection_postgres.py#_publish_gallery_projection_on_connection",
       "action": "Run publisher _publish_gallery_projection_on_connection",
       "entrypoints": [
@@ -8483,22 +8467,6 @@
       ],
       "owners": [
         "music_app/services/library_event_coordinator.py"
-      ],
-      "rules": [
-        "BI-07",
-        "BI-08"
-      ],
-      "workClass": "background-batch",
-      "proof": "static"
-    },
-    {
-      "id": "py:services/library_hydration.py#refresh_cached_cover_paths_in_library_state",
-      "action": "Run refresh refresh_cached_cover_paths_in_library_state",
-      "entrypoints": [
-        "py:music_app/services/library_hydration.py#refresh_cached_cover_paths_in_library_state:refresh:name"
-      ],
-      "owners": [
-        "music_app/services/library_hydration.py"
       ],
       "rules": [
         "BI-07",
@@ -9065,22 +9033,6 @@
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
-    },
-    {
-      "id": "py:services/state.py#refresh_cached_cover_paths_for_state",
-      "action": "Run refresh refresh_cached_cover_paths_for_state",
-      "entrypoints": [
-        "py:music_app/services/state.py#refresh_cached_cover_paths_for_state:refresh:name"
-      ],
-      "owners": [
-        "music_app/services/state.py"
-      ],
-      "rules": [
-        "BI-07",
-        "BI-08"
-      ],
-      "workClass": "background-batch",
       "proof": "static"
     },
     {

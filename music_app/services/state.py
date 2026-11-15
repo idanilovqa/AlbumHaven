@@ -67,6 +67,9 @@ _CACHE_LOCK = threading.Lock()
 _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-scan")
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _HYDRATION_REQUEST_LOCK = threading.Lock()
+# Readers poll status every few seconds; a failed hydration waits this long
+# before the next reader may queue another database attempt.
+_HYDRATION_RETRY_SECONDS = 5.0
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
 _MBID_ASSERTION_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-mbid")
 _RELATION_REBUILD_LOCK = threading.Lock()
@@ -530,6 +533,7 @@ def init_state(app) -> None:
         "relation_projection_duration_ms": 0.0,
         "hydrate_in_progress": False,
         "hydration_settled": False,
+        "hydration_attempted_at": None,
         "covers_in_progress": False,
         "covers_processed": 0,
         "covers_completed": 0,
@@ -1439,7 +1443,7 @@ def request_library_hydration_for_state(
     queues the single background hydration owner and the caller answers with
     a pending state. An attempt that completed without albums settles, and
     scans publish the inventory from then on; a failed attempt is retried by
-    the next reader.
+    the first reader after the retry interval.
     """
     if _library_inventory_ready(library_state):
         return True
@@ -1448,6 +1452,11 @@ def request_library_hydration_for_state(
             return True
         if library_state.get("hydrate_in_progress"):
             return False
+        now = time.monotonic()
+        attempted_at = library_state.get("hydration_attempted_at")
+        if attempted_at is not None and now - attempted_at < _HYDRATION_RETRY_SECONDS:
+            return False
+        library_state["hydration_attempted_at"] = now
         library_state["hydrate_in_progress"] = True
     _HYDRATE_EXECUTOR.submit(
         _hydrate_library_state_worker,
@@ -1468,7 +1477,7 @@ def _hydrate_library_state_worker(
     validate_cache: bool,
     enable_prewarm: bool = True,
 ) -> None:
-    settled = False
+    settled = hydrated = False
     try:
         hydrated = hydrate_library_state_for_config(
             library_state,
@@ -1478,8 +1487,6 @@ def _hydrate_library_state_worker(
             logger_for_prewarm=logger if enable_prewarm else None,
         )
         settled = True
-        if hydrated and not enable_prewarm:
-            _prewarm_root_browse_payload_for_state(library_state, config, logger)
     except Exception as exc:
         # A failed attempt stays unsettled so the next reader queues a retry.
         library_state["last_error"] = str(exc)
@@ -1493,6 +1500,14 @@ def _hydrate_library_state_worker(
             if settled:
                 library_state["hydration_settled"] = True
             library_state["hydrate_in_progress"] = False
+    if hydrated and not enable_prewarm:
+        # The inventory is already published; a failed prewarm only leaves the
+        # first browse to build its payload, so it is not a hydration failure.
+        try:
+            _prewarm_root_browse_payload_for_state(library_state, config, logger)
+        except Exception:
+            if logger is not None:
+                logger.exception("Root browse prewarm failed after library hydration")
 
 
 def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object]) -> None:

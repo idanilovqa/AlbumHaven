@@ -1297,8 +1297,38 @@ def test_request_library_hydration_retries_after_a_failed_background_attempt(con
 
     assert library_state["hydration_settled"] is False
     assert library_state["hydrate_in_progress"] is False
+    # Status polls inside the retry interval queue no database attempt.
+    for _poll in range(10):
+        assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    assert executor.queued == []
+    library_state["hydration_attempted_at"] -= state_module._HYDRATION_RETRY_SECONDS
     assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
     assert len(executor.queued) == 1
+
+
+def test_hydrate_worker_reports_a_failed_prewarm_without_failing_the_published_hydration(config, logger, monkeypatch):
+    library_state = {"hydrate_in_progress": True, "hydration_settled": False, "last_error": None, "albums": ["album-1"]}
+    monkeypatch.setattr(state_module, "hydrate_library_state_for_config", lambda *_args, **_kwargs: True)
+
+    def fail_prewarm(*_args):
+        # The inventory is published before the prewarm starts.
+        assert library_state["hydration_settled"] is True
+        assert library_state["hydrate_in_progress"] is False
+        raise RuntimeError("view payload failed")
+
+    monkeypatch.setattr(state_module, "_prewarm_root_browse_payload_for_state", fail_prewarm)
+
+    state_module._hydrate_library_state_worker(
+        library_state,
+        config,
+        logger,
+        ensure_relations=False,
+        validate_cache=False,
+        enable_prewarm=False,
+    )
+
+    assert library_state["last_error"] is None
+    assert logger.exception_messages == [("Root browse prewarm failed after library hydration", ())]
 
 
 def test_request_library_hydration_retries_after_persistence_adapter_was_unavailable(config, logger, monkeypatch):
@@ -1330,6 +1360,7 @@ def test_request_library_hydration_retries_after_persistence_adapter_was_unavail
         "Background library hydration deferred: %s",
     ]
 
+    library_state["hydration_attempted_at"] -= state_module._HYDRATION_RETRY_SECONDS
     assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
     function, args, kwargs = executor.queued.pop()
     function(*args, **kwargs)

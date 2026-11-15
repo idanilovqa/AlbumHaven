@@ -3886,18 +3886,36 @@
     },
     {
       "id": "js:runtime/mobile-navigation.js#restoreMobileGalleryParent",
-      "action": "requestAnimationFrame timers installed by restoreMobileGalleryParent",
+      "action": "Reapply a mobile gallery parent's saved scroll anchor on the frame after returning from a child page",
       "entrypoints": [
         "js:music_app/static/js/runtime/mobile-navigation.js#restoreMobileGalleryParent:timer:requestAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/mobile-navigation.js"
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "animationFrames": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI mobile gallery return frame restores the saved anchor by index at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the virtual grid rendered-section index; the return frame then scans every loaded section for the saved anchor occurrence again, with no data or API change."
     },
     {
       "id": "js:runtime/mobile-navigation.js#restoreMobileLoopListScroll",

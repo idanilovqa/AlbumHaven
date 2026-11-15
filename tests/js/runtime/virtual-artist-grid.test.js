@@ -6990,3 +6990,47 @@ test('BI deferred cover resume frame waits for grid settlement without touching 
   });
   assert.deepEqual(large, small);
 });
+
+const mobileNavigationPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'mobile-navigation.js');
+
+test('BI mobile gallery return frame restores the saved anchor by index at production scale', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const returnFrame = async (artistCount) => {
+    const gallery = loadCountedGallery(artistCount);
+    const { context, counter, frames, scrollEl, virtualGrid } = gallery;
+    vm.runInContext(fs.readFileSync(mobileNavigationPath, 'utf8'), context, { filename: mobileNavigationPath });
+    context.window.history = { state: {} };
+    context.handleGalleryBootstrapPopState = () => {};
+    let chromeUpdates = 0;
+    context.updateGalleryMainChrome = () => { chromeUpdates += 1; };
+    context.requestAnimationFrame = callback => context.scheduleBrowserAnimationFrame(callback);
+    const index = artistCount - 2;
+    const section = artistSection(virtualGrid, `Artist ${index}`);
+    // The saved parent anchor names an album whose card is not mounted.
+    const parentScrollAnchor = {
+      scrollLeft: 0,
+      scrollTop: section.top + 50,
+      albumKey: `album-${index}`,
+      albumName: `Album ${index}`,
+      albumYear: '2000',
+      sectionOccurrenceKey: virtualGrid.getRenderedSectionKey(section),
+      offsetTop: 10,
+    };
+    context.restoreMobileGalleryParent({ parentScrollAnchor });
+    assert.equal(frames.size >= 1, true, 'the return schedules its settling frame');
+    scrollEl.scrollTop = 0;
+    const counts = await counter.measure(() => gallery.runFrame(Math.max(...frames.keys())));
+    assert.equal(scrollEl.scrollTop, section.top + virtualGrid.sectionHeaderHeight + section.blockOffsets[0] - 10);
+    assert.equal(chromeUpdates, 1, 'the settled return updates the gallery chrome once');
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/mobile-navigation.js#restoreMobileGalleryParent',
+    small: 20,
+    large: 14000,
+    run: returnFrame,
+    budgets: { itemsVisited: 0, animationFrames: 0, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+});

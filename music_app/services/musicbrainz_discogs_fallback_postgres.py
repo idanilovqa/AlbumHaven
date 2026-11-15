@@ -44,6 +44,12 @@ class DiscogsFallbackPostgresRepository(EnrichmentJobQueue):
                 on discogs.library_id = matches.library_id and discogs.local_artist_id = matches.local_artist_id
               where (%(local_artist_id)s::bigint is null or matches.local_artist_id = %(local_artist_id)s::bigint)
                 and (discogs.local_artist_id is null or discogs.observed_at < %(observed_at)s - interval '30 days')
+                -- An artist whose fallback used up its retries rests a week before the next try.
+                and not exists (
+                  select 1 from ops.metadata_enrichment_jobs recent
+                  where recent.library_id = matches.library_id and recent.local_artist_id = matches.local_artist_id
+                    and recent.job_kind = %(job_kind)s and recent.state = 'exhausted'
+                    and recent.updated_at > %(observed_at)s - interval '7 days')
                 and exists (select 1 from library.local_albums albums
                             join library.local_tracks tracks
                               on tracks.library_id = albums.library_id and tracks.album_id = albums.id

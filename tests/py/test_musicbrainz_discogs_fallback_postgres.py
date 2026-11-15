@@ -130,3 +130,17 @@ def test_a_discogs_outage_retries_and_stores_nothing(monkeypatch):
     assert processor.process_next(worker_id="w")["state"] == "retry_wait"
     identity, albums, flags, _requeued = _state(setup_url, ids["crows"])
     assert (identity, albums, flags) == (None, [], [])
+
+
+def test_an_artist_whose_fallback_used_up_its_retries_rests_a_week(monkeypatch):
+    from datetime import timedelta
+    from music_app.services.musicbrainz_discogs_fallback_postgres import JOB_KIND
+
+    setup_url, repository, ids, _albums = _seed(monkeypatch)
+    assert repository.enqueue(reason="test", observed_at=NOW) == 1
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update ops.metadata_enrichment_jobs set state = 'exhausted', updated_at = %s"
+                           " where job_kind = %s", (NOW, JOB_KIND))
+    assert repository.enqueue(reason="test", observed_at=NOW + timedelta(hours=1)) == 0
+    # The negative: after a week it is tried again.
+    assert repository.enqueue(reason="test", observed_at=NOW + timedelta(days=8)) == 1

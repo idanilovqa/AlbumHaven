@@ -198,3 +198,41 @@ def test_a_discogs_artist_named_only_in_another_script_is_not_matched_yet():
 def test_disc_positions_are_read_from_discogs_track_positions():
     from music_app.services.discogs_metadata import _disc
     assert [_disc(position) for position in ("1-3", "CD2-4", "2.07", "3", "A1", "")] == [1, 2, 2, 1, 1, 1]
+
+
+def test_an_artist_discogs_has_removed_is_skipped_not_retried():
+    # Discogs search listed Unforgettable H2O's artist 7870619; its releases answer 404.
+    from music_app.services.discogs_metadata import NOT_FOUND
+
+    def get_json(path, params):
+        if path == "/database/search":
+            return {"results": [{"id": 7870619, "title": "3 Crows"}]}
+        return {NOT_FOUND: True}
+
+    outcome = resolve_with_discogs(_local(), discogs=DiscogsMetadataClient(get_json), musicbrainz=_MusicBrainz())
+    assert (outcome["classification"], outcome["albums"]) == ("not_found", [])
+
+
+def test_the_discogs_request_keeps_a_404_apart_from_an_outage(monkeypatch):
+    import io
+    import urllib.error
+    from music_app.services import discogs_metadata as module
+
+    monkeypatch.setattr(module, "_MIN_INTERVAL_SECONDS", 0)
+
+    def answer(status):
+        def urlopen(request, timeout):
+            assert "secret" not in request.full_url and "key=" not in request.full_url
+            if status == 200:
+                return io.BytesIO(b'{"name": "Sonda"}')
+            raise urllib.error.HTTPError(request.full_url, status, "x", {}, None)
+        return urlopen
+
+    class Config:
+        DISCOGS_API_BASE_URL = "https://api.discogs.test"
+        DISCOGS_CONSUMER_KEY = "k"
+        DISCOGS_CONSUMER_SECRET = "s"
+
+    for status, expected in ((200, {"name": "Sonda"}), (404, {module.NOT_FOUND: True}), (429, None), (503, None)):
+        monkeypatch.setattr("urllib.request.urlopen", answer(status))
+        assert module.discogs_get_json("/releases/1", {}, user_agent="Test", config=Config) == expected

@@ -8,12 +8,52 @@ agent). Each method returns plain projections of the fields the fallback reads.
 from __future__ import annotations
 
 import re
+import threading
+import time
 from collections.abc import Callable
 
 JsonDict = dict[str, object]
 # ``get_json(path, params) -> dict | None``; None is a provider failure (rate limit,
 # network, authentication), never "not found".
 DiscogsGetter = Callable[[str, dict[str, object]], "JsonDict | None"]
+_PACE = threading.Lock()
+_LAST_REQUEST = [0.0]
+_MIN_INTERVAL_SECONDS = 1.05
+# The answer a getter gives for Discogs' 404: the entity does not exist (not an outage).
+NOT_FOUND = "__not_found__"
+
+
+def discogs_get_json(path: str, params: dict[str, object], *, user_agent: str, config=None,
+                     timeout: float = 15.0) -> JsonDict | None:
+    """One authenticated Discogs database request that keeps a 404 apart from an outage
+    (the cover providers' transport reports both as no payload). None for network errors,
+    rate limits and server errors, which the job retries later."""
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    from config import Config
+    from music_app.services.cover_provider_discogs import discogs_auth_headers
+
+    config = config or Config
+    with _PACE:
+        # Discogs allows 60 authenticated requests a minute.
+        wait = _LAST_REQUEST[0] + _MIN_INTERVAL_SECONDS - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_REQUEST[0] = time.monotonic()
+    base = str(getattr(config, "DISCOGS_API_BASE_URL", "") or "https://api.discogs.com").rstrip("/")
+    query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None})
+    request = urllib.request.Request(f"{base}{path}" + (f"?{query}" if query else ""), headers={
+        "User-Agent": user_agent, "Accept": "application/json", **discogs_auth_headers(config=config)})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return {NOT_FOUND: True} if error.code == 404 else None
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return None
 _DURATION = re.compile(r"^(?:(\d+):)?(\d{1,3}):(\d{2})$")
 _TRAILING_NUMBER = re.compile(r"\s+\(\d+\)$")
 
@@ -55,6 +95,9 @@ class DiscogsMetadataClient:
         payload = self._get_json(path, {key: value for key, value in params.items() if value is not None})
         if payload is None:
             return {"classification": "provider_unavailable"}
+        if isinstance(payload, dict) and payload.get(NOT_FOUND):
+            # A search can list an artist Discogs has since removed or merged.
+            return {"classification": "not_found"}
         if not isinstance(payload, dict):
             return {"classification": "invalid_response"}
         return {"classification": "complete", "payload": payload}

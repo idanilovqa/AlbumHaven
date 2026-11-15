@@ -413,3 +413,14 @@ test('Album Details callers use presentation-only title and year values', () => 
   assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
 });
+
+test('album details show the MusicBrainz release type, else the local tag', () => {
+  const context = loadComponents();
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'ALBUM', musicbrainz_release: { type_label: 'Live' } }), 'Live');
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'EP', musicbrainz_release: { type_label: null } }), 'EP');
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'EP' }), 'EP');
+  assert.equal(context.albumDetailsReleaseType({}), 'ALBUM');
+  const tagEditorSource = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
+  assert.match(tagEditorSource, /releaseType:\s*albumDetailsReleaseType\(album\)/);
+});

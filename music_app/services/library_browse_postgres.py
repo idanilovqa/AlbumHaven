@@ -8250,17 +8250,22 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
 
 def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[object]) -> dict[str, object] | None:
     """The album's MusicBrainz release decision for album details: where the main album
-    ends (as the last main disc number) and the track artists shown for tags that lost them.
-    Display only; tags never change here."""
+    ends (as the last main disc number), the release type and the track artists shown for
+    tags that lost them. Display only; tags never change here."""
+    from music_app.services.musicbrainz_release_identity import release_type_label
+
     if not album_id:
         return None
     rows = connection.execute(
         """
         select decision.state, decision.release_group_mbid::text, decision.release_mbid::text,
-               decision.main_disc_count, decision.main_disc_source, decision.track_artists
+               decision.main_disc_count, decision.main_disc_source, decision.track_artists,
+               release_group.primary_type, release_group.secondary_types
         from library.local_albums album
         join library.local_album_musicbrainz_releases decision
           on decision.library_id = album.library_id and decision.album_key = album.album_key
+        join integration.musicbrainz_release_groups release_group
+          on release_group.mbid = decision.release_group_mbid
         where album.id = %(album_id)s and decision.state <> 'unresolved'
         """,
         {"album_id": album_id},
@@ -8279,6 +8284,8 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
         "release_mbid": row.get("release_mbid") or None,
         # Discs after this number are bonus discs; absent keeps the local guess.
         "last_main_disc_number": discs[count - 1] if 0 < count <= len(discs) and count < len(discs) else None,
+        # Absent keeps the local tag's type.
+        "type_label": release_type_label(row.get("primary_type"), row.get("secondary_types")),
         "track_artists": [item for item in track_artists or [] if isinstance(item, Mapping) and item.get("artist")],
     }
 

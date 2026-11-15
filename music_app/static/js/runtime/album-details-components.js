@@ -23,6 +23,11 @@ function albumTaggedArtistNote(album) {
     : '';
 }
 
+// MusicBrainz's release type ("Live", "EP • Live"; owner 2026-11-15) wins over the local tag.
+function albumDetailsReleaseType(album) {
+  return album?.musicbrainz_release?.type_label || album?.release_type || 'ALBUM';
+}
+
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';

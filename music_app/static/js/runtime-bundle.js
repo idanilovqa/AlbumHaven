@@ -5297,6 +5297,11 @@ function albumTaggedArtistNote(album) {
     : '';
 }
 
+// MusicBrainz's release type ("Live", "EP • Live"; owner 2026-11-15) wins over the local tag.
+function albumDetailsReleaseType(album) {
+  return album?.musicbrainz_release?.type_label || album?.release_type || 'ALBUM';
+}
+
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';
@@ -38982,7 +38987,7 @@ function renderTrackModalRelease(album) {
       artist: albumDisplayArtist(album),
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
+      releaseType: albumDetailsReleaseType(album),
       tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),

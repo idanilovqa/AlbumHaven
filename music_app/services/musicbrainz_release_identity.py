@@ -300,6 +300,17 @@ def credit_text(credit: list[dict[str, object]]) -> str:
                    for part in credit or []).strip()
 
 
+def release_type_label(primary_type: object, secondary_types: object) -> str | None:
+    """The release type album details show (owner 2026-11-15): an Album with secondary types
+    is only those ("Live", "Compilation"), a plain Album is "Album", and any other primary type
+    stays first ("EP • Live", "Single"). None without types, so the local tag keeps showing."""
+    primary = str(primary_type or "").strip()
+    secondary = [str(kind).strip() for kind in secondary_types if str(kind or "").strip()] \
+        if isinstance(secondary_types, (list, tuple)) else []
+    parts = secondary if secondary and primary.casefold() == "album" else [primary, *secondary]
+    return " • ".join(part for part in parts if part) or None
+
+
 def _same_track_title(local: object, remote: object) -> bool:
     """The matcher's own track-title agreement: brackets, spacing and ID3v1 truncation aside."""
     return bool(_track_title_forms(local) & _track_title_forms(remote)) or _starts_remote_title(

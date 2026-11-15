@@ -263,3 +263,37 @@ def test_only_a_mixed_mode_disc_may_hold_one_more_track_than_the_rip():
     assert _audio_track_count_may_be({"discs": [{"track_count": 7, "format": "Mixed Mode CD"}]}, 6)
     assert _audio_track_count_may_be({"discs": [{"track_count": 7, "format": "Mixed Mode CD"}]}, 7)
     assert not _audio_track_count_may_be({"discs": [{"track_count": 7, "format": "CD"}]}, 6)
+
+
+# Release type in album details (owner 2026-11-15): "Live", not "Album • Live".
+def test_an_album_with_secondary_types_shows_only_the_secondary_types():
+    from music_app.services.musicbrainz_release_identity import release_type_label
+    assert release_type_label("Album", ["Live"]) == "Live"
+    assert release_type_label("Album", ["Compilation"]) == "Compilation"
+    assert release_type_label("album", ["Demo"]) == "Demo"
+    assert release_type_label("Album", ["Soundtrack", "Live"]) == "Soundtrack • Live"
+
+
+def test_a_plain_album_shows_album():
+    from music_app.services.musicbrainz_release_identity import release_type_label
+    assert release_type_label("Album", []) == "Album"
+    assert release_type_label("Album", None) == "Album"
+
+
+def test_a_primary_type_other_than_album_stays_first():
+    from music_app.services.musicbrainz_release_identity import release_type_label
+    assert release_type_label("EP", ["Live"]) == "EP • Live"
+    assert release_type_label("Single", []) == "Single"
+    assert release_type_label("Other", ["Soundtrack"]) == "Other • Soundtrack"
+
+
+def test_secondary_types_without_a_primary_type_show_alone():
+    from music_app.services.musicbrainz_release_identity import release_type_label
+    assert release_type_label(None, ["Compilation"]) == "Compilation"
+
+
+def test_without_musicbrainz_types_the_local_tag_keeps_the_type():
+    from music_app.services.musicbrainz_release_identity import release_type_label
+    assert release_type_label(None, []) is None
+    assert release_type_label("", ["", "  "]) is None
+    assert release_type_label(None, "Live") is None, "a malformed stored value is not a type list"

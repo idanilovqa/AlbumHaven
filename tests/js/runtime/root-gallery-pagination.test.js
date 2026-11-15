@@ -499,7 +499,9 @@ test('stale cursor recovery reloads only the window around the visible album', a
   assert.equal(f.state.view.gallery_page.previous_cursor, 'before-window');
   assert.equal(f.state.view.gallery_page.next_cursor, 'after-window');
   assert.equal(f.renders.length, 1);
-  assert.equal(f.renders[0].semanticScrollAnchor.albumKey, 'retained-12000', 'the visible album keeps its place');
+  assert.equal(f.renders[0].semanticScrollAnchor, f.semanticScrollAnchor, 'the visible album keeps its on-screen offset');
+  assert.deepEqual([f.renders[0].semanticScrollAnchor.albumKey, f.renders[0].semanticScrollAnchor.offset], ['retained-12000', 24]);
+  assert.equal(f.renders[0].semanticScrollOwnerGeneration, 7, 'restoration is skipped only if the user scrolled meanwhile');
 });
 
 test('stale cursor recovery anchors at the nearest surviving neighbour of a deleted visible artist', async () => {

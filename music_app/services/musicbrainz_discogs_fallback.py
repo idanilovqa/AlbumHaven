@@ -131,16 +131,29 @@ def _match_albums(candidate, albums, local_name, discogs, budget) -> list[dict[s
             release = (found or {}).get("release")
             if not release:
                 continue
-            signals = album_signals(album, {"first_release_date": release.get("year") or item.get("year"),
-                                            "tracks": release["tracks"]})
-            if album_level(agreement, signals) == "strong" and _CERTAIN <= signals:
-                matched.append({"local_album_id": album.get("id"), "local_title": album["title"],
-                                "discogs_release_id": release["id"], "discogs_master_id": release.get("master_id"),
-                                "discogs_title": release["title"], "discogs_year": release.get("year"),
-                                "barcodes": release["barcodes"], "signals": sorted(signals),
-                                "tracks": release["tracks"]})
+            found_album = _certain_album(album, agreement, release, release.get("year") or item.get("year"))
+            if found_album:
+                matched.append(found_album)
                 break
     return matched
+
+
+def _certain_album(album, agreement, release, year) -> dict[str, object] | None:
+    """The release, or one disc of a multi-disc release (a local album of disc 1 of Keep
+    Rockin's two CDs), when its title, track titles and track count agree."""
+    discs = sorted({track["disc"] for track in release["tracks"]})
+    candidates = [(None, release["tracks"])]
+    if len(discs) > 1:
+        candidates += [(disc, [track for track in release["tracks"] if track["disc"] == disc]) for disc in discs]
+    for disc, tracks in candidates:
+        signals = album_signals(album, {"first_release_date": year, "tracks": tracks})
+        if album_level(agreement, signals) == "strong" and _CERTAIN <= signals:
+            return {"local_album_id": album.get("id"), "local_title": album["title"],
+                    "discogs_release_id": release["id"], "discogs_master_id": release.get("master_id"),
+                    "discogs_title": release["title"], "discogs_year": release.get("year"), "disc_position": disc,
+                    # The whole release is stored; ``disc_position`` names the disc that matched.
+                    "barcodes": release["barcodes"], "signals": sorted(signals), "tracks": release["tracks"]}
+    return None
 
 
 def _musicbrainz(method, *args):

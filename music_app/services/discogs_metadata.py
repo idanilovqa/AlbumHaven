@@ -32,6 +32,15 @@ def artist_name(value: object) -> str:
     return _TRAILING_NUMBER.sub("", str(value or "").strip())
 
 
+# "1-3", "CD2-4", "2.07": the disc before the separator; a plain "3" or "A1" is disc 1.
+_DISC_POSITION = re.compile(r"^(?:cd|dis[ck])?\s*(\d+)[-.]\d", re.IGNORECASE)
+
+
+def _disc(position: object) -> int:
+    match = _DISC_POSITION.match(str(position or "").strip())
+    return int(match.group(1)) if match else 1
+
+
 def _credits(items: object) -> list[JsonDict]:
     return [{"id": int(item["id"]), "name": artist_name(item.get("name")), "anv": str(item.get("anv") or "") or None,
              "join": str(item.get("join") or "")}
@@ -97,7 +106,8 @@ class DiscogsMetadataClient:
             return found
         payload = found["payload"]
         tracks = [
-            {"position": str(track.get("position") or ""), "title": str(track.get("title") or ""),
+            {"position": str(track.get("position") or ""), "disc": _disc(track.get("position")),
+             "title": str(track.get("title") or ""),
              "length": duration_ms(track.get("duration")), "artists": _credits(track.get("artists"))}
             for track in payload.get("tracklist") or []
             # Headings and index entries are not tracks.

@@ -4,7 +4,12 @@ owner-named cases are added as recorded answers once Discogs access is approved.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from urllib.parse import urlparse
+
 from music_app.services.discogs_metadata import DiscogsMetadataClient, artist_name, duration_ms
+from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_discogs_fallback import resolve_with_discogs
 
 TRACKS = [("Opening", 200), ("Middle", 250), ("Closing", 300)]
@@ -136,3 +141,60 @@ def test_an_outage_on_either_side_retries_instead_of_calling_it_absent():
                                 musicbrainz=_MusicBrainz())["classification"] == "provider_unavailable"
     assert resolve_with_discogs(_local(), discogs=_discogs(), musicbrainz=_MusicBrainz(fail=True))[
         "classification"] == "provider_unavailable"
+
+
+# Owner-named fallback cases, replayed from real Discogs and mirror answers recorded once on
+# sandbox6. Tests never call Discogs: any request the recording lacks fails the test.
+
+_RECORDED = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "musicbrainz"
+                         / "delivery-2-discogs-fallback.json").read_text(encoding="utf-8"))
+_CASES = {case["case"]: case["context"] for case in _RECORDED["cases"]}
+
+
+def _replayed(name):
+    def discogs_get(path, params):
+        key = path + "?" + json.dumps(params, sort_keys=True)
+        assert key in _RECORDED["discogs"], f"unrecorded Discogs request {key}"
+        return _RECORDED["discogs"][key]
+
+    def mirror_get(url, _agent, **_kwargs):
+        parsed = urlparse(url)
+        key = parsed.path.replace("/ws/2", "") + "?" + parsed.query
+        assert key in _RECORDED["mirror"], f"unrecorded mirror request {key}"
+        return _RECORDED["mirror"][key], {"status": "network", "http_status": 200, "cache_hit": False}
+
+    return resolve_with_discogs(_CASES[name], discogs=DiscogsMetadataClient(discogs_get),
+                                musicbrainz=MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2",
+                                                              user_agent="Test", get_json=mirror_get))
+
+
+def test_a_release_only_discogs_has_keeps_its_discogs_ids_and_is_flagged_for_contribution():
+    outcome = _replayed("Richard Neylon")
+    assert (outcome["classification"], outcome["discogs_artist"]["id"]) == ("found", 5729722)
+    assert [(album["local_title"], album["discogs_release_id"]) for album in outcome["albums"]] == [("Sonda", 11963767)]
+    assert outcome["remote_info_needed"] is True
+
+
+def test_a_local_album_can_be_one_disc_of_a_two_disc_discogs_release():
+    # Keep Rockin' "Screaming Out Your Name": two CDs of 11 tracks, the local album is CD 1.
+    [album] = _replayed("Keep Rockin'")["albums"]
+    assert (album["discogs_release_id"], album["disc_position"]) == (10395128, 1)
+    # The whole two-CD tracklist is kept for the release, not just the matched disc.
+    assert len(album["tracks"]) == 22
+
+
+def test_an_edition_with_other_tracks_never_proves_the_album():
+    # Yossi Sassi Band "Roots and Roads": Discogs has only a 15-track limited edition and the
+    # local album has 12 tracks, so the owner's certainty bar (title, titles, count) is not met.
+    outcome = _replayed("Yossi Sassi Band")
+    assert (outcome["classification"], outcome["albums"]) == ("not_found", [])
+
+
+def test_a_discogs_artist_named_only_in_another_script_is_not_matched_yet():
+    # Ktzat Acheret is "קצת אחרת" on Discogs; matching needs transliteration (Delivery 2 S7).
+    assert _replayed("Ktzat Acheret")["classification"] == "not_found"
+
+
+def test_disc_positions_are_read_from_discogs_track_positions():
+    from music_app.services.discogs_metadata import _disc
+    assert [_disc(position) for position in ("1-3", "CD2-4", "2.07", "3", "A1", "")] == [1, 2, 2, 1, 1, 1]

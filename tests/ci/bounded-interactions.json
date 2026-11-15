@@ -1225,7 +1225,7 @@
     },
     {
       "id": "js:runtime/bootstrap-init.js#runHydration",
-      "action": "fetchAndRender requests installed by runHydration",
+      "action": "Hydrate the startup view for Home, the root gallery, and a selected artist",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-init.js#runHydration:request:fetchAndRender"
       ],
@@ -1237,7 +1237,42 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": [
+          "/album-details",
+          "/utilities/problematic-files"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-init-playback-ownership.test.js",
+      "testIdentity": "request capture: startup hydration requests its own view endpoint once",
+      "performanceTargets": [
+        "all-artists",
+        "selected-artist",
+        "root-album-browse",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "gallery-artwork-diversity"
+      ],
+      "rollback": "Test-only request-capture contract (plus a harness hook); startup hydration is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-utility-event-handlers.js#bindCoverLookupFileInput",

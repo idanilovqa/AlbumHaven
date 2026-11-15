@@ -317,6 +317,16 @@ def test_a_list_like_name_is_featured_in_and_a_plain_name_is_not(monkeypatch):
     assert (kinds["The Bestiary Saga"], kinds["Topographic Oceans"]) == ("series", "series")
 
 
+def test_chart_and_list_names_are_featured_in_and_band_or_word_lookalikes_are_not(monkeypatch):
+    setup_url, _library = _database(monkeypatch)
+    lists = ["Billboard 200: 2022-02-12", "UK Albums Chart", "The Wire: 2005 Rewind", "Year-End Albums 2019",
+             "Album of the Year", "Readers' Poll 2010", "Village Voice Critics", "Justin Stranzl: Best of 1999"]
+    series = ["Best of Bowie", "Chartreuse Sessions", "The Rewinder Tapes", "King Crimson Collectors' Club"]
+    kinds = _kinds(setup_url, [(name, "Release group series", 5) for name in lists + series])
+    assert {name: kinds[name] for name in lists} == dict.fromkeys(lists, "featured_in")
+    assert {name: kinds[name] for name in series} == dict.fromkeys(series, "series")
+
+
 def test_the_owners_kind_always_wins_and_a_hidden_series_shows_nowhere(monkeypatch):
     from music_app.services.library_browse_postgres import _album_musicbrainz_series
 

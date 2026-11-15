@@ -89,13 +89,38 @@ operate, or contribute to the application.
   analyzed as part of any hot entrypoint that schedules it); Mutation, Resize,
   Intersection, and Performance observers; workers; and every Python route and
   background entrypoint (watchers, pollers, schedulers, reconcilers,
-  refresh/publish, thread and executor targets). Otherwise the entry needs a
+  refresh/publish, thread and executor targets, including a lambda, `partial`,
+  or function passed to a helper that hands that parameter to `submit`,
+  `Thread(target=)`, or `run_in_executor`). On a hot JavaScript path a call that
+  resolves to no code is itself an `unresolved-call` hazard unless a real
+  browser defines the name (`scripts/ci/bounded-interaction-platform-names.json`,
+  regenerated with `node scripts/ci/bounded-interaction-platform-names.cjs
+  --write`) or the application never defines it; discovery resolves `const`
+  aliases, singleton aliases, object-literal and published API members,
+  inherited methods, and parameters through their call sites first. Limit: an
+  application method that shares a platform method's name is followed only
+  when its receiver resolves. A listener's event name must resolve (a literal,
+  a `const`, a constant list, an object literal's keys, or a helper's call
+  sites); otherwise validation fails with `unresolved-trigger`. A Python
+  background entrypoint may reach registered library-scale work, and any
+  entrypoint may loop over or copy a registered `libraryStateCollections` key
+  of the in-memory library state, only under a contract proving batching,
+  coalescing, and convergence (routes still reject library-scale work).
+  Library-state scans are found only on receivers evidenced as library state
+  (a `library_state` name, `_library_state(...)`, a `.library_state`
+  attribute, or one local alias of a registered collection); a scan through
+  any other name is not seen. Otherwise the entry needs a
   deterministic contract that runs the real code at a small and a
   production-calibration cardinality and asserts absolute operation budgets and
   growth
   (`tests/js/helpers/bounded-interaction-counter.js`,
-  `tests/py/bounded_interactions.py`). Interactive work never declares
-  `library-size`; there are no allowlists, waivers, or baselines.
+  `tests/py/bounded_interactions.py`). A contract measures under its entry's
+  own registered id (an unknown id is an error), or under each id of an
+  explicit `measures` list of registered contracts; the gate fails unless the
+  entry's `testIdentity` (the exact name of a real test declaration) measured
+  it. A helper-level test never proves a route or worker it does not drive.
+  Interactive work never declares `library-size`; there are no allowlists,
+  waivers, or baselines.
 - Every other JavaScript entrypoint (click, change, submit, keydown, load and
   other one-shot events, one-shot `setTimeout`, request owners) is not forced
   to prove its call chain, but still fails for a dedicated surface routed

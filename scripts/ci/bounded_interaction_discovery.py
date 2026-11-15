@@ -394,6 +394,88 @@ def _direct_hazards(definition: Definition, looped: bool) -> list[dict[str, obje
     return hazards
 
 
+# Library-state scans. The in-memory library state holds the whole library in
+# registered collections (`library_state["albums"]`); a loop, comprehension, or
+# copy over one of them is library-sized work. A receiver is library state only
+# by evidence: a parameter or variable named `library_state`, or a variable
+# bound from `_library_state(...)` or a `.library_state` attribute. One local
+# alias (`albums = library_state.get("albums", [])`) is followed.
+COPYING_CALLS = {"list", "sorted", "tuple", "set", "dict", "frozenset", "enumerate", "reversed"}
+VIEW_METHODS = {"values", "items", "keys", "copy"}
+
+
+def _is_library_state(node: ast.AST, state_names: set[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in state_names
+    if isinstance(node, ast.Attribute):
+        return node.attr == "library_state"
+    return isinstance(node, ast.Call) and _call_name(node)[1] == "_library_state"
+
+
+def _library_collection(node: ast.AST, state_names: set[str], aliases: dict[str, str], collections: set[str]) -> str | None:
+    """The registered collection an expression reads, through copies and views."""
+    while True:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in COPYING_CALLS and node.args:
+            node = node.args[0]
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in VIEW_METHODS and not node.args:
+            node = node.func.value
+        elif isinstance(node, ast.BoolOp):
+            found = [_library_collection(value, state_names, aliases, collections) for value in node.values]
+            return next((item for item in found if item), None)
+        else:
+            break
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id)
+    key = None
+    if isinstance(node, ast.Subscript) and _is_library_state(node.value, state_names):
+        key = node.slice
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args:
+        if _is_library_state(node.func.value, state_names):
+            key = node.args[0]
+    if isinstance(key, ast.Constant) and key.value in collections:
+        return str(key.value)
+    return None
+
+
+def _library_state_scans(definition: Definition, collections: set[str]) -> list[dict[str, object]]:
+    if not collections:
+        return []
+    node = definition.node
+    state_names = {"library_state"} & set(_parameter_names(definition))
+    statements = [item for item in ast.walk(node) if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name)]
+    for statement in statements:
+        if _is_library_state(statement.value, set()) or statement.targets[0].id == "library_state":
+            state_names.add(statement.targets[0].id)
+    aliases: dict[str, str] = {}
+    for statement in statements:
+        collection = _library_collection(statement.value, state_names, {}, collections)
+        if collection:
+            aliases[statement.targets[0].id] = collection
+    hazards = []
+    seen = set()
+    for item in ast.walk(node):
+        sources = []
+        if isinstance(item, (ast.For, ast.AsyncFor)):
+            sources = [item.iter]
+        elif isinstance(item, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            sources = [generator.iter for generator in item.generators]
+        elif isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and item.func.id in COPYING_CALLS and item.args:
+            sources = [item.args[0]]
+        for source in sources:
+            collection = _library_collection(source, state_names, aliases, collections)
+            if collection and (source.lineno, collection) not in seen:
+                seen.add((source.lineno, collection))
+                hazards.append({
+                    "rule": "BI-04",
+                    "operation": f"library-state-scan:{collection}",
+                    "path": definition.path,
+                    "function": definition.qualname,
+                    "line": source.lineno,
+                    "enumeration": False,
+                })
+    return hazards
+
+
 def _resolver(definition: Definition, index: Index):
     nested = _facts(definition).nested
 
@@ -423,22 +505,92 @@ def _callees(definition: Definition, index: Index) -> list[tuple[Definition, boo
     return found
 
 
-def _launched_entrypoints(module: Module, index: Index) -> list[tuple[str, Definition]]:
-    """Background entrypoints found by how they start: thread and executor targets."""
-    found = []
-    pending = [*module.functions.values(), *(definition for methods in module.methods.values() for definition in methods.values())]
+def _all_definitions(modules: list[Module]):
+    """Every function and method, nested definitions included."""
+    pending = [
+        definition
+        for module in modules
+        for definition in [*module.functions.values(), *(item for methods in module.methods.values() for item in methods.values())]
+    ]
     while pending:
         definition = pending.pop()
+        yield definition
+        pending.extend(_facts(definition).nested.values())
+
+
+def _parameter_names(definition: Definition) -> list[str]:
+    arguments = definition.node.args
+    return [argument.arg for argument in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]]
+
+
+def _argument_for(node: ast.Call, definition: Definition, parameter: str) -> ast.AST | None:
+    """The argument a call passes for one parameter of the called definition."""
+    for keyword in node.keywords:
+        if keyword.arg == parameter:
+            return keyword.value
+    names = _parameter_names(definition)
+    positional = [*definition.node.args.posonlyargs, *definition.node.args.args]
+    # `self.method(x)` and `cls.method(x)` bind the receiver to the first parameter.
+    offset = 1 if definition.class_name and positional and positional[0].arg in {"self", "cls"} and isinstance(node.func, ast.Attribute) else 0
+    position = names.index(parameter) - offset if parameter in names[: len(positional)] else -1
+    if 0 <= position < len(node.args) and not any(isinstance(arg, ast.Starred) for arg in node.args[: position + 1]):
+        return node.args[position]
+    return None
+
+
+def _launcher_parameters(modules: list[Module], index: Index) -> dict[int, dict[str, str]]:
+    """Helpers that launch one of their own parameters in the background
+    (`_queue(config, key, action)` submitting `action` to an executor), to a
+    fixpoint: a helper that passes its parameter to another launcher launches it
+    too. Maps each helper's node id to {parameter: trigger}."""
+    definitions = list(_all_definitions(modules))
+    launchers: dict[int, dict[str, str]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for definition in definitions:
+            parameters = set(_parameter_names(definition))
+            facts = _facts(definition)
+            resolve = _resolver(definition, index)
+            awaited = {id(submit) for node, _ in facts.calls if (submit := _awaited_submit(node)) is not None}
+            for node, _ in facts.calls:
+                handed: list[tuple[str, ast.AST]] = []
+                launched = None if id(node) in awaited else _launched_callable(node)
+                if launched is not None:
+                    handed.append(launched)
+                for callee in resolve(node.func):
+                    for parameter, trigger in launchers.get(id(callee.node), {}).items():
+                        argument = _argument_for(node, callee, parameter)
+                        if argument is not None:
+                            handed.append((trigger, argument))
+                for trigger, argument in handed:
+                    if isinstance(argument, ast.Name) and argument.id in parameters:
+                        own = launchers.setdefault(id(definition.node), {})
+                        if argument.id not in own:
+                            own[argument.id] = trigger
+                            changed = True
+    return launchers
+
+
+def _launched_entrypoints(module: Module, index: Index, launchers: dict[int, dict[str, str]]) -> list[tuple[str, Definition]]:
+    """Background entrypoints found by how they start: thread and executor
+    targets, including a lambda, `partial`, or function passed to a helper that
+    launches that parameter."""
+    found = []
+    for definition in _all_definitions([module]):
         facts = _facts(definition)
-        pending.extend(facts.nested.values())
         resolve = _resolver(definition, index)
         awaited = {id(submit) for node, _ in facts.calls if (submit := _awaited_submit(node)) is not None}
         for node, _ in facts.calls:
             launched = None if id(node) in awaited else _launched_callable(node)
-            if launched is None:
-                continue
-            trigger, target = launched
-            found.extend((trigger, callee) for callee in resolve(_callable_target(target)))
+            handed = [launched] if launched is not None else []
+            for callee in resolve(node.func):
+                for parameter, trigger in launchers.get(id(callee.node), {}).items():
+                    argument = _argument_for(node, callee, parameter)
+                    if argument is not None:
+                        handed.append((trigger, argument))
+            for trigger, target in handed:
+                found.extend((trigger, callee) for callee in resolve(_callable_target(target)))
     return found
 
 
@@ -496,8 +648,9 @@ def _all_entrypoints(modules: list[Module], index: Index) -> list[tuple[dict[str
     target not already discovered under its own name."""
     found = [item for module in modules if module.path.startswith(ENTRYPOINT_ROOTS) for item in _entrypoints(module)]
     known = {id(definition.node) for _, definition in found}
+    launchers = _launcher_parameters(modules, index)
     for module in modules:
-        for trigger, definition in _launched_entrypoints(module, index):
+        for trigger, definition in _launched_entrypoints(module, index, launchers):
             if id(definition.node) in known:
                 continue
             known.add(id(definition.node))
@@ -529,12 +682,14 @@ def analyze_python_repository(
     root: Path,
     *,
     library_scale_operations: list[str] | tuple[str, ...] = (),
+    library_state_collections: list[str] | tuple[str, ...] = (),
     overrides: dict[str, str] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     _FACTS.clear()
     modules = load_modules(root, overrides)
     index = Index(modules)
     library_scale = set(library_scale_operations)
+    collections = set(library_state_collections)
     entrypoints: list[dict[str, object]] = []
     hazards: list[dict[str, object]] = []
     hazard_cache: dict[tuple[int, bool], list[dict[str, object]]] = {}
@@ -550,7 +705,10 @@ def analyze_python_repository(
                 continue
             seen.add((id(current.node), looped))
             depth = "direct" if not via else "indirect"
-            if interactive and current.key in library_scale:
+            # A route never reaches library-scale work; a background entrypoint
+            # may, but only under a contract proving its batching, coalescing,
+            # and convergence.
+            if current.key in library_scale:
                 hazards.append({
                     "rule": "BI-04",
                     "operation": f"library-scale:{current.key}",
@@ -560,12 +718,12 @@ def analyze_python_repository(
                     "entrypoint": entry["key"],
                     "depth": depth,
                     "via": via,
-                    "reject": True,
+                    "reject": interactive,
                 })
                 continue
             cache_key = (id(current.node), looped)
             if cache_key not in hazard_cache:
-                hazard_cache[cache_key] = _direct_hazards(current, looped)
+                hazard_cache[cache_key] = [*_direct_hazards(current, looped), *_library_state_scans(current, collections)]
             for hazard in hazard_cache[cache_key]:
                 record = {key: value for key, value in hazard.items() if key != "enumeration"}
                 hazards.append({
@@ -607,11 +765,11 @@ def find_python_hazards(path: Path) -> list[dict[str, object]]:
     return sorted(hazards, key=lambda item: item["line"])
 
 
-def _library_scale_from_registry(registry_path: Path | None) -> list[str]:
+def _registry_names(registry_path: Path | None, key: str, field: str) -> list[str]:
     if registry_path is None or not registry_path.exists():
         return []
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    return [str(item["operation"]) for item in registry.get("libraryScaleOperations", [])]
+    return [str(item[field]) for item in registry.get(key, [])]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -625,7 +783,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         analysis = analyze_python_repository(
             args.root,
-            library_scale_operations=_library_scale_from_registry(args.registry),
+            library_scale_operations=_registry_names(args.registry, "libraryScaleOperations", "operation"),
+            library_state_collections=_registry_names(args.registry, "libraryStateCollections", "collection"),
             overrides=overrides,
         )
     except (OSError, SyntaxError, UnicodeDecodeError) as error:

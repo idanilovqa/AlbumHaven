@@ -89,6 +89,37 @@ for (const [name, mutate, expected] of [
   });
 }
 
+test('a test identity must name a real test declaration, never a substring of one', () => {
+  const declared = source => validateSchema(registry([contractEntry()]), { ...io, readFile: () => source });
+  const identity = 'BI-H01 adjacent drag stays delta-bounded at production scale';
+  for (const source of [
+    `test("${identity}", () => {});`,
+    `require('node:test')('${identity}', async () => {});`,
+    `it(\`${identity}\`, () => {});`,
+    // A test declared in a loop matches through its template holes.
+    "for (const size of ['production']) test(`BI-H01 adjacent drag stays delta-bounded at ${size} scale`, () => {});",
+  ]) assert.deepEqual(declared(source), [], source);
+  for (const source of [
+    `test('${identity} with a longer name', () => {});`,
+    `// ${identity}\ntest('another test', () => {});`,
+    `const label = '${identity}';`,
+    `test('BI-H01 adjacent drag', () => {}); // ${identity}`,
+  ]) assert.match(declared(source).join('\n'), /is not defined in/, source);
+  const python = { ...io, fileExists: () => true, readFile: () => 'def test_route_contract_at_production_size(app):\n    pass\n' };
+  const pyEntry = name => registry([contractEntry({ command: 'python -m pytest tests/py/test_b.py', testIdentity: name })]);
+  assert.deepEqual(validateSchema(pyEntry('test_route_contract_at_production_size'), python), []);
+  assert.match(validateSchema(pyEntry('test_route_contract'), python).join('\n'), /is not defined in/);
+});
+
+test('measures names registered contract entries and only a contract may declare it', () => {
+  const other = contractEntry({ id: 'other-contract', entrypoints: [`js:${OWNER}#install:event:wheel`] });
+  assert.deepEqual(validateSchema(registry([contractEntry({ measures: ['other-contract'] }), other]), io), []);
+  assert.match(validateSchema(registry([contractEntry({ measures: ['py:services/helper.py#helper'] })]), io).join('\n'), /measures py:services\/helper\.py#helper, which is not a registered contract/);
+  assert.match(validateSchema(registry([contractEntry({ measures: [] })]), io).join('\n'), /measures must be a nonempty list/);
+  const entry = { id: 'static', action: 'Toggle', entrypoints: [KEY], owners: [OWNER], rules: ['BI-03'], workClass: 'constant', proof: 'static', measures: ['x'] };
+  assert.match(validateSchema(registry([entry]), io).join('\n'), /static proof must not declare measures/);
+});
+
 test('rejects unregistered, stale, and doubly registered entrypoints', () => {
   const reg = registry([contractEntry(), contractEntry({ id: 'second' })]);
   reg.interactions[1].entrypoints = [KEY, `js:${OWNER}#install:event:scroll`];

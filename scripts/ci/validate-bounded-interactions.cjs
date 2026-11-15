@@ -23,10 +23,10 @@ const { syncRegistry } = require('./bounded-interaction-registry-sync.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const REGISTRY_PATH = 'tests/ci/bounded-interactions.json';
 const WORK_CLASSES = ['constant', 'delta', 'page', 'selected-set', 'affected-set', 'background-batch'];
-const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryScaleOperations', 'interactions']);
+const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryScaleOperations', 'libraryStateCollections', 'interactions']);
 const INTERACTION_KEYS = new Set([
   'id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof', 'requestOwnership',
-  'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'performanceTargets', 'rollback',
+  'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'measures', 'performanceTargets', 'rollback',
 ]);
 const REQUIRED_KEYS = ['id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof'];
 const CONTRACT_KEYS = ['cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'rollback'];
@@ -108,6 +108,23 @@ function commandTestFiles(command) {
     .filter(token => /^tests\/.+\.(js|cjs|py)$/.test(token));
 }
 
+const escapeRegExp = text => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const JS_TEST_DECLARATION = /(?<![\w.$])(?:test|it|require\(\s*['"]node:test['"]\s*\))\(\s*(?:'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`)/g;
+
+// A test identity names one real test: `def <name>(` in Python, or the exact
+// name of a `test(...)`/`it(...)` declaration in JavaScript, where each hole of
+// a template-literal name (a test declared in a loop) matches one expansion. A
+// substring of a longer name, a comment, or a string elsewhere does not count.
+function declaresTest(source, file, name) {
+  if (file.endsWith('.py')) return new RegExp(`^[ \\t]*(?:async[ \\t]+)?def[ \\t]+${escapeRegExp(name)}[ \\t]*\\(`, 'm').test(source);
+  for (const [, single, double, template] of source.matchAll(JS_TEST_DECLARATION)) {
+    if (template === undefined ? (single ?? double) === name : new RegExp(`^${
+      template.split(/\$\{[^}]*\}/).map(escapeRegExp).join('.+')
+    }$`).test(name)) return true;
+  }
+  return false;
+}
+
 function validateSchema(registry, { fileExists, readFile }) {
   const errors = [];
   if (registry?.schemaVersion !== 1) errors.push('schemaVersion must be 1');
@@ -122,7 +139,12 @@ function validateSchema(registry, { fileExists, readFile }) {
     else if (!fileExists(match[1])) errors.push(`libraryScaleOperations[${index}] source ${match[1]} does not exist`);
     if (!String(operation?.reason || '').trim()) errors.push(`libraryScaleOperations[${index}] must give a reason`);
   }
+  for (const [index, item] of (registry?.libraryStateCollections || []).entries()) {
+    if (!/^\w+$/.test(String(item?.collection || ''))) errors.push(`libraryStateCollections[${index}] must name a library_state key`);
+    if (!String(item?.reason || '').trim()) errors.push(`libraryStateCollections[${index}] must give a reason`);
+  }
   const ids = new Set();
+  const contractIds = new Set((registry?.interactions || []).filter(entry => entry?.proof === 'contract').map(entry => entry.id));
   for (const [index, entry] of (registry?.interactions || []).entries()) {
     const label = entry?.id || `interactions[${index}]`;
     for (const key of Object.keys(entry || {})) if (!INTERACTION_KEYS.has(key)) errors.push(`${label}: unknown key ${key}`);
@@ -155,7 +177,7 @@ function validateSchema(registry, { fileExists, readFile }) {
       }
     }
     if (entry?.proof === 'static') {
-      for (const key of CONTRACT_KEYS) {
+      for (const key of [...CONTRACT_KEYS, 'measures']) {
         if (key !== 'rollback' && entry[key] !== undefined) errors.push(`${label}: static proof must not declare ${key}`);
       }
     } else if (entry?.proof === 'contract') {
@@ -177,8 +199,14 @@ function validateSchema(registry, { fileExists, readFile }) {
       if (!testFiles.length) errors.push(`${label}: command must name a test file`);
       const missing = testFiles.filter(file => !fileExists(file));
       for (const file of missing) errors.push(`${label}: command test file ${file} does not exist`);
-      if (!missing.length && testFiles.length && !testFiles.some(file => readFile(file).includes(entry.testIdentity))) {
+      if (!missing.length && testFiles.length && !testFiles.some(file => declaresTest(readFile(file), file, entry.testIdentity))) {
         errors.push(`${label}: test identity "${entry.testIdentity}" is not defined in ${testFiles.join(', ')}`);
+      }
+      if (entry.measures !== undefined && !(Array.isArray(entry.measures) && entry.measures.length)) {
+        errors.push(`${label}: measures must be a nonempty list of registered contract ids`);
+      }
+      for (const id of Array.isArray(entry.measures) ? entry.measures : []) {
+        if (!contractIds.has(id)) errors.push(`${label}: measures ${id}, which is not a registered contract`);
       }
     } else {
       errors.push(`${label}: proof must be "static" or "contract"`);
@@ -202,6 +230,11 @@ function validateInventory(registry, discovery) {
     if (!registeredBy.has(key)) errors.push(`unregistered entrypoint ${key}`);
   }
   for (const hazard of discovery.hazards.filter(item => item.reject)) {
+    if (hazard.operation === 'unresolved-trigger') {
+      errors.push(`unresolved-trigger at ${hazard.path}:${hazard.line}: discovery cannot resolve this listener's event name; `
+        + 'make it a literal, a const, a constant list, or an object literal\'s keys so the listener can be registered');
+      continue;
+    }
     const via = hazard.via?.length ? ` via ${hazard.via.join(' > ')}` : '';
     errors.push(`rejected ${hazard.rule} ${hazard.operation} at ${hazard.path}:${hazard.line} from ${hazard.entrypoint}${via}`);
   }

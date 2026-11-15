@@ -1,6 +1,8 @@
 'use strict';
 
+const fs = require('node:fs');
 const { isDeepStrictEqual } = require('node:util');
+const { EVIDENCE_ENV, currentTestName } = require('./bounded-interaction-evidence');
 const { endpointMatches, loadRegistry, normalizeEndpoint } = require('../../../scripts/ci/validate-bounded-interactions.cjs');
 
 // Deterministic operation counters for bounded-interaction contracts. Tests
@@ -56,16 +58,24 @@ function registryEntry(id, registry) {
   return checkedInEntries.get(id);
 }
 
-// A contract measured under a registry interaction id must measure exactly the
-// cardinalities, budgets, and growth that the registry declares for it.
+// A contract is measured under a registered interaction id and must measure
+// exactly the cardinalities, budgets, and growth the registry declares for it.
+// An unknown id is an error: a contract can never prove an entry it does not name.
 function registryMismatches(id, { small, large, budgets, growth }, registry) {
   const entry = registryEntry(id, registry);
-  if (!entry) return [];
+  if (!entry) return [`${id}: measured id is not a registered interaction`];
   const expected = { small: entry.cardinalities?.small, large: entry.cardinalities?.production, budgets: entry.budgets, growth: entry.growth };
   const actual = { small, large, budgets, growth };
   return Object.keys(expected)
     .filter(key => !isDeepStrictEqual(actual[key], expected[key]))
     .map(key => `${id}: ${key} ${JSON.stringify(actual[key])} differs from the registry's ${JSON.stringify(expected[key])}`);
+}
+
+// Under the gate runner, a passing checked-in contract records which test
+// measured which id, so the runner can prove each entry's test measured it.
+function recordMeasuredId(id) {
+  const file = process.env[EVIDENCE_ENV];
+  if (file) fs.appendFileSync(file, `${JSON.stringify({ id, test: currentTestName() })}\n`);
 }
 
 // Runs one interaction at a small and a production cardinality, then enforces
@@ -98,6 +108,7 @@ async function measureScalePair({ id = 'interaction', small, large, run, budgets
     }
   }
   if (violations.length) throw new Error(violations.join('\n'));
+  if (!registry) recordMeasuredId(id);
   return results;
 }
 

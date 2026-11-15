@@ -8,8 +8,15 @@ const {
   measureScalePair,
 } = require('./helpers/bounded-interaction-counter');
 
+// Self-test contracts are measured against a registry that declares exactly them.
+function selfRegisteredPair(contract) {
+  const { id, small, large, budgets, growth } = contract;
+  const registry = { interactions: [{ id, cardinalities: { small, production: large }, budgets, growth }] };
+  return measureScalePair({ ...contract, registry });
+}
+
 test('scale pair enforces absolute and growth budgets', async () => {
-  await assert.rejects(() => measureScalePair({
+  await assert.rejects(() => selfRegisteredPair({
     id: 'example',
     small: 20,
     large: 1000,
@@ -20,8 +27,8 @@ test('scale pair enforces absolute and growth budgets', async () => {
 });
 
 test('scale pair fails closed when a budgeted metric is not measured', async () => {
-  await assert.rejects(() => measureScalePair({
-    small: 1, large: 2, run: async () => ({}), budgets: { requests: 1 },
+  await assert.rejects(() => selfRegisteredPair({
+    id: 'unmeasured', small: 1, large: 2, run: async () => ({}), budgets: { requests: 1 },
   }), /requests was not measured/);
 });
 
@@ -102,10 +109,10 @@ const DRAG_CONTRACT = {
 
 test('BI-H01 rejects a drag move that rescans every row and accepts the delta repair', async () => {
   await assert.rejects(
-    () => measureScalePair({ ...DRAG_CONTRACT, run: rows => adjacentDrag(DragSelectionBefore, rows) }),
+    () => selfRegisteredPair({ ...DRAG_CONTRACT, run: rows => adjacentDrag(DragSelectionBefore, rows) }),
     /itemsVisited=2000 at cardinality 1000 exceeds budget 3/,
   );
-  const { large } = await measureScalePair({ ...DRAG_CONTRACT, run: rows => adjacentDrag(DragSelectionAfter, rows) });
+  const { large } = await selfRegisteredPair({ ...DRAG_CONTRACT, run: rows => adjacentDrag(DragSelectionAfter, rows) });
   assert.deepEqual([large.itemsVisited, large.domMutations, large.outputEmissions], [2, 1, 0]);
 });
 
@@ -127,10 +134,10 @@ test('BI-H03 rejects eager Problematic Files navigation rendering and accepts a 
     growth: { metric: 'nodesCreated', largeMinusSmallMax: 20 },
   };
   await assert.rejects(
-    () => measureScalePair({ ...contract, run: async count => renderNavigation(rows(count), createInteractionCounter()) }),
+    () => selfRegisteredPair({ ...contract, run: async count => renderNavigation(rows(count), createInteractionCounter()) }),
     /nodesCreated=1412 at cardinality 706 exceeds budget 120/,
   );
-  await measureScalePair({ ...contract, run: async count => renderNavigation(rows(count), createInteractionCounter(), 60) });
+  await selfRegisteredPair({ ...contract, run: async count => renderNavigation(rows(count), createInteractionCounter(), 60) });
 });
 
 function pollStatus({ unchangedPolls, compareRevision }) {
@@ -154,10 +161,10 @@ test('BI-H13 rejects presentation work on unchanged polls and accepts revision c
     growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
   };
   await assert.rejects(
-    () => measureScalePair({ ...contract, run: async polls => pollStatus({ unchangedPolls: polls, compareRevision: false }) }),
+    () => selfRegisteredPair({ ...contract, run: async polls => pollStatus({ unchangedPolls: polls, compareRevision: false }) }),
     /renderCommits=100 at cardinality 100 exceeds budget 1/,
   );
-  await measureScalePair({ ...contract, run: async polls => pollStatus({ unchangedPolls: polls, compareRevision: true }) });
+  await selfRegisteredPair({ ...contract, run: async polls => pollStatus({ unchangedPolls: polls, compareRevision: true }) });
 });
 
 function navigateGallery(cycles, evictDetached) {
@@ -189,10 +196,10 @@ function openSelectedArtist({ repeatBroaderHydration }) {
 test('BI-H07 rejects a repeated broader selected-artist hydration request', async () => {
   const contract = { id: 'BI-H07-selected-artist', small: 20, large: 14000, budgets: { requests: 1 } };
   await assert.rejects(
-    () => measureScalePair({ ...contract, run: async () => openSelectedArtist({ repeatBroaderHydration: true }) }),
+    () => selfRegisteredPair({ ...contract, run: async () => openSelectedArtist({ repeatBroaderHydration: true }) }),
     /requests=2 at cardinality 20 exceeds budget 1/,
   );
-  await measureScalePair({ ...contract, run: async () => openSelectedArtist({ repeatBroaderHydration: false }) });
+  await selfRegisteredPair({ ...contract, run: async () => openSelectedArtist({ repeatBroaderHydration: false }) });
 });
 
 test('BI-H17 request capture rejects Home routed through generic view-data', () => {
@@ -224,10 +231,10 @@ test('BI-H02 rejects navigation summaries that scale with library tracks', async
     growth: { metric: 'responseBytes', largeMinusSmallMax: 0 },
   };
   await assert.rejects(
-    () => measureScalePair({ ...contract, run: async count => openCollectionsNavigation(count, { compactSummary: false }) }),
+    () => selfRegisteredPair({ ...contract, run: async count => openCollectionsNavigation(count, { compactSummary: false }) }),
     /responseRows=160000 at cardinality 160000 exceeds budget 100/,
   );
-  await measureScalePair({ ...contract, run: async count => openCollectionsNavigation(count, { compactSummary: true }) });
+  await selfRegisteredPair({ ...contract, run: async count => openCollectionsNavigation(count, { compactSummary: true }) });
 });
 
 const REGISTERED = {
@@ -259,8 +266,11 @@ test('a scale pair under a registry id must measure exactly the registered contr
   await assert.rejects(() => registeredPair({ growth: undefined }), /growth undefined differs/);
 });
 
-test('a scale pair under an unregistered id is checked only against its own budgets', async () => {
-  await registeredPair({ id: 'example', large: 500, budgets: { itemsVisited: 30 } });
+test('a scale pair under an unregistered id is rejected', async () => {
+  await assert.rejects(() => registeredPair({ id: 'example', large: 500, budgets: { itemsVisited: 30 } }), /example: measured id is not a registered interaction/);
+  await assert.rejects(() => measureScalePair({
+    id: 'js:runtime/helper.js#helper', small: 1, large: 2, run: async () => ({ requests: 0 }), budgets: { requests: 1 },
+  }), /js:runtime\/helper\.js#helper: measured id is not a registered interaction/);
 });
 
 test('scale pairs are checked against the checked-in registry by default', async () => {
@@ -274,4 +284,42 @@ test('scale pairs are checked against the checked-in registry by default', async
     budgets: contract.budgets,
     growth: contract.growth,
   }), /large \d+ differs from the registry's \d+/);
+});
+
+test('under the gate a checked-in measurement records the test that measured it', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const { loadRegistry } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const contract = loadRegistry().interactions.find(entry => entry.proof === 'contract' && entry.id.startsWith('js:'));
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-evidence-'));
+  try {
+    const helpers = path.join(__dirname, 'helpers');
+    const evidence = path.join(scratch, 'evidence.jsonl');
+    const probe = path.join(scratch, 'probe.test.js');
+    fs.writeFileSync(probe, `
+      const test = require('node:test');
+      const { measureScalePair } = require(${JSON.stringify(path.join(helpers, 'bounded-interaction-counter.js'))});
+      const contract = ${JSON.stringify(contract)};
+      const zero = Object.fromEntries(Object.keys(contract.budgets).map(metric => [metric, 0]));
+      test('probe measures its contract', () => measureScalePair({
+        id: contract.id, small: contract.cardinalities.small, large: contract.cardinalities.production,
+        run: async () => zero, budgets: contract.budgets, growth: contract.growth,
+      }));
+      test('probe measures a self-registered contract', () => measureScalePair({
+        id: 'self', small: 1, large: 2, run: async () => ({ requests: 0 }), budgets: { requests: 0 },
+        registry: { interactions: [{ id: 'self', cardinalities: { small: 1, production: 2 }, budgets: { requests: 0 } }] },
+      }));
+    `);
+    const { NODE_TEST_CONTEXT, ...env } = process.env;
+    const result = spawnSync(process.execPath, [
+      '--test', '--require', path.join(helpers, 'bounded-interaction-evidence.js'), probe,
+    ], { env: { ...env, BOUNDED_INTERACTION_EVIDENCE: evidence }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const lines = fs.readFileSync(evidence, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(lines, [{ id: contract.id, test: 'probe measures its contract' }]);
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });

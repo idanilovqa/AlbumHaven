@@ -278,7 +278,7 @@ def test_single_legacy_foreign_cover_without_provenance_is_preserved(tmp_path):
 def test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count(tmp_path, monkeypatch):
     from music_app.services import covers
     from music_app.services.library import build_albums_from_file_cache
-    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.bounded_interactions import OperationCounts
     from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
     tracks_per_album = 160
@@ -325,12 +325,11 @@ def test_album_build_contract_repairs_only_contaminated_albums_at_production_tra
         assert len(albums) >= album_count + 1
         return counts
 
-    small, production = measure_scale_pair(
-        interaction_id="py:services/library.py#build_albums_from_file_cache",
-        small=20,
-        large=1_000,
-        run=run,
-        budgets={"filesystem_enumerations": 2, "stat_calls": 8, "open_calls": 0, "media_parses": 1},
-        growth=("stat_calls", 0),
-    )
+    # A helper check, not a registry contract: the workers that build albums
+    # are proved by their own contracts.
+    small, production = run(20), run(1_000)
+    for counts in (small, production):
+        assert counts.filesystem_enumerations <= 2 and counts.open_calls == 0
+        assert counts.stat_calls <= 8 and counts.media_parses <= 1
+    assert small.stat_calls == production.stat_calls
     assert small.filesystem_enumerations == production.filesystem_enumerations

@@ -173,6 +173,59 @@ const DEFECTS = [
     expected: /^js:runtime\/search-input\.js#<top-level>: \d+ reachable hazard\(s\) need a runtime contract \(.*indexed-loop at music_app\/static\/js\/runtime\/search-input\.js:\d+/,
   },
   {
+    id: 'BI-01 card scan reached through a local const alias of a helper (aliased calls were treated as hazard-free)',
+    language: 'js',
+    file: 'music_app/static/js/admin-members.js',
+    anchor: "  window.addEventListener?.('wheel', closeOnLayoutChange, { capture: true, passive: true });",
+    replacement: "  window.addEventListener?.('wheel', () => { closeOnLayoutChange(); const seededSync = seededSyncAdminRows; seededSync(); }, { capture: true, passive: true });\n"
+      + "  function seededSyncAdminRows() { document.querySelectorAll('[data-account-row]').forEach(row => row.classList.add('seen')); }",
+    expected: /^js:admin-members\.js#mount: \d+ reachable hazard\(s\) need a runtime contract \(.*querySelectorAll at music_app\/static\/js\/admin-members\.js:\d+/,
+  },
+  {
+    id: 'BI-01 grid relayout reached through a local alias of the virtualGrid singleton',
+    language: 'js',
+    file: 'music_app/static/js/runtime/mobile-navigation.js',
+    anchor: "  gallery.addEventListener('touchmove', event => {\n    if (!gesture || event.touches.length !== 2) return;\n",
+    replacement: "  gallery.addEventListener('touchmove', event => {\n    if (!gesture || event.touches.length !== 2) return;\n"
+      + '    const seededGrid = virtualGrid;\n    seededGrid.captureScrollAnchor();\n',
+    expected: /^js:runtime\/mobile-navigation\.js#initMobileGalleryPinch: \d+ reachable hazard\(s\) need a runtime contract \(.*at music_app\/static\/js\/runtime\/virtual-artist-grid\.js:\d+/,
+  },
+  {
+    id: 'BI-01 thumbnail scan reached through an object literal hook from a touchmove handler',
+    language: 'js',
+    file: 'music_app/static/js/runtime/track-modal-lightbox-helpers.js',
+    anchor: "  overlay.addEventListener('touchmove', event => {\n    if (event.touches.length !== 1 || state.lightbox.zoom > 1) start = null;\n",
+    replacement: "  const seededLightboxHooks = { onSwipe() { document.querySelectorAll('.lightbox-thumb').forEach(thumb => thumb.classList.add('seen')); } };\n"
+      + "  overlay.addEventListener('touchmove', event => {\n    if (event.touches.length !== 1 || state.lightbox.zoom > 1) start = null;\n"
+      + '    seededLightboxHooks.onSwipe();\n',
+    expected: /^js:runtime\/track-modal-lightbox-helpers\.js#bindLightboxSwipe: \d+ reachable hazard\(s\) need a runtime contract \(.*querySelectorAll at music_app\/static\/js\/runtime\/track-modal-lightbox-helpers\.js:\d+/,
+  },
+  {
+    id: 'BI-01 resize handler that dispatches through a computed hook nobody can resolve',
+    language: 'js',
+    file: 'music_app/static/js/settings-navigation.js',
+    anchor: '    const syncDrawerLayout = () => closeDrawer(false);',
+    replacement: '    const syncDrawerLayout = () => { closeDrawer(false); window.seededDrawerHooks[document.body.dataset.layout](); };',
+    expected: /^js:settings-navigation\.js#create: \d+ reachable hazard\(s\) need a runtime contract \(.*unresolved-call:…\[…\] at music_app\/static\/js\/settings-navigation\.js:\d+/,
+  },
+  {
+    id: 'BI-01 scroll listener installed from a constant event list (non-literal event names were never discovered)',
+    language: 'js',
+    file: 'music_app/static/js/runtime/trigger-anchor.js',
+    anchor: "  document.addEventListener('selectionchange', confine);\n",
+    replacement: "  document.addEventListener('selectionchange', confine);\n"
+      + "  for (const seededType of ['scroll']) document.addEventListener(seededType, () => document.querySelectorAll('[data-trigger-anchor]').forEach(anchor => anchor.removeAttribute('data-placed')));\n",
+    expected: /^rejected BI-01 querySelectorAll at music_app\/static\/js\/runtime\/trigger-anchor\.js:\d+ from js:music_app\/static\/js\/runtime\/trigger-anchor\.js#installPanelSelectionBoundary:event:scroll$/,
+  },
+  {
+    id: 'BI-13 listener whose event name cannot be resolved',
+    language: 'js',
+    file: 'music_app/static/js/settings-navigation.js',
+    anchor: "    window.addEventListener('resize', syncDrawerLayout);",
+    replacement: "    window.addEventListener('resize', syncDrawerLayout);\n    window.addEventListener(window.seededLayoutEvent, syncDrawerLayout);",
+    expected: /^unresolved-trigger at music_app\/static\/js\/settings-navigation\.js:\d+: /,
+  },
+  {
     id: 'BI-H05/H06/H14 status request that synchronously rebuilds relation views',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
@@ -245,6 +298,36 @@ const DEFECTS = [
     expected: /^py:routes\/api_read_asgi_routes\.py#album_opinions_crowd_read_reserved: \d+ reachable hazard\(s\) need a runtime contract \(.*Path\.exists at music_app\/routes\/api_read_asgi_routes\.py:\d+/,
   },
   {
+    id: 'BI-07 gallery rebuild queued as a lambda through a helper parameter (helper-launched work was invisible)',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: "        payload = await request.json()\n        if not isinstance(payload, dict):\n            raise LogHistoryQueryError('Invalid history export request')\n",
+    replacement: "        payload = await request.json()\n        if not isinstance(payload, dict):\n            raise LogHistoryQueryError('Invalid history export request')\n"
+      + '        _seeded_queue(_app_config(request), "rebuild", lambda: _seeded_rebuild_gallery(_app_config(request)))\n',
+    prelude: '_SEEDED_QUEUE_POOL = ThreadPoolExecutor(max_workers=1)\n\n\ndef _seeded_queue(config, key, action):\n    return _SEEDED_QUEUE_POOL.submit(action)\n\n\n'
+      + 'def _seeded_rebuild_gallery(config):\n    return None\n',
+    expected: /^unregistered entrypoint py:music_app\/routes\/api_read_asgi_routes\.py#_seeded_rebuild_gallery:background:executor$/,
+  },
+  {
+    id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
+    language: 'py',
+    file: 'music_app/services/cover_lookup_tasks.py',
+    anchor: '    claimed_at = monotonic()\n    with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:\n',
+    replacement: '    claimed_at = monotonic()\n    _seeded_build_relation_views([], config)\n    with _STALE_COVER_LOOKUP_RECONCILIATION_LOCK:\n',
+    prelude: 'from music_app.services.relations import build_relation_views as _seeded_build_relation_views\n',
+    expected: /^py:services\/cover_lookup_tasks\.py#_reconcile_stale_cover_lookup_tasks: \d+ reachable hazard\(s\) need a runtime contract \(.*library-scale:py:music_app\/services\/relations\.py#build_relation_views at /,
+  },
+  {
+    id: 'BI-04 read route that scans every album in the in-memory library state',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: '    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item)',
+    replacement: '    library_state = request.app.state.library_state\n'
+      + '    [album for album in library_state.get("albums", []) if getattr(album, "loops", None)]\n'
+      + '    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item)',
+    expected: /^py:routes\/api_read_asgi_routes\.py#utilities_loops: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:albums at music_app\/routes\/api_read_asgi_routes\.py:\d+/,
+  },
+  {
     id: 'BI-07 thread target that escapes name-based background discovery',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
@@ -275,6 +358,44 @@ const validations = () => {
 test('the unmodified repository validates cleanly, so no seeded defect hides behind an existing error', { timeout: 300_000 }, async () => {
   const [clean] = await validations();
   assert.deepEqual(clean.errors, []);
+});
+
+// Registry-side bypasses: a contract that "proves" an entry with a test that
+// measures something else, and a test identity that only names part of a test.
+test('the guard rejects a contract proved by a helper test under an unregistered id', async () => {
+  const fsPromises = require('node:fs/promises');
+  const os = require('node:os');
+  const { loadRegistry } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const { measureScalePair } = require('./helpers/bounded-interaction-counter');
+  const { evidenceErrors } = require('../../scripts/run-bounded-interactions.cjs');
+  const helperId = 'py:services/move_planner.py#build_move_availability_payload';
+  const helperTest = 'test_move_availability_contract_probes_one_artist_folder_at_production_artist_count';
+  // The helper's own measurement is rejected outright...
+  await assert.rejects(() => measureScalePair({
+    id: helperId, small: 20, large: 14_000, run: async () => ({ stat_calls: 0 }), budgets: { stat_calls: 4 },
+  }), /measured id is not a registered interaction/);
+  // ...and a route entry whose test measured only the helper is not proven.
+  const entry = { ...loadRegistry().interactions.find(item => item.id === 'py:routes/api_read_asgi_routes.py#album_details'), testIdentity: helperTest };
+  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'seeded-evidence-'));
+  const evidence = path.join(dir, 'evidence.jsonl');
+  await fsPromises.writeFile(evidence, `${JSON.stringify({ id: helperId, test: helperTest })}\n`);
+  assert.deepEqual(evidenceErrors([entry], evidence), [
+    `py:routes/api_read_asgi_routes.py#album_details: its test "${helperTest}" did not measure py:routes/api_read_asgi_routes.py#album_details`,
+  ]);
+});
+
+test('the guard rejects a test identity that is only a substring of the real test name', () => {
+  const { loadRegistry, validateSchema } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const registry = loadRegistry();
+  const entry = registry.interactions.find(item => item.id === 'js:runtime/track-modal-and-gallery.js#attachUtilityModalEvents');
+  entry.testIdentity = 'BI Utility search keystroke stores the query';
+  const errors = validateSchema(registry, {
+    fileExists: file => fs.existsSync(path.join(ROOT, file)),
+    readFile: file => fs.readFileSync(path.join(ROOT, file), 'utf8'),
+  });
+  assert.deepEqual(errors, [
+    'js:runtime/track-modal-and-gallery.js#attachUtilityModalEvents: test identity "BI Utility search keystroke stores the query" is not defined in tests/js/runtime/utility-search-input-bounded.test.js',
+  ]);
 });
 
 test('the guard reports every seeded historical defect in real application sources', { timeout: 300_000 }, async () => {

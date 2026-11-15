@@ -1283,7 +1283,7 @@ test('Problematic Files runtime partition accepts only one-to-one production-aut
     kind: 'requestfailed',
     type: 'net::ERR_ABORTED',
     method: 'GET',
-    url: 'http://127.0.0.1:4173/cover?path=private%2Falbum&size=480&v=secret',
+    url: 'http://127.0.0.1:4173/cover/privateAlbumReference0?size=480&v=secret',
     coverRequestId: 'gallery-cover-session-1',
   };
   const window = {
@@ -1722,7 +1722,7 @@ test('shared cover-preemption partition accepts only one authenticated render-ge
     kind: 'requestfailed',
     type: 'net::ERR_ABORTED',
     method: 'GET',
-    url: 'http://127.0.0.1:4173/cover?path=private%2Falbum&size=480&v=secret',
+    url: 'http://127.0.0.1:4173/cover/privateAlbumReference0?size=480&v=secret',
     coverRequestId: 'gallery-cover-render-1',
   };
   const window = {

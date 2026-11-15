@@ -556,7 +556,7 @@ function androidNativeStoredTrack(track) {
     ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
     album: String(track.album || ''),
     ...(track.year ? { year: String(track.year) } : {}),
-    coverPath: String(track.coverPath || ''),
+    coverRef: String(track.coverRef || ''),
     ...(track.trackNumber ? { trackNumber: String(track.trackNumber) } : {}),
     ...(Number(track.durationSeconds) > 0 ? { durationSeconds: Number(track.durationSeconds) } : {}),
   };

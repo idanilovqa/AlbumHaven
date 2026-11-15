@@ -1,13 +1,27 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { coverPathForReference, coverReferenceFromUrl, nameFixtureCover } from './coverReferences.js';
 
 const JOSEPH_COVER_FILENAME = 'Neal Morse - The Dreamer - Joseph, Pt. One.png';
 const JOSEPH_PREVIEW_RESPONSE_HASH = '84b7ef18d9c825fcedfb872a40835b7d9667f497936b0ad2ba526ff096531568';
 const JOSEPH_FULL_RESPONSE_HASH = '982c12c0697ed661a18f230290dc81a5a72a950cce2efb5ea8ee184f1693f491';
 const JOSEPH_ZOOMED_DETAIL_HASH = '12efccbc8b10d830762730e24dfe35d8c9738abbbefb0027f8a55592cdd3059c';
 
-export function observeExactCoverTraffic(page) {
+// The reference the app gives the test-owned Joseph cover, named before any page asks for it so
+// traffic can be matched from the first request. Pages never carry the file's path.
+export async function josephCoverReference({ mediaRoot = process.env.ALBUM_HAVEN_MEDIA_ROOT } = {}) {
+  const resolvedMediaRoot = path.resolve(String(mediaRoot || ''));
+  const found = String(mediaRoot || '').trim() === '' ? [] : fs.readdirSync(resolvedMediaRoot, { recursive: true })
+    .map((relative) => path.join(resolvedMediaRoot, String(relative)))
+    .filter((candidate) => path.basename(candidate) === JOSEPH_COVER_FILENAME);
+  if (found.length !== 1) {
+    throw new Error('Expected exactly one test-owned Joseph cover fixture.');
+  }
+  return nameFixtureCover(found[0]);
+}
+
+export function observeExactCoverTraffic(page, { josephReference = '' } = {}) {
   const requestCounts = new Map();
   const responseCounts = new Map();
   const responseEvidence = new Map();
@@ -19,14 +33,12 @@ export function observeExactCoverTraffic(page) {
     const url = new URL(value);
     const currentPageUrl = page.url();
     if (!URL.canParse(currentPageUrl)) return '';
-    return url.origin === new URL(currentPageUrl).origin && url.pathname === '/cover' ? url.href : '';
+    return url.origin === new URL(currentPageUrl).origin && url.pathname.startsWith('/cover/') ? url.href : '';
   };
   const isPinnedJosephCoverUrl = (rawUrl) => {
     if (!URL.canParse(String(rawUrl || ''))) return false;
-    const url = new URL(String(rawUrl || ''));
-    const coverPath = decodeURIComponent(url.searchParams.get('path') || '');
-    const size = url.searchParams.get('size');
-    return path.basename(coverPath) === JOSEPH_COVER_FILENAME
+    const size = new URL(String(rawUrl || '')).searchParams.get('size');
+    return Boolean(josephReference) && coverReferenceFromUrl(rawUrl) === josephReference
       && (size === null || size === '480');
   };
   const onRequest = (request) => {
@@ -218,15 +230,16 @@ export function expectAlbumCardCoverPresentationReady(expect, checkpoint) {
 
 export function expectJosephFixtureCheckpoint(expect, checkpoint, options = {}) {
   expectDecodedCheckpoint(expect, checkpoint);
-  expect(decodeURIComponent(checkpoint.productionSrc || checkpoint.src)).toContain(JOSEPH_COVER_FILENAME);
+  expect(options.josephReference).toBeTruthy();
+  expect(coverReferenceFromUrl(checkpoint.productionSrc || checkpoint.src)).toBe(options.josephReference);
   expect(checkpoint.naturalWidth).toBe(options.fullscreen ? 1200 : 480);
   expect(checkpoint.naturalHeight).toBe(checkpoint.naturalWidth);
 }
 
 export function expectJosephCoverRouteResponse(expect, evidence, options = {}) {
   const routeUrl = new URL(evidence.url);
-  expect(routeUrl.pathname).toBe('/cover');
-  expect(decodeURIComponent(routeUrl.searchParams.get('path') || '')).toContain(JOSEPH_COVER_FILENAME);
+  expect(options.josephReference).toBeTruthy();
+  expect(routeUrl.pathname).toBe(`/cover/${options.josephReference}`);
   expect(routeUrl.searchParams.get('size')).toBe(options.fullscreen ? null : '480');
   expect(evidence.status).toBe(200);
   expect(evidence.bodyHash).toBe(
@@ -234,16 +247,14 @@ export function expectJosephCoverRouteResponse(expect, evidence, options = {}) {
   );
 }
 
-export function temporarilyMakeJosephCoverUnavailable(
+export async function temporarilyMakeJosephCoverUnavailable(
   fullCoverUrl,
   baseUrl = '',
-  { mediaRoot = process.env.ALBUM_HAVEN_MEDIA_ROOT } = {},
+  { mediaRoot = process.env.ALBUM_HAVEN_MEDIA_ROOT, resolveCoverPath = coverPathForReference } = {},
 ) {
-  const normalizedBaseUrl = String(baseUrl || '').trim();
-  const coverUrl = normalizedBaseUrl
-    ? new URL(String(fullCoverUrl || ''), normalizedBaseUrl)
-    : new URL(String(fullCoverUrl || ''));
-  const sourcePath = path.resolve(decodeURIComponent(coverUrl.searchParams.get('path') || ''));
+  const sourcePath = path.resolve(
+    await resolveCoverPath(coverReferenceFromUrl(fullCoverUrl, String(baseUrl || '').trim() || undefined)),
+  );
   const resolvedMediaRoot = path.resolve(String(mediaRoot || ''));
   const relativeToMedia = path.relative(resolvedMediaRoot, sourcePath);
   const isOwnedFixturePath = String(mediaRoot || '').trim() !== ''

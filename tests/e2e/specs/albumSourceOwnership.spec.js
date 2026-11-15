@@ -8,6 +8,7 @@ import {
   readOwnedLegacyCoverState,
 } from '../helpers/albumSourceOwnershipFixture.js';
 import { setOwnedLegacyCoverRepairProvider } from '../helpers/coverLookupProviderHelpers.js';
+import { coverPathForReference, coverReferenceForPath } from '../helpers/coverReferences.js';
 
 let ownedFixture;
 
@@ -118,14 +119,14 @@ test('FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is
     expect(opened.album.cover_selection_origin).toBe('automatic');
     expect(opened.album.local_cover_width).toBe(1600);
     expect(opened.album.local_cover_height).toBe(1600);
-    expect(opened.album.cover_path).not.toBe(inherited.wrongCoverPath);
+    expect(await coverPathForReference(opened.album.cover_ref)).not.toBe(inherited.wrongCoverPath);
     const visibleCover = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage, 'repaired physical album artwork',
-      { expectedCoverPath: opened.album.cover_path },
+      { expectedCoverPath: await coverPathForReference(opened.album.cover_ref) },
     );
-    expect(visibleCover.coverPath).toBe(opened.album.cover_path);
+    expect(visibleCover.coverPath).toBe(await coverPathForReference(opened.album.cover_ref));
     const persisted = await readOwnedLegacyCoverState(fixture);
-    expect(persisted.coverPath).toBe(opened.album.cover_path);
+    expect(persisted.coverPath).toBe(await coverPathForReference(opened.album.cover_ref));
     expect(persisted.origin).toBe('automatic');
     expect(persisted.repairPrevious).toEqual({
       cover_path: inherited.wrongCoverPath,
@@ -159,7 +160,7 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
     for (const excluded of fixture.excludedPaths) expect(tracks.map(track => track.path)).not.toContain(excluded);
     expect(album.local_cover_width).toBe(1600);
     expect(album.local_cover_height).toBe(1600);
-    expect(album.cover_path).not.toContain('Random songs');
+    expect(await coverPathForReference(album.cover_ref)).not.toContain('Random songs');
     await trackModalActions.waitForLoadedSummary();
     await expectCompleteSourceTracks(album, fixture, trackModalActions);
     await trackModalActions.close();
@@ -241,11 +242,12 @@ test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cove
     await expect(cards).toHaveCount(2);
     const candidatePaths = await Promise.all(
       [...Array(await cards.count()).keys()].map(async index => {
-        const candidatePath = String(
+        const candidateReference = String(
           await cards.nth(index).getAttribute('data-select-local-cover') || '',
         ).trim();
-        expect(candidatePath).not.toBe('');
-        return candidatePath;
+        expect(candidateReference).not.toBe('');
+        // Cards name images by opaque reference; the isolated E2E database maps each to its file.
+        return coverPathForReference(candidateReference);
       }),
     );
     expect(new Set(candidatePaths)).toEqual(new Set([
@@ -266,7 +268,7 @@ test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cove
     const saved = await coverLookupActions.selectLocalCoverByNameAndSave('manual-choice.png');
     expect(saved.candidate.sourcePath).toBe(path.join(selectedRoot, 'manual-choice.png'));
     expect(saved.selectedCoverPath).toBe(path.join(selectedRoot, 'cover.jpg'));
-    expect(saved.updatedAlbum.cover_path).toBe(saved.selectedCoverPath);
+    expect(await coverPathForReference(saved.updatedAlbum.cover_ref)).toBe(saved.selectedCoverPath);
     expect(await fs.readFile(path.join(siblingRoot, 'cover.png'))).toEqual(siblingCoverBytes);
     const siblingCanonicalExists = await fs.stat(path.join(siblingRoot, 'cover.jpg'))
       .then(() => true, error => {
@@ -300,7 +302,7 @@ test('FTC-COVERS-043 differently tagged CD siblings expose only their own local 
     await coverLookupActions.waitForModalReady();
     const cards = coverLookupActions.coverLookup.localCoverCards;
     await expect(cards).toHaveCount(1);
-    await expect(cards.first()).toHaveAttribute('data-select-local-cover', fixture.walletOneCover);
+    await expect(cards.first()).toHaveAttribute('data-select-local-cover', await coverReferenceForPath(fixture.walletOneCover));
   });
 });
 
@@ -326,14 +328,14 @@ test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and mak
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
     expect(opened.album.cover_selection_origin).toBe('user');
-    expect(opened.album.cover_path).toBe(saved.selectedCoverPath);
+    expect(await coverPathForReference(opened.album.cover_ref)).toBe(saved.selectedCoverPath);
     expect(opened.album.cover_revision).toBe(saved.updatedAlbum.cover_revision);
     displayedBaseline = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage, 'settled explicit selection before rescan',
-      { expectedCoverPath: opened.album.cover_path, expectedCoverRevision: opened.album.cover_revision },
+      { expectedCoverPath: await coverPathForReference(opened.album.cover_ref), expectedCoverRevision: opened.album.cover_revision },
     );
     const fullSize = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: opened.album.cover_path, coverRevision: opened.album.cover_revision,
+      coverPath: await coverPathForReference(opened.album.cover_ref), coverRevision: opened.album.cover_revision,
       label: 'explicit selection source before rescan',
     });
     expect(fullSize.sha256).toBe(saved.candidateFullSize.sha256);
@@ -349,13 +351,13 @@ test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and mak
       await galleryActions.waitForGalleryReady();
       const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
       expect(opened.album.cover_selection_origin).toBe('user');
-      expect(opened.album.cover_path).toBe(saved.selectedCoverPath);
+      expect(await coverPathForReference(opened.album.cover_ref)).toBe(saved.selectedCoverPath);
       expect(opened.album.cover_revision).toBe(saved.updatedAlbum.cover_revision);
       const image = await coverLookupActions.readDisplayedImageEvidence(trackModalActions.trackModal.detailedCoverImage,
-        'explicit selection after physical rescan', { expectedCoverPath: opened.album.cover_path, expectedCoverRevision: opened.album.cover_revision });
+        'explicit selection after physical rescan', { expectedCoverPath: await coverPathForReference(opened.album.cover_ref), expectedCoverRevision: opened.album.cover_revision });
       expect(image.sha256).toBe(displayedBaseline.sha256);
       const fullSize = await coverLookupActions.readFullSizeCoverEvidence({
-        coverPath: opened.album.cover_path, coverRevision: opened.album.cover_revision,
+        coverPath: await coverPathForReference(opened.album.cover_ref), coverRevision: opened.album.cover_revision,
         label: 'explicit selection source after rescan',
       });
       expect(fullSize.sha256).toBe(saved.candidateFullSize.sha256);
@@ -422,12 +424,12 @@ test('FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequa
       expect(opened.album.local_cover_height).toBeGreaterThanOrEqual(2000);
       const image = await coverLookupActions.readDisplayedImageEvidence(
         trackModalActions.trackModal.detailedCoverImage, 'automatic adequate legacy replacement',
-        { expectedCoverPath: opened.album.cover_path, expectedCoverRevision: opened.album.cover_revision },
+        { expectedCoverPath: await coverPathForReference(opened.album.cover_ref), expectedCoverRevision: opened.album.cover_revision },
       );
       expect(image.sha256).not.toBe(baselineImage.sha256);
       const persisted = await readOwnedLegacyCoverState(fixture);
       expect(persisted.origin).toBe('automatic');
-      expect(persisted.coverPath).toBe(opened.album.cover_path);
+      expect(persisted.coverPath).toBe(await coverPathForReference(opened.album.cover_ref));
       await trackModalActions.waitForCoverLookupImprovementIndicator(false);
       await trackModalActions.close();
     };

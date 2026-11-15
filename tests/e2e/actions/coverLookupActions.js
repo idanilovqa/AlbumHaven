@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+import { coverPathForReference, coverReferenceForPath, coverReferenceFromUrl } from '../helpers/coverReferences.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import {
   isCoverLookupCancellationSettledBeforeArchiveWork,
@@ -99,8 +100,11 @@ export async function readDisplayedBlobBytes(element, expected) {
 }
 
 export class CoverLookupActions {
-  constructor(coverLookup) {
+  // [coverReferences] is the server's reference <-> fixture file mapping, read from the isolated
+  // E2E database unless a unit test supplies its own.
+  constructor(coverLookup, { coverReferences = { coverPathForReference, coverReferenceForPath } } = {}) {
     this.coverLookup = coverLookup;
+    this.coverReferences = coverReferences;
     this.laterProviderFixtureHeld = false;
     this.candidateImageFixtureHeld = false;
     this.providerFixtureMode = 'no-results';
@@ -113,7 +117,7 @@ export class CoverLookupActions {
       const pageLocation = new URL(this.coverLookup.page.url());
       const isSameOriginCoverFetch = resourceType === 'fetch'
         && responseLocation.origin === pageLocation.origin
-        && responseLocation.pathname === '/cover';
+        && responseLocation.pathname.startsWith('/cover/');
       if (resourceType !== 'image' && !isSameOriginCoverFetch) return;
       const evidence = (async () => {
         const failure = await response.finished();
@@ -1329,10 +1333,9 @@ export class CoverLookupActions {
       }
       const src = normalizeResponseUrl(displayedSource, this.coverLookup.page.url());
       const coverUrl = new URL(src);
-      const coverPath = coverUrl.pathname === '/cover'
-        ? String(coverUrl.searchParams.get('path') || '')
-        : '';
-      const coverRevision = coverUrl.pathname === '/cover'
+      // The page names the cover by reference; the fixture file comes from the server's mapping.
+      const coverPath = await this.coverReferences.coverPathForReference(coverReferenceFromUrl(src));
+      const coverRevision = coverUrl.pathname.startsWith('/cover/')
         ? String(coverUrl.searchParams.get('v') || '')
         : '';
       if (options.expectedCoverPath && coverPath !== String(options.expectedCoverPath)) {
@@ -1380,8 +1383,11 @@ export class CoverLookupActions {
       if (!coverPath) {
         throw new Error(`Cannot measure full-size ${label} bytes without a cover path.`);
       }
-      const coverUrl = new URL('/cover', this.coverLookup.page.url());
-      coverUrl.searchParams.set('path', coverPath);
+      const reference = await this.coverReferences.coverReferenceForPath(coverPath);
+      if (!reference) {
+        throw new Error(`Cannot measure full-size ${label} bytes: the app has not named that cover.`);
+      }
+      const coverUrl = new URL(`/cover/${encodeURIComponent(reference)}`, this.coverLookup.page.url());
       const coverRevision = String(options.coverRevision || '').trim();
       if (coverRevision) coverUrl.searchParams.set('v', coverRevision);
       source = coverUrl.toString();
@@ -1390,7 +1396,7 @@ export class CoverLookupActions {
     const src = normalizeResponseUrl(source, this.coverLookup.page.url());
     const coverUrl = new URL(src);
     const pageUrl = new URL(this.coverLookup.page.url());
-    if (coverUrl.origin !== pageUrl.origin || coverUrl.pathname !== '/cover') {
+    if (coverUrl.origin !== pageUrl.origin || !coverUrl.pathname.startsWith('/cover/')) {
       throw new Error(`Full-size ${label} evidence must use the production /cover route.`);
     }
     if (String(coverUrl.searchParams.get('size') || '').trim()) {
@@ -1408,14 +1414,14 @@ export class CoverLookupActions {
     const body = await response.body();
     return {
       src,
-      coverPath: String(coverUrl.searchParams.get('path') || ''),
+      coverPath: await this.coverReferences.coverPathForReference(coverReferenceFromUrl(src)),
       coverRevision: String(coverUrl.searchParams.get('v') || ''),
       sha256: createHash('sha256').update(body).digest('hex').toUpperCase(),
     };
   }
 
   async readLocalCoverCardEvidence(card, label) {
-    const sourcePath = String(await card.getAttribute('data-select-local-cover') || '').trim();
+    const sourcePath = await this.coverReferences.coverPathForReference(String(await card.getAttribute('data-select-local-cover') || '').trim());
     const fullSizeSource = String(await card.getAttribute('data-cover-src') || '').trim();
     const name = String(await this.coverLookup.localCoverNameWithin(card).textContent() || '').trim();
     const resolution = String(
@@ -1460,13 +1466,15 @@ export class CoverLookupActions {
     const timeout = options.timeout || 30000;
     const expectedPath = String(sourcePath || '').trim();
     await expect(this.coverLookup.localCoverCards.first()).toBeVisible({ timeout });
+    // Cards name candidates by reference; the gallery has just named every candidate it shows.
+    const expectedReference = await this.coverReferences.coverReferenceForPath(expectedPath);
     const count = await this.coverLookup.localCoverCards.count();
     for (let index = 0; index < count; index += 1) {
       const card = this.coverLookup.localCoverCards.nth(index);
-      const candidatePath = String(
+      const candidateReference = String(
         await card.getAttribute('data-select-local-cover') || '',
       ).trim();
-      if (candidatePath !== expectedPath) continue;
+      if (!expectedReference || candidateReference !== expectedReference) continue;
       await card.click();
       await expect(card).toHaveAttribute('data-cover-lookup-local-active', '1', { timeout });
       return this.readLocalCoverCardEvidence(card, 'selected local cover');
@@ -1490,11 +1498,13 @@ export class CoverLookupActions {
   async deleteLocalCoverBySourcePath(sourcePath, options = {}) {
     const timeout = options.timeout || 30000;
     const expectedPath = String(sourcePath || '').trim();
+    const expectedReference = await this.coverReferences.coverReferenceForPath(expectedPath);
     const count = await this.coverLookup.localCoverCards.count();
     let card = null;
     for (let index = 0; index < count; index += 1) {
       const candidate = this.coverLookup.localCoverCards.nth(index);
-      if (String(await candidate.getAttribute('data-select-local-cover') || '').trim() === expectedPath) {
+      if (expectedReference
+        && String(await candidate.getAttribute('data-select-local-cover') || '').trim() === expectedReference) {
         card = candidate;
         break;
       }
@@ -1522,19 +1532,19 @@ export class CoverLookupActions {
     }
     await expect(this.coverLookup.deleteConfirm).toBeHidden({ timeout });
     await expect.poll(async () => {
-      const paths = [];
+      const references = [];
       const remainingCount = await this.coverLookup.localCoverCards.count();
       for (let index = 0; index < remainingCount; index += 1) {
-        paths.push(String(
+        references.push(String(
           await this.coverLookup.localCoverCards.nth(index)
             .getAttribute('data-select-local-cover') || '',
         ).trim());
       }
-      return paths;
+      return references;
     }, {
       message: `Expected deleted local cover to leave the gallery: ${expectedPath}`,
       timeout,
-    }).not.toContain(expectedPath);
+    }).not.toContain(expectedReference);
     return { payload, stacking };
   }
 
@@ -1599,7 +1609,7 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
-    const selectedCoverPath = String(payload.selected_cover_path || '').trim();
+    const selectedCoverPath = await this.coverReferences.coverPathForReference(String(payload.selected_cover_ref || '').trim());
     if (!selectedCoverPath) {
       throw new Error('Local cover selection did not return an authoritative cover path.');
     }

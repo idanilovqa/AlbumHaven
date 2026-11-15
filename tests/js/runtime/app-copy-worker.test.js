@@ -261,7 +261,8 @@ test('IAR-004: a new version is kept for the next start while the running versio
   assert.ok(cache.entries.has(`${ORIGIN}/static/app.js?v=v2`));
 });
 
-// The server addresses local covers by their file path. Rendered as an attribute and as tojson.
+// Pages served before opaque cover references named local covers by file path; a kept copy of one
+// must still lose every path. Rendered as an attribute and as tojson.
 const COVER_PATH = String.raw`C:\Music\Broadcast\Tender Buttons\cover.jpg`;
 const COVER_URL = `/cover?path=${encodeURIComponent(COVER_PATH)}&size=480&v=process-abc`;
 const OTHER_COVER_URL = `/cover?path=${encodeURIComponent('/srv/music/Mono/cover.png')}&size=480&v=process-abc`;
@@ -396,6 +397,32 @@ test('covers still load from the server online, as today, and each size keeps it
   assert.equal((await (await handle(resource(await coverKey(COVER_URL.replace('size=480', 'size=960'))))).arrayBuffer()).byteLength, 12);
   // A new version of the same cover replaces its bytes under the same key.
   assert.equal(await coverKey(COVER_URL), await coverKey(COVER_URL.replace('v=process-abc', 'v=process-new')));
+});
+
+test('a page naming covers by reference keeps them under opaque keys and fetches them once', async () => {
+  const reference = 'AbCdEfGhIjKlMnOpQrStU-'; // ends in a non-word character
+  const coverUrl = `/cover/${reference}?size=480&v=process-abc`;
+  const referencedPage = () => new Response(
+    '<!doctype html><html><head><meta name="album-haven-app-copy" content="network" data-account="acct-a"></head><body>'
+    + `<img src="${coverUrl.replaceAll('&', '&amp;')}" data-cover-ref="${reference}">`
+    + `<script>window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = ${JSON.stringify({ albums: [{ cover_ref: reference, cover_preview_url: coverUrl }] }).replaceAll('&', '\\u0026')};</script></body></html>`,
+    { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-cache', [COPY_HEADER]: 'acct-a', [VERSION_HEADER]: 'v1' } },
+  );
+  let online = true;
+  const { caches, calls, handle, worker } = setup({
+    respond: request => (!online ? new TypeError('Failed to fetch')
+      : new URL(request.url).pathname === '/' ? referencedPage() : coverResponse(6)),
+  });
+
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  online = false;
+  const kept = await (await handle(navigation('/'))).text();
+
+  assert.equal(calls.filter(request => new URL(request.url).pathname === `/cover/${reference}`).length, 1);
+  assert.ok(kept.includes(`src="${await coverKey(coverUrl)}"`), kept);
+  assert.ok(kept.includes(`"cover_preview_url":"${await coverKey(coverUrl)}"`), kept);
+  assert.equal((await (await handle(resource(await coverKey(coverUrl)))).arrayBuffer()).byteLength, 6);
+  assert.deepEqual(await storedPathLeaks(caches), []);
 });
 
 test('the cover cache holds at most its byte budget, least recently seen first out', async () => {

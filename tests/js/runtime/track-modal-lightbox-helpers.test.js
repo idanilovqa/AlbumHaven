@@ -352,7 +352,7 @@ function loadHelper(options = {}) {
       return String(value);
     },
     albumHasDisplayCover(album) {
-      return Boolean(album?.cover_path || options.albumHasDisplayCover);
+      return Boolean(album?.cover_ref || options.albumHasDisplayCover);
     },
     buildAlbumDisplayCoverUrlCalls: [],
     buildAlbumDisplayCoverUrl(album) {
@@ -1926,13 +1926,13 @@ async function run() {
 
   {
     const { context, trackModal, trackModalCover, galleryImages } = loadHelper({
-      galleryImageSources: ['/cover?path=one', '/cover?path=two'],
+      galleryImageSources: ['/cover/one', '/cover/two'],
       onFetchAlbumDetails({ url }) {
         assert.equal(url, '/album-details?album_key=alpha');
         assert.equal(trackModal.hidden, false, 'the loading shell should be visible before the detail fetch starts');
         assert.deepEqual(
           galleryImages.map((image) => image.src),
-          ['/cover?path=one', '/cover?path=two'],
+          ['/cover/one', '/cover/two'],
           'opening the real modal must not strip already-loaded gallery image sources',
         );
         return new Promise(() => {});
@@ -1943,7 +1943,7 @@ async function run() {
       key: 'alpha',
       name: 'Album Alpha',
       preview_only: true,
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
     });
 
     assert.equal(trackModal.hidden, false);
@@ -1951,12 +1951,12 @@ async function run() {
     assert.deepEqual(context.modalSchedulingEvents, ['fetch-album-details']);
     assert.match(trackModalCover.innerHTML, /Loading cover art/);
     assert.doesNotMatch(trackModalCover.innerHTML, /<img/);
-    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover?path=one', '/cover?path=two']);
+    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
 
     context.closeTrackModal();
 
-    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover?path=one', '/cover?path=two']);
+    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
   }
 
@@ -2061,7 +2061,7 @@ async function run() {
       key: 'alpha',
       name: 'Album Alpha',
       preview_only: true,
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
     });
     const elements = context.getTrackModalElements();
 
@@ -2084,7 +2084,7 @@ async function run() {
     const hydratedAlbum = {
       key: 'alpha',
       name: 'Album Alpha',
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
       tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
     };
     resolveAlbumDetails({
@@ -2095,7 +2095,7 @@ async function run() {
     await flushMicrotasks();
 
     assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha']);
-    assert.equal(context.renderTrackModalReleaseAlbums[0].cover_path, hydratedAlbum.cover_path);
+    assert.equal(context.renderTrackModalReleaseAlbums[0].cover_ref, hydratedAlbum.cover_ref);
     assert.equal(context.state.ui.pendingTrackModalLoadAlbumKey, '');
 
     context.closeTrackModal();

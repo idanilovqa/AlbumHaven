@@ -53,18 +53,18 @@ def test_gallery_keeps_canonical_authority_and_exposes_picker_source(tmp_path):
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
     assert payload["active_cover_path"] == str(canonical)
-    assert payload["selected_source_path"] == str(source)
+    assert payload["selected_source_cover_path"] == str(source)
     active = [item for item in payload["local_covers"] if item["is_active"]]
     assert len(active) == 1
-    assert active[0]["path"] == str(canonical)
+    assert active[0]["candidate_cover_path"] == str(canonical)
     assert active[0]["cover_revision"] == revision
-    source_row = next(row for row in payload["local_covers"] if row["path"] == str(source))
+    source_row = next(row for row in payload["local_covers"] if row["candidate_cover_path"] == str(source))
     assert source_row["cover_revision"] == revision
     cache["track.mp3"]["remote_cover_url"] = "https://example.test/cover.jpg"
     remote = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
-    assert remote["selected_source_path"] is None
+    assert remote["selected_source_cover_path"] is None
     assert not any(item["is_active"] for item in remote["local_covers"])
 
 
@@ -77,8 +77,8 @@ def test_initial_gallery_keeps_canonical_candidate_without_claiming_a_saved_sour
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
     assert payload["active_cover_path"] == str(canonical)
-    assert payload["selected_source_path"] == str(canonical)
-    assert [row["path"] for row in payload["local_covers"] if row["is_active"]] == [str(canonical)]
+    assert payload["selected_source_cover_path"] == str(canonical)
+    assert [row["candidate_cover_path"] for row in payload["local_covers"] if row["is_active"]] == [str(canonical)]
     assert all("cover_revision" not in row for row in payload["local_covers"])
 
 
@@ -95,19 +95,19 @@ def test_initial_gallery_identifies_exact_duplicates_without_removing_local_file
             file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
             is_squareish_cover=lambda _width, _height: True)
     payload = read()
-    rows = {row["path"]: row for row in payload["local_covers"]}
+    rows = {row["candidate_cover_path"]: row for row in payload["local_covers"]}
     assert set(rows) == {str(canonical), str(original), str(alternate)}
-    assert rows[str(original)].get("duplicate_of") == str(canonical)
-    assert "duplicate_of" not in rows[str(alternate)]
-    assert "duplicate_of" not in rows[str(canonical)]
-    assert payload["selected_source_path"] == str(canonical)
+    assert rows[str(original)].get("duplicate_of_cover_path") == str(canonical)
+    assert "duplicate_of_cover_path" not in rows[str(alternate)]
+    assert "duplicate_of_cover_path" not in rows[str(canonical)]
+    assert payload["selected_source_cover_path"] == str(canonical)
     assert all("cover_revision" not in row for row in rows.values())
     original.write_bytes(b"image-c")
-    assert all("duplicate_of" not in row for row in read()["local_covers"])
+    assert all("duplicate_of_cover_path" not in row for row in read()["local_covers"])
     original.unlink()
     assert len(read()["local_covers"]) == 2
     canonical.unlink()
-    assert all("duplicate_of" not in row for row in read()["local_covers"])
+    assert all("duplicate_of_cover_path" not in row for row in read()["local_covers"])
 
 
 def test_saved_or_remote_cover_does_not_apply_initial_duplicate_projection(tmp_path):
@@ -121,10 +121,10 @@ def test_saved_or_remote_cover_does_not_apply_initial_duplicate_projection(tmp_p
             file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
             is_squareish_cover=lambda _width, _height: True)
     saved = read()
-    assert saved["selected_source_path"] == str(source)
-    assert all("duplicate_of" not in row for row in saved["local_covers"])
+    assert saved["selected_source_cover_path"] == str(source)
+    assert all("duplicate_of_cover_path" not in row for row in saved["local_covers"])
     cache["track.mp3"].pop("cover_revision")
     cache["track.mp3"]["remote_cover_url"] = "https://example.test/cover.jpg"
     remote = read()
-    assert remote["selected_source_path"] is None
-    assert all("duplicate_of" not in row for row in remote["local_covers"])
+    assert remote["selected_source_cover_path"] is None
+    assert all("duplicate_of_cover_path" not in row for row in remote["local_covers"])

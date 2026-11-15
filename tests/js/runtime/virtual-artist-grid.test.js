@@ -6769,3 +6769,224 @@ test('BI virtual grid scroll and wheel frames find the visible window by binary 
   });
   assert.ok(large.itemsVisited > 0);
 });
+
+const bootstrapGalleryHandlersPath = path.join(
+  __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'bootstrap-gallery-event-handlers.js',
+);
+
+// An all-artists gallery with `artistCount` loaded artist sections whose reads
+// are counted, plus the gallery jump owners, driven one animation frame at a time.
+function loadCountedGallery(artistCount) {
+  const { countedCollection, createInteractionCounter } = require('../helpers/bounded-interaction-counter');
+  const runtime = createRuntimeContext();
+  const { context } = runtime;
+  vm.runInContext(fs.readFileSync(bootstrapGalleryHandlersPath, 'utf8'), context, { filename: bootstrapGalleryHandlersPath });
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const counter = createInteractionCounter();
+  const frames = new Map();
+  let nextFrame = 0;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    counter.count('animationFrames');
+    nextFrame += 1;
+    frames.set(nextFrame, callback);
+    return nextFrame;
+  };
+  context.cancelBrowserAnimationFrame = frameId => frames.delete(frameId);
+  context.scheduleBrowserTimeout = () => {
+    counter.count('timers');
+    return 0;
+  };
+  context.state.ui = {};
+  const groups = Array.from({ length: artistCount }, (_, index) => ({
+    artist: `Artist ${index}`,
+    albums: [{ key: `album-${index}`, name: `Album ${index}`, year: '2000' }],
+  }));
+  context.state.view = { ...context.state.view, query: '', selected_artist: '', artist_groups: groups };
+  const runFrame = (frameId) => {
+    const callback = frames.get(frameId);
+    assert.equal(typeof callback, 'function', `frame ${frameId} is pending`);
+    frames.delete(frameId);
+    callback();
+  };
+  const runNextFrame = () => runFrame(Math.min(...frames.keys()));
+  // Regrouping replaces the sections, so count the replacement's reads too.
+  const countSections = () => { virtualGrid.sections = countedCollection(virtualGrid.sections, counter); };
+  virtualGrid.setGroups([], [], groups, { preserveScroll: false });
+  while (frames.size) runNextFrame();
+  countSections();
+  return { ...runtime, counter, countSections, frames, runFrame, runNextFrame, virtualGrid };
+}
+
+const artistSection = (virtualGrid, artist) => virtualGrid.sections.find(section => section.group?.artist === artist);
+
+test('BI root gallery artist alignment frame finds the artist by index at production scale', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const alignmentFrame = async (artistCount) => {
+    const { context, counter, runNextFrame, scrollEl, virtualGrid } = loadCountedGallery(artistCount);
+    const target = `Artist ${artistCount - 1}`;
+    context.stabilizeRootGalleryArtistAlignment(target);
+    const counts = await counter.measure(runNextFrame);
+    const section = artistSection(virtualGrid, target);
+    assert.equal(scrollEl.scrollTop, section.top + virtualGrid.sectionHeaderHeight, 'the frame jumps to the requested artist');
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/bootstrap-gallery-event-handlers.js#align',
+    small: 20,
+    large: 14000,
+    run: alignmentFrame,
+    budgets: { itemsVisited: 40, animationFrames: 3, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 24 },
+  });
+  assert.ok(large.itemsVisited > 0 && small.itemsVisited > 0);
+});
+
+test('BI anchored root gallery jump retries an unrendered artist without scanning loaded sections', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const retryFrame = async (artistCount) => {
+    const { context, counter, frames, runNextFrame } = loadCountedGallery(artistCount);
+    let requests = 0;
+    context.renderLibraryLoader = () => {};
+    context.buildApiUrl = () => '/view-data?gallery_anchor_artist=Anchored';
+    context.fetchAndRender = () => {
+      requests += 1;
+      context.state.view = { ...context.state.view, gallery_page: { anchor_artist: 'Anchored' } };
+      return Promise.resolve(true);
+    };
+    assert.equal(await context.scrollRootGalleryToArtist('Anchored'), true);
+    assert.equal(requests, 1);
+    assert.equal(frames.size, 1, 'the anchored artist is not mounted yet, so the jump retries next frame');
+    const counts = await counter.measure(runNextFrame);
+    assert.equal(frames.size, 1, 'the retry keeps waiting for the anchored page');
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered',
+    small: 20,
+    large: 14000,
+    run: retryFrame,
+    budgets: { itemsVisited: 0, animationFrames: 1, renderCommits: 0, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+});
+
+// One rendered row whose measured height differs from the modeled estimate.
+function measuredGalleryRow(virtualGrid, artist, height) {
+  const section = artistSection(virtualGrid, artist);
+  return {
+    getAttribute: name => (name === 'data-section-key' ? section.sectionKey : name === 'data-block-index' ? '0' : ''),
+    getBoundingClientRect: () => ({ top: 0, bottom: height, height }),
+  };
+}
+
+test('BI row measurement frame relayouts only the measured section at production scale', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const measurementFrame = async (artistCount) => {
+    const { containerEl, counter, runFrame, virtualGrid } = loadCountedGallery(artistCount);
+    let rows = [];
+    containerEl.querySelectorAll = selector => (selector === '.album-row[data-section-key][data-block-index]' ? rows : []);
+    // The first measured row replaces the estimate everywhere; later rows reflow alone.
+    rows = [measuredGalleryRow(virtualGrid, 'Artist 0', 300)];
+    virtualGrid.scheduleMeasureRows(true);
+    runFrame(virtualGrid._measureRaf);
+    const middle = Math.floor(artistCount / 2);
+    const measured = artistSection(virtualGrid, `Artist ${middle}`);
+    const following = artistSection(virtualGrid, `Artist ${middle + 1}`);
+    const followingTop = following.top;
+    const totalHeight = virtualGrid.totalHeight;
+    rows = [measuredGalleryRow(virtualGrid, `Artist ${middle}`, 360)];
+    virtualGrid.scheduleMeasureRows(true);
+    const counts = await counter.measure(() => runFrame(virtualGrid._measureRaf));
+    assert.equal(measured.blockHeights[0], 360);
+    assert.equal(following.top, followingTop + 60, 'later sections move by the measured height change');
+    assert.equal(virtualGrid.totalHeight, totalHeight + 60);
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows',
+    small: 20,
+    large: 14000,
+    run: measurementFrame,
+    budgets: { itemsVisited: 40, animationFrames: 3, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 24 },
+  });
+  assert.ok(large.itemsVisited > 0 && small.itemsVisited > 0);
+});
+
+test('row measurement keeps section geometry identical to a full relayout', () => {
+  const { containerEl, runFrame, virtualGrid } = loadCountedGallery(40);
+  let rows = [measuredGalleryRow(virtualGrid, 'Artist 0', 300)];
+  containerEl.querySelectorAll = selector => (selector === '.album-row[data-section-key][data-block-index]' ? rows : []);
+  virtualGrid.scheduleMeasureRows(true);
+  runFrame(virtualGrid._measureRaf);
+  rows = [measuredGalleryRow(virtualGrid, 'Artist 7', 410), measuredGalleryRow(virtualGrid, 'Artist 30', 180)];
+  virtualGrid.scheduleMeasureRows(true);
+  runFrame(virtualGrid._measureRaf);
+  const geometry = () => virtualGrid.sections.map(section => [section.top, section.bottom, section.height]);
+  const incremental = { sections: geometry(), totalHeight: virtualGrid.totalHeight };
+  virtualGrid.recalculate({ preserveColumnGeometry: true });
+  assert.deepEqual({ sections: geometry(), totalHeight: virtualGrid.totalHeight }, incremental);
+});
+
+test('BI settled scroll restore frame resolves the anchored section by index at production scale', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const restoreFrame = async (artistCount) => {
+    const { counter, countSections, runFrame, scrollEl, virtualGrid } = loadCountedGallery(artistCount);
+    const artist = `Artist ${artistCount - 2}`;
+    const section = artistSection(virtualGrid, artist);
+    const anchor = {
+      scrollLeft: 0,
+      scrollTop: section.top + 50,
+      albumKey: `album-${artistCount - 2}`,
+      albumName: `Album ${artistCount - 2}`,
+      albumYear: '2000',
+      sectionOccurrenceKey: virtualGrid.getRenderedSectionKey(section),
+      offsetTop: 10,
+    };
+    const groups = virtualGrid.sections.filter(candidate => candidate.kind === 'artist').map(candidate => candidate.group);
+    virtualGrid.setGroups([], [], groups, { preserveScroll: true, semanticScrollAnchor: anchor });
+    countSections();
+    scrollEl.scrollTop = 0;
+    const counts = await counter.measure(() => runFrame(virtualGrid._scrollRestoreRaf));
+    const restored = artistSection(virtualGrid, artist);
+    assert.equal(scrollEl.scrollTop, restored.top + virtualGrid.sectionHeaderHeight + restored.blockOffsets[0] - 10);
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/virtual-artist-grid.js#scheduleSettledScrollRestore',
+    small: 20,
+    large: 14000,
+    run: restoreFrame,
+    budgets: { itemsVisited: 40, animationFrames: 3, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 24 },
+  });
+  assert.ok(large.itemsVisited > 0 && small.itemsVisited > 0);
+});
+
+test('BI deferred cover resume frame waits for grid settlement without touching loaded sections', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const deferredResumeFrame = async (artistCount) => {
+    const { context, counter, frames, runNextFrame, virtualGrid } = loadCountedGallery(artistCount);
+    const token = virtualGrid.suspendSelectedArtistCoverLoadsForUserAction();
+    virtualGrid._measureRaf = 1;
+    assert.equal(virtualGrid.resumeSelectedArtistCoverLoadsAfterUserAction(token), true);
+    const resumes = context.galleryCoverSchedulerResumes;
+    const counts = await counter.measure(runNextFrame);
+    assert.equal(frames.size, 1, 'pending measurement keeps the resume deferred');
+    assert.equal(context.galleryCoverSchedulerResumes, resumes);
+    virtualGrid._measureRaf = null;
+    runNextFrame();
+    assert.equal(context.galleryCoverSchedulerResumes, resumes + 1, 'settlement resumes cover loads once');
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction',
+    small: 20,
+    large: 14000,
+    run: deferredResumeFrame,
+    budgets: { itemsVisited: 0, animationFrames: 1, renderCommits: 0, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+});

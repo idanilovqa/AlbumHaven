@@ -1045,18 +1045,38 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#align",
-      "action": "scheduleBrowserAnimationFrame timers installed by align",
+      "action": "Keep correcting a root gallery artist jump each frame until its heading settles at the top",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#align:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "animationFrames": 3,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI root gallery artist alignment frame finds the artist by index at production scale",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the virtual grid artist-section index; each alignment frame then scans every loaded section for the artist again, with no data or API change."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#armArtistTreeLongPressClickGuard",
@@ -1374,18 +1394,39 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered",
-      "action": "scheduleBrowserAnimationFrame timers installed by scrollWhenRendered",
+      "action": "Retry an anchored root gallery jump each frame until the anchored page mounts its artist",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "animationFrames": 1,
+        "renderCommits": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI anchored root gallery jump retries an unrendered artist without scanning loaded sections",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the virtual grid artist-section index; each retry frame then scans every loaded section for the anchored artist again, with no data or API change."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#stabilizeRootGalleryArtistAlignment",
@@ -6653,7 +6694,7 @@
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction",
-      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction",
+      "action": "Defer resuming suspended gallery cover loads frame by frame until pending grid render, measurement and stabilization settle",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction:timer:scheduleBrowserAnimationFrame"
       ],
@@ -6664,11 +6705,29 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "animationFrames": 1,
+        "renderCommits": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI deferred cover resume frame waits for grid settlement without touching loaded sections",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; cover resume is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows",
-      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.scheduleMeasureRows",
+      "action": "Measure rendered gallery rows on the next frame and reflow only the sections whose heights changed",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows:timer:scheduleBrowserAnimationFrame"
       ],
@@ -6678,8 +6737,27 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "animationFrames": 3,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI row measurement frame relayouts only the measured section at production scale",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the measured-section reflow and section shift tree; every changed row measurement then relayouts every loaded section again, with no data or API change."
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleSettledMeasurement",
@@ -6729,7 +6807,7 @@
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#scheduleSettledScrollRestore",
-      "action": "scheduleBrowserAnimationFrame timers installed by scheduleSettledScrollRestore",
+      "action": "Reapply a regrouped gallery's preserved scroll anchor on the settled frame and recheck pagination",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#scheduleSettledScrollRestore:timer:scheduleBrowserAnimationFrame"
       ],
@@ -6740,7 +6818,26 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "animationFrames": 3,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI settled scroll restore frame resolves the anchored section by index at production scale",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the rendered-section index; each settled restore then scans every loaded section for the anchor occurrence again, with no data or API change."
     },
     {
       "id": "js:selection-accent.js#load",

@@ -2870,57 +2870,6 @@
       }
     },
     {
-      "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",
-      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:event:abort",
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetch",
-        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:timer:setTimeout"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/pending-projection-fetch.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "page",
-      "proof": "contract",
-      "requestOwnership": {
-        "allowed": [
-          "/album-details",
-          "/home-data",
-          "/utilities/problematic-files",
-          "/utilities/problematic-files/detail",
-          "/versions/mark",
-          "/view-data",
-          "/view-data*"
-        ],
-        "forbidden": []
-      },
-      "cardinalities": {
-        "small": 50,
-        "production": 20000
-      },
-      "budgets": {
-        "requests": 4
-      },
-      "growth": {
-        "metric": "requests",
-        "largeMinusSmallMax": 0
-      },
-      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
-      "testIdentity": "request capture: a pending gallery projection retries the same page once per second until cancelled",
-      "performanceTargets": [
-        "idle-memory",
-        "selected-artist",
-        "artist-tree-scroll-navigation",
-        "utility-problematic-files",
-        "problematic-files-focused"
-      ],
-      "rollback": "Revert the shared pending-projection retry; gallery requests keep their own retry and Album Details, Problematic Files and version marking answer a cold process with the pending error again."
-    },
-    {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",
       "action": "Dispatch Home and selected-artist startup hydration follow-ups after busy retries",
       "entrypoints": [
@@ -3580,6 +3529,57 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",
+      "action": "Retry a pending projection request once per second until it answers, cancels, or reaches its 60 s deadline",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:event:abort",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#fetchRetryingPendingProjection:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-projection-fetch.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/album-details",
+          "/home-data",
+          "/utilities/problematic-files",
+          "/utilities/problematic-files/detail",
+          "/versions/mark",
+          "/view-data",
+          "/view-data*"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 50,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a pending gallery projection retries the same page once per second until cancelled",
+      "performanceTargets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ],
+      "rollback": "Revert the shared pending-projection retry; gallery requests keep their own retry and Album Details, Problematic Files and version marking answer a cold process with the pending error again."
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#acceptPlaybackClaim",
@@ -6330,6 +6330,22 @@
       }
     },
     {
+      "id": "py:__init__.py#_start_library_warmup.<locals>.warm_library_state",
+      "action": "Warm the connection pool and hydrate library state on a startup thread",
+      "entrypoints": [
+        "py:music_app/__init__.py#_start_library_warmup.<locals>.warm_library_state:background:thread"
+      ],
+      "owners": [
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/account_asgi.py#get_account",
       "action": "Serve GET /account",
       "entrypoints": [
@@ -8948,6 +8964,22 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/musicbrainz_enrichment_asgi.py#load_problematic_artist_items",
+      "action": "Load the owner's unresolved MusicBrainz artist rows for Problematic Files on an executor",
+      "entrypoints": [
+        "py:music_app/routes/musicbrainz_enrichment_asgi.py#load_problematic_artist_items:background:executor"
+      ],
+      "owners": [
+        "music_app/routes/musicbrainz_enrichment_asgi.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/musicbrainz_enrichment_asgi.py#retry_artist",
       "action": "Serve POST /{local_artist_id}/retry",
       "entrypoints": [
@@ -9123,6 +9155,22 @@
         "BI-13"
       ],
       "workClass": "page",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/web_asgi.py#_cover_response",
+      "action": "Resolve and serve one cover image variant on an executor",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#_cover_response:background:executor"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
       "proof": "static"
     },
     {
@@ -9474,6 +9522,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/cache.py#save_cache_updates_to_disk_for_config",
+      "action": "Persist changed scan-cache entries on an executor",
+      "entrypoints": [
+        "py:music_app/services/cache.py#save_cache_updates_to_disk_for_config:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cache.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:services/cache.py#schedule_cache_updates_save_for_config",
       "action": "Run scheduler schedule_cache_updates_save_for_config",
       "entrypoints": [
@@ -9487,6 +9551,38 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_lookup_diagnostics.py#_run_provider_call",
+      "action": "Run one cover provider call for one album in a diagnostics scenario",
+      "entrypoints": [
+        "py:music_app/services/cover_lookup_diagnostics.py#_run_provider_call:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_lookup_diagnostics.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_lookup_diagnostics.py#_run_scenario",
+      "action": "Run one cover lookup diagnostics scenario for one album",
+      "entrypoints": [
+        "py:music_app/services/cover_lookup_diagnostics.py#_run_scenario:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_lookup_diagnostics.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
       "proof": "static"
     },
     {
@@ -9522,6 +9618,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/cover_lookup_runtime.py#_run_cover_lookup_save_remote_task",
+      "action": "Download and save a chosen remote cover for the selected album's tracks",
+      "entrypoints": [
+        "py:music_app/services/cover_lookup_runtime.py#_run_cover_lookup_save_remote_task:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_lookup_runtime.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "selected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:services/cover_lookup_tasks.py#_reconcile_stale_cover_lookup_tasks",
       "action": "Run reconciler _reconcile_stale_cover_lookup_tasks",
       "entrypoints": [
@@ -9535,6 +9647,134 @@
         "BI-14"
       ],
       "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_manual_links.py#_add_manual_cover_candidates_from_urls_sequential",
+      "action": "Fetch cover candidates from the links the user pasted, one at a time",
+      "entrypoints": [
+        "py:music_app/services/cover_manual_links.py#_add_manual_cover_candidates_from_urls_sequential:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_manual_links.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "selected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_preview_backfill.py#CoverPreviewBackfill._run_forever",
+      "action": "Backfill missing cover previews in periodic passes",
+      "entrypoints": [
+        "py:music_app/services/cover_preview_backfill.py#CoverPreviewBackfill._run_forever:background:thread"
+      ],
+      "owners": [
+        "music_app/services/cover_preview_backfill.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_bandcamp.py#_build_bandcamp_label_catalog_matches.<locals>.probe_direct_account_urls",
+      "action": "Probe up to eight Bandcamp accounts for one album's cover",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_bandcamp.py#_build_bandcamp_label_catalog_matches.<locals>.probe_direct_account_urls:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_bandcamp.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_bandcamp.py#_build_bandcamp_label_catalog_matches.<locals>.probe_known_accounts",
+      "action": "Probe known Bandcamp artist accounts and their catalogs for one album's cover",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_bandcamp.py#_build_bandcamp_label_catalog_matches.<locals>.probe_known_accounts:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_bandcamp.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_discogs.py#search_discogs_cover_candidates",
+      "action": "Search Discogs for one album's cover candidates",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_discogs.py#search_discogs_cover_candidates:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_discogs.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_musicbrainz_caa.py#search_cover_art_archive_candidates",
+      "action": "Search MusicBrainz and the Cover Art Archive for one album's cover candidates",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_musicbrainz_caa.py#search_cover_art_archive_candidates:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_musicbrainz_caa.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_registry.py#_search_service_cover_candidates.<locals>.run_service_searches",
+      "action": "Run each enabled cover service search for one album",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_registry.py#_search_service_cover_candidates.<locals>.run_service_searches:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_registry.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_refresh_execution.py#execute_cover_job",
+      "action": "Execute one album's cover refresh job",
+      "entrypoints": [
+        "py:music_app/services/cover_refresh_execution.py#execute_cover_job:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_refresh_execution.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "selected-set",
       "proof": "static"
     },
     {
@@ -9957,6 +10197,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/covers.py#_drain_background_cover_admissions",
+      "action": "Drain queued background cover variant admissions",
+      "entrypoints": [
+        "py:music_app/services/covers.py#_drain_background_cover_admissions:background:executor"
+      ],
+      "owners": [
+        "music_app/services/covers.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/covers.py#needs_remote_cover_refresh",
       "action": "Run refresh needs_remote_cover_refresh",
       "entrypoints": [
@@ -10021,6 +10277,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/generated_preview_relocation.py#GeneratedPreviewRelocationWorker._run",
+      "action": "Relocate generated previews whenever woken or on the refresh interval",
+      "entrypoints": [
+        "py:music_app/services/generated_preview_relocation.py#GeneratedPreviewRelocationWorker._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/generated_preview_relocation.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/generated_preview_relocation.py#_copy_publish",
       "action": "Run publisher _copy_publish",
       "entrypoints": [
@@ -10028,6 +10300,38 @@
       ],
       "owners": [
         "music_app/services/generated_preview_relocation.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker",
+      "action": "Retry pending Last.fm scrobbles in periodic passes",
+      "entrypoints": [
+        "py:music_app/services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker:background:thread"
+      ],
+      "owners": [
+        "music_app/services/lastfm_retry.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm",
+      "action": "Prewarm a utility projection (Problematic Files and others) on an executor",
+      "entrypoints": [
+        "py:music_app/services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm:background:executor"
+      ],
+      "owners": [
+        "music_app/services/library_browse_postgres.py"
       ],
       "rules": [
         "BI-07",
@@ -10246,6 +10550,22 @@
         "BI-14"
       ],
       "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/metadata.py#read_metadata_for_file",
+      "action": "Read one media file's tags and stat on an executor",
+      "entrypoints": [
+        "py:music_app/services/metadata.py#read_metadata_for_file:background:executor"
+      ],
+      "owners": [
+        "music_app/services/metadata.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
       "proof": "static"
     },
     {
@@ -10529,6 +10849,38 @@
       "proof": "static"
     },
     {
+      "id": "py:services/problematic_albums.py#_run_problematic_albums_prewarm",
+      "action": "Prewarm the problematic albums projection when its signature is current",
+      "entrypoints": [
+        "py:music_app/services/problematic_albums.py#_run_problematic_albums_prewarm:background:executor"
+      ],
+      "owners": [
+        "music_app/services/problematic_albums.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/relation_projection_postgres.py#_cancel_active_connection_on_request.<locals>.cancel_active_connection",
+      "action": "Cancel the active relation projection query when cancellation is requested",
+      "entrypoints": [
+        "py:music_app/services/relation_projection_postgres.py#_cancel_active_connection_on_request.<locals>.cancel_active_connection:background:thread"
+      ],
+      "owners": [
+        "music_app/services/relation_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:services/relation_state.py#refresh_relation_views_in_state",
       "action": "Run refresh refresh_relation_views_in_state",
       "entrypoints": [
@@ -10542,6 +10894,38 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/save_tasks.py#finalize_save_task",
+      "action": "Finalize a save task for the edited tracks",
+      "entrypoints": [
+        "py:music_app/services/save_tasks.py#finalize_save_task:background:executor"
+      ],
+      "owners": [
+        "music_app/services/save_tasks.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/save_tasks.py#finalize_structural_tag_edit_save_task",
+      "action": "Finalize a structural tag edit save task and rebuild the affected albums",
+      "entrypoints": [
+        "py:music_app/services/save_tasks.py#finalize_structural_tag_edit_save_task:background:executor"
+      ],
+      "owners": [
+        "music_app/services/save_tasks.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
       "proof": "static"
     },
     {
@@ -10621,6 +11005,22 @@
       "action": "Run background _drain_watcher_cover_refresh_queue",
       "entrypoints": [
         "py:music_app/services/state.py#_drain_watcher_cover_refresh_queue:background:while"
+      ],
+      "owners": [
+        "music_app/services/state.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/state.py#_hydrate_library_state_worker",
+      "action": "Hydrate library state from the cache on an executor",
+      "entrypoints": [
+        "py:music_app/services/state.py#_hydrate_library_state_worker:background:executor"
       ],
       "owners": [
         "music_app/services/state.py"
@@ -10964,6 +11364,38 @@
       "command": "python -m pytest tests/py/test_targeted_library_reconciliation.py::test_targeted_reconcile_contract_reads_only_the_event_album_at_production_library_size",
       "testIdentity": "test_targeted_reconcile_contract_reads_only_the_event_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:services/targeted_reconciliation_scheduler.py#TargetedReconciliationScheduler._run_catch_up",
+      "action": "Catch up targeted reconciliation for a batch of library roots",
+      "entrypoints": [
+        "py:music_app/services/targeted_reconciliation_scheduler.py#TargetedReconciliationScheduler._run_catch_up:background:executor"
+      ],
+      "owners": [
+        "music_app/services/targeted_reconciliation_scheduler.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/utility_rules.py#_run_utility_rules_prewarm",
+      "action": "Prewarm the utility rules projection when its signature is current",
+      "entrypoints": [
+        "py:music_app/services/utility_rules.py#_run_utility_rules_prewarm:background:executor"
+      ],
+      "owners": [
+        "music_app/services/utility_rules.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
     },
     {
       "id": "py:services/view_payloads.py#project_library_watch_health",

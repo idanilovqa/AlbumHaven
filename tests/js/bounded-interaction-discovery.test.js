@@ -181,6 +181,153 @@ test('lookups and indexed loops over owned collections and primitives are not ha
   `, FILE), []);
 });
 
+test('string-typed bindings are not collections, however they are reassigned or passed on', () => {
+  assert.deepEqual(findJavaScriptHazards(`
+    root.addEventListener('scroll', (event) => {
+      const source = String(event.target.dataset.src || '').trim();
+      let path = source;
+      const hash = path.indexOf('#');
+      if (hash >= 0) path = path.slice(0, hash);
+      const id = Math.random().toString(16).slice(2);
+      const label = \`\${id}:\${path}\`;
+      label.includes('?') ? record(label) : record(path.slice(1));
+      for (const part of label.split('&')) part.indexOf('=');
+    });
+  `, FILE), []);
+});
+
+test('a binding counts as a string only when every value it is ever given is one', () => {
+  const hazards = findJavaScriptHazards(`
+    root.addEventListener('scroll', () => {
+      let path = String(state.path);
+      if (state.flag) path = state.rows;
+      path.includes('x');
+      let other = String(state.path);
+      [other] = state.rows;
+      other.slice(1);
+    });
+  `, FILE);
+  assert.deepEqual(hazards.map(hazard => hazard.operation), ['includes', 'slice']);
+});
+
+test('fixed-length typed arrays, strings split apart, and URLs are bounded by construction', () => {
+  assert.deepEqual(findJavaScriptHazards(`
+    root.addEventListener('scroll', (event) => {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 15) | 64;
+      const hex = [...bytes].map(value => value.toString(16)).join('');
+      Array.from(window.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16)).join('');
+      const parsed = new URL(event.target.href, location.href);
+      [...parsed.searchParams.keys()].every(key => key === 'token');
+      const sources = [event.target.src, event.target.dataset.fallback].map(String).filter(Boolean);
+      sources.filter((source, index) => sources.indexOf(source) === index);
+      return hex;
+    });
+  `, FILE), []);
+});
+
+// `owner:operation` for each reported hazard; one owner per case, because a
+// handler reports each operation once.
+const reportedByOwner = source => findJavaScriptHazards(source, FILE)
+  .map(hazard => `${hazard.entrypoint.split('#')[1].split(':')[0]}:${hazard.operation}`).sort();
+
+test('a value bounded by construction stays a hazard once it can grow or escape', () => {
+  assert.deepEqual(reportedByOwner(`
+    function grownUrl() {
+      root.addEventListener('click', () => {
+        const params = new URL(location.href);
+        state.rows.forEach(row => params.searchParams.append('id', row.id));
+        return [...params.searchParams.keys()];
+      });
+    }
+    function escapedUrl() {
+      root.addEventListener('click', () => {
+        const params = new URL(location.href);
+        fill(params);
+        return [...params.searchParams.keys()];
+      });
+    }
+    function bounded() {
+      root.addEventListener('click', () => {
+        const params = new URL(location.href);
+        return [...params.searchParams.keys()];
+      });
+    }
+  `), ['escapedUrl:spread', 'grownUrl:forEach', 'grownUrl:spread']);
+});
+
+test('spreading or enumerating a fixed-shape object is bounded', () => {
+  assert.deepEqual(findJavaScriptHazards(`
+    function claimContext() { return active() ? { clientId: tabId(), claimToken: token() } : {}; }
+    function emptyFields(session) { if (!session) return {}; return { id: session.id, total: session.total }; }
+    root.addEventListener('scroll', (event) => {
+      const claim = claimContext();
+      const payload = { ...emptyFields(event.session), ...claim, path: String(event.target.dataset.path) };
+      for (const key in payload) record(key);
+      Object.keys(claim).forEach(key => record(key));
+      return payload;
+    });
+  `, FILE), []);
+});
+
+test('spreading or enumerating a keyed map, shared state, or an object that escapes stays a hazard', () => {
+  assert.deepEqual(reportedByOwner(`
+    const DEFAULTS = { theme: 'dark', size: 2 };
+    const index = {};
+    const target = {};
+    function addRow(row) { index[row.id] = row; }
+    function fill() { Object.assign(target, state.byId); }
+    function cached() { return state.cache; }
+    function fixed() { root.addEventListener('click', () => [{ ...DEFAULTS }, Object.keys(DEFAULTS)]); }
+    function keyed() { root.addEventListener('click', () => [{ ...index }, Object.keys(index)]); }
+    function escaped() { root.addEventListener('click', () => ({ ...target })); }
+    function returnsShared() { root.addEventListener('click', () => ({ ...cached() })); }
+    function shared() { root.addEventListener('click', () => ({ ...state.byId })); }
+  `), [
+    'escaped:spread',
+    'keyed:Object.keys',
+    'keyed:spread',
+    'returnsShared:spread',
+    'shared:spread',
+  ]);
+});
+
+test('an element or member of a bounded value is not itself bounded', () => {
+  assert.deepEqual(reportedByOwner(`
+    const LISTS = [state.rows, state.albums];
+    const CONTEXT = { rows: state.rows };
+    function element() { root.addEventListener('click', () => LISTS[0].forEach(row => row.seen)); }
+    function found() { root.addEventListener('click', () => LISTS.find(Boolean).map(row => row.id)); }
+    function member() { root.addEventListener('click', () => CONTEXT.rows.filter(Boolean)); }
+    function count() { root.addEventListener('click', () => LISTS.map(list => list.length)); }
+  `), ['element:forEach', 'found:map', 'member:filter']);
+});
+
+test('Object.entries and Array.from are as large as their argument', () => {
+  assert.deepEqual(reportedByOwner(`
+    function build(query) { Object.entries(query || {}).forEach(([key, value]) => record(key, value)); }
+    function fromParam() { root.addEventListener('click', event => build(event.query)); }
+    function fromState() {
+      root.addEventListener('click', () => {
+        Object.entries(state.byId).forEach(entry => record(entry));
+        return Array.from(state.rows).map(row => row.id);
+      });
+    }
+  `), ['fromState:Array.from', 'fromState:Object.entries', 'fromState:forEach', 'fromState:map']);
+});
+
+test('a top-level binding is proven only when no other runtime script can grow it', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const handler = "root.addEventListener('scroll', () => KEYS.forEach(key => record(key)));";
+  const alone = analyzeJavaScriptSources({ [FILE]: `const KEYS = ['a', 'b'];\n${handler}` });
+  assert.deepEqual(alone.hazards, []);
+  const grown = analyzeJavaScriptSources({
+    [FILE]: `const KEYS = ['a', 'b'];\n${handler}`,
+    'music_app/static/js/runtime/other.js': 'function grow() { state.rows.forEach(row => KEYS.push(row.id)); }',
+  });
+  assert.deepEqual(grown.hazards.filter(hazard => hazard.path === FILE).map(hazard => hazard.operation), ['forEach']);
+});
+
 test('a template hole that only appends a query string keeps the literal request path', () => {
   const [request] = discoverJavaScriptSource('function load(qs) { return fetch(`/view-data${qs ? `?${qs}` : \'\'}`); }', FILE);
   assert.deepEqual(request.targets.map(item => item.target), ['/view-data?${}']);

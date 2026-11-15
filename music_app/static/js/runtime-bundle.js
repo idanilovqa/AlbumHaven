@@ -4681,7 +4681,7 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
 const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
-const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), pending: false, signature: '[]', loadedAt: 0, promise: null };
 
 function galleryArtistMusicBrainzStatusKey(artist) {
   return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
@@ -4700,13 +4700,15 @@ function getGalleryArtistMusicBrainzStatus(group = {}) {
 function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
   if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
     galleryArtistMusicBrainzStatus.byArtist.clear();
+    galleryArtistMusicBrainzStatus.pending = false;
     galleryArtistMusicBrainzStatus.signature = '[]';
     return Promise.resolve(false);
   }
   if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
   // Poll quickly only while a first lookup is pending; otherwise back off.
-  const pending = [...galleryArtistMusicBrainzStatus.byArtist.values()].some((value) => value.state === 'pending');
-  const interval = pending ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
+  const interval = galleryArtistMusicBrainzStatus.pending
+    ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS
+    : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
   if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
     return Promise.resolve(false);
   }
@@ -4735,6 +4737,7 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
         : new Set();
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
+      galleryArtistMusicBrainzStatus.pending = [...next.values()].some((value) => value.state === 'pending');
       if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
       // A finished lookup, re-check or manual match changes the shared Gallery
       // projection (links, pills). Reload the view when it shows such an artist,
@@ -5226,39 +5229,49 @@ function syncGalleryCardMetadataMotion(root) {
   if (!mobile) { galleryCardMetadataMotion?.dispose(); galleryCardMetadataMotion = null; return; }
   if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
   if (!galleryCardMetadataMotion) {
-    const rows = new Map();
+    // rows maps each metadata row to its text; texts maps the text back. A frame
+    // refreshes only the rows whose row or text resized (removal resizes to zero).
+    const rows = new Map(), texts = new Map(), dirty = new Set();
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let frame = 0, disposed = false;
     const refresh = () => {
       frame = 0;
-      for (const [row, text] of rows) {
-        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
+      for (const row of dirty) {
+        const text = rows.get(row);
+        if (!text) continue;
+        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); texts.delete(text); continue; }
         const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
         row.style.setProperty('--card-text-distance', `${motion.distance}px`);
         row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
       }
+      dirty.clear();
     };
     const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(refresh); };
-    const observer = new ResizeObserver(schedule);
-    reduced.addEventListener('change', schedule);
-    document.fonts?.ready.then(schedule);
+    const scheduleAll = () => { rows.forEach((_text, row) => dirty.add(row)); schedule(); };
+    const observer = new ResizeObserver((entries) => {
+      for (const { target } of entries) dirty.add(texts.get(target) || target);
+      schedule();
+    });
+    reduced.addEventListener('change', scheduleAll);
+    document.fonts?.ready.then(scheduleAll);
     galleryCardMetadataMotion = {
       update(root) {
         root.querySelectorAll('.album-card [data-gallery-metadata-text]').forEach(text => {
           const row = text.parentElement, previous = rows.get(row);
           if (previous === text) return;
-          if (previous) observer.unobserve(previous);
-          rows.set(row, text); observer.observe(row); observer.observe(text);
+          if (previous) { observer.unobserve(previous); texts.delete(previous); }
+          rows.set(row, text); texts.set(text, row); dirty.add(row);
+          observer.observe(row); observer.observe(text);
         });
         schedule();
       },
       dispose() {
         disposed = true;
         if (frame) cancelAnimationFrame(frame);
-        observer.disconnect(); reduced.removeEventListener('change', schedule);
+        observer.disconnect(); reduced.removeEventListener('change', scheduleAll);
         for (const row of rows.keys()) row.classList.remove('is-card-text-overflowing');
-        rows.clear();
+        rows.clear(); texts.clear(); dirty.clear();
       },
     };
   }
@@ -42429,6 +42442,50 @@ const MAX_VIRTUAL_GRID_DIAGNOSTIC_EVENTS = 24;
 const VIRTUAL_GRID_SCROLL_RENDER_FALLBACK_MS = 100;
 const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
 
+// Height changes recorded since the last full layout, as a Fenwick tree over
+// section indexes: a row measurement moves every later section in O(log n)
+// instead of relaying out the whole loaded gallery.
+class VirtualSectionShifts {
+  constructor(length) {
+    this.tree = new Float64Array(length + 1);
+  }
+
+  add(index, delta) {
+    for (let position = index + 1; position < this.tree.length; position += position & -position) {
+      this.tree[position] += delta;
+    }
+  }
+
+  before(index) {
+    let total = 0;
+    for (let position = index; position > 0; position -= position & -position) total += this.tree[position];
+    return total;
+  }
+}
+
+// The first row height measured under the current measure keys, if any.
+function findMeasuredRowHeight(blockHeights, measureKeys = [], measuredKeys = []) {
+  return blockHeights.find((height, index) => {
+    const measureKey = String(measureKeys[index] || '');
+    return measureKey.startsWith('row:')
+      && String(measuredKeys[index] || '') === measureKey
+      && Number(height) > 0;
+  });
+}
+
+const VIRTUAL_SECTION_GEOMETRY = Object.freeze({
+  top: {
+    configurable: true,
+    enumerable: true,
+    get() { return this.layoutTop + this.layoutShifts.before(this.layoutIndex); },
+  },
+  bottom: {
+    configurable: true,
+    enumerable: true,
+    get() { return this.top + this.height; },
+  },
+});
+
 class VirtualArtistGrid {
   constructor() {
     this.scrollEl = document.getElementById('albums-scroll');
@@ -42453,6 +42510,9 @@ class VirtualArtistGrid {
     this.sections = [];
     this.albumCardNodeCache = new Map();
     this.sectionByKey = new Map();
+    this._sectionShifts = new VirtualSectionShifts(0);
+    this._layoutRowEstimateFromMeasurement = false;
+    this._layoutRowEstimateMeasured = false;
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
@@ -42885,9 +42945,7 @@ class VirtualArtistGrid {
           ))
           : null
       );
-      const capturedOccurrenceStillExists = Boolean(sectionOccurrenceKey) && this.sections.some((section) => (
-        this.getRenderedSectionKey(section) === sectionOccurrenceKey
-      ));
+      const capturedOccurrenceStillExists = this.sectionByRenderedKey.has(sectionOccurrenceKey);
       const fallbackAlbumTrigger = !sectionOccurrenceKey || !capturedOccurrenceStillExists
         ? matchingAlbumTriggers[0] || null
         : null;
@@ -42914,10 +42972,8 @@ class VirtualArtistGrid {
         return;
       }
       if (sectionOccurrenceKey && anchorAlbumName) {
-        const modeledSection = this.sections.find((section) => (
-          section.kind === 'artist'
-          && this.getRenderedSectionKey(section) === sectionOccurrenceKey
-        ));
+        const occurrenceSection = this.sectionByRenderedKey.get(sectionOccurrenceKey);
+        const modeledSection = occurrenceSection?.kind === 'artist' ? occurrenceSection : undefined;
         const modeledBlocks = Array.isArray(modeledSection?.blocksData)
           ? modeledSection.blocksData
           : modeledSection ? this.getBlocksForSection(modeledSection) : [];
@@ -42981,10 +43037,7 @@ class VirtualArtistGrid {
   scrollToArtist(artist) {
     const normalizedArtist = String(artist || '').trim();
     if (!normalizedArtist) return false;
-    const section = this.sections.find((candidate) => (
-      candidate.kind === 'artist'
-      && String(candidate.group?.artist || '') === normalizedArtist
-    ));
+    const section = this.artistSectionByName.get(normalizedArtist);
     if (!section) return false;
     if (this._scrollRestoreRaf) {
       cancelBrowserAnimationFrame(this._scrollRestoreRaf);
@@ -43428,6 +43481,25 @@ class VirtualArtistGrid {
     );
   }
 
+  get sections() {
+    return this._sections;
+  }
+
+  // Lookups by rendered occurrence and by artist read one section instead of
+  // scanning every loaded section.
+  set sections(sections) {
+    this._sections = sections;
+    this.sectionByRenderedKey = new Map();
+    this.artistSectionByName = new Map();
+    sections.forEach((section) => {
+      this.sectionByRenderedKey.set(this.getRenderedSectionKey(section), section);
+      const artist = String(section.group?.artist || '');
+      if (section.kind === 'artist' && !this.artistSectionByName.has(artist)) {
+        this.artistSectionByName.set(artist, section);
+      }
+    });
+  }
+
   hasDeferredMountedGroupUpdate() {
     return Boolean(this._deferredSetGroups);
   }
@@ -43480,26 +43552,25 @@ class VirtualArtistGrid {
       this.cardTrackWidth = mobileGeometry.cardTrackWidth;
     }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
-    const measuredRowHeight = this.sections.flatMap((section) => (
-      section.rowGeometryKey === rowGeometryKey
-        ? (section.blockHeights || []).filter((_height, index) => {
-          const measureKey = String(section.blockMeasureKeys?.[index] || '');
-          return measureKey.startsWith('row:')
-            && String(section.measuredBlockKeys?.[index] || '') === measureKey;
-        })
-        : []
-    )).find(height => Number(height) > 0);
+    let measuredRowHeight;
+    for (const section of this.sections) {
+      if (section.rowGeometryKey !== rowGeometryKey) continue;
+      measuredRowHeight = findMeasuredRowHeight(section.blockHeights || [], section.blockMeasureKeys, section.measuredBlockKeys);
+      if (measuredRowHeight) break;
+    }
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
       || (displayMode === 'covers' ? this.cardTrackWidth : measuredRowHeight)
       || this.collapsedRowHeight;
+    this._layoutRowEstimateFromMeasurement = !mobileGeometry?.estimatedRowHeight && displayMode !== 'covers';
+    this._layoutRowEstimateMeasured = Boolean(measuredRowHeight);
+    this._sectionShifts = new VirtualSectionShifts(this.sections.length);
     let offsetTop = 0;
     this.sectionByKey = new Map();
-    this.sections.forEach((section) => {
-      section.top = offsetTop;
+    this.sections.forEach((section, index) => {
       if (section.kind === 'label') {
         section.height = this.labelHeight;
+        this.placeSection(section, index, offsetTop);
         offsetTop += section.height;
-        section.bottom = offsetTop;
         return;
       }
 
@@ -43519,12 +43590,7 @@ class VirtualArtistGrid {
       const previousBlockHeights = Array.isArray(section.blockHeights)
         ? section.blockHeights
         : [];
-      const sectionMeasuredRowHeight = previousBlockHeights.find((height, index) => {
-        const measureKey = String(previousMeasureKeys[index] || '');
-        return measureKey.startsWith('row:')
-          && String(previousMeasuredKeys[index] || '') === measureKey
-          && Number(height) > 0;
-      });
+      const sectionMeasuredRowHeight = findMeasuredRowHeight(previousBlockHeights, previousMeasureKeys, previousMeasuredKeys);
       const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
         || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
         || estimatedRowHeight;
@@ -43540,20 +43606,54 @@ class VirtualArtistGrid {
       section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
         previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
       ));
-      let blockOffset = 0;
-      section.blockOffsets = blocks.map((_block, index) => {
-        const top = blockOffset;
-        blockOffset += section.blockHeights[index] || 0;
-        if (index < blocks.length - 1) blockOffset += this.rowGap;
-        return top;
-      });
-      section.blocksHeight = blockOffset;
-      section.height = this.sectionHeaderHeight + section.blocksHeight + this.sectionMarginBottom;
+      this.layoutSectionBlocks(section);
+      this.placeSection(section, index, offsetTop);
       offsetTop += section.height;
-      section.bottom = offsetTop;
       this.sectionByKey.set(section.sectionKey, section);
     });
     this.totalHeight = offsetTop;
+  }
+
+  layoutSectionBlocks(section) {
+    let blockOffset = 0;
+    const blockCount = section.blockHeights.length;
+    section.blockOffsets = section.blockHeights.map((height, index) => {
+      const top = blockOffset;
+      blockOffset += height || 0;
+      if (index < blockCount - 1) blockOffset += this.rowGap;
+      return top;
+    });
+    section.blocksHeight = blockOffset;
+    section.height = this.sectionHeaderHeight + section.blocksHeight + this.sectionMarginBottom;
+  }
+
+  placeSection(section, index, top) {
+    section.layoutIndex = index;
+    section.layoutTop = top;
+    section.layoutShifts = this._sectionShifts;
+    if (!Object.getOwnPropertyDescriptor(section, 'top')?.get) {
+      Object.defineProperties(section, VIRTUAL_SECTION_GEOMETRY);
+    }
+  }
+
+  // A row measurement relayouts only its own section: unmeasured rows take the
+  // section's measured height, and later sections move by the height change.
+  reflowMeasuredSection(section) {
+    const measuredRowHeight = findMeasuredRowHeight(section.blockHeights, section.blockMeasureKeys, section.measuredBlockKeys);
+    if (this._layoutRowEstimateFromMeasurement && measuredRowHeight) {
+      section.blockHeights = section.blockHeights.map((height, index) => {
+        const measureKey = String(section.blockMeasureKeys?.[index] || '');
+        return measureKey.startsWith('row:') && section.measuredBlockKeys?.[index] !== measureKey
+          ? measuredRowHeight
+          : height;
+      });
+    }
+    const previousHeight = section.height;
+    this.layoutSectionBlocks(section);
+    const delta = section.height - previousHeight;
+    if (!delta) return;
+    this._sectionShifts.add(section.layoutIndex, delta);
+    this.totalHeight += delta;
   }
 
   updateScrollDiagnostic(renderRafOwner, coalesced = false) {
@@ -44478,7 +44578,7 @@ class VirtualArtistGrid {
     const preservedAnchor = absoluteScrollActive
       ? null
       : reflowAnchor === undefined ? this.captureScrollAnchor() : reflowAnchor;
-    let changed = false;
+    const changedSections = new Set();
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');
     rows.forEach((rowEl) => {
@@ -44513,9 +44613,10 @@ class VirtualArtistGrid {
       section.measuredBlockKeys[blockIndex] = measureKey;
       if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) >= (1 / 64)) {
         section.blockHeights[blockIndex] = measured;
-        changed = true;
+        changedSections.add(section);
       }
     });
+    const changed = changedSections.size > 0;
     const measurement = {
       changed,
       renderGeneration: Number(this._renderGeneration || 0),
@@ -44540,8 +44641,13 @@ class VirtualArtistGrid {
       });
     }
     this.lastKey = '';
-    // Height reconciliation must retain the layout that produced these measurements.
-    this.recalculate({ preserveColumnGeometry: true });
+    if (this._layoutRowEstimateFromMeasurement && !this._layoutRowEstimateMeasured) {
+      // The first measured row replaces the estimate of every unmeasured section.
+      // Height reconciliation must retain the layout that produced these measurements.
+      this.recalculate({ preserveColumnGeometry: true });
+    } else {
+      changedSections.forEach(section => this.reflowMeasuredSection(section));
+    }
     const latestScroll = this.diagnostics.latestScroll;
     const measurementRenderRafOwner = (
       Number(latestScroll?.renderGeneration || 0) === Number(this._renderGeneration || 0)

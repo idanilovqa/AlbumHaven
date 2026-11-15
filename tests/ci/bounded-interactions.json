@@ -1045,18 +1045,38 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#align",
-      "action": "scheduleBrowserAnimationFrame timers installed by align",
+      "action": "Keep correcting a root gallery artist jump each frame until its heading settles at the top",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#align:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "animationFrames": 3,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI root gallery artist alignment frame finds the artist by index at production scale",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the virtual grid artist-section index; each alignment frame then scans every loaded section for the artist again, with no data or API change."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#armArtistTreeLongPressClickGuard",
@@ -1267,7 +1287,7 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#reconcile",
-      "action": "fetchAndRender requests installed by reconcile",
+      "action": "Reconcile a cached selected-artist view once its track modal closes, polling every 500 ms while it is open",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:request:fetchAndRender",
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:timer:scheduleBrowserTimeout"
@@ -1280,18 +1300,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
           "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "BI cached selected-artist reconcile waits for the track modal with constant work",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; selected-artist reconcile is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#resume",
-      "action": "scheduleBrowserTimeout timers installed by resume",
+      "action": "Resume sidebar-suspended gallery cover loads, polling every 16 ms while a superseding view request is pending",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#resume:timer:scheduleBrowserTimeout"
       ],
@@ -1302,11 +1339,28 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "BI sidebar artist cover resume waits for the pending view request with constant work",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; cover resume is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads",
-      "action": "scheduleBrowserTimeout timers installed by resumeCoverLoads",
+      "action": "Resume all-artists-suspended gallery cover loads, polling every 16 ms while a superseding view request is pending",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads:timer:scheduleBrowserTimeout"
       ],
@@ -1317,7 +1371,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "BI all-artists cover resume waits for the pending view request with constant work",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; cover resume is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#scheduleCachedSelectedArtistReconcile",
@@ -1374,18 +1445,39 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered",
-      "action": "scheduleBrowserAnimationFrame timers installed by scrollWhenRendered",
+      "action": "Retry an anchored root gallery jump each frame until the anchored page mounts its artist",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "animationFrames": 1,
+        "renderCommits": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI anchored root gallery jump retries an unrendered artist without scanning loaded sections",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the virtual grid artist-section index; each retry frame then scans every loaded section for the anchored artist again, with no data or API change."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#stabilizeRootGalleryArtistAlignment",
@@ -1883,18 +1975,44 @@
     },
     {
       "id": "js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners#2",
-      "action": "scheduleBrowserAnimationFrame timers installed by ensureSidebarVirtualScrollListeners",
+      "action": "Render the sidebar artist window on the frame a window-changing scroll schedules",
       "entrypoints": [
         "js:music_app/static/js/runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/core-state-and-helpers.js"
+        "music_app/static/js/runtime/core-state-and-helpers.js",
+        "music_app/static/js/navigation-tree.js",
+        "music_app/static/js/runtime/render-markup-helpers.js",
+        "music_app/static/js/runtime/browser-navigation-helpers.js"
       ],
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 400,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 160,
+        "renderCommits": 1,
+        "domMutations": 1,
+        "markupBytes": 64000,
+        "domQueries": 2,
+        "animationFrames": 1,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/sidebar-virtualization.test.js",
+      "testIdentity": "bounded interaction: sidebar window render frame renders only the new window at 14,000 artists",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only contract; the sidebar window render is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/core-state-and-helpers.js#renderSidebar",
@@ -2573,20 +2691,40 @@
     },
     {
       "id": "js:runtime/gallery-card-component.js#syncGalleryCardMetadataMotion",
-      "action": "change listeners, ResizeObserver observers installed by syncGalleryCardMetadataMotion",
+      "action": "Pan overflowing mobile gallery card metadata when a registered row or its text resizes, or reduced motion changes",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-card-component.js#syncGalleryCardMetadataMotion:event:change",
         "js:music_app/static/js/runtime/gallery-card-component.js#syncGalleryCardMetadataMotion:observer:ResizeObserver"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-card-component.js"
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/compact-player-helpers.js"
       ],
       "rules": [
         "BI-03",
         "BI-09"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 12,
+        "production": 1200
+      },
+      "budgets": {
+        "itemsVisited": 1,
+        "domMutations": 3,
+        "domQueries": 0,
+        "animationFrames": 1,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-card-component.test.js",
+      "testIdentity": "BI gallery card metadata motion refreshes only the resized row at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the resized-row set in syncGalleryCardMetadataMotion; every resize observation then measures every registered card row again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-cover-preview-cache.js#GalleryCoverPreviewCache.awaitWithAbort",
@@ -2857,7 +2995,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup",
-      "action": "scheduleBrowserTimeout timers installed by dispatchStartupHydrationFollowup",
+      "action": "Dispatch a delayed startup hydration follow-up, deferring it again while a foreground view is busy",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup:timer:scheduleBrowserTimeout"
       ],
@@ -2868,7 +3006,25 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI busy startup hydration retry is constant at production scale (delayed dispatch)",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; startup hydration is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
@@ -3116,7 +3272,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#performPendingCoverCompletionViewRefresh",
-      "action": "scheduleBrowserTimeout timers installed by performPendingCoverCompletionViewRefresh",
+      "action": "Retry a failed post-cover gallery refresh at most twice, one current-view request per retry",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#performPendingCoverCompletionViewRefresh:timer:scheduleBrowserTimeout"
       ],
@@ -3126,12 +3282,30 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI cover completion refresh retry requests the current view once at production scale",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; post-cover refresh is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#performPendingScanCompletionViewRefresh",
-      "action": "scheduleBrowserTimeout timers installed by performPendingScanCompletionViewRefresh",
+      "action": "Retry a failed post-scan gallery refresh at most twice, one current-view request per retry",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#performPendingScanCompletionViewRefresh:timer:scheduleBrowserTimeout"
       ],
@@ -3141,8 +3315,26 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI scan completion refresh retry requests the current view once at production scale",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; post-scan refresh is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#pollStatus",
@@ -3252,7 +3444,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch#2",
-      "action": "scheduleBrowserTimeout timers installed by runDispatch",
+      "action": "Retry a startup hydration follow-up every 100 ms while a foreground view is busy, then request it once",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#runDispatch:timer:scheduleBrowserTimeout"
       ],
@@ -3263,7 +3455,25 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI busy startup hydration retry is constant at production scale (busy retry)",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; startup hydration is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#scheduleSidebarRender",
@@ -3282,19 +3492,40 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#scheduleStatusPoll",
-      "action": "Reschedule the self-rescheduling library status poll",
+      "action": "Reschedule the self-rescheduling library status poll; an unchanged status does no presentation or library work",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#scheduleStatusPoll:timer:scheduleBrowserTimeout"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/status-ui-helpers.js",
+        "music_app/static/js/runtime/gallery-main-components.js"
       ],
       "rules": [
         "BI-03",
         "BI-12"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "domMutations": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI an unchanged status poll does no presentation or library work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the stored MusicBrainz pending flag; every status poll then walks every owner-only artist repair state again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",
@@ -3655,18 +3886,36 @@
     },
     {
       "id": "js:runtime/mobile-navigation.js#restoreMobileGalleryParent",
-      "action": "requestAnimationFrame timers installed by restoreMobileGalleryParent",
+      "action": "Reapply a mobile gallery parent's saved scroll anchor on the frame after returning from a child page",
       "entrypoints": [
         "js:music_app/static/js/runtime/mobile-navigation.js#restoreMobileGalleryParent:timer:requestAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/mobile-navigation.js"
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "animationFrames": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI mobile gallery return frame restores the saved anchor by index at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the virtual grid rendered-section index; the return frame then scans every loaded section for the saved anchor occurrence again, with no data or API change."
     },
     {
       "id": "js:runtime/mobile-navigation.js#restoreMobileLoopListScroll",
@@ -6653,7 +6902,7 @@
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction",
-      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction",
+      "action": "Defer resuming suspended gallery cover loads frame by frame until pending grid render, measurement and stabilization settle",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction:timer:scheduleBrowserAnimationFrame"
       ],
@@ -6664,11 +6913,29 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "animationFrames": 1,
+        "renderCommits": 0,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI deferred cover resume frame waits for grid settlement without touching loaded sections",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; cover resume is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows",
-      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.scheduleMeasureRows",
+      "action": "Measure rendered gallery rows on the next frame and reflow only the sections whose heights changed",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows:timer:scheduleBrowserAnimationFrame"
       ],
@@ -6678,8 +6945,27 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "animationFrames": 3,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI row measurement frame relayouts only the measured section at production scale",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the measured-section reflow and section shift tree; every changed row measurement then relayouts every loaded section again, with no data or API change."
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleSettledMeasurement",
@@ -6729,7 +7015,7 @@
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#scheduleSettledScrollRestore",
-      "action": "scheduleBrowserAnimationFrame timers installed by scheduleSettledScrollRestore",
+      "action": "Reapply a regrouped gallery's preserved scroll anchor on the settled frame and recheck pagination",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#scheduleSettledScrollRestore:timer:scheduleBrowserAnimationFrame"
       ],
@@ -6740,7 +7026,26 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "animationFrames": 3,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI settled scroll restore frame resolves the anchored section by index at production scale",
+      "performanceTargets": [
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Revert the rendered-section index; each settled restore then scans every loaded section for the anchor occurrence again, with no data or API change."
     },
     {
       "id": "js:selection-accent.js#load",

@@ -3220,14 +3220,45 @@
         "js:music_app/static/js/runtime/player-loop-playback.js#attachPlayerEvents:event:resize"
       ],
       "owners": [
-        "music_app/static/js/runtime/player-loop-playback.js"
+        "music_app/static/js/runtime/player-loop-playback.js",
+        "music_app/static/js/runtime/player-and-waveform.js",
+        "music_app/static/js/runtime/player-state-persistence-helpers.js",
+        "music_app/static/js/runtime/compact-player-controller.js",
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/player-waveform-peaks.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/runtime/utility-loop-playback.js",
+        "music_app/static/js/client-device-preferences.js",
+        "music_app/static/js/runtime/player-listen-session-helpers.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/selection-accent.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
-      "workClass": "delta",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 120,
+        "domQueries": 10,
+        "domMutations": 10,
+        "outputEmissions": 10,
+        "responseBytes": 17921
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-loop-playback.test.js",
+      "testIdentity": "bounded interaction: global seekbar drag and input stay album-bounded with 1,000 saved loops",
+      "performanceTargets": [],
+      "rollback": "Revert the timeline-position drag preview and the once-per-list saved-loop peak pruning; drag moves then rerun the full player refresh and every player update remaps all saved loops again. No data or API change."
     },
     {
       "id": "js:runtime/player-loop-playback.js#attachSharedPlayer",

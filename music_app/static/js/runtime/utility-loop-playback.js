@@ -34,8 +34,13 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   });
 }
 
+// Player UI updates refresh the mounted loop waveforms; the saved-loop list is
+// replaced, never edited in place, so the peak cache is pruned once per list.
+let utilityLoopListRetainedForPeaks = null;
 function refreshUtilityLoopStereoWaveforms() {
-  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)
+      && state.utility.loops !== utilityLoopListRetainedForPeaks) {
+    utilityLoopListRetainedForPeaks = state.utility.loops;
     retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
   }
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {

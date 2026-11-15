@@ -256,3 +256,16 @@ test('window replacement restores keyboard focus to the same artist link', () =>
   context.__restore(sidebarList, focusIdentity);
   assert.equal(focused, true);
 });
+
+test('original-script artists show their romanized name in parentheses and re-render when it arrives (J3)', () => {
+  const context = loadHelpers();
+  const source = [{ artist: '天門', artist_display: '天門', count: 5 }, { artist: 'Angra', artist_display: 'Angra', count: 16 }];
+  const before = context.buildSidebarStructureSignature(source);
+  context.setRomanizedArtistNames({ '天門': 'Tenmon' });
+  const html = context.buildSidebarHtml({ surface: { active: 'albums' } }, source, {});
+  assert.match(html, /天門 <span class="navigation-tree-label-secondary">\(Tenmon\)<\/span>/);
+  assert.equal((html.match(/navigation-tree-label-secondary/g) || []).length, 1);
+  assert.notEqual(context.buildSidebarStructureSignature(source), before);
+  assert.equal(context.romanizedArtistName(' 天門 '), 'Tenmon');
+  assert.equal(context.romanizedArtistName('Angra'), '');
+});

@@ -18,6 +18,8 @@ button.navigation-tree-item[data-navigation-tree-item="panel"] {
   width: 100%; text-align: left; font: inherit; cursor: pointer;
 }
 .navigation-tree-label { min-width: 0; }
+/* A dimmed second name after the label, e.g. a romanized artist name (approved J3). */
+.navigation-tree-label-secondary { color: var(--muted); }
 .navigation-tree-icon { flex: 0 0 22px; text-align: center; }
 /* Use a real edge, independent of filled selection/focus paint. Account-owned
    accent color/disable overrides still apply to every NavigationTree consumer. */

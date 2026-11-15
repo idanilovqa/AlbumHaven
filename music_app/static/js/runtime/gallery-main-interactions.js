@@ -604,6 +604,9 @@ function updateGalleryMainChrome() {
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
+  const romanized = bar.querySelector('[data-gallery-context-romanized]');
+  // The info button follows the romanized name, which follows the name (approved J3).
+  const infoAnchor = romanized || name;
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
@@ -616,6 +619,10 @@ function updateGalleryMainChrome() {
     && Boolean(series || context.kind === 'gallery');
   if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : (seriesHeader ? 'series' : context.kind);
   summary.hidden = false;
+  if (romanized) {
+    romanized.hidden = true;
+    romanized.textContent = '';
+  }
   if (metadata) {
     metadata.hidden = true;
     metadata.innerHTML = '';
@@ -646,7 +653,7 @@ function updateGalleryMainChrome() {
       metadata.innerHTML = content.metadataHtml;
     }
     if (!series) oldInfo?.remove();
-    else if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    else if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = series.name;
       oldInfo.setAttribute('aria-label', `Information about ${series.name}`);
@@ -658,6 +665,10 @@ function updateGalleryMainChrome() {
   } else {
     // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
+    if (romanized) {
+      romanized.textContent = galleryArtistRomanizedLabel(name.textContent);
+      romanized.hidden = !romanized.textContent;
+    }
     summary.hidden = true;
     summary.textContent = '';
     if (inlineTotal) {
@@ -668,7 +679,7 @@ function updateGalleryMainChrome() {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
     }
-    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);

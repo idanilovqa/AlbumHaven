@@ -4,7 +4,7 @@
   if (window.NavigationTree) return;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   // HTML slots contain component-rendered markup; resource text uses escaped fields.
-  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '' } = {}) {
+  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '', secondaryLabel = '' } = {}) {
     const template = document.getElementById('navigation-tree-item-template')?.textContent;
     if (!template) throw new Error('NavigationTreeItem template is missing.');
     const settings = variant === 'settings';
@@ -25,7 +25,7 @@
     }
     if (selected) values['aria-current'] = settings ? 'page' : 'true';
     const attrs = Object.entries(values).map(([name, value]) => name + '="' + escape(value) + '"').join(' ');
-    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + (subtitle ? '<span class="utility-list-item-subtitle">' + escape(subtitle) + '</span>' : '') + (year ? '<span class="utility-list-item-year">' + escape(year) + '</span>' : '') + '</span>' : escape(label);
+    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + (subtitle ? '<span class="utility-list-item-subtitle">' + escape(subtitle) + '</span>' : '') + (year ? '<span class="utility-list-item-year">' + escape(year) + '</span>' : '') + '</span>' : escape(label) + (secondaryLabel ? ' <span class="navigation-tree-label-secondary">' + escape(secondaryLabel) + '</span>' : '');
     const slots = [tag, attrs, wide ? '<span class="navigation-tree-artwork">' + artworkHtml + '</span>' : icon ? '<span class="navigation-tree-icon" aria-hidden="true">' + escape(icon) + '</span>' : '', identity,
       (count === null ? '' : '<span class="navigation-tree-count artist-count"' + (countHidden ? ' hidden' : '') + '>' + escape(count) + '</span>') + (wide ? trailingHtml : ''), tag];
     let index = 0;

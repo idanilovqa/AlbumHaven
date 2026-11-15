@@ -646,3 +646,29 @@ def test_owner_shell_status_and_artist_status_together_enable_gallery_warnings(o
                                        "match_state": None, "problem_occurrence_id": 424, "unresolved_reason": "MBID: Not found"}]
     else:
         assert artist_status == 403
+
+
+def test_everyone_who_browses_reads_the_romanized_artist_names(monkeypatch):
+    """J3 (owner 2026-11-15): romanized names show for every viewer of the tree and gallery."""
+    class Names:
+        def list_romanized_artist_names(self):
+            return {"天門": "Tenmon", "久石 譲": "Joe Hisaishi"}
+
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository", lambda config: Names())
+    assert private_action_for_route("GET", "/api/musicbrainz/artists/romanized-names") == "library.browse.read"
+    assert "/api/musicbrainz/artists/romanized-names" in collect_route_paths(app_for(actor_with(), None))
+
+    status, payload = request(app_for(actor_with("library.browse.read", owner=False), None),
+                              "GET", "/api/musicbrainz/artists/romanized-names")
+    assert (status, payload) == (200, {"names": {"天門": "Tenmon", "久石 譲": "Joe Hisaishi"}})
+
+
+def test_romanized_artist_names_fail_safely_to_none(monkeypatch):
+    class Broken:
+        def list_romanized_artist_names(self):
+            raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository", lambda config: Broken())
+    status, payload = request(app_for(actor_with("library.browse.read", owner=False), None),
+                              "GET", "/api/musicbrainz/artists/romanized-names")
+    assert (status, payload) == (200, {"names": {}})

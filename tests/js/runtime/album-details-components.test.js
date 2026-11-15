@@ -424,3 +424,33 @@ test('album details show the MusicBrainz release type, else the local tag', () =
     path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
   assert.match(tagEditorSource, /releaseType:\s*albumDetailsReleaseType\(album\)/);
 });
+
+test('gallery artist headers show the romanized name in parentheses beside the name, outside it (J3)', () => {
+  const context = loadComponents();
+  context.romanizedArtistName = (name) => (name === '天門' ? 'Tenmon' : '');
+  const bar = context.buildGalleryBarHtml({ contextKind: 'artist', artist: '天門', albumCount: 5 });
+  assert.match(bar, /<span data-gallery-context-name>天門<\/span><span class="gallery-artist-romanized" data-gallery-context-romanized>\(Tenmon\)<\/span><button class="gallery-info-button"/);
+  assert.match(context.buildFamilyArtistHeaderHtml({ artist: '天門', albumCount: 5 }),
+    /<h2 class="artist-name">天門 <span class="gallery-artist-romanized">\(Tenmon\)<\/span><\/h2>/);
+  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Angra', albumCount: 16 }),
+    /<span class="gallery-artist-romanized" data-gallery-context-romanized hidden><\/span>/);
+  assert.doesNotMatch(context.buildFamilyArtistHeaderHtml({ artist: 'Angra', albumCount: 16 }), /romanized/);
+});
+
+test('romanized names load once per ten minutes and redraw the tree and gallery only on change (J3)', async () => {
+  const context = loadComponents();
+  const calls = [];
+  let names = { '天門': 'Tenmon' };
+  context.fetch = async (url) => { calls.push(url); return { ok: true, json: async () => ({ names }) }; };
+  context.setRomanizedArtistNames = (value) => calls.push(['set', value]);
+  context.renderSidebar = () => calls.push('sidebar');
+  context.updateGalleryMainChrome = () => calls.push('chrome');
+  assert.equal(await context.refreshRomanizedArtistNames(), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), ['/api/musicbrainz/artists/romanized-names', ['set', { '天門': 'Tenmon' }], 'sidebar', 'chrome']);
+  assert.equal(await context.refreshRomanizedArtistNames(), false, 'not asked again within ten minutes');
+  assert.equal(calls.length, 4);
+  context.Date = { now: () => Date.now() + 600001 };
+  names = { '天門': 'Tenmon' };
+  assert.equal(await context.refreshRomanizedArtistNames(), false, 'unchanged names redraw nothing');
+  assert.equal(calls.length, 5);
+});

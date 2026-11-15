@@ -120,6 +120,23 @@ function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
   };
 }
 
+// Romanized artist names (owner-approved J3): the Latin form MusicBrainz gives an
+// original-script name, shown in parentheses beside it. Display only.
+let romanizedArtistNames = new Map();
+
+function setRomanizedArtistNames(names = {}) {
+  romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
+}
+
+function romanizedArtistName(name) {
+  return romanizedArtistNames.get(String(name || '').trim()) || '';
+}
+
+function sidebarArtistRomanizedLabel(item) {
+  const latin = romanizedArtistName(item?.artist_display || item?.artist);
+  return latin ? `(${latin})` : '';
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -144,7 +161,7 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: item.artist_display || item.artist, secondaryLabel: sidebarArtistRomanizedLabel(item), key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -190,6 +207,7 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
+    sidebarArtistRomanizedLabel(item),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized

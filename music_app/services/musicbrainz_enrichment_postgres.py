@@ -7,6 +7,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from music_app.services.musicbrainz_matching import romanized_name
 from music_app.services.postgres_connections import pooled_connection
 
 
@@ -722,6 +723,37 @@ class MusicBrainzEnrichmentPostgresRepository:
         result = _review_row(row)
         result["candidates"] = [_candidate_review_row(candidate) for candidate in candidates]
         return result
+
+    def list_romanized_artist_names(self) -> dict[str, str]:
+        """Each matched original-script local artist name and its Latin form (J3), read from
+        the stored MusicBrainz artist. The pattern only skips names written wholly in Latin
+        or Cyrillic letters; ``romanized_name`` decides the rest."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_active_library_cte() + r"""
+                select artists.name as local_artist_name, remote.canonical_name, remote.sort_name,
+                       coalesce((
+                         select jsonb_agg(jsonb_build_object(
+                                  'name', aliases.alias_name, 'locale', aliases.locale,
+                                  'primary', aliases.is_primary_for_locale, 'kind', aliases.alias_kind))
+                         from integration.musicbrainz_artist_aliases aliases
+                         where aliases.artist_mbid = remote.mbid
+                       ), '[]'::jsonb) as aliases
+                from active_library
+                join library.local_artists artists on artists.library_id = active_library.library_id
+                join library.local_artist_musicbrainz_matches matches
+                  on matches.library_id = artists.library_id and matches.local_artist_id = artists.id
+                 and matches.state = 'matched'
+                join integration.musicbrainz_artists remote on remote.mbid = matches.artist_mbid
+                where artists.name ~ '[^\x01-\u024F\u0400-\u052F\u1E00-\u1EFF]'
+                """).fetchall()
+        names = {}
+        for row in map(_row_mapping, rows):
+            aliases = row.get("aliases")
+            romanized = romanized_name(row.get("local_artist_name"), {
+                **row, "aliases": json.loads(aliases) if isinstance(aliases, str) else aliases})
+            if romanized:
+                names[str(row["local_artist_name"])] = romanized
+        return names
 
     def list_accepted_artist_mbids(self) -> list[str]:
         """MBIDs of artists matched automatically or assigned by the owner."""

@@ -91,6 +91,20 @@ async def list_artist_status(request: Request):
     ]}
 
 
+@router.get("/romanized-names")
+async def list_romanized_artist_names(request: Request):
+    """Original-script artist names and their Latin forms for the tree and gallery (J3).
+    Display only; a failure shows the names alone."""
+    try:
+        names = await run_in_threadpool(
+            MusicBrainzEnrichmentPostgresRepository(request.app.state.config).list_romanized_artist_names)
+    except Exception:
+        logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
+        logger.warning("Romanized artist names were unavailable.")
+        names = {}
+    return {"names": names}
+
+
 @router.get("/{local_artist_id}")
 async def get_artist_problem(local_artist_id: int, request: Request):
     await _require_current_library_owner(request)

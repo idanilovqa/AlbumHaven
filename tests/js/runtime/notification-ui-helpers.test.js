@@ -1046,3 +1046,24 @@ test('BI a blocked notification lane keeps one waiting toast and constant placem
   });
   assert.deepEqual(large, small);
 });
+
+test('a blocked lane never lets a newer lesser toast discard a waiting error or warning', () => {
+  const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const { context, controls, layoutChange, showToast, toasts } = blockedToastLanes(createInteractionCounter());
+  const show = (message, variant) => {
+    context.showToast(message, variant, 3600);
+    layoutChange();
+  };
+  show('Save failed', 'error');
+  show('Cover lookup slow', 'warning');
+  for (let index = 0; index < 5; index += 1) showToast(index);
+  show('Tag write failed', 'error');
+  assert.deepEqual(
+    toasts.map(toast => toast.markup.match(/Save failed|Tag write failed|Cover lookup slow|Update \d/)[0]),
+    ['Cover lookup slow', 'Update 4', 'Tag write failed'],
+    'each severity keeps its newest waiting toast',
+  );
+  controls.shift();
+  layoutChange();
+  assert.ok(toasts.every(toast => toast.attributes['data-notification-deferred'] === undefined), 'every waiting toast shows once the lane clears');
+});

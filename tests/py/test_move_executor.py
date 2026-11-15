@@ -647,3 +647,51 @@ def test_build_completed_move_task_tracks_refresh_metadata():
     assert task["moved_track_count"] == 2
     assert task["updated_album_count"] == 1
     assert task["requires_view_refresh"] is True
+
+
+def test_move_cache_refresh_contract_reads_only_moved_tracks_at_production_library_size(config, tmp_path, monkeypatch):
+    from music_app.services import metadata
+    from music_app.services import move_executor as move_executor_module
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    main_root = (tmp_path / "main").resolve()
+    destination = main_root / "Broadcast" / "2004 - Tender Buttons"
+    destination.mkdir(parents=True)
+    (destination / "booklet-front.jpg").write_bytes(b"not decoded")
+    moved = {}
+    for index in range(10):
+        new_path = destination / f"{index:02d}.mp3"
+        new_path.write_bytes(b"track")
+        moved[str(tmp_path / "arrivals" / f"{index:02d}.mp3")] = str(new_path)
+    monkeypatch.setattr(move_executor_module, "get_library_roots", lambda _config: [
+        {"id": "main-1", "path": str(main_root), "category": "main_library_roots"},
+    ])
+    monkeypatch.setattr(move_executor_module, "load_exception_overrides", lambda _config: {})
+
+    def run(album_count: int) -> OperationCounts:
+        previous_file_cache = {
+            f"{tmp_path}/library/Artist {index}/track.mp3": {"title": "unrelated"}
+            for index in range(album_count * 160)
+        }
+        previous_file_cache.update({old_path: {"title": "moved"} for old_path in moved})
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(metadata,)):
+            updated, new_paths = move_executor_module._refresh_cache_after_move(
+                config=config,
+                previous_file_cache=previous_file_cache,
+                track_path_map=moved,
+            )
+        assert new_paths == set(moved.values())
+        assert not set(moved) & set(updated)
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:services/move_executor.py#_refresh_cache_after_move",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 1, "stat_calls": 96, "open_calls": 11, "media_parses": 10},
+        growth=("stat_calls", 0),
+    )
+    assert small.media_parses == production.media_parses == len(moved)

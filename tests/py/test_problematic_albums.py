@@ -172,6 +172,85 @@ def test_find_problematic_album_by_track_paths_returns_matching_item():
     assert match == {"key": "problem-2", "tracks": [{"path": "b.mp3"}]}
 
 
+@pytest.mark.parametrize(
+    "changed_field",
+    ["library_id", "inventory_mutation_revision", "cover_mutation_revision", "builder_version"],
+)
+def test_problematic_cache_misses_when_durable_source_tuple_changes(
+    config, monkeypatch, changed_field,
+):
+    st = {
+        "albums": [], "file_cache": {}, "relation_views": {},
+        "library_id": 7, "inventory_mutation_revision": 41, "cover_mutation_revision": 13,
+    }
+    built = []
+
+    def build(**_kwargs):
+        payload = {"items": [{"key": f"build-{len(built)}"}]}
+        built.append(payload)
+        return payload
+
+    monkeypatch.setattr(problematic_albums_module, "build_problematic_albums_read_payload", build)
+    first = build_problematic_albums_payload(
+        library_state=st, config=config, **_problematic_payload_kwargs(),
+    )
+    assert build_problematic_albums_payload(
+        library_state=st, config=config, **_problematic_payload_kwargs(),
+    ) is first
+    if changed_field == "builder_version":
+        monkeypatch.setattr(
+            problematic_albums_module, "PROBLEMATIC_FILES_BUILDER_VERSION", "v2", raising=False,
+        )
+    else:
+        st[changed_field] += 1
+
+    assert has_cached_problematic_albums_payload(st, config=config) is False
+    assert build_problematic_albums_payload(
+        library_state=st, config=config, **_problematic_payload_kwargs(),
+    ) is not first
+    assert len(built) == 2
+
+
+@pytest.mark.parametrize(
+    "changed_field",
+    ["library_id", "inventory_mutation_revision", "cover_mutation_revision", "builder_version"],
+)
+def test_problematic_older_builder_cannot_replace_newer_source_tuple(
+    config, monkeypatch, changed_field,
+):
+    st = {
+        "albums": [], "file_cache": {}, "relation_views": {},
+        "library_id": 7, "inventory_mutation_revision": 41, "cover_mutation_revision": 13,
+    }
+    older = {"items": [{"key": "older"}]}
+    newer = {"items": [{"key": "newer"}]}
+    calls = []
+
+    def build(**_kwargs):
+        calls.append(None)
+        if len(calls) > 1:
+            return newer
+        if changed_field == "builder_version":
+            monkeypatch.setattr(
+                problematic_albums_module, "PROBLEMATIC_FILES_BUILDER_VERSION", "v2", raising=False,
+            )
+        else:
+            st[changed_field] += 1
+        assert build_problematic_albums_payload(
+            library_state=st, config=config, **_problematic_payload_kwargs(),
+        ) is newer
+        return older
+
+    monkeypatch.setattr(problematic_albums_module, "build_problematic_albums_read_payload", build)
+    assert build_problematic_albums_payload(
+        library_state=st, config=config, **_problematic_payload_kwargs(),
+    ) is older
+    assert build_problematic_albums_payload(
+        library_state=st, config=config, **_problematic_payload_kwargs(),
+    ) is newer
+    assert len(calls) == 2
+
+
 def test_build_problematic_album_detail_payload_ignores_e2e_fixture_file(config, monkeypatch, tmp_path):
     fixture_path = tmp_path / "problematic-fixture.json"
     fixture_path.write_text(json.dumps({

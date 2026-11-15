@@ -898,6 +898,13 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
     class Connection:
         def execute(self, sql, _params=None):
             normalized_sql = " ".join(str(sql).split()).lower()
+            if "library.read_cover_mutation_revision" in normalized_sql:
+                calls.append("revision")
+                return Cursor({
+                    "library_id": 1,
+                    "inventory_mutation_revision": state["inventory_revision"],
+                    "cover_mutation_revision": 0,
+                })
             if "relation_alias_cache_identity" in normalized_sql:
                 calls.append("identity")
                 return Cursor({
@@ -933,7 +940,7 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
 
     assert first["alias_to_canonical"] == {"Alias": "Canonical"}
     assert second == first
-    assert calls == ["identity", "full", "identity"]
+    assert calls == ["revision", "identity", "full", "revision", "revision", "identity"]
 
     state["inventory_revision"] = 8
     refreshed_revision = default_empty_relation_alias_projection(
@@ -941,7 +948,10 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
     )
     assert refreshed_revision == {**first, "inventory_mutation_revision": 8}
     assert first["inventory_mutation_revision"] == 7
-    assert calls == ["identity", "full", "identity", "identity"]
+    assert calls == [
+        "revision", "identity", "full", "revision", "revision", "identity",
+        "revision", "identity", "full", "revision",
+    ]
 
     state.update(fingerprint="11", canonical="Updated canonical")
     third = default_empty_relation_alias_projection(
@@ -951,7 +961,11 @@ def test_relation_alias_loader_reuses_maps_until_projection_fingerprint_changes(
 
     assert third["alias_to_canonical"] == {"Alias": "Updated canonical"}
     assert third["inventory_mutation_revision"] == 8
-    assert calls == ["identity", "full", "identity", "identity", "identity", "full"]
+    assert calls == [
+        "revision", "identity", "full", "revision", "revision", "identity",
+        "revision", "identity", "full", "revision",
+        "revision", "identity", "full", "revision",
+    ]
     browse.invalidate_postgres_utility_projection_cache(
         database_url=database_url,
         kinds=("relation-alias-maps",),
@@ -3995,6 +4009,7 @@ def test_stale_search_requires_background_recovery_without_live_alias_build(monk
         ("incomplete", "incomplete_projection"),
     ],
 )
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_relation_alias_loader_reports_persisted_projection_authority(
     projection_case,
     expected_stale_reason,
@@ -12426,6 +12441,7 @@ def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_
     assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1"]) == [1, 2]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_candidate_cache_only_uses_cached_index_before_postgres_18_lookup(
     monkeypatch,
 ):
@@ -12599,6 +12615,7 @@ def test_requested_duplicate_identity_sql_returns_only_cross_container_identitie
 
 
 @pytest.mark.parametrize("changed_field", range(6))
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_identity_prewarm_cache_reuses_only_same_library_inventory_fingerprint(monkeypatch, changed_field):
     import music_app.services.library_browse_postgres as browse
 
@@ -12637,6 +12654,7 @@ def test_duplicate_identity_prewarm_cache_reuses_only_same_library_inventory_fin
 
 
 @pytest.mark.parametrize("race", ["newer_snapshot", "invalidation", "changed_inventory"])
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_identity_cache_does_not_publish_after_a_newer_snapshot_or_invalidation(monkeypatch, race):
     import music_app.services.library_browse_postgres as browse
 
@@ -12665,6 +12683,7 @@ def test_duplicate_identity_cache_does_not_publish_after_a_newer_snapshot_or_inv
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_non_album_candidate_cache_reloads_rows_by_ids_and_invalidates_overrides(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12693,6 +12712,7 @@ def test_non_album_candidate_cache_reloads_rows_by_ids_and_invalidates_overrides
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_empty_non_album_candidate_cache_does_not_request_unrestricted_inventory(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12822,6 +12842,7 @@ def test_duplicate_inventory_fingerprint_ignores_cover_only_library_timestamp_ch
     assert after["fingerprint"] == before["fingerprint"]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_absence_cache_skips_full_rows_preserves_year_provenance_and_invalidates(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12863,6 +12884,7 @@ def test_duplicate_absence_cache_skips_full_rows_preserves_year_provenance_and_i
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_absence_cache_skips_source_projection_when_candidates_are_empty(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12904,6 +12926,7 @@ def test_non_album_candidate_track_filter_is_applied_before_inventory_scans():
 
 
 @pytest.mark.parametrize("unrelated_count", [0, 10000])
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_absence_hit_copies_only_requested_entries(monkeypatch, unrelated_count):
     import music_app.services.library_browse_postgres as browse
 
@@ -12936,6 +12959,7 @@ def test_duplicate_absence_hit_copies_only_requested_entries(monkeypatch, unrela
     assert browse._UTILITY_PROJECTION_CACHE[cache_key] is cached
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_absence_miss_does_not_mutate_borrowed_snapshot(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12971,6 +12995,7 @@ def test_duplicate_absence_miss_does_not_mutate_borrowed_snapshot(monkeypatch):
     assert published["albums"]["new"]["_root_provenance_by_year"][2001]["root_ids"] == ["main"]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(monkeypatch):
     from time import perf_counter
 
@@ -13036,6 +13061,7 @@ def test_duplicate_source_attachment_defers_pg18_cache_miss_to_global_prewarm(mo
     )
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -13129,6 +13155,7 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_identity_prewarm_lookup_borrows_read_only_cache_without_deepcopy(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -15393,6 +15420,7 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     )
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_library_browse_builds_utility_rules_projection_from_rows():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -15918,6 +15946,7 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
     ]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index(monkeypatch):
     from contextlib import nullcontext
     from music_app.services import library_browse_postgres as module
@@ -15986,6 +16015,7 @@ def test_postgres_library_browse_disables_background_utility_projection_prewarm_
     assert submissions == []
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_library_browse_caches_utility_rules_payload_per_database_url():
     from music_app.services import library_browse_postgres as module
 
@@ -16041,23 +16071,24 @@ def test_postgres_library_browse_caches_utility_rules_payload_per_database_url()
     assert second_payload is not first_payload
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_utility_projection_invalidation_is_scoped_by_database_url_and_kind():
     from music_app.services import library_browse_postgres as module
 
     database_a = "postgresql://album_haven_app@localhost/cache-a"
     database_b = "postgresql://album_haven_app@localhost/cache-b"
     keys = {
-        (database_a, "problematic-files"),
-        (database_a, "rules"),
-        (database_b, "problematic-files"),
-        (database_b, "rules"),
+        (database_a, 7, "problematic-files", 41, 13, "v1"),
+        (database_a, 7, "rules", 41, 13, "v1"),
+        (database_b, 7, "problematic-files", 41, 13, "v1"),
+        (database_b, 7, "rules", 41, 13, "v1"),
     }
     with module._UTILITY_PROJECTION_CACHE_LOCK:
         module._UTILITY_PROJECTION_CACHE.clear()
         module._UTILITY_PROJECTION_GENERATIONS.clear()
         for key in keys:
             module._UTILITY_PROJECTION_CACHE[key] = {"key": key}
-            module._UTILITY_PROJECTION_GENERATIONS[key] = 4
+            module._UTILITY_PROJECTION_GENERATIONS[key[:3]] = 4
 
     module.invalidate_postgres_utility_projection_cache(
         database_url=database_a,
@@ -16065,19 +16096,315 @@ def test_postgres_utility_projection_invalidation_is_scoped_by_database_url_and_
     )
 
     with module._UTILITY_PROJECTION_CACHE_LOCK:
-        assert (database_a, "problematic-files") not in module._UTILITY_PROJECTION_CACHE
-        assert module._UTILITY_PROJECTION_GENERATIONS[(database_a, "problematic-files")] == 5
-        assert module._UTILITY_PROJECTION_GENERATIONS[(database_a, "rules")] == 4
-        assert module._UTILITY_PROJECTION_GENERATIONS[(database_b, "problematic-files")] == 4
-        assert module._UTILITY_PROJECTION_GENERATIONS[(database_b, "rules")] == 4
-        assert set(module._UTILITY_PROJECTION_CACHE) == keys - {(database_a, "problematic-files")}
+        assert not any(key[:3] == (database_a, 7, "problematic-files") for key in module._UTILITY_PROJECTION_CACHE)
+        assert module._UTILITY_PROJECTION_GENERATIONS[(database_a, 7, "problematic-files")] == 5
+        assert module._UTILITY_PROJECTION_GENERATIONS[(database_a, 7, "rules")] == 4
+        assert module._UTILITY_PROJECTION_GENERATIONS[(database_b, 7, "problematic-files")] == 4
+        assert module._UTILITY_PROJECTION_GENERATIONS[(database_b, 7, "rules")] == 4
+        assert set(module._UTILITY_PROJECTION_CACHE) == keys - {(database_a, 7, "problematic-files", 41, 13, "v1")}
 
 
+@pytest.mark.parametrize(
+    "changed_field",
+    ["library_id", "inventory_mutation_revision", "cover_mutation_revision", "builder_version"],
+)
+def test_postgres_utility_cache_misses_when_source_tuple_changes(monkeypatch, changed_field):
+    from types import SimpleNamespace
+    from music_app.services import library_browse_postgres as module
+    from music_app.services import problematic_albums
+
+    revisions = SimpleNamespace(
+        library_id=7, inventory_mutation_revision=41, cover_mutation_revision=13,
+    )
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/revision-key-cache",
+    })
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_CACHE", {})
+    monkeypatch.setattr(
+        repository, "_load_library_revisions", lambda **_kwargs: revisions, raising=False,
+    )
+    repository._set_cached_utility_projection("problematic-files", {"items": [{"key": "older"}]})
+    assert repository._get_cached_utility_projection("problematic-files") == {
+        "items": [{"key": "older"}],
+    }
+    if changed_field == "builder_version":
+        monkeypatch.setattr(problematic_albums, "PROBLEMATIC_FILES_BUILDER_VERSION", "v2", raising=False)
+    else:
+        setattr(revisions, changed_field, getattr(revisions, changed_field) + 1)
+
+    assert repository._get_cached_utility_projection("problematic-files") is None
+
+
+@pytest.fixture
+def fixed_utility_projection_revisions(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    monkeypatch.setattr(
+        module.PostgresLibraryBrowseRepository, "_load_library_revisions",
+        lambda _self, **_kwargs: module.LibraryProjectionRevisions(7, 41, 13),
+    )
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_CACHE", {})
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_GENERATIONS", {})
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_INFLIGHT", set())
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_SINGLEFLIGHT", {})
+
+
+@pytest.fixture
+def utility_revision_cache(monkeypatch):
+    from types import SimpleNamespace
+    from music_app.services import library_browse_postgres as module
+
+    revisions = SimpleNamespace(
+        library_id=7, inventory_mutation_revision=1, cover_mutation_revision=1,
+    )
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "utility-retention-test",
+    })
+    monkeypatch.setattr(repository, "_load_library_revisions", lambda **_kwargs: revisions)
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_CACHE", {})
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_GENERATIONS", {})
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_INFLIGHT", set())
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_SINGLEFLIGHT", {})
+    return module, repository, revisions
+
+
+def test_utility_revisions_load_once_on_borrowed_connection():
+    from music_app.services import library_browse_postgres as module
+
+    statements = []
+
+    class Connection:
+        def execute(self, sql):
+            statements.append(sql)
+            return self
+
+        def fetchone(self):
+            return {"library_id": 7, "inventory_mutation_revision": 41, "cover_mutation_revision": 13}
+
+    def unexpected_owned_connection(_database_url):
+        raise AssertionError("borrowed revision reads must not open an owned connection")
+
+    repository = module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "borrowed-revisions-test"},
+        connect=unexpected_owned_connection,
+    )
+    revisions = repository._load_library_revisions(connection=Connection())
+    assert revisions == module.LibraryProjectionRevisions(7, 41, 13)
+    assert len(statements) == 1
+    assert "library.read_cover_mutation_revision" in statements[0]
+    assert "inventory_mutation_revision" in statements[0]
+
+
+def test_utility_rules_revision_reads_run_outside_cache_mutex(utility_revision_cache, monkeypatch):
+    module, repository, revisions = utility_revision_cache
+    reads = []
+
+    def load_revisions(**_kwargs):
+        assert module._UTILITY_PROJECTION_CACHE_LOCK.acquire(blocking=False)
+        module._UTILITY_PROJECTION_CACHE_LOCK.release()
+        reads.append(revisions)
+        return revisions
+
+    monkeypatch.setattr(repository, "_load_library_revisions", load_revisions)
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", lambda: [])
+    repository.build_utility_rules_payload()
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize("invalidate", [False, True])
+def test_utility_cache_retains_bounded_revision_state(utility_revision_cache, monkeypatch, invalidate):
+    module, repository, revisions = utility_revision_cache
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", lambda: [])
+    for revision in range(20):
+        revisions.inventory_mutation_revision = revision
+        revisions.cover_mutation_revision = revision
+        repository.build_utility_rules_payload()
+        assert len(module._UTILITY_PROJECTION_CACHE) == 1
+        assert len(module._UTILITY_PROJECTION_GENERATIONS) == 1
+        if invalidate:
+            module.invalidate_postgres_utility_projection_cache(kinds=("rules",))
+            assert len(module._UTILITY_PROJECTION_GENERATIONS) == 1
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_utility_cache_rejects_older_repeatable_read_snapshot(
+    utility_revision_cache, monkeypatch, compact,
+):
+    module, repository, revisions = utility_revision_cache
+    kind = "duplicate-identities" if compact else "rules"
+    fingerprint = {"fingerprint": (7, 2), "observed_at": 2}
+    monkeypatch.setattr(module, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
+    revisions.inventory_mutation_revision = 2
+    revisions.cover_mutation_revision = 2
+    newer_key = repository._utility_projection_cache_key(kind)
+
+    def publish(key, payload):
+        if compact:
+            module._cache_compact_inventory_payload(
+                object(), repository, kind, fingerprint, payload, 0,
+                expected_cache_key=key,
+            )
+        else:
+            repository._set_cached_utility_projection(kind, payload, expected_cache_key=key)
+
+    publish(newer_key, {"value": "newer"})
+    revisions.inventory_mutation_revision = 1
+    revisions.cover_mutation_revision = 1
+    fingerprint = {"fingerprint": (7, 1), "observed_at": 1}
+    older_key = repository._utility_projection_cache_key(kind)
+    publish(older_key, {"value": "older"})
+
+    assert set(module._UTILITY_PROJECTION_CACHE) == {newer_key}
+    assert module._UTILITY_PROJECTION_CACHE[newer_key]["value"] == "newer"
+
+
+def test_utility_prewarm_coalesces_revision_changes_and_replays_latest(
+    utility_revision_cache, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    module, repository, revisions = utility_revision_cache
+    queued = []
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", SimpleNamespace(
+        submit=lambda function, *args: queued.append((function, args)),
+    ))
+    repository._allow_background_prewarm = True
+    repository.queue_utility_projection_prewarm("rules")
+    revisions.cover_mutation_revision = 2
+    repository.queue_utility_projection_prewarm("rules")
+    assert len(queued) == 1
+    assert len(module._UTILITY_PROJECTION_PREWARM_INFLIGHT) == 1
+
+    def load_rows():
+        revisions.cover_mutation_revision = 3
+        return []
+
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", load_rows)
+    function, args = queued[0]
+    function(*args)
+    assert len(queued) == 2
+    assert len(module._UTILITY_PROJECTION_PREWARM_INFLIGHT) == 1
+    function, args = queued[1]
+    function(*args)
+    assert len(queued) == 2
+    assert not module._UTILITY_PROJECTION_PREWARM_INFLIGHT
+    assert len(module._UTILITY_PROJECTION_CACHE) == 1
+
+
+def test_utility_prewarm_does_not_drop_request_arriving_during_final_revision_read(
+    utility_revision_cache, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    module, repository, revisions = utility_revision_cache
+    queued = []
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", SimpleNamespace(
+        submit=lambda function, *args: queued.append((function, args)),
+    ))
+    repository._allow_background_prewarm = True
+    repository.queue_utility_projection_prewarm("rules")
+    monkeypatch.setattr(repository, "build_utility_rules_payload", lambda: {})
+    reads = []
+
+    def load_revisions(**_kwargs):
+        captured = module.LibraryProjectionRevisions(
+            revisions.library_id, revisions.inventory_mutation_revision,
+            revisions.cover_mutation_revision,
+        )
+        reads.append(captured)
+        if len(reads) == 1:
+            revisions.cover_mutation_revision = 2
+            repository.queue_utility_projection_prewarm("rules")
+        return captured
+
+    monkeypatch.setattr(repository, "_load_library_revisions", load_revisions)
+    function, args = queued[0]
+    function(*args)
+    assert len(queued) == 2
+    assert len(module._UTILITY_PROJECTION_PREWARM_INFLIGHT) == 1
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_utility_prewarm_releases_ownership_and_retries_after_invalidation_or_read_failure(
+    utility_revision_cache, monkeypatch, failure,
+):
+    from types import SimpleNamespace
+
+    module, repository, revisions = utility_revision_cache
+    queued = []
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", SimpleNamespace(
+        submit=lambda function, *args: queued.append((function, args)),
+    ))
+    repository._allow_background_prewarm = True
+    repository.queue_utility_projection_prewarm("rules")
+    loads = []
+
+    def load_rows():
+        loads.append(True)
+        if len(loads) == 1:
+            module.invalidate_postgres_utility_projection_cache(kinds=("rules",))
+            if failure:
+                def unavailable_revisions(**_kwargs):
+                    raise RuntimeError("revision read unavailable")
+                monkeypatch.setattr(repository, "_load_library_revisions", unavailable_revisions)
+                raise RuntimeError("rules read unavailable")
+        return []
+
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", load_rows)
+    function, args = queued[0]
+    if failure:
+        with pytest.raises(RuntimeError, match="rules read unavailable"):
+            function(*args)
+        assert not module._UTILITY_PROJECTION_PREWARM_INFLIGHT
+        monkeypatch.setattr(repository, "_load_library_revisions", lambda **_kwargs: revisions)
+        repository.queue_utility_projection_prewarm("rules")
+    else:
+        function(*args)
+    assert len(queued) == 2
+    function, args = queued[1]
+    function(*args)
+    assert len(queued) == 2
+    assert len(loads) == 2
+    assert not module._UTILITY_PROJECTION_PREWARM_INFLIGHT
+    assert len(module._UTILITY_PROJECTION_CACHE) == 1
+
+
+def test_postgres_utility_invalidation_fences_all_matching_revision_keys(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    database = "postgresql://album_haven_app@localhost/revision-key-invalidation"
+    cached = (database, 7, "problematic-files", 41, 13, "v1")
+    flight = (database, 7, "problematic-files")
+    prewarm = (database, 8, "problematic-files")
+    generation_only = (database, 9, "problematic-files")
+    page = (database, 7, "problematic-files-page", 41, 13, "v1")
+    other_kind = (database, 7, "rules", 41, 13, "v1")
+    other_database = (database + "-other", 7, "problematic-files", 41, 13, "v1")
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_CACHE", {
+        cached: {"items": []}, page: {"items": []}, other_kind: {}, other_database: {},
+    })
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_SINGLEFLIGHT", {flight: Event()})
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_INFLIGHT", {prewarm})
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_GENERATIONS", {generation_only: 4})
+
+    module.invalidate_postgres_utility_projection_cache(
+        database_url=database, kinds=("problematic-files",),
+    )
+
+    assert set(module._UTILITY_PROJECTION_CACHE) == {other_kind, other_database}
+    assert module._UTILITY_PROJECTION_GENERATIONS == {
+        flight: 1, prewarm: 1, generation_only: 5, page[:3]: 1,
+    }
+    assert set(module._UTILITY_PROJECTION_SINGLEFLIGHT) == {flight}
+    assert module._UTILITY_PROJECTION_PREWARM_INFLIGHT == {prewarm}
+
+
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_utility_rules_invalidation_during_load_rejects_stale_cache_commit(monkeypatch):
     from music_app.services import library_browse_postgres as module
 
     database_url = "postgresql://album_haven_app@localhost/rules-generation-race"
-    cache_key = (database_url, "rules")
+    cache_key = (database_url, 7, "rules", 41, 13, "v1")
     old_load_started = Event()
     release_old_load = Event()
     current_rule = "old"
@@ -16088,7 +16415,7 @@ def test_utility_rules_invalidation_during_load_rejects_stale_cache_commit(monke
     )
     with module._UTILITY_PROJECTION_CACHE_LOCK:
         module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
-        module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
+        module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key[:3], None)
 
     def load_rows():
         nonlocal load_count

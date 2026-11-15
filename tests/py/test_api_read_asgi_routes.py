@@ -98,6 +98,8 @@ def test_asgi_status_syncs_worker_committed_inventory_revision(monkeypatch, app)
     def sync(library_state, config):
         calls.append((library_state, config))
         library_state["inventory_mutation_revision"] = 27
+        library_state["cover_mutation_revision"] = 13
+        library_state["library_id"] = 7
         return 27
 
     monkeypatch.setattr(
@@ -108,7 +110,11 @@ def test_asgi_status_syncs_worker_committed_inventory_revision(monkeypatch, app)
     status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
 
     assert status == 200
-    assert _decode_json(body)["inventory_mutation_revision"] == 27
+    payload = _decode_json(body)
+    assert payload["inventory_mutation_revision"] == 27
+    assert payload["cover_mutation_revision"] == 13
+    assert type(payload["cover_mutation_revision"]) is int
+    assert "library_id" not in payload
     assert len(calls) == 1
 
 

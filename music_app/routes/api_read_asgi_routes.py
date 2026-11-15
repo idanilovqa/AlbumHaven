@@ -852,6 +852,9 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         "inventory_mutation_revision": int(
             library_state.get("inventory_mutation_revision") or 0
         ),
+        "cover_mutation_revision": int(
+            library_state.get("cover_mutation_revision") or 0
+        ),
     }
 
 

@@ -94,16 +94,21 @@ def invalidate_targeted_library_projections(
     *,
     revision: int,
     affected_album_keys: tuple[str, ...],
+    expected_library_id: int | None = None,
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
     with _CACHE_LOCK:
         browse_cache = library_state.get("_view_payload_root_browse_cache")
         if isinstance(browse_cache, dict):
             browse_cache.clear()
-        library_state["inventory_mutation_revision"] = max(
-            0, int(revision or 0),
-            int(library_state.get("inventory_mutation_revision") or 0),
-        )
+        if (
+            expected_library_id is None
+            or library_state.get("library_id") == expected_library_id
+        ):
+            library_state["inventory_mutation_revision"] = max(
+                0, int(revision or 0),
+                int(library_state.get("inventory_mutation_revision") or 0),
+            )
         library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         schedule_gallery_projection_refresh(config)
@@ -407,21 +412,27 @@ def sync_durable_inventory_revision(
 ) -> int:
     """Observe worker commits and invalidate this web process once per revision."""
 
-    current_revision = max(
-        0, int(library_state.get("inventory_mutation_revision") or 0)
-    )
-    current_cover_revision = max(
-        0, int(library_state.get("cover_mutation_revision") or 0)
-    )
+    with _CACHE_LOCK:
+        observed_library_id = library_state.get("library_id")
+        current_revision = max(
+            0, int(library_state.get("inventory_mutation_revision") or 0)
+        )
+        current_cover_revision = max(
+            0, int(library_state.get("cover_mutation_revision") or 0)
+        )
+    durable_library_id = observed_library_id
     durable_cover_revision = current_cover_revision
     try:
         adapter = select_scan_cache_adapter(config)
         load_publication = getattr(adapter, "load_inventory_publication", None)
         if callable(load_publication):
             publication = load_publication()
-            durable_revision = max(0, int(publication.get("inventory_mutation_revision") or 0))
+            durable_library_id = publication.get("library_id", observed_library_id)
+            durable_revision = max(
+                0, int(publication.get("inventory_mutation_revision") or 0)
+            )
             durable_cover_revision = max(
-                current_cover_revision, int(publication.get("cover_mutation_revision") or 0)
+                0, int(publication.get("cover_mutation_revision") or 0)
             )
         else:
             load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
@@ -430,17 +441,42 @@ def sync_durable_inventory_revision(
             durable_revision = max(0, int(load_revision() or 0))
     except Exception:
         return current_revision
-    if durable_revision <= current_revision and durable_cover_revision <= current_cover_revision:
-        return current_revision
+    with _CACHE_LOCK:
+        current_library_id = library_state.get("library_id")
+        current_revision = max(
+            0, int(library_state.get("inventory_mutation_revision") or 0)
+        )
+        current_cover_revision = max(
+            0, int(library_state.get("cover_mutation_revision") or 0)
+        )
+        if (
+            current_library_id != observed_library_id
+            and durable_library_id != current_library_id
+        ):
+            return current_revision
+        if durable_library_id == current_library_id:
+            durable_revision = max(current_revision, durable_revision)
+            durable_cover_revision = max(current_cover_revision, durable_cover_revision)
+        if (
+            durable_library_id == current_library_id
+            and durable_revision == current_revision
+            and durable_cover_revision == current_cover_revision
+        ):
+            return current_revision
+        library_state.update(
+            library_id=durable_library_id,
+            inventory_mutation_revision=durable_revision,
+            cover_mutation_revision=durable_cover_revision,
+            relation_projection_ready=False,
+        )
     invalidate_targeted_library_projections(
         library_state,
         config,
-        revision=max(current_revision, durable_revision),
+        revision=durable_revision,
         affected_album_keys=(),
+        expected_library_id=durable_library_id,
     )
-    library_state["cover_mutation_revision"] = durable_cover_revision
-    library_state["relation_projection_ready"] = False
-    return max(current_revision, durable_revision)
+    return durable_revision
 
 
 def _bounded_file_error_history_recorder(
@@ -556,6 +592,9 @@ def _call_hydrate_library_state_from_disk(
 
 def init_state(app) -> None:
     app.library_state = {
+        "library_id": None,
+        "inventory_mutation_revision": 0,
+        "cover_mutation_revision": 0,
         "albums": [],
         "file_cache": {},
         "last_scan": 0.0,

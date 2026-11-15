@@ -13,6 +13,38 @@ from music_app.services import state as state_module
 from tests.py.runtime_testing import configure_test_app_paths
 
 
+def test_durable_sync_hydrates_library_identity_with_zero_revisions(monkeypatch):
+    publication = {"library_id": 7, "inventory_mutation_revision": 0, "cover_mutation_revision": 0}
+    adapter = SimpleNamespace(load_inventory_publication=lambda: publication)
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    st = {"inventory_mutation_revision": 0, "cover_mutation_revision": 0}
+
+    assert state_module.sync_durable_inventory_revision(st, {}) == 0
+    assert st["library_id"] == 7
+    assert st["inventory_mutation_revision"] == 0
+    assert st["cover_mutation_revision"] == 0
+
+
+def test_durable_sync_does_not_inherit_previous_library_revisions(monkeypatch):
+    publication = {"library_id": 8, "inventory_mutation_revision": 2, "cover_mutation_revision": 1}
+    adapter = SimpleNamespace(load_inventory_publication=lambda: publication)
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    invalidations = []
+
+    def invalidate(library_state, _config, **values):
+        invalidations.append(values)
+        library_state["inventory_mutation_revision"] = values["revision"]
+
+    monkeypatch.setattr(state_module, "invalidate_targeted_library_projections", invalidate)
+    st = {"library_id": 7, "inventory_mutation_revision": 41, "cover_mutation_revision": 13}
+
+    assert state_module.sync_durable_inventory_revision(st, {}) == 2
+    assert st["library_id"] == 8
+    assert st["inventory_mutation_revision"] == 2
+    assert st["cover_mutation_revision"] == 1
+    assert len(invalidations) == 1
+
+
 def test_durable_inventory_sync_ignores_legacy_timestamp_recovery_marker(monkeypatch):
     marker = {
         "inventory_mutation_revision": 41,

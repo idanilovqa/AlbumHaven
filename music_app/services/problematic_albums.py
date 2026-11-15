@@ -14,6 +14,7 @@ from music_app.services.separate_releases import load_separate_release_keys
 
 
 _LOGGER = logging.getLogger(__name__)
+PROBLEMATIC_FILES_BUILDER_VERSION = "v1"
 _POOR_ART_MIN_EDGE = 1200
 _PROBLEMATIC_ALBUMS_CACHE_KEY = "_problematic_albums_payload_cache"
 _PROBLEMATIC_ALBUMS_CACHE_SIGNATURE_KEY = "_problematic_albums_payload_cache_signature"
@@ -37,6 +38,10 @@ def _log_problematic_albums_timing(kind: str, *, logger=None, **details: object)
 
 def _problematic_albums_cache_signature(library_state: dict[str, object]) -> tuple[object, ...]:
     return (
+        library_state.get("library_id"),
+        int(library_state.get("inventory_mutation_revision") or 0),
+        int(library_state.get("cover_mutation_revision") or 0),
+        PROBLEMATIC_FILES_BUILDER_VERSION,
         id(library_state.get("albums")),
         id(library_state.get("file_cache")),
         id(library_state.get("relation_views")),

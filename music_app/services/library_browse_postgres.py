@@ -4,6 +4,7 @@ from contextlib import ExitStack, contextmanager
 import base64
 import binascii
 from copy import deepcopy
+from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
 import hashlib
@@ -165,10 +166,12 @@ _PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
 _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
-_UTILITY_PROJECTION_CACHE: dict[tuple[str, str], dict[str, object]] = {}
-_UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
-_UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
-_UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
+_UtilityProjectionCacheKey = tuple[str, int, str, int, int, str]
+_UtilityProjectionIdentity = tuple[str, int, str]
+_UTILITY_PROJECTION_CACHE: dict[_UtilityProjectionCacheKey, dict[str, object]] = {}
+_UTILITY_PROJECTION_PREWARM_INFLIGHT: set[_UtilityProjectionIdentity] = set()
+_UTILITY_PROJECTION_SINGLEFLIGHT: dict[_UtilityProjectionIdentity, Event] = {}
+_UTILITY_PROJECTION_GENERATIONS: dict[_UtilityProjectionIdentity, int] = {}
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 
 
@@ -254,27 +257,55 @@ def invalidate_postgres_utility_projection_cache(
     if not normalized_kinds:
         return
     with _UTILITY_PROJECTION_CACHE_LOCK:
-        if normalized_database_url:
-            affected_keys = {
-                (normalized_database_url, kind)
-                for kind in normalized_kinds
-            }
-        else:
-            affected_keys = {
-                key
-                for key in (
-                    set(_UTILITY_PROJECTION_CACHE)
-                    | set(_UTILITY_PROJECTION_SINGLEFLIGHT)
-                    | set(_UTILITY_PROJECTION_PREWARM_INFLIGHT)
-                    | set(_UTILITY_PROJECTION_GENERATIONS)
-                )
-                if key[1] in normalized_kinds
-            }
-        for cache_key in affected_keys:
-            _UTILITY_PROJECTION_GENERATIONS[cache_key] = (
-                _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
+        affected_identities = {
+            key[:3]
+            for key in (
+                set(_UTILITY_PROJECTION_CACHE)
+                | set(_UTILITY_PROJECTION_SINGLEFLIGHT)
+                | set(_UTILITY_PROJECTION_PREWARM_INFLIGHT)
+                | set(_UTILITY_PROJECTION_GENERATIONS)
             )
-            _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            if key[2] in normalized_kinds
+            and (not normalized_database_url or key[0] == normalized_database_url)
+        }
+        for identity in affected_identities:
+            _UTILITY_PROJECTION_GENERATIONS[identity] = (
+                _UTILITY_PROJECTION_GENERATIONS.get(identity, 0) + 1
+            )
+        for cache_key in list(_UTILITY_PROJECTION_CACHE):
+            if cache_key[:3] in affected_identities:
+                _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+
+
+def _publish_utility_projection_cache(
+    cache_key: _UtilityProjectionCacheKey,
+    payload: dict[str, object],
+    *,
+    expected_generation: int | None = None,
+    copy_payload: bool = True,
+) -> None:
+    identity = cache_key[:3]
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        if (
+            expected_generation is not None
+            and _UTILITY_PROJECTION_GENERATIONS.get(identity, 0) != expected_generation
+        ):
+            return
+        previous_keys = [key for key in _UTILITY_PROJECTION_CACHE if key[:3] == identity]
+        if any(
+            key[3] > cache_key[3] or key[4] > cache_key[4]
+            for key in previous_keys
+        ):
+            return
+        observed_at = payload.get("observed_at")
+        if observed_at is not None and any(
+            _UTILITY_PROJECTION_CACHE[key].get("observed_at", observed_at) > observed_at
+            for key in previous_keys
+        ):
+            return
+        for key in previous_keys:
+            _UTILITY_PROJECTION_CACHE.pop(key, None)
+        _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload) if copy_payload else payload
 
 
 def _request_flag(value: object) -> bool:
@@ -383,6 +414,13 @@ class ProblematicProjectionRequestError(ValueError):
     """Problematic Files request input is invalid."""
 
 
+@dataclass(frozen=True)
+class LibraryProjectionRevisions:
+    library_id: int
+    inventory_mutation_revision: int
+    cover_mutation_revision: int
+
+
 class PostgresLibraryBrowseRepository:
     def __init__(
         self,
@@ -442,16 +480,20 @@ class PostgresLibraryBrowseRepository:
                     list(duplicate_rows), defer_source_payloads=defer_source_payloads,
                 )
             kind = "duplicate-absence"
+            cache_key = self._utility_projection_cache_key(
+                kind, connection=active_connection,
+            )
             fingerprint = _duplicate_inventory_fingerprint(active_connection)
-            cached = self._get_cached_utility_projection(kind, copy_payload=False) if fingerprint else None
+            cached = self._get_cached_utility_projection(
+                kind, copy_payload=False, cache_key=cache_key, connection=active_connection,
+            ) if fingerprint else None
             absent = cached["albums"] if cached and cached.get("fingerprint") == fingerprint.get("fingerprint") else {}
             known = {key: deepcopy(absent[key]) for key in keys if key in absent}
             pending = [key for key in keys if key not in known]
             if not pending:
                 return known
-            cache_key = self._utility_projection_cache_key(kind)
             with _UTILITY_PROJECTION_CACHE_LOCK:
-                generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
+                generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key[:3], 0) if cache_key else 0
             candidate_ids = _load_duplicate_candidate_album_ids(
                 active_connection,
                 pending,
@@ -489,7 +531,10 @@ class PostgresLibraryBrowseRepository:
                     provenance = result.get("_root_provenance_by_year")
                     if provenance:
                         absent[key]["_root_provenance_by_year"] = deepcopy(provenance)
-                _cache_compact_inventory_payload(active_connection, self, kind, fingerprint, {"albums": absent}, generation)
+                _cache_compact_inventory_payload(
+                    active_connection, self, kind, fingerprint, {"albums": absent},
+                    generation, expected_cache_key=cache_key,
+                )
             return {**duplicates, **known}
 
         if connection is None:
@@ -648,6 +693,10 @@ class PostgresLibraryBrowseRepository:
         include_library_wide: bool = False,
     ) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
         kind = "non-album-candidates"
+        cache_key = (
+            self._utility_projection_cache_key(kind, connection=connection)
+            if connection is not None else None
+        )
         fingerprint = _duplicate_inventory_fingerprint(connection) if connection is not None else {}
         scoped_artist_names = [
             str(value).strip()
@@ -657,14 +706,13 @@ class PostgresLibraryBrowseRepository:
         scoped_query = str(query or "").strip()
         scope_inventory_query = bool(scoped_artist_names or scoped_query) and not include_library_wide
         cached = (
-            self._get_cached_utility_projection(kind)
+            self._get_cached_utility_projection(kind, cache_key=cache_key, connection=connection)
             if fingerprint and not scope_inventory_query
             else None
         )
         reuse = bool(cached and cached.get("fingerprint") == fingerprint.get("fingerprint"))
-        cache_key = self._utility_projection_cache_key(kind)
         with _UTILITY_PROJECTION_CACHE_LOCK:
-            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
+            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key[:3], 0) if cache_key else 0
         options = {"track_ids": cached["track_ids"]} if reuse else {}
         if scope_inventory_query:
             if scoped_artist_names:
@@ -686,7 +734,7 @@ class PostgresLibraryBrowseRepository:
         if fingerprint and not scope_inventory_query and not reuse:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),
-            }, generation)
+            }, generation, expected_cache_key=cache_key)
         scoped_entries = _non_album_entries_from_inventory_candidates(
             rows,
             visible_library_categories=list(
@@ -3138,18 +3186,20 @@ class PostgresLibraryBrowseRepository:
 
     def build_utility_rules_payload(self) -> dict[str, object]:
         kind = "rules"
-        cached_payload = self._get_cached_utility_projection(kind)
+        cache_key = self._utility_projection_cache_key(kind)
+        cached_payload = self._get_cached_utility_projection(kind, cache_key=cache_key)
         if cached_payload is not None:
             return cached_payload
         with _UTILITY_PROJECTION_CACHE_LOCK:
-            cache_key = self._utility_projection_cache_key(kind)
             generation = (
-                _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
+                _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key[:3], 0)
                 if cache_key is not None
                 else None
             )
         payload = _utility_rules_projection_payload(self._load_utility_rules_rows())
-        self._set_cached_utility_projection(kind, payload, expected_generation=generation)
+        self._set_cached_utility_projection(
+            kind, payload, expected_generation=generation, expected_cache_key=cache_key,
+        )
         return deepcopy(payload)
 
     def resolve_problem_exclusion_items(
@@ -3678,6 +3728,9 @@ class PostgresLibraryBrowseRepository:
                 return rows[0] if rows else None
             return None
 
+        cache_key = self._utility_projection_cache_key(
+            "relation-alias-maps", connection=connection,
+        )
         identity_row = fetch_one(
             connection.execute(_relation_alias_maps_cache_identity_sql())
         )
@@ -3688,7 +3741,9 @@ class PostgresLibraryBrowseRepository:
         )
         cacheable = bool(fingerprint[0] and fingerprint[1])
         cached = (
-            self._get_cached_utility_projection("relation-alias-maps")
+            self._get_cached_utility_projection(
+                "relation-alias-maps", cache_key=cache_key, connection=connection,
+            )
             if cacheable
             else None
         )
@@ -3702,10 +3757,9 @@ class PostgresLibraryBrowseRepository:
 
         generation = 0
         if cacheable:
-            cache_key = self._utility_projection_cache_key("relation-alias-maps")
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 generation = (
-                    _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
+                    _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key[:3], 0)
                     if cache_key
                     else 0
                 )
@@ -3757,6 +3811,8 @@ class PostgresLibraryBrowseRepository:
                 "relation-alias-maps",
                 {"fingerprint": loaded_fingerprint, "relation_views": result},
                 expected_generation=generation,
+                expected_cache_key=cache_key,
+                connection=connection,
             )
         return result
 
@@ -4082,21 +4138,59 @@ class PostgresLibraryBrowseRepository:
     def _config_value(self, key: str, default: object = "") -> object:
         return self._config.get(key, default)
 
-    def _utility_projection_cache_key(self, kind: str) -> tuple[str, str] | None:
+    def _load_library_revisions(
+        self, *, connection: Any | None = None,
+    ) -> LibraryProjectionRevisions:
+        from music_app.services.scan_cache_persistence import (
+            _first_row,
+            _load_library_revisions_sql,
+        )
+
+        if connection is None:
+            with self._search_connection_context() as owned_connection:
+                return self._load_library_revisions(connection=owned_connection)
+        row = _row_mapping(
+            _first_row(connection.execute(_load_library_revisions_sql()))
+        )
+        return LibraryProjectionRevisions(
+            library_id=_coerce_int(row.get("library_id")),
+            inventory_mutation_revision=_coerce_int(
+                row.get("inventory_mutation_revision")
+            ),
+            cover_mutation_revision=_coerce_int(row.get("cover_mutation_revision")),
+        )
+
+    def _utility_projection_cache_key(
+        self, kind: str, *, connection: Any | None = None,
+    ) -> _UtilityProjectionCacheKey | None:
         if not self._database_url:
             return None
         normalized_kind = str(kind or "").strip()
         if not normalized_kind:
             return None
-        return (self._database_url, normalized_kind)
+        from music_app.services.problematic_albums import PROBLEMATIC_FILES_BUILDER_VERSION
+
+        revisions = self._load_library_revisions(connection=connection)
+        return (
+            self._database_url,
+            revisions.library_id,
+            normalized_kind,
+            revisions.inventory_mutation_revision,
+            revisions.cover_mutation_revision,
+            PROBLEMATIC_FILES_BUILDER_VERSION,
+        )
 
     def _get_cached_utility_projection(
         self,
         kind: str,
         *,
         copy_payload: bool = True,
+        cache_key: _UtilityProjectionCacheKey | None = None,
+        connection: Any | None = None,
     ) -> dict[str, object] | None:
-        cache_key = self._utility_projection_cache_key(kind)
+        cache_key = cache_key or self._utility_projection_cache_key(
+            kind, connection=connection,
+        )
         if cache_key is None:
             return None
         with _UTILITY_PROJECTION_CACHE_LOCK:
@@ -4111,17 +4205,17 @@ class PostgresLibraryBrowseRepository:
         payload: dict[str, object],
         *,
         expected_generation: int | None = None,
+        expected_cache_key: _UtilityProjectionCacheKey | None = None,
+        connection: Any | None = None,
     ) -> None:
-        cache_key = self._utility_projection_cache_key(kind)
-        if cache_key is None:
+        cache_key = self._utility_projection_cache_key(kind, connection=connection)
+        if cache_key is None or (
+            expected_cache_key is not None and cache_key != expected_cache_key
+        ):
             return
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            if (
-                expected_generation is not None
-                and _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) != expected_generation
-            ):
-                return
-            _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
+        _publish_utility_projection_cache(
+            cache_key, payload, expected_generation=expected_generation,
+        )
 
     def queue_settings_projection_prewarm(self) -> None:
         if not self._allow_background_prewarm:
@@ -4136,13 +4230,14 @@ class PostgresLibraryBrowseRepository:
         cache_key = self._utility_projection_cache_key(kind)
         if cache_key is None:
             return
+        identity = cache_key[:3]
         with _UTILITY_PROJECTION_CACHE_LOCK:
             if cache_key in _UTILITY_PROJECTION_CACHE:
                 return
-            if cache_key in _UTILITY_PROJECTION_PREWARM_INFLIGHT:
+            if identity in _UTILITY_PROJECTION_PREWARM_INFLIGHT:
                 return
-            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
-            _UTILITY_PROJECTION_PREWARM_INFLIGHT.add(cache_key)
+            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(identity, 0)
+            _UTILITY_PROJECTION_PREWARM_INFLIGHT.add(identity)
         _UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(
             self._run_utility_projection_prewarm,
             kind,
@@ -4153,7 +4248,7 @@ class PostgresLibraryBrowseRepository:
     def _run_utility_projection_prewarm(
         self,
         kind: str,
-        cache_key: tuple[str, str],
+        cache_key: _UtilityProjectionCacheKey,
         queued_generation: int,
     ) -> None:
         try:
@@ -4163,12 +4258,21 @@ class PostgresLibraryBrowseRepository:
                 with self._search_connection_context() as connection:
                     _load_duplicate_candidate_album_ids(connection, [], repository=self)
         finally:
+            identity = cache_key[:3]
             with _UTILITY_PROJECTION_CACHE_LOCK:
-                _UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(cache_key)
+                _UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(identity)
+            try:
+                current_key = self._utility_projection_cache_key(kind)
+            except Exception:
+                current_key = None
+            with _UTILITY_PROJECTION_CACHE_LOCK:
                 replay = (
-                    _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0)
-                    != queued_generation
-                    and cache_key not in _UTILITY_PROJECTION_CACHE
+                    current_key is not None
+                    and (
+                        current_key != cache_key
+                        or _UTILITY_PROJECTION_GENERATIONS.get(identity, 0) != queued_generation
+                    )
+                    and current_key not in _UTILITY_PROJECTION_CACHE
                 )
             if replay:
                 self.queue_utility_projection_prewarm(kind)
@@ -4857,8 +4961,11 @@ def _load_duplicate_candidate_album_ids(
     # otherwise pull thousands of unrelated albums into every artist request.
     if cache_only:
         kind = "duplicate-identities"
+        cache_key = repository._utility_projection_cache_key(kind, connection=connection)
         fingerprint = _duplicate_inventory_fingerprint(connection)
-        cached = repository._get_cached_utility_projection(kind, copy_payload=False)
+        cached = repository._get_cached_utility_projection(
+            kind, copy_payload=False, cache_key=cache_key, connection=connection,
+        )
         if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
             return _duplicate_candidate_ids_from_index(cached["index"], album_keys)
         repository.queue_utility_projection_prewarm(kind)
@@ -4872,14 +4979,16 @@ def _load_duplicate_candidate_album_ids(
     ):
         return _load_duplicate_candidate_album_ids_for_keys(connection, album_keys)
     kind = "duplicate-identities"
+    cache_key = repository._utility_projection_cache_key(kind, connection=connection)
     fingerprint = _duplicate_inventory_fingerprint(connection)
-    cached = repository._get_cached_utility_projection(kind, copy_payload=False)
+    cached = repository._get_cached_utility_projection(
+        kind, copy_payload=False, cache_key=cache_key, connection=connection,
+    )
     if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
         candidate_ids = _duplicate_candidate_ids_from_index(cached["index"], album_keys)
         return candidate_ids
-    cache_key = repository._utility_projection_cache_key(kind)
     with _UTILITY_PROJECTION_CACHE_LOCK:
-        generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
+        generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key[:3], 0) if cache_key else 0
     cursor = connection.execute("""
         select distinct albums.id as album_id, albums.album_key,
           files.scan_file_album as album, files.scan_file_album_artist as album_artist,
@@ -4898,7 +5007,10 @@ def _load_duplicate_candidate_album_ids(
     rows = cursor.fetchall()
     index = _duplicate_candidate_index_from_rows(rows)
     if fingerprint:
-        _cache_compact_inventory_payload(connection, repository, kind, fingerprint, {"index": index}, generation)
+        _cache_compact_inventory_payload(
+            connection, repository, kind, fingerprint, {"index": index}, generation,
+            expected_cache_key=cache_key,
+        )
     candidate_ids = _duplicate_candidate_ids_from_index(index, album_keys)
     return candidate_ids
 
@@ -5020,18 +5132,20 @@ def _duplicate_candidate_album_ids_for_keys_sql(*, canonical_library: bool = Fal
 def _cache_compact_inventory_payload(
     connection: Any, repository: PostgresLibraryBrowseRepository, kind: str,
     fingerprint: dict[str, object], payload: dict[str, object], generation: int,
+    *, expected_cache_key: _UtilityProjectionCacheKey | None = None,
 ) -> None:
     # READ COMMITTED callers can observe publication during the load; older
     # repeatable-read callers can finish after a newer snapshot has cached.
-    cache_key = repository._utility_projection_cache_key(kind)
-    if cache_key and _duplicate_inventory_fingerprint(connection) == fingerprint:
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            current = _UTILITY_PROJECTION_CACHE.get(cache_key)
-            if (
-                _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
-                and (not current or current["observed_at"] <= fingerprint["observed_at"])
-            ):
-                _UTILITY_PROJECTION_CACHE[cache_key] = {**fingerprint, **payload}
+    cache_key = repository._utility_projection_cache_key(kind, connection=connection)
+    if (
+        cache_key
+        and (expected_cache_key is None or cache_key == expected_cache_key)
+        and _duplicate_inventory_fingerprint(connection) == fingerprint
+    ):
+        _publish_utility_projection_cache(
+            cache_key, {**fingerprint, **payload},
+            expected_generation=generation, copy_payload=False,
+        )
 
 
 def _duplicate_candidate_index_from_rows(rows: Iterable[object]) -> list[tuple[int, str, object]]:

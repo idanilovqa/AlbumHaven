@@ -1395,7 +1395,7 @@ async def album_details(request: Request) -> JSONResponse:
                 return JSONResponse(
                     {
                         "ok": False,
-                        "error": "This album was splitвЂ”choose the current release",
+                        "error": "This album was split—choose the current release",
                         "resolution_kind": "album_split",
                         "current_releases": lineage["choices"],
                     },
@@ -1445,7 +1445,7 @@ async def album_details(request: Request) -> JSONResponse:
                     return JSONResponse(
                         {
                             "ok": False,
-                            "error": "This album was splitвЂ”choose the current release",
+                            "error": "This album was split—choose the current release",
                             "resolution_kind": "album_split",
                             "current_releases": lineage["choices"],
                         },

@@ -416,7 +416,9 @@ async def _resolve_album_payload_context(
             {"path": path} for path in sorted(fallback_paths)
         ]
         normalized_album["_cover_lookup_task_scoped_context"] = True
-    resolved_context = resolve_album_context(config, normalized_album)
+    resolved_context = await run_in_threadpool(
+        resolve_album_context, config, normalized_album
+    )
     if resolved_context is not None:
         if task_scoped and fallback_paths:
             album_id = _album_id(normalized_album)
@@ -466,7 +468,7 @@ async def _resolve_album_payload_context(
                         if str(path or "").strip()
                     ]
                     return normalized_album, (
-                        resolve_album_context(config, normalized_album)
+                        await run_in_threadpool(resolve_album_context, config, normalized_album)
                         or _resolve_distributed_album_context(config, normalized_album)
                     )
         return normalized_album, resolved_context
@@ -502,7 +504,7 @@ async def _resolve_album_payload_context(
                     ]
                     normalized_album["_cover_lookup_task_scoped_context"] = True
                     resolved_context = (
-                        resolve_album_context(config, normalized_album)
+                        await run_in_threadpool(resolve_album_context, config, normalized_album)
                         or _resolve_distributed_album_context(config, normalized_album)
                     )
                     if resolved_context is not None:
@@ -516,7 +518,7 @@ async def _resolve_album_payload_context(
                     if str(path or "").strip()
                 ]
                 resolved_context = (
-                    resolve_album_context(config, normalized_album)
+                    await run_in_threadpool(resolve_album_context, config, normalized_album)
                     or _resolve_distributed_album_context(config, normalized_album)
                 )
                 if resolved_context is not None:
@@ -544,7 +546,7 @@ async def _resolve_album_payload_context(
                 if str(path or "").strip()
             ]
     resolved_context = (
-        resolve_album_context(config, normalized_album)
+        await run_in_threadpool(resolve_album_context, config, normalized_album)
         or _resolve_distributed_album_context(config, normalized_album)
     )
     if resolved_context is not None:
@@ -584,7 +586,7 @@ async def _resolve_album_payload_context(
         if str(path or "").strip()
     ]
     return normalized_album, (
-        resolve_album_context(config, normalized_album)
+        await run_in_threadpool(resolve_album_context, config, normalized_album)
         or _resolve_distributed_album_context(config, normalized_album)
     )
 
@@ -1205,7 +1207,9 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         _album_track_paths(album)
         or _cover_lookup_task_track_paths(task_payload)
     )
-    album_context = resolve_album_context(config, queued_album)
+    album_context = await run_in_threadpool(
+        resolve_album_context, config, queued_album
+    )
     if task_payload:
         queued_album, album_context = await _resolve_album_payload_context(
             config,

@@ -33,6 +33,7 @@ from music_app.services.cover_provider_candidates import (
 )
 from music_app.services.cover_provider_outcomes_postgres import persist_cover_provider_outcomes
 from music_app.services.library import build_albums_from_file_cache
+from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 
@@ -1096,7 +1097,7 @@ def run_cover_jobs(
                     snapshot = {path: dict(entry) for path, entry in current_entries.items()}
                     for path, selection in accepted_updates.items():
                         snapshot[path].update(selection)
-                library_state["albums"] = build_albums_from_file_cache(current_entries, separate_release_keys)
+                publish_library_albums(library_state, build_albums_from_file_cache(current_entries, separate_release_keys))
 
         if snapshot is not None:
             def commit_snapshot(commit_action):
@@ -1106,9 +1107,9 @@ def run_cover_jobs(
                     result = commit_action()
                     for path, selection in accepted_updates.items():
                         library_state["file_cache"][path].update(selection)
-                    library_state["albums"] = build_albums_from_file_cache(
+                    publish_library_albums(library_state, build_albums_from_file_cache(
                         library_state["file_cache"], separate_release_keys,
-                    )
+                    ))
                     return result
 
             # Preserve the legacy clearing path. Revision guards reject concurrent

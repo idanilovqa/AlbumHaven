@@ -328,3 +328,107 @@ def test_refresh_worker_contract_converges_without_rescanning_a_fresh_library_at
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))
+
+
+class _CountingAlbums(list):
+    """A published album list that counts every album a reader walks."""
+
+    counts = OperationCounts()
+
+    def __iter__(self):
+        for album in super().__iter__():
+            self.counts.candidate_rows += 1
+            yield album
+
+
+def _published_versions_library(app, album_count: int) -> tuple[_CountingAlbums, str, str]:
+    """`album_count` albums published through the library publisher; returns
+    the published list and the keys of two releases by one artist."""
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_album_index import publish_library_albums
+
+    file_cache = {}
+    releases = [("Broadcast", "Tender Buttons"), ("Broadcast", "Tender Buttons (Demos)")]
+    releases += [(f"Artist {index:05d}", "Album") for index in range(album_count - 2)]
+    for artist, album in releases:
+        path = f"/music/{artist}/{album}/01.mp3"
+        file_cache[path] = {"path": path, "title": "One", "album": album, "album_artist": artist, "artist": artist}
+    albums = _CountingAlbums(build_albums_from_file_cache(file_cache))
+    # The publisher indexes the list on its own thread, before any request.
+    publish_library_albums(app.state.library_state, albums)
+    albums.counts = OperationCounts()
+    keys = {album.name: album.key for album in list.__iter__(albums) if album.album_artist == "Broadcast"}
+    return albums, keys["Tender Buttons (Demos)"], keys["Tender Buttons"]
+
+
+def test_mark_version_route_contract_reads_two_albums_by_key_at_production_album_count(library_app, monkeypatch):
+    from music_app.services import manual_versions, rule_state_postgres
+
+    saved: list[dict[str, str]] = []
+    # The Postgres rule-state store saves the link set it is given.
+    monkeypatch.setattr(
+        rule_state_postgres.RuleStatePostgresAdapter, "save_manual_version_links",
+        lambda _self, links: saved.append(dict(links)),
+    )
+
+    def run(album_count: int) -> OperationCounts:
+        albums, album_key, parent_key = _published_versions_library(library_app, album_count)
+        manual_versions._MANUAL_VERSION_LINKS_CACHE.clear()
+        status, _headers, body = run_asgi_request(
+            library_app, "POST", "/versions/mark", json_body={"album_key": album_key, "parent_album_key": parent_key},
+        )
+        assert status == 200, body
+        assert decode_json(body)["manual_version_links"] == {album_key: parent_key}
+        assert saved[-1] == {album_key: parent_key}
+        return albums.counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_a_asgi_routes.py#mark_album_version"))
+
+
+def test_cover_gallery_mark_seen_route_contract_probes_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes
+
+    snapshot = {"candidates": [], "automatic_improvement_revision": 2, "seen_automatic_improvement_revision": 2}
+    marked: list[int] = []
+
+    class SnapshotRepository:
+        """The Postgres candidate-snapshot store for the selected album."""
+
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return 7
+
+        def mark_seen(self, *, album_id):
+            marked.append(album_id)
+            return dict(snapshot)
+
+    monkeypatch.setattr(api_wave_d_asgi_routes, "AlbumCoverCandidateSnapshotRepository", SnapshotRepository)
+
+    def run(album_count: int) -> OperationCounts:
+        main_root = (tmp_path / f"main-{album_count}").resolve()
+        for index in range(album_count):
+            sibling = main_root / f"Artist {index:04d}" / "Album" / "01.mp3"
+            sibling.parent.mkdir(parents=True)
+            sibling.write_bytes(b"track")
+        track = main_root / "Selected" / "Album" / "CD1" / "01.mp3"
+        track.parent.mkdir(parents=True)
+        track.write_bytes(b"track")
+        (main_root / "Selected" / "Album" / "CD2").mkdir()
+        _use_roots(library_app, {"main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}]})
+
+        def request():
+            status, _headers, body = run_asgi_request(
+                library_app, "POST", "/utilities/cover-lookup/gallery/mark-seen",
+                json_body={"album": {"id": 7, "name": "Album", "tracks": [{"path": str(track)}]}},
+            )
+            assert status == 200, body
+            assert decode_json(body)["candidate_snapshot"]["candidates"] == []
+            assert marked[-1] == 7
+
+        return _measure(monkeypatch, request)
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_gallery_mark_seen"))

@@ -617,20 +617,24 @@ def _ensure_relation_projection_ready(
                 phase_timings_ms["fingerprint"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
-                phase_started_at = perf_counter()
-                if cancel_requested is None:
-                    relation_views = build_relation_views_from_postgres_rows(config, rows)
-                else:
-                    relation_views = build_relation_views_from_postgres_rows(
-                        config,
-                        rows,
-                        cooperate=lambda: _cooperate_with_foreground(cancel_requested),
-                    )
-                phase_timings_ms["pure_build"] = (
-                    perf_counter() - phase_started_at
-                ) * 1000
-                if not relation_projection_structure_complete(relation_views):
-                    raise RuntimeError("Relation projection builder returned an incomplete projection.")
+                # An inventory publication marks the projection stale without
+                # checking its relation inputs; unchanged inputs need no rebuild.
+                source_unchanged = _restorable_ready_metadata(baseline_scan_cache, source_fingerprint) is not None
+                if not source_unchanged:
+                    phase_started_at = perf_counter()
+                    if cancel_requested is None:
+                        relation_views = build_relation_views_from_postgres_rows(config, rows)
+                    else:
+                        relation_views = build_relation_views_from_postgres_rows(
+                            config,
+                            rows,
+                            cooperate=lambda: _cooperate_with_foreground(cancel_requested),
+                        )
+                    phase_timings_ms["pure_build"] = (
+                        perf_counter() - phase_started_at
+                    ) * 1000
+                    if not relation_projection_structure_complete(relation_views):
+                        raise RuntimeError("Relation projection builder returned an incomplete projection.")
                 _raise_if_projection_cancelled(cancel_requested)
             finally:
                 close_source_connection = getattr(source_connection, "close", None)
@@ -678,53 +682,65 @@ def _ensure_relation_projection_ready(
                                 reason="healthy",
                                 duration_ms=(perf_counter() - started_at) * 1000,
                             )
-                        reason = locked_reason
-                        scan_cache = locked_scan_cache
-                        duration_ms = (perf_counter() - started_at) * 1000
-                        metadata = build_ready_relation_projection_metadata(
-                            source_fingerprint,
-                            reason=reason,
-                            duration_ms=duration_ms,
-                            source_row_count=source_row_count,
-                            phase_timings_ms=phase_timings_ms,
-                        )
-                        relations_last_built = datetime.now(timezone.utc).timestamp()
-                        next_scan_cache = {
-                            key: value
-                            for key, value in scan_cache.items()
-                            if key != _ARTIST_SEARCH_PROJECTION_ROWS_KEY
-                        }
-                        next_scan_cache["relation_views"] = serialize_relation_views(relation_views)
-                        next_scan_cache["relations_last_built"] = relations_last_built
-                        next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = metadata
-                        phase_started_at = perf_counter()
-                        replace_artist_family_projection_in_transaction(
-                            connection,
-                            relation_views,
-                            relations_last_built=relations_last_built,
-                        )
-                        phase_timings_ms["family_link_replacement"] = (
-                            perf_counter() - phase_started_at
-                        ) * 1000
-                        phase_started_at = perf_counter()
-                        replace_artist_search_projection_in_transaction(
-                            connection,
-                            relation_views,
-                            metadata=metadata,
-                            relations_last_built=relations_last_built,
-                        )
-                        phase_timings_ms["search_projection_replacement"] = (
-                            perf_counter() - phase_started_at
-                        ) * 1000
-                        phase_started_at = perf_counter()
-                        connection.execute(
-                            _save_scan_cache_sql(),
-                            {"scan_cache": _jsonb(next_scan_cache)},
-                        )
-                        phase_timings_ms["snapshot_publication"] = (
-                            perf_counter() - phase_started_at
-                        ) * 1000
-                        duration_ms = (perf_counter() - started_at) * 1000
+                        if source_unchanged:
+                            restored_metadata = _restorable_ready_metadata(locked_scan_cache, source_fingerprint)
+                            if restored_metadata is not None:
+                                return _restore_unchanged_projection(
+                                    connection,
+                                    locked_scan_cache,
+                                    restored_metadata,
+                                    duration_ms=(perf_counter() - started_at) * 1000,
+                                )
+                            # The projection changed after its sources were read.
+                            retry_with_current_sources = True
+                        else:
+                            reason = locked_reason
+                            scan_cache = locked_scan_cache
+                            duration_ms = (perf_counter() - started_at) * 1000
+                            metadata = build_ready_relation_projection_metadata(
+                                source_fingerprint,
+                                reason=reason,
+                                duration_ms=duration_ms,
+                                source_row_count=source_row_count,
+                                phase_timings_ms=phase_timings_ms,
+                            )
+                            relations_last_built = datetime.now(timezone.utc).timestamp()
+                            next_scan_cache = {
+                                key: value
+                                for key, value in scan_cache.items()
+                                if key != _ARTIST_SEARCH_PROJECTION_ROWS_KEY
+                            }
+                            next_scan_cache["relation_views"] = serialize_relation_views(relation_views)
+                            next_scan_cache["relations_last_built"] = relations_last_built
+                            next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = metadata
+                            phase_started_at = perf_counter()
+                            replace_artist_family_projection_in_transaction(
+                                connection,
+                                relation_views,
+                                relations_last_built=relations_last_built,
+                            )
+                            phase_timings_ms["family_link_replacement"] = (
+                                perf_counter() - phase_started_at
+                            ) * 1000
+                            phase_started_at = perf_counter()
+                            replace_artist_search_projection_in_transaction(
+                                connection,
+                                relation_views,
+                                metadata=metadata,
+                                relations_last_built=relations_last_built,
+                            )
+                            phase_timings_ms["search_projection_replacement"] = (
+                                perf_counter() - phase_started_at
+                            ) * 1000
+                            phase_started_at = perf_counter()
+                            connection.execute(
+                                _save_scan_cache_sql(),
+                                {"scan_cache": _jsonb(next_scan_cache)},
+                            )
+                            phase_timings_ms["snapshot_publication"] = (
+                                perf_counter() - phase_started_at
+                            ) * 1000
+                            duration_ms = (perf_counter() - started_at) * 1000
             if not retry_with_current_sources:
                 break
             reason = "source_fingerprint_changed"
@@ -887,6 +903,55 @@ def _artist_search_projection_rows(
         }
         for normalized_key in sorted(identity_to_canonical)
     ]
+
+
+def _restorable_ready_metadata(
+    scan_cache: Mapping[str, object],
+    source_fingerprint: str,
+) -> dict[str, object] | None:
+    """Ready metadata for a projection marked stale whose sources did not change."""
+    metadata = scan_cache.get(RELATION_PROJECTION_METADATA_KEY)
+    if not isinstance(metadata, Mapping) or metadata.get("status") != "stale":
+        return None
+    ready = {**metadata, "status": "ready"}
+    if (
+        ready.get("built_from_fingerprint") != source_fingerprint
+        or relation_projection_stale_reason({**scan_cache, RELATION_PROJECTION_METADATA_KEY: ready})
+    ):
+        return None
+    return ready
+
+
+def _restore_unchanged_projection(
+    connection: Any,
+    scan_cache: Mapping[str, object],
+    metadata: Mapping[str, object],
+    *,
+    duration_ms: float,
+) -> dict[str, object]:
+    """Republish the existing views as ready; the locked snapshot was checked
+    against the baseline, so it still matches the loaded sources."""
+    next_scan_cache = {
+        key: value
+        for key, value in scan_cache.items()
+        if key != _ARTIST_SEARCH_PROJECTION_ROWS_KEY
+    }
+    next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = dict(metadata)
+    connection.execute(_save_scan_cache_sql(), {"scan_cache": _jsonb(next_scan_cache)})
+    if artist_search_projection_stale_reason({**scan_cache, RELATION_PROJECTION_METADATA_KEY: metadata}):
+        replace_artist_search_projection_in_transaction(
+            connection,
+            next_scan_cache["relation_views"],
+            metadata=metadata,
+            relations_last_built=float(scan_cache.get("relations_last_built") or 0.0),
+        )
+    return _projection_result(
+        scan_cache.get("relation_views"),
+        metadata,
+        startup_rebuilt=False,
+        reason="source_unchanged",
+        duration_ms=duration_ms,
+    )
 
 
 def _projection_result(

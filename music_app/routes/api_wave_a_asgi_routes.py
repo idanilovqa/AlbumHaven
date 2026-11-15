@@ -50,6 +50,7 @@ from music_app.services.exception_overrides import (
 from music_app.services.ignored_repairs import load_ignored_repair_keys, save_ignored_repair_keys
 from music_app.services.ignored_versions import load_ignored_version_keys, save_ignored_version_keys
 from music_app.services.library import _album_key, album_to_dict
+from music_app.services.library_album_index import library_album_index, publish_library_albums
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.missing_album_removal_postgres import (
     MissingAlbumNotFound,
@@ -168,14 +169,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     def remove_from_runtime_albums():
         albums = library_state.get("albums")
         if isinstance(albums, list):
-            library_state["albums"] = [
+            publish_library_albums(library_state, [
                 album
                 for album in albums
                 if str(
                     album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
                 ).strip()
                 != normalized_key
-            ]
+            ])
 
     def update_runtime_after_removal():
         run_runtime_state_mutation_for_state(remove_from_runtime_albums)
@@ -846,18 +847,10 @@ def _asgi_albums_by_track_paths_finder(request: Request):
     library_state = _library_state(request)
 
     def find_albums(track_paths: TrackPathSet) -> list[JsonDict]:
-        if not track_paths:
-            return []
-        matches: list[JsonDict] = []
-        for album in list(library_state.get("albums", []) or []):
-            album_paths = {
-                str(getattr(track, "path", "") or "")
-                for track in getattr(album, "tracks", []) or []
-                if str(getattr(track, "path", "") or "")
-            }
-            if album_paths & track_paths:
-                matches.append(album_to_dict(album, config=config))
-        return matches
+        return [
+            album_to_dict(album, config=config)
+            for album in library_album_index(library_state).albums_with_any_track(track_paths)
+        ]
 
     return find_albums
 
@@ -1587,13 +1580,9 @@ async def mark_album_version(request: Request) -> JSONResponse:
 
     if (pending := library_hydration_pending_response(library_state, config, logger)) is not None:
         return pending
-    all_albums = {
-        str(getattr(album, "key", "") or ""): album
-        for album in list(library_state.get("albums", []))
-        if str(getattr(album, "key", "") or "")
-    }
-    album = all_albums.get(album_key)
-    parent_album = all_albums.get(parent_album_key)
+    index = library_album_index(library_state)
+    album = index.album(album_key)
+    parent_album = index.album(parent_album_key)
     if album is None or parent_album is None:
         return _json_response(({"ok": False, "error": "Album could not be found"}, 404))
 

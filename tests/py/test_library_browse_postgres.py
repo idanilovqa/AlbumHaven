@@ -13395,18 +13395,6 @@ def test_selected_artist_family_context_does_not_refresh_loaded_empty_projection
             "loaded": True,
         },
     )
-    monkeypatch.setattr(
-        browse_module,
-        "_refresh_relation_views",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("loaded empty projections should not refresh relation views during read shaping")
-        ),
-    )
-    monkeypatch.setattr(
-        browse_module,
-        "_ensure_relation_views",
-        lambda library_state, _config: bool(library_state.get("relation_views")),
-    )
 
     context = _selected_artist_family_context_from_state(
         "Neal Morse",
@@ -18307,18 +18295,27 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
     def unexpected(*args, **kwargs):
         pytest.fail('unchanged watcher publication must reuse scan-built family relations')
 
-    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', unexpected)
-    monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction', unexpected)
-    if search_state == 'ready':
-        monkeypatch.setattr(persistence, 'replace_artist_search_projection_in_transaction', unexpected)
+    for module in (persistence, projections):
+        monkeypatch.setattr(module, 'build_relation_views_from_postgres_rows', unexpected)
+        monkeypatch.setattr(module, 'replace_artist_family_projection_in_transaction', unexpected)
+        if search_state == 'ready':
+            monkeypatch.setattr(module, 'replace_artist_search_projection_in_transaction', unexpected)
 
     # Exercise the actual caller: it marks the projection stale while advancing
-    # the inventory revision, even when the observed track has not changed.
+    # the inventory revision, even when the observed track has not changed, and
+    # leaves relations to the queued background refresh.
     result = fixture.adapter.persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: entry},
     )
     assert result['inventory_mutation_revision'] > revision_before
     assert fixture.adapter.load_inventory_mutation_revision() == result['inventory_mutation_revision']
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        marked = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone()
+        )
+    assert projections.relation_projection_stale_reason(marked) == 'projection_not_ready'
+    refreshed = projections.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    assert refreshed['rebuild_reason'] == 'source_unchanged'
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         after = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
@@ -18353,12 +18350,16 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
         return original_builder(config, rows)
 
     monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', build)
+    monkeypatch.setattr(projections, 'build_relation_views_from_postgres_rows', build)
     changed = {**entry, 'artist': 'Guest'}
     result = fixture.adapter.persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: changed},
     )
-    assert calls == [True]
+    # The watcher publication never rebuilds relations inline.
+    assert calls == []
     assert result['inventory_mutation_revision'] > revision_before
+    projections.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    assert calls == [True]
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         after = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone()

@@ -243,6 +243,7 @@ class _EmptyMissingAlbumConnection:
             "candidate_containers as materialized",
             "library.local_album_artist_identities",
             "library.local_album_musicbrainz_releases",
+            "library.local_album_musicbrainz_series",
         )):
             return _InventoryCursor()
         assert _is_missing_album_query(sql)
@@ -9626,7 +9627,7 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
             return False
 
         def execute(self, sql, params=None):
-            if _is_missing_album_query(sql):
+            if _is_missing_album_query(sql) or "library.local_album_musicbrainz_series" in str(sql):
                 return _InventoryCursor()
             executed.extend([sql, params])
             return FakeCursor()

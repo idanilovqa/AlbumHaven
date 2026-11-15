@@ -9376,6 +9376,51 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "1B: the SERIES block sits under the cover: label above an underlined series link",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-album-details-block"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "4A: on a phone the SERIES block follows the track table, and an album of no series shows none",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-album-details-block"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "3A: the folded sidebar stacks the Series button directly below the Artist Tree button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-sidebar-button"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/mobileGalleryHeaderTruncation.spec.js",
     "case": "mobile gallery header truncates long artist names without truncating artist separators",
     "profile": null,

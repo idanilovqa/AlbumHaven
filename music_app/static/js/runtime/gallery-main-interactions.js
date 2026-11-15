@@ -1042,8 +1042,8 @@ function initGalleryMain() {
   updateGalleryMainChrome();
   // The page renders unsearched browsing first; a Series view URL (reload, shared link)
   // then opens its series.
-  const locationState = parseBrowserUrlState(window.location.href);
-  if (resolveViewSeries(locationState) && !state.view.selected_series) {
+  const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};
+  if (typeof resolveViewSeries === 'function' && resolveViewSeries(locationState) && !state.view.selected_series) {
     void fetchAndRender(buildUrl(locationState), false);
   }
 }

@@ -6613,6 +6613,6 @@ def test_durable_cover_publication_invalidates_once_without_advancing_inventory(
     assert state_module.sync_durable_inventory_revision(library_state, {}) == 42
     assert library_state["cover_mutation_revision"] == 9
     assert invalidations == [
-        {"revision": 41, "affected_album_keys": ()},
-        {"revision": 42, "affected_album_keys": ()},
+        {"revision": 41, "affected_album_keys": (), "expected_library_id": None},
+        {"revision": 42, "affected_album_keys": (), "expected_library_id": None},
     ]

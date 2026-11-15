@@ -1683,6 +1683,7 @@ def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_ove
     assert payload["non_album_tracks"][0]["reason_label"] == "Unmarked"
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_exact_pseudo_key(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,
@@ -2497,6 +2498,7 @@ def test_root_album_category_browse_revision_and_memberships_share_snapshot(monk
     assert payload["inventory_mutation_revision"] == 41
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
     monkeypatch, default_empty_missing_album_projection, default_empty_inventory_fingerprint,
 ):
@@ -2671,6 +2673,7 @@ def test_postgres_root_sidebar_rolls_back_and_closes_when_snapshot_read_fails(mo
     assert connection.close_count == 1
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_library_browse_omits_category_filter_for_all_visible_categories():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -2858,6 +2861,7 @@ def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_
     assert "library.libraries" in sql
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_root_album_browse_payload_applies_category_filter_params():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -5327,6 +5331,7 @@ def test_root_album_browse_payload_keeps_unseen_cover_improvement_across_search_
     )
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_root_full_alias_group_deduplicates_album_and_global_count(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -5802,6 +5807,7 @@ def test_search_preview_sql_separates_active_and_stale_filename_matches():
     assert "file_name_matches.scan_cache_stale is true" in missing_matches
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_direct_search_queues_visible_covers_before_family_and_non_album_work(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -10194,6 +10200,7 @@ def test_postgres_selected_artist_blank_override_masks_embedded_non_album_value(
     assert [track["path"] for track in albums[0]["tracks"]] == [path]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_album_detail_payload_excludes_persisted_non_album_override_and_keeps_sibling(
     monkeypatch,
 ):
@@ -10240,6 +10247,7 @@ def test_postgres_album_detail_payload_excludes_persisted_non_album_override_and
     assert "override_payload ->> 'exception_type'" in sql
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_album_detail_blank_override_masks_embedded_non_album_value(
     monkeypatch,
 ):
@@ -10310,6 +10318,7 @@ def test_postgres_album_detail_payload_omits_album_when_all_tracks_have_persiste
     assert repository.build_album_detail_payload("exception-artist-exception-album") is None
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_album_projections_mark_full_scope_for_incomplete_track_order(monkeypatch):
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import (
@@ -10523,6 +10532,7 @@ def test_album_detail_sql_keeps_joint_credit_album_without_synthetic_owner_artis
     ) in detail_joins
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_artist_credit(monkeypatch):
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import (
@@ -12492,6 +12502,7 @@ def test_duplicate_candidate_cache_only_uses_cached_index_before_postgres_18_loo
     ) == [1]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_duplicate_candidate_lookup_uses_python_identity_before_postgres_18(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -12734,6 +12745,7 @@ def test_empty_non_album_candidate_cache_does_not_request_unrestricted_inventory
 
 
 @pytest.mark.parametrize("changed_versions", ["override_versions", "root_versions"])
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_inventory_cache_observes_late_commits_with_unchanged_max_timestamp_and_count(
     monkeypatch, changed_versions, default_empty_inventory_fingerprint,
 ):
@@ -13097,6 +13109,7 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
     browse.invalidate_postgres_utility_projection_cache()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_loaded(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -13214,6 +13227,7 @@ def test_preferred_duplicate_source_keeps_stable_order_when_credits_tie():
     ) is first
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_album_detail_duplicate_source_exposes_featured_track_credit(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -15920,6 +15934,7 @@ def test_postgres_library_browse_uses_saved_key_when_ignored_version_row_has_no_
     }]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_identity_index(monkeypatch):
     from music_app.services import library_browse_postgres as module
 
@@ -16928,6 +16943,7 @@ def test_family_group_exposes_collaboration_relationship_identity_as_variation()
     }]
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_root_browse_batch_loads_private_album_rating_overlays(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -17001,6 +17017,7 @@ def test_postgres_selected_artist_batch_loads_private_album_rating_overlays(monk
     _assert_single_album_rating_batch()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_search_batch_loads_private_album_rating_overlays(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -17054,6 +17071,7 @@ def test_postgres_search_batch_loads_private_album_rating_overlays(monkeypatch):
     _assert_single_album_rating_batch()
 
 
+@pytest.mark.usefixtures("fixed_utility_projection_revisions")
 def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(monkeypatch):
     import music_app.services.album_details as album_details_module
     from music_app.services import library_browse_postgres as browse_module

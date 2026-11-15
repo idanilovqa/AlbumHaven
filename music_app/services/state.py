@@ -1488,7 +1488,8 @@ def _hydrate_library_state_worker(
         )
         settled = True
     except Exception as exc:
-        # A failed attempt stays unsettled so the next reader queues a retry.
+        # A failed attempt stays unsettled so a reader queues a retry once the
+        # retry interval has passed.
         library_state["last_error"] = str(exc)
         if logger is not None:
             if "runtime persistence adapter is unavailable" in str(exc):

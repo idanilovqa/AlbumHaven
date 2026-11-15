@@ -878,7 +878,7 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
-// Album details' SERIES link opens that series' gallery (approved 1B and 4A).
+// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A).
 function openSeriesGallery(mbid) {
   const navigate = () => fetchAndRender(buildUrl({
     surface_request: 'albums',

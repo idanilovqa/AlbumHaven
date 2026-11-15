@@ -10600,7 +10600,10 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
 
     sql = " ".join(_search_preview_sql().split())
 
-    assert sql.count("like lower(%(query_like)s)") == 8
+    # Eight indexed base-table scans, plus the small MusicBrainz series table (Delivery 2, S6):
+    # a series' name finds its albums through their release decisions.
+    assert sql.count("like lower(%(query_like)s)") == 9
+    assert "where lower(btrim(integration.musicbrainz_series.name)) like lower(%(query_like)s)" in sql
     assert "album_title_matches as materialized (" in sql
     assert "display_artist_matches as materialized (" in sql
     assert "credited_album_artist_matches as materialized (" in sql

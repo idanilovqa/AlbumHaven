@@ -449,6 +449,45 @@ def test_execute_album_move_accepts_album_key_without_track_paths(config, logger
     assert set(persistence_calls[0]["active_file_entries"]) == {str(destination_track)}
 
 
+def test_execute_album_move_reports_a_readable_error_when_publication_fails(config, logger, library_state, monkeypatch):
+    from music_app.services import move_executor as move_executor_module
+
+    arrivals_root = (config["DATA_DIR"] / "arrivals").resolve()
+    track_path = arrivals_root / "Broadcast" / "Tender Buttons" / "01 - I Found the F.mp3"
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    _install_move_root_settings(
+        monkeypatch,
+        main_root=(config["DATA_DIR"] / "library").resolve(),
+        hoard_root=(config["DATA_DIR"] / "hoard").resolve(),
+        arrivals_root=arrivals_root,
+    )
+    st = _seed_arrivals_album_state(library_state, track_path=track_path)
+
+    def fail(_config, **_kwargs):
+        raise RuntimeError("Some library changes may have been missed.")
+
+    monkeypatch.setattr(move_executor_module, "persist_moved_album_inventory_for_config", fail)
+
+    with pytest.raises(AlbumMoveError) as excinfo:
+        execute_album_move(
+            action="move_to_hoard",
+            album_key="arrival-album",
+            config=config,
+            logger=logger,
+            get_state=lambda: st,
+            rebuild_affected_albums_in_state=lambda *args, **kwargs: None,
+            find_albums_by_track_paths=lambda track_paths: [],
+            find_problematic_album_by_track_paths=lambda track_paths: None,
+        )
+
+    assert excinfo.value.status_code == 500
+    assert str(excinfo.value) == (
+        "Album folder moved but library publication failed: Some library changes may have been missed."
+    )
+    assert "inventory_mutation_revision" not in st
+
+
 def test_execute_album_move_collision_leaves_state_and_files_unchanged(config, logger, library_state, monkeypatch):
     arrivals_root = (config["DATA_DIR"] / "arrivals").resolve()
     hoard_root = (config["DATA_DIR"] / "hoard").resolve()

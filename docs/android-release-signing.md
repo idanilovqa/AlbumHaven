@@ -160,8 +160,15 @@ every other field is published unchanged.
 ## Promoting
 
 ```powershell
-gh workflow run android-promote.yml --repo idanilovqa/AlbumHaven -f commit=<40-hex sha> -f channel=sandbox
+gh workflow run android-promote.yml --repo idanilovqa/AlbumHaven -f commit=<40-hex sha> -f channel=sandbox -f sandbox=<1-99> -f branch=<branch> -f label="<chat title>"
 ```
+
+A sandbox promotion names the sandbox (`sandbox`, 1-99) the build is published
+to; the synchronizer writes it only into that sandbox, which keeps its own newest
+build. `branch` (optional: default, the first branch containing the commit) must
+contain the commit, and `label` (optional, at most 60 printable characters) names
+the build in the app's build picker. Both are recorded in `promotion.json`, and
+the run is named `... for sandbox<N>`. Stable takes none of the three.
 
 Approve the `android-stable` deployment when the sign job waits; sandbox signs
 without approval. Promote and accept sandbox before stable.
@@ -169,7 +176,10 @@ without approval. Promote and accept sandbox before stable.
 ### Sandbox test builds from a pull request
 
 When the repository owner adds the `test_build` label to a same-repository pull
-request, its head is promoted to sandbox without waiting for `PR Gates`.
+request, its head is promoted to sandbox without waiting for `PR Gates`. The pull
+request must also carry exactly one `sandbox<N>` label (for example `sandbox2`)
+naming the sandbox the build is for; its branch and title become the build's
+branch and label.
 `android-test-build.yml` then dispatches `android-promote.yml` on `main` for the
 head commit on every later push and reopen by the owner, until the label is
 removed; labels and pushes by anyone else request nothing. It runs the pull

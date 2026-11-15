@@ -20,6 +20,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.album_details.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
+    "updates.choose.v1": "optional",
     "downloads.link.v1": "optional",
     "files.save.v1": "optional",
     "app.copy.v1": "optional"

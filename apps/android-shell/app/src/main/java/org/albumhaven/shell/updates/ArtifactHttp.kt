@@ -59,17 +59,32 @@ class ArtifactHttp(
 ) {
     private val client = ShellSession.client(client)
 
-    /** The manifest is small and revalidated on every check. */
-    fun fetchManifest(url: String): FetchResult = when (val signed = signed("GET", url)) {
-        is Signed.Ok -> signed.response.use { response ->
-            if (response.code != 200) return FetchResult.Failed
-            readBounded(response, ManifestValidator.MAX_MANIFEST_BYTES)?.let(FetchResult::Body)
-                ?: FetchResult.Refused(Rejection.MALFORMED)
+    /** The manifest, or the sandbox build index, is small and revalidated on every check. */
+    fun fetchManifest(url: String, maxBytes: Int = ManifestValidator.MAX_MANIFEST_BYTES): FetchResult =
+        when (val signed = signed("GET", url)) {
+            is Signed.Ok -> signed.response.use { response ->
+                if (response.code != 200) return FetchResult.Failed
+                readBounded(response, maxBytes)?.let(FetchResult::Body) ?: FetchResult.Refused(Rejection.MALFORMED)
+            }
+            is Signed.Refused -> FetchResult.Refused(signed.reason)
+            is Signed.Denied -> FetchResult.Denied(signed.reason)
+            Signed.Failed -> FetchResult.Failed
         }
-        is Signed.Refused -> FetchResult.Refused(signed.reason)
-        is Signed.Denied -> FetchResult.Denied(signed.reason)
-        Signed.Failed -> FetchResult.Failed
-    }
+
+    /** Asks the signed-in sandbox to rebuild [sandbox]'s build under a newer version code (the owner only). */
+    fun requestRebuild(origin: String, sandbox: Int): RebuildResult =
+        when (val signed = signed("POST", "$origin/artifacts/android/sandbox/rebuild/$sandbox")) {
+            is Signed.Ok -> signed.response.use { response ->
+                when (response.code) {
+                    202 -> RebuildResult.STARTED
+                    409 -> RebuildResult.ALREADY_RUNNING
+                    429 -> RebuildResult.TOO_MANY
+                    503 -> RebuildResult.UNAVAILABLE
+                    else -> RebuildResult.FAILED
+                }
+            }
+            else -> RebuildResult.FAILED
+        }
 
     /**
      * Exchanges [manifest]'s immutable APK URL for its download link and checks it with HEAD

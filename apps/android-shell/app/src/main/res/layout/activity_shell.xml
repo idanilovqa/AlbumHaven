@@ -76,6 +76,37 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- While a build chosen on another sandbox waits for sign-in there (mockup v003 E). -->
+    <LinearLayout
+        android:id="@+id/pending_build"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="@color/sheet_surface"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/pending_build_message"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:accessibilityLiveRegion="polite"
+            android:textColor="@color/sheet_ink"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/pending_build_cancel"
+            style="@style/RecoveryAction"
+            android:layout_marginStart="8dp"
+            android:minHeight="36dp"
+            android:text="@string/build_sign_in_cancel"
+            android:textSize="13sp" />
+    </LinearLayout>
+
     <ScrollView
         android:id="@+id/recovery_root"
         android:layout_width="match_parent"

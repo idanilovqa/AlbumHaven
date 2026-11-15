@@ -40,7 +40,7 @@ function plan(overrides = {}) {
     repository: REPOSITORY, channel: 'sandbox', commit: COMMIT, versionCode: 7,
     versionName: '0.10.0-sandbox.b5f585f', certificate: CERT, bridgeProtocolMin: 1, bridgeProtocolMax: 1,
     releaseNotesUrl: `https://github.com/${REPOSITORY}/commit/${COMMIT}`, runId: 11, runAttempt: 1,
-    ciGate: 'not-required', ...overrides,
+    ciGate: 'not-required', target: { sandbox: 2, branch: 'feature/gapless', label: '8 - Gapless Fix' }, ...overrides,
   };
 }
 
@@ -199,7 +199,8 @@ test('finalize writes an Update Manifest v1 and an APK only the synchronizer can
   });
   assert.deepEqual({ ...result, manifest: undefined }, {
     schemaVersion: 1, repository: REPOSITORY, workflow: '.github/workflows/android-promote.yml', runId: 11, runAttempt: 1,
-    ciGate: 'not-required', versionTag: 'android/sandbox/7', encryptedApk: 'album-haven-sandbox-7.apk.enc', manifest: undefined,
+    ciGate: 'not-required', versionTag: 'android/sandbox/7', encryptedApk: 'album-haven-sandbox-7.apk.enc',
+    target: { sandbox: 2, branch: 'feature/gapless', label: '8 - Gapless Fix' }, manifest: undefined,
   });
   const blob = fs.readFileSync(path.join(outDir, 'album-haven-sandbox-7.apk.enc'));
   assert.equal(blob.includes(apkBytes), false, 'the APK is never uploaded in plaintext');
@@ -253,7 +254,7 @@ test('the workflow CLI encrypts, decrypts and generates recipient keys without p
 
 function stable() {
   return {
-    plan: plan({ channel: 'stable', versionName: '0.10.0', ciGate: 'complete-pipeline', pipelineRunId: 10 }),
+    plan: plan({ channel: 'stable', versionName: '0.10.0', ciGate: 'complete-pipeline', pipelineRunId: 10, target: undefined }),
     badging: badging({ packageName: 'org.albumhaven.app', versionName: '0.10.0' }),
   };
 }
@@ -261,6 +262,23 @@ function stable() {
 test('a stable promotion records its complete pipeline', () => {
   const { result } = finalize(stable());
   assert.deepEqual([result.ciGate, result.pipelineRunId, result.versionTag], ['complete-pipeline', 10, 'android/stable/7']);
+  assert.equal(Object.hasOwn(result, 'target'), false, 'stable has no sandbox target');
+});
+
+test('a sandbox promotion names its sandbox, branch and an optional printable label', () => {
+  assert.deepEqual(promotion.sandboxTarget({ sandbox: '12', branch: 'a/b-c.d', label: '  Chat  ' }), { sandbox: 12, branch: 'a/b-c.d', label: 'Chat' });
+  assert.deepEqual(promotion.sandboxTarget({ sandbox: 5, branch: 'main', label: '' }), { sandbox: 5, branch: 'main', label: null });
+  assert.deepEqual(promotion.sandboxTarget({ sandbox: '1', branch: 'main' }), { sandbox: 1, branch: 'main', label: null });
+  for (const sandbox of ['', '0', '100', '01', '2a', ' ', undefined, 0, 100, 1.5]) {
+    assert.throws(() => promotion.sandboxTarget({ sandbox, branch: 'main' }), /1 to 99/, String(sandbox));
+  }
+  for (const branch of ['', '-x', '/x', 'x/', 'a..b', 'x.lock', 'a b', 'a~b', undefined]) {
+    assert.throws(() => promotion.sandboxTarget({ sandbox: 2, branch }), /branch/, String(branch));
+  }
+  for (const label of ['x'.repeat(61), 'bad\nline', 'zero\u200bwidth']) {
+    assert.throws(() => promotion.sandboxTarget({ sandbox: 2, branch: 'main', label }), /label/, label);
+  }
+  assert.equal(promotion.sandboxTarget({ sandbox: 2, branch: 'main', label: '\u00e9'.repeat(60) }).label.length, 60);
 });
 
 test('finalize refuses an APK that does not match the plan, channel or certificate', () => {
@@ -283,6 +301,9 @@ test('finalize refuses an APK that does not match the plan, channel or certifica
     [{ plan: plan({ ciGate: undefined }) }, /CI gate/],
     [{ plan: plan({ pipelineRunId: 10 }) }, /CI gate/],
     [{ plan: plan({ pipelineRunId: null }) }, /CI gate/],
+    [{ plan: plan({ target: undefined }) }, /sandbox it is for/],
+    [{ plan: plan({ target: { sandbox: 2 } }) }, /branch/],
+    [{ ...stable(), plan: plan({ ...stable().plan, target: { sandbox: 2, branch: 'main' } }) }, /stable promotion has no sandbox target/],
   ]) assert.throws(() => finalize(overrides), message, JSON.stringify(Object.keys(overrides)));
 });
 
@@ -315,6 +336,11 @@ test('android-promote is a dispatch-only, per-channel locked workflow with isola
   assert.match(workflow, /^concurrency:\n {2}group: android-promote-\$\{\{ inputs\.channel \}\}\n {2}cancel-in-progress: false$/m);
   assert.match(workflow, /^permissions:\n {2}contents: read$/m);
   assert.match(workflow, /options:\n {10}- sandbox\n {10}- stable\n/);
+  // A sandbox promotion names its sandbox, branch and label; the run name lets a sandbox see its rebuild running.
+  for (const input of ['sandbox', 'branch', 'label']) {
+    assert.match(workflow, new RegExp(`\\n {6}${input}:\\n {8}description: '[^\\n]+'\\n {8}required: false\\n {8}type: string\\n`), input);
+  }
+  assert.ok(workflow.includes("run-name: Android ${{ inputs.channel }} promotion of ${{ inputs.commit }}${{ inputs.sandbox && format(' for sandbox{0}', inputs.sandbox) || '' }}\n"));
 
   const verify = jobBlock(workflow, 'verify');
   assert.match(verify, /test "\$GITHUB_REF" = refs\/heads\/main/);
@@ -328,7 +354,13 @@ test('android-promote is a dispatch-only, per-channel locked workflow with isola
   const branch = verify.slice(verify.indexOf('- name: Require a branch of this repository to contain a sandbox commit'));
   assert.match(branch, /^ {8}if: \$\{\{ inputs\.channel == 'sandbox' \}\}\n/m);
   assert.match(branch, /fetch --quiet --no-tags --filter=tree:0 origin '\+refs\/heads\/\*:refs\/heads\/\*'\n {10}# [^\n]+\n {10}git -C "\$branches" remote remove origin\n {10}git -C "\$branches" config --unset extensions\.partialClone \|\| test \$\? -eq 5\n/);
-  assert.match(branch, /for-each-ref --contains "\$COMMIT" --count=1 --format='%\(refname:short\)' refs\/heads\)"\n {10}test -n "\$branch" \|\| refuse\n/);
+  assert.match(branch, /for-each-ref --contains "\$COMMIT" --count=1 --format='%\(refname:short\)' refs\/heads\)"\n {12}test -n "\$branch" \|\| refuse\n/);
+  // A named branch must itself contain the commit; the branch used is what the target records.
+  assert.ok(branch.includes('merge-base --is-ancestor "$COMMIT" "refs/heads/$BRANCH"'));
+  assert.ok(branch.includes(`printf 'name=%s\\n' "$branch" >> "$GITHUB_OUTPUT"`));
+  assert.ok(verify.includes('BRANCH: ${{ steps.branch.outputs.name }}'));
+  assert.ok(verify.includes('promotion.sandboxTarget({ sandbox: process.env.SANDBOX, branch: process.env.BRANCH, label: process.env.LABEL })'));
+  assert.ok(verify.includes('...(target && { target }),\n'));
   assert.match(branch, /cat-file -e "\$COMMIT\^\{commit\}" 2>\/dev\/null \|\| refuse\n/);
   assert.ok(verify.indexOf('Require a branch') < verify.indexOf('ciGateFor'), 'the branch check runs before allocation');
   assert.match(verify, /checkStableRelease/);
@@ -428,7 +460,12 @@ test('the test_build label only asks main to promote a same-repository pull requ
   assert.match(dispatch, /github\.event\.action != 'labeled' && contains\(github\.event\.pull_request\.labels\.\*\.name, 'test_build'\)\)\n/);
   assert.match(dispatch, /permissions:\n {6}actions: write\n {4}steps:/);
   assert.match(dispatch, /COMMIT: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n/);
-  assert.match(dispatch, /workflow_id: 'android-promote\.yml',\n {14}ref: 'main',\n {14}inputs: \{ commit, channel: 'sandbox' \},/);
+  assert.ok(dispatch.includes("workflow_id: 'android-promote.yml',\n              ref: 'main',\n              inputs: { commit, channel: 'sandbox', sandbox, branch: process.env.BRANCH, label },"));
+  // Exactly one sandbox<N> label names the sandbox; the title (untrusted text) arrives only through env.
+  assert.ok(dispatch.includes('/^sandbox([1-9]\\d?)$/'));
+  assert.ok(dispatch.includes('if (slots.length !== 1) throw new Error'));
+  assert.ok(dispatch.includes('TITLE: ${{ github.event.pull_request.title }}\n'));
+  assert.doesNotMatch(dispatch.slice(dispatch.indexOf('script: |')), /\$\{\{/, 'no expression is interpolated into the script');
   assert.doesNotMatch(workflow, /secrets\.|environment:|checkout|contents: write|stable/);
   const uses = workflow.match(/uses: [^\n]+/g);
   assert.deepEqual(uses, ['uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0']);

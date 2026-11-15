@@ -4,6 +4,10 @@
 
 - The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target. Losing the network no longer stops playback at all: the player keeps its playback claim through the outage, retrying every 2 seconds, and renews it when the network returns, even past the claim's 30-second lease. The server now accepts that renewal until another device has claimed playback, so only another device taking over stops it, and Play after reconnecting or after a long pause no longer shows "Playback unavailable".
 
+## 0.11.11 - 2026-11-15
+
+- Android Sandbox app: Update offers the build each sandbox serves. One waiting build installs at once, switching to its sandbox (and signing in there) when it belongs to another; two or more open a build sheet. An older build is rebuilt under a newer version code by the owner's one-tap rebuild, so no uninstall is needed. Sandbox promotions now name their sandbox, branch and label; a `test_build` pull request names its sandbox with one `sandbox<N>` label. The Stable app is unchanged.
+
 ## 0.11.10 - 2026-11-15
 
 - Covers are addressed by opaque references (`/cover/<reference>`): no page or payload carries a local cover file path or the music folder any more. Migration 0200 stores the references and 0201 names every stored cover without changing any cover choice.

@@ -1,4 +1,5 @@
-function buildCompactDataTable(config = {}) {
+// Columns, identity and cell markup shared by a whole table and by rows appended to it later.
+function compactDataTableShape(config = {}) {
   const columns = Array.isArray(config.columnsConfig) ? config.columnsConfig : [];
   const rows = Array.isArray(config.rows) ? config.rows : [];
   const headerMode = ['visible', 'screen-reader', 'absent'].includes(config.headers)
@@ -54,16 +55,13 @@ function buildCompactDataTable(config = {}) {
     return `<div role="${role}" data-cdt-column="${escapeHtml(column.key || '')}"${visibility}${headerIdentity}${actionAttribute}${headerClass}${selected}${disabled}${ariaLabel}${headerAssociation}>${content}</div>`;
   };
 
-  const header = headerMode === 'absent'
-    ? ''
-    : `<div role="row" class="compact-data-table-header">${columns
-      .map((column) => (
-        column.header === 'absent'
-          ? `<div data-cdt-column="${escapeHtml(column.key || '')}"${column.action ? ' data-cdt-action' : ''} aria-hidden="true"></div>`
-          : buildCell(column, escapeHtml(column.label || ''), 'columnheader')
-      ))
-      .join('')}</div>`;
-  const body = rows.map((row) => {
+  return { columns, rows, headerMode, density, overflow, mobile, frame, style, ariaLabel, selection, tableId, buildCell };
+}
+
+// Row markup only, for appending a batch to a table already built with the same config.
+function buildCompactDataTableRowsHtml(config = {}) {
+  const { columns, rows, buildCell } = compactDataTableShape(config);
+  return rows.map((row) => {
     const rowClassName = String(row?.className || '')
       .split(/\s+/)
       .map((value) => value.trim())
@@ -86,6 +84,22 @@ function buildCompactDataTable(config = {}) {
       buildCell(column, row?.cells?.[column.key] || '', 'cell')
     )).join('')}</div>`;
   }).join('');
+}
+
+function buildCompactDataTable(config = {}) {
+  const {
+    columns, rows, headerMode, density, overflow, mobile, frame, style, ariaLabel, selection, tableId, buildCell,
+  } = compactDataTableShape(config);
+  const header = headerMode === 'absent'
+    ? ''
+    : `<div role="row" class="compact-data-table-header">${columns
+      .map((column) => (
+        column.header === 'absent'
+          ? `<div data-cdt-column="${escapeHtml(column.key || '')}"${column.action ? ' data-cdt-action' : ''} aria-hidden="true"></div>`
+          : buildCell(column, escapeHtml(column.label || ''), 'columnheader')
+      ))
+      .join('')}</div>`;
+  const body = buildCompactDataTableRowsHtml(config);
 
   const empty = !rows.length
     ? `<div data-cdt-empty>${config.emptyHtml || ''}</div>`

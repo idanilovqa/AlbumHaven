@@ -706,3 +706,68 @@ test('AlbumTrackTable shows a later disc rating on its heading only when both ar
     assert.doesNotMatch(html, /album-track-table__disc-rating/, `no disc rating for ${discRating}/${albumRating}/${JSON.stringify(options)}`);
   }
 });
+
+function createProgressiveHarness(context) {
+  const frames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => frames.push(callback);
+  const bodies = new Map();
+  const container = {
+    innerHTML: '',
+    querySelector(selector) {
+      if (!bodies.has(selector)) bodies.set(selector, { appended: [], insertAdjacentHTML(_where, html) { this.appended.push(html); } });
+      return bodies.get(selector);
+    },
+  };
+  const runFrames = () => { while (frames.length) frames.shift()(); };
+  return { frames, bodies, container, runFrames };
+}
+
+const rowCount = html => (String(html).match(/data-cdt-row-key=/g) || []).length;
+
+test('large track tables paint a first screen of rows, then append the rest in per-frame batches', () => {
+  // Owner CHAT-39: 815 Loose Tracks rendered at once froze the page for 5.4-5.8 s on a phone-speed CPU.
+  const context = loadTrackTable();
+  const { frames, bodies, container, runFrames } = createProgressiveHarness(context);
+  const track = (n) => ({ path: `/music/${n}.flac`, title: `Song ${n}`, duration: '3:00' });
+  const groups = [
+    { discLabel: 'Interviews', tracks: Array.from({ length: 50 }, (_, i) => track(i + 1)) },
+    { discLabel: 'Other', tracks: Array.from({ length: 100 }, (_, i) => track(i + 51)) },
+  ];
+  const batches = [];
+
+  context.renderAlbumTrackTableProgressively(container, { groups, idPrefix: 'loose-track-table', forceGroupLabels: true }, {
+    initialRows: 60, batchRows: 40, onBatch: () => batches.push(rowCount(bodies.get('#loose-track-table-tracks-2 .compact-data-table-body').appended.join(''))),
+  });
+
+  assert.equal(rowCount(container.innerHTML), 60, 'the first paint holds only the first screen of rows');
+  assert.match(container.innerHTML, /Song 60</);
+  assert.doesNotMatch(container.innerHTML, /Song 61</);
+  assert.equal(frames.length, 1, 'the remainder waits for the next frame');
+  runFrames();
+  const appended = bodies.get('#loose-track-table-tracks-2 .compact-data-table-body').appended;
+  assert.deepEqual(appended.map(rowCount), [40, 40, 10]);
+  assert.deepEqual(batches, [40, 80, 90]);
+  assert.match(appended[0], /album-track-table__number">11</, 'appended rows keep their position in the group');
+  assert.match(appended[2], /Song 150</);
+  assert.equal(bodies.has('#loose-track-table-tracks-1 .compact-data-table-body'), false, 'complete groups are not touched');
+});
+
+test('a newer render into the same container cancels the pending batches of the previous one', () => {
+  const context = loadTrackTable();
+  const { bodies, container, runFrames } = createProgressiveHarness(context);
+  const tracks = Array.from({ length: 30 }, (_, i) => ({ path: `/m/${i}.flac`, title: `T${i}` }));
+  context.renderAlbumTrackTableProgressively(container, { groups: [{ tracks }], idPrefix: 'first' }, { initialRows: 10, batchRows: 10 });
+  context.renderAlbumTrackTableProgressively(container, { groups: [{ tracks: tracks.slice(0, 5) }], idPrefix: 'second' }, { initialRows: 10 });
+  runFrames();
+  assert.equal(bodies.has('#first-tracks-1 .compact-data-table-body'), false);
+  assert.equal(rowCount(container.innerHTML), 5);
+});
+
+test('small track tables render completely in one pass', () => {
+  const context = loadTrackTable();
+  const { frames, container } = createProgressiveHarness(context);
+  const tracks = Array.from({ length: 12 }, (_, i) => ({ path: `/m/${i}.flac`, title: `T${i}` }));
+  context.renderAlbumTrackTableProgressively(container, { groups: [{ tracks }] }, { initialRows: 60 });
+  assert.equal(rowCount(container.innerHTML), 12);
+  assert.equal(frames.length, 0);
+});

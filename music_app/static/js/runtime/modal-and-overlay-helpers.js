@@ -592,6 +592,11 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
 }
 
 function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
+  return buildAlbumTrackTableHtml(buildNonAlbumTrackSectionsConfig(items, options));
+}
+
+// AlbumTrackTable config for Loose Tracks: one group per exception section.
+function buildNonAlbumTrackSectionsConfig(items, options = {}) {
   const collectionName = String(options.collectionName || '').trim();
   const visibleItems = collectionName
     ? items.filter((item) => (
@@ -650,7 +655,7 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
   const totalSeconds = visibleItems.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
-  return buildAlbumTrackTableHtml({
+  return {
     groups,
     showPath,
     forceGroupLabels: !collectionName,
@@ -661,7 +666,7 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     mobileColumns: '36px minmax(0, 1fr) minmax(54px, auto)',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
-  });
+  };
 }
 
 function buildCustomCollectionArtworkMarkup(collectionName, artwork = null) {
@@ -998,14 +1003,21 @@ function openNonAlbumModal(options = {}) {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
-      if (!hydrationPending && populated) {
-        els.table.innerHTML = collectionName
-          ? buildCustomCollectionDetailMarkup(
-            looseTracks,
-            collectionName,
-            state.ui.customCollectionArtworkByName?.[collectionName] || null,
-          )
-          : buildNonAlbumTrackSectionsMarkup(looseTracks);
+      if (!hydrationPending && populated && collectionName) {
+        els.table.innerHTML = buildCustomCollectionDetailMarkup(
+          looseTracks,
+          collectionName,
+          state.ui.customCollectionArtworkByName?.[collectionName] || null,
+        );
+      } else if (!hydrationPending && populated) {
+        // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
+        renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
+          onBatch: () => {
+            attachSharedPlayer();
+            nonAlbumTrackSelectionController?.refreshRows?.();
+            if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+          },
+        });
       }
       installNonAlbumCollapsibleSections(els);
       installNonAlbumTrackSelection(els);

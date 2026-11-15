@@ -15118,6 +15118,11 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
 }
 
 function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
+  return buildAlbumTrackTableHtml(buildNonAlbumTrackSectionsConfig(items, options));
+}
+
+// AlbumTrackTable config for Loose Tracks: one group per exception section.
+function buildNonAlbumTrackSectionsConfig(items, options = {}) {
   const collectionName = String(options.collectionName || '').trim();
   const visibleItems = collectionName
     ? items.filter((item) => (
@@ -15176,7 +15181,7 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
   const totalSeconds = visibleItems.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
-  return buildAlbumTrackTableHtml({
+  return {
     groups,
     showPath,
     forceGroupLabels: !collectionName,
@@ -15187,7 +15192,7 @@ function buildNonAlbumTrackSectionsMarkup(items, options = {}) {
     mobileColumns: '36px minmax(0, 1fr) minmax(54px, auto)',
     totalLength: formatAlbumDuration(totalSeconds),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
-  });
+  };
 }
 
 function buildCustomCollectionArtworkMarkup(collectionName, artwork = null) {
@@ -15524,14 +15529,21 @@ function openNonAlbumModal(options = {}) {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
-      if (!hydrationPending && populated) {
-        els.table.innerHTML = collectionName
-          ? buildCustomCollectionDetailMarkup(
-            looseTracks,
-            collectionName,
-            state.ui.customCollectionArtworkByName?.[collectionName] || null,
-          )
-          : buildNonAlbumTrackSectionsMarkup(looseTracks);
+      if (!hydrationPending && populated && collectionName) {
+        els.table.innerHTML = buildCustomCollectionDetailMarkup(
+          looseTracks,
+          collectionName,
+          state.ui.customCollectionArtworkByName?.[collectionName] || null,
+        );
+      } else if (!hydrationPending && populated) {
+        // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
+        renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
+          onBatch: () => {
+            attachSharedPlayer();
+            nonAlbumTrackSelectionController?.refreshRows?.();
+            if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+          },
+        });
       }
       installNonAlbumCollapsibleSections(els);
       installNonAlbumTrackSelection(els);
@@ -22667,7 +22679,8 @@ async function handleUtilityLogHistoryAction(action) {
 
 // BEGIN js/runtime/compact-data-table.js
 
-function buildCompactDataTable(config = {}) {
+// Columns, identity and cell markup shared by a whole table and by rows appended to it later.
+function compactDataTableShape(config = {}) {
   const columns = Array.isArray(config.columnsConfig) ? config.columnsConfig : [];
   const rows = Array.isArray(config.rows) ? config.rows : [];
   const headerMode = ['visible', 'screen-reader', 'absent'].includes(config.headers)
@@ -22723,16 +22736,13 @@ function buildCompactDataTable(config = {}) {
     return `<div role="${role}" data-cdt-column="${escapeHtml(column.key || '')}"${visibility}${headerIdentity}${actionAttribute}${headerClass}${selected}${disabled}${ariaLabel}${headerAssociation}>${content}</div>`;
   };
 
-  const header = headerMode === 'absent'
-    ? ''
-    : `<div role="row" class="compact-data-table-header">${columns
-      .map((column) => (
-        column.header === 'absent'
-          ? `<div data-cdt-column="${escapeHtml(column.key || '')}"${column.action ? ' data-cdt-action' : ''} aria-hidden="true"></div>`
-          : buildCell(column, escapeHtml(column.label || ''), 'columnheader')
-      ))
-      .join('')}</div>`;
-  const body = rows.map((row) => {
+  return { columns, rows, headerMode, density, overflow, mobile, frame, style, ariaLabel, selection, tableId, buildCell };
+}
+
+// Row markup only, for appending a batch to a table already built with the same config.
+function buildCompactDataTableRowsHtml(config = {}) {
+  const { columns, rows, buildCell } = compactDataTableShape(config);
+  return rows.map((row) => {
     const rowClassName = String(row?.className || '')
       .split(/\s+/)
       .map((value) => value.trim())
@@ -22755,6 +22765,22 @@ function buildCompactDataTable(config = {}) {
       buildCell(column, row?.cells?.[column.key] || '', 'cell')
     )).join('')}</div>`;
   }).join('');
+}
+
+function buildCompactDataTable(config = {}) {
+  const {
+    columns, rows, headerMode, density, overflow, mobile, frame, style, ariaLabel, selection, tableId, buildCell,
+  } = compactDataTableShape(config);
+  const header = headerMode === 'absent'
+    ? ''
+    : `<div role="row" class="compact-data-table-header">${columns
+      .map((column) => (
+        column.header === 'absent'
+          ? `<div data-cdt-column="${escapeHtml(column.key || '')}"${column.action ? ' data-cdt-action' : ''} aria-hidden="true"></div>`
+          : buildCell(column, escapeHtml(column.label || ''), 'columnheader')
+      ))
+      .join('')}</div>`;
+  const body = buildCompactDataTableRowsHtml(config);
 
   const empty = !rows.length
     ? `<div data-cdt-empty>${config.emptyHtml || ''}</div>`
@@ -22882,67 +22908,74 @@ function buildDiscRatingHtml(group, groupIndex, albumRating) {
   });
 }
 
-function buildAlbumTrackTableHtml(config = {}) {
-  const groups = Array.isArray(config.groups) ? config.groups : [];
+// One group's CompactDataTable config. Appended row batches reuse it with an index offset so
+// their markup, column ids and numbering match the rows painted first.
+function albumTrackTableGroupConfig(config, group, groupIndex, indexOffset = 0) {
+  const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
   const showPath = Boolean(config.showPath);
-  const forceGroupLabels = Boolean(config.forceGroupLabels);
-  const collapsibleGroups = Boolean(config.collapsibleGroups);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const optionalColumns = (Array.isArray(config.optionalColumns) ? config.optionalColumns : []).filter((column) => (
     column && /^[a-z][a-z0-9_-]*$/.test(String(column.key || '')) && typeof column.cell === 'function'
   ));
   const mobile = config.mobile === 'grouped' ? 'grouped' : 'preserve';
+  const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
+  const columnsConfig = [
+    { key: 'number', label: '#' },
+    { key: 'title', label: 'Track' },
+    ...optionalColumns.map((column) => ({
+      key: column.key,
+      label: column.label,
+      visibility: column.visibility,
+      header: column.header,
+      action: column.action,
+    })),
+    ...(showPath ? [{ key: 'path', label: 'File path', visibility: mobile === 'grouped' ? 'desktop' : undefined }] : []),
+    { key: 'problem', label: 'Problem', header: 'absent', action: true, visibility: mobile === 'grouped' ? 'desktop' : undefined },
+    { key: 'duration', label: 'Length', action: true },
+  ];
+  const columnTracks = [
+    '36px',
+    'minmax(0, 1fr)',
+    ...optionalColumns.map((column) => String(column.width || 'auto')),
+    ...(showPath ? ['minmax(0, .9fr)'] : []),
+    '20px',
+    'minmax(54px, auto)',
+  ].join(' ');
+  return {
+    id: `${idPrefix}-tracks-${groupIndex + 1}`,
+    ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
+    headers: groupIndex === 0 ? 'visible' : 'absent',
+    columns: columnTracks,
+    mobileColumns: config.mobileColumns,
+    columnsConfig,
+    rows: group?.loadingRows
+      ? Array.from({ length: Number(group.loadingRows) }, (_, index) => buildAlbumTrackTableSkeletonRow(index))
+      : tracks.map((track, index) => buildAlbumTrackTableRow(track, indexOffset + index, {
+        ...config,
+        optionalColumns,
+      })),
+    density: 'compact',
+    frame: 'outline',
+    overflow: 'none',
+    mobile,
+  };
+}
+
+function buildAlbumTrackTableHtml(config = {}) {
+  const groups = Array.isArray(config.groups) ? config.groups : [];
+  const forceGroupLabels = Boolean(config.forceGroupLabels);
+  const collapsibleGroups = Boolean(config.collapsibleGroups);
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const tableSections = groups.map((group, groupIndex) => {
-    const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
     const showLabel = Boolean(label) && (
       forceGroupLabels
       || Boolean(group?.namedSection)
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
-    const columnsConfig = [
-      { key: 'number', label: '#' },
-      { key: 'title', label: 'Track' },
-      ...optionalColumns.map((column) => ({
-        key: column.key,
-        label: column.label,
-        visibility: column.visibility,
-        header: column.header,
-        action: column.action,
-      })),
-      ...(showPath ? [{ key: 'path', label: 'File path', visibility: mobile === 'grouped' ? 'desktop' : undefined }] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true, visibility: mobile === 'grouped' ? 'desktop' : undefined },
-      { key: 'duration', label: 'Length', action: true },
-    ];
-    const columnTracks = [
-      '36px',
-      'minmax(0, 1fr)',
-      ...optionalColumns.map((column) => String(column.width || 'auto')),
-      ...(showPath ? ['minmax(0, .9fr)'] : []),
-      '20px',
-      'minmax(54px, auto)',
-    ].join(' ');
-    const table = buildCompactDataTable({
-      id: `${idPrefix}-tracks-${groupIndex + 1}`,
-      ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
-      headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: columnTracks,
-      mobileColumns: config.mobileColumns,
-      columnsConfig,
-      rows: group?.loadingRows
-        ? Array.from({ length: Number(group.loadingRows) }, (_, index) => buildAlbumTrackTableSkeletonRow(index))
-        : tracks.map((track, index) => buildAlbumTrackTableRow(track, index, {
-          ...config,
-          optionalColumns,
-        })),
-      density: 'compact',
-      frame: 'outline',
-      overflow: 'none',
-      mobile,
-    });
+    const table = buildCompactDataTable(albumTrackTableGroupConfig(config, group, groupIndex));
     if (collapsibleGroups && (showLabel || group?.loadingRows)) {
       const heading = group?.loadingRows
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
@@ -22976,6 +23009,46 @@ function buildAlbumTrackTableHtml(config = {}) {
   ].join('');
   const loading = groups.some((group) => group?.loadingRows);
   return `<div class="album-track-table${summaries ? ' album-track-table--has-total' : ''}"${loading ? ' aria-busy="true"' : ''} data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
+}
+
+// Renders a track table into container without one long task: the first screen of rows paints at
+// once and the remaining rows are appended to their groups, one batch per animation frame. A newer
+// render into the same container cancels the batches of the previous one.
+function renderAlbumTrackTableProgressively(container, config = {}, options = {}) {
+  const initialRows = Math.max(1, Number(options.initialRows) || 60);
+  const batchRows = Math.max(1, Number(options.batchRows) || 60);
+  const onBatch = typeof options.onBatch === 'function' ? options.onBatch : () => {};
+  const groups = Array.isArray(config.groups) ? config.groups : [];
+  const pending = [];
+  let budget = initialRows;
+  const firstGroups = groups.map((group, groupIndex) => {
+    const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
+    if (group?.loadingRows || tracks.length <= budget) {
+      budget -= group?.loadingRows ? 0 : tracks.length;
+      return group;
+    }
+    // A group keeps at least one row so its table, header and empty state are built normally.
+    const shown = Math.max(1, budget);
+    budget = 0;
+    pending.push({ group, groupIndex, next: shown });
+    return { ...group, tracks: tracks.slice(0, shown) };
+  });
+  const render = {};
+  container.albumTrackTableRender = render;
+  container.innerHTML = buildAlbumTrackTableHtml({ ...config, groups: firstGroups });
+  const appendBatch = () => {
+    if (container.albumTrackTableRender !== render || !pending.length) return;
+    const target = pending[0];
+    const tracks = target.group.tracks.slice(target.next, target.next + batchRows);
+    const groupConfig = albumTrackTableGroupConfig(config, { ...target.group, tracks }, target.groupIndex, target.next);
+    container.querySelector(`#${groupConfig.id} .compact-data-table-body`)
+      ?.insertAdjacentHTML('beforeend', buildCompactDataTableRowsHtml(groupConfig));
+    target.next += tracks.length;
+    if (target.next >= target.group.tracks.length) pending.shift();
+    onBatch();
+    if (pending.length) scheduleBrowserAnimationFrame(appendBatch);
+  };
+  if (pending.length) scheduleBrowserAnimationFrame(appendBatch);
 }
 
 var TrackSelectionController = class {
@@ -23015,6 +23088,15 @@ var TrackSelectionController = class {
 
   rows() {
     return this.rowList;
+  }
+
+  // Rows appended after construction (progressive rendering) join selection and keyboard order.
+  refreshRows() {
+    this.rowList = Array.from(this.root?.querySelectorAll?.('[data-track-row-path]') || []);
+    this.pathList = this.rowList.map(row => this.pathForRow(row)).filter(Boolean);
+    this.rowByPath = new Map(this.rowList.map(row => [this.pathForRow(row), row]).filter(([path]) => path));
+    this.indexByPath = new Map(this.pathList.map((path, index) => [path, index]));
+    this.rowList.forEach(row => row.setAttribute?.('tabindex', '0'));
   }
 
   rowFromEvent(event) {

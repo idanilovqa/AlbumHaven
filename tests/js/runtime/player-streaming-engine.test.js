@@ -6735,3 +6735,85 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
   });
   assert.equal(kept.length, 1, 'it is kept once');
 });
+
+// Bounded-interaction contracts (tests/ci/bounded-interactions.json): a socket chunk or a worklet
+// message decodes one fixed-size buffer and publishes fixed-shape diagnostics however long the
+// session has been playing.
+async function startCountedStreamingSession(counter, options = {}) {
+  const harness = createEngineHarness({
+    ...options,
+    sendSocket: () => counter.count('requests'),
+    handleStreamingPlaybackPosition: () => counter.count('renderCommits'),
+  });
+  harness.context.document = { documentElement: { setAttribute(_name, value) {
+    counter.count('domMutations');
+    counter.count('markupBytes', String(value).length);
+  } } };
+  await harness.api.start(makeTrack());
+  await harness.settle();
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const port = harness.nodes[0].port;
+  const post = port.postMessage.bind(port);
+  port.postMessage = (...args) => { counter.count('outputEmissions'); return post(...args); };
+  port.dispatch({ type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0, contextTime: 12.5 });
+  let sequence = 0;
+  let nowMs = 1000;
+  // One 2-frame chunk arrives, the worklet plays it, and reports its position 100 ms later.
+  const playChunk = () => {
+    harness.sockets[0].receive(createPcmMessage({ generation: current.generation, streamId: current.streamId, sequence }));
+    sequence += 1;
+    port.dispatch({ type: 'consumed', generation: current.generation, streamId: current.streamId, role: 'current', frames: 2, bufferedFrames: 0 });
+    nowMs += 100;
+    harness.setNow(nowMs);
+    port.dispatch({ type: 'position', generation: current.generation, streamId: current.streamId, timelineFrame: sequence * 2 });
+  };
+  return { harness, playChunk, chunks: () => sequence };
+}
+
+test('bounded interaction: streaming socket chunks and worklet messages stay constant over a 10,000-chunk session', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (sessionChunks) => {
+    const counter = createInteractionCounter();
+    const session = await startCountedStreamingSession(counter);
+    for (let chunk = 0; chunk < sessionChunks; chunk += 1) session.playChunk();
+    const work = await counter.measure(() => {
+      for (let chunk = 0; chunk < 10; chunk += 1) session.playChunk();
+    });
+    assert.equal(session.harness.engine.mode, 'playing');
+    assert.equal(session.harness.portMessages('enqueue').length, sessionChunks + 10, 'every chunk reaches the worklet');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine',
+    small: 10,
+    large: 10000,
+    run,
+    budgets: { outputEmissions: 10, requests: 0, renderCommits: 3, domMutations: 10, markupBytes: 13000 },
+    growth: { metric: 'outputEmissions', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: the streaming keepalive sends one control per tick over a 1,000-tick pause', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (ticks) => {
+    const counter = createInteractionCounter();
+    const { harness } = await startCountedStreamingSession(counter);
+    await harness.api.pause();
+    const keepalive = harness.intervals.find(({ delay }) => delay === 25_000).callback;
+    for (let tick = 0; tick < ticks; tick += 1) keepalive();
+    const work = await counter.measure(() => {
+      for (let tick = 0; tick < 10; tick += 1) keepalive();
+    });
+    assert.equal(harness.sent('keepalive').length, ticks + 10);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#keepStreamingSocketAlive',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 10, outputEmissions: 0, domMutations: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
+});

@@ -544,13 +544,30 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/app-copy/account"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 3,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10,
+        "timers": 10,
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy.test.js",
+      "testIdentity": "bounded interaction: an unreachable copy retries one account check per tick after 1,000 failed retries",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the account check is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its self-scheduling retry."
     },
     {
       "id": "js:app-copy.js#createAppCopyClient",
@@ -719,7 +736,23 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 10000
+      },
+      "budgets": {
+        "itemsVisited": 1280,
+        "outputEmissions": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gapless-playback-processor.test.js",
+      "testIdentity": "bounded interaction: worklet seek commands copy one fixed boundary capture after 10,000 rendered quanta",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the worklet is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its message entrypoint."
     },
     {
       "id": "js:capability-ui.js#install",
@@ -1000,7 +1033,6 @@
         "music_app/static/js/runtime/player-loop-playback.js",
         "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
         "music_app/static/js/selection-accent.js",
-        "music_app/static/js/utilities/loops-tab.js",
         "music_app/static/js/utilities/shell.js",
         "music_app/static/js/runtime/alert-components.js",
         "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
@@ -1900,7 +1932,24 @@
         "BI-09"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 12,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 20,
+        "listeners": 0,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/compact-player-helpers.test.js",
+      "testIdentity": "bounded interaction: docked compact player resizes and shell class changes stay constant with a 1,000-track queue",
+      "performanceTargets": [],
+      "rollback": "Revert the queue-cursor check in currentQueueIndex; every compact player sync then scans the play queue for the current track again. No data or API change."
     },
     {
       "id": "js:runtime/compact-player-controller.js#scheduleCompactPlayerMetadata",
@@ -2186,8 +2235,25 @@
       "rules": [
         "BI-12"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 80,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 600,
+        "requests": 10,
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-modal-and-drawer.test.js",
+      "testIdentity": "bounded interaction: Cover Lookup polling repeats nothing per loaded notification while one lookup runs among 1,000",
+      "performanceTargets": [],
+      "rollback": "Revert the repeated-active-answer early return, the task id index and the short-circuit idle check; every 100 ms poll then merges, snapshots and serializes every loaded notification again. No data or API change."
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#fileToDataUrl",
@@ -2519,8 +2585,25 @@
       "rules": [
         "BI-12"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 80,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "domQueries": 10,
+        "domMutations": 600
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-modal-and-drawer.test.js",
+      "testIdentity": "bounded interaction: Cover Lookup elapsed ticks relabel only the mounted task window among 1,000 notifications",
+      "performanceTargets": [],
+      "rollback": "Revert the task id index in updateCoverLookupTaskElapsedLabels; every one-second tick then rebuilds a map of every loaded notification again. No data or API change."
     },
     {
       "id": "js:runtime/cover-lookup-notification-helpers.js#markCoverLookupTaskActionTaken",
@@ -4192,7 +4275,25 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 5,
+        "production": 500
+      },
+      "budgets": {
+        "itemsVisited": 20,
+        "domQueries": 10,
+        "animationFrames": 10,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/notification-ui-helpers.test.js",
+      "testIdentity": "bounded interaction: notification lane observers place only the visible notifications after 500 shown toasts",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; notification placement is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its Mutation and Resize observers."
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
@@ -4320,7 +4421,22 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 6,
+        "production": 2160
+      },
+      "budgets": {
+        "renderCommits": 0
+      },
+      "growth": {
+        "metric": "renderCommits",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "bounded interaction: playing lease renewals keep the claim without repainting the player",
+      "performanceTargets": [],
+      "rollback": "Revert the ownership presentation comparison in acceptPlaybackClaim; every lease renewal then repaints the whole player and waveform again. No data or API change."
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#acquirePlaybackOwnershipHandoff",
@@ -4394,7 +4510,23 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 6,
+        "production": 2160
+      },
+      "budgets": {
+        "renderCommits": 1,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "renderCommits",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "bounded interaction: ownership broadcasts from other tabs repaint the player only when the lock changes",
+      "performanceTargets": [],
+      "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState; every broadcast from another tab then repaints the whole player and waveform again. No data or API change."
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest",
@@ -4497,7 +4629,22 @@
         "BI-12"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 6,
+        "production": 2160
+      },
+      "budgets": {
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "renderCommits",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/playback-ownership-helpers.test.js",
+      "testIdentity": "bounded interaction: a playback ownership heartbeat repaints the player only when the lock changes",
+      "performanceTargets": [],
+      "rollback": "Revert the ownership presentation comparison in syncMirroredPlaybackState and acceptPlaybackClaim; every 10-second heartbeat then repaints the whole player and waveform again. No data or API change."
     },
     {
       "id": "js:runtime/player-browser-playback-integration.js#observeBrowserPlaybackAudioContext",
@@ -4787,7 +4934,26 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 60,
+        "domMutations": 180,
+        "animationFrames": 20,
+        "observers": 0,
+        "listeners": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-loop-playback.test.js",
+      "testIdentity": "bounded interaction: mobile player metadata motion measures its three rows after 1,000 track changes",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the metadata motion code is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its resize and ResizeObserver entrypoints."
     },
     {
       "id": "js:runtime/player-state-persistence-helpers.js#restore",
@@ -4833,7 +4999,24 @@
         "BI-12"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 10,
+        "outputEmissions": 0,
+        "domMutations": 0
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: the streaming keepalive sends one control per tick over a 1,000-tick pause",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the keepalive is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its setInterval entrypoint."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine",
@@ -4852,7 +5035,26 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 10000
+      },
+      "budgets": {
+        "outputEmissions": 10,
+        "requests": 0,
+        "renderCommits": 3,
+        "domMutations": 10,
+        "markupBytes": 13000
+      },
+      "growth": {
+        "metric": "outputEmissions",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/player-streaming-engine.test.js",
+      "testIdentity": "bounded interaction: streaming socket chunks and worklet messages stay constant over a 10,000-chunk session",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its socket and worklet message entrypoints."
     },
     {
       "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",
@@ -6708,13 +6910,31 @@
         "js:music_app/static/js/runtime/utility-renderers-and-actions.js#bindUtilityLoopDragAndDrop:timer:setTimeout"
       ],
       "owners": [
-        "music_app/static/js/runtime/utility-renderers-and-actions.js"
+        "music_app/static/js/runtime/utility-renderers-and-actions.js",
+        "music_app/static/js/runtime/utility-loop-playback.js"
       ],
       "rules": [
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "domQueries": 5,
+        "domMutations": 15
+      },
+      "growth": {
+        "metric": "domMutations",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-loop-reorder.test.js",
+      "testIdentity": "bounded interaction: dragging a saved loop restyles only the marked rows among 1,000 saved loops",
+      "performanceTargets": [],
+      "rollback": "Revert the saved-loop index, the song-only reorder check and the marked-row drag restyle; every dragover then filters and rebuilds the whole saved-loop list and restyles every loop row again. No data or API change."
     },
     {
       "id": "js:runtime/utility-renderers-and-actions.js#finishFocusedNavigation",
@@ -7205,7 +7425,25 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 2,
+        "production": 200
+      },
+      "budgets": {
+        "itemsVisited": 0,
+        "domQueries": 10,
+        "domMutations": 20,
+        "animationFrames": 10
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/startup-progress-interactivity.test.js",
+      "testIdentity": "bounded interaction: startup progress animation frames stay constant beside 200 page regions",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the startup progress animation is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its requestAnimationFrame loop."
     },
     {
       "id": "js:startup-progress.js#finishHide",
@@ -7254,47 +7492,6 @@
       ],
       "workClass": "constant",
       "proof": "static"
-    },
-    {
-      "id": "js:utilities/loops-tab.js#bindUtilityLoopDragAndDrop",
-      "action": "dragend/dragover/dragstart/drop listeners, setTimeout timers installed by bindUtilityLoopDragAndDrop",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/loops-tab.js#bindUtilityLoopDragAndDrop:event:dragend",
-        "js:music_app/static/js/utilities/loops-tab.js#bindUtilityLoopDragAndDrop:event:dragover",
-        "js:music_app/static/js/utilities/loops-tab.js#bindUtilityLoopDragAndDrop:event:dragstart",
-        "js:music_app/static/js/utilities/loops-tab.js#bindUtilityLoopDragAndDrop:event:drop",
-        "js:music_app/static/js/utilities/loops-tab.js#bindUtilityLoopDragAndDrop:timer:setTimeout"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/loops-tab.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
-      "id": "js:utilities/loops-tab.js#loadUtilityLoops",
-      "action": "fetch requests installed by loadUtilityLoops",
-      "entrypoints": [
-        "js:music_app/static/js/utilities/loops-tab.js#loadUtilityLoops:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/utilities/loops-tab.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/utilities/loops"
-        ],
-        "forbidden": []
-      }
     },
     {
       "id": "js:utilities/rules-tab.js#loadUtilityRules",

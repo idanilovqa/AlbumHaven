@@ -14000,6 +14000,19 @@ function isShellPlaybackUnavailable() {
   return typeof isAndroidPlaybackUnavailable === 'function' && isAndroidPlaybackUnavailable();
 }
 
+// The player shows only the lock, its reason and the mirrored track, so a heartbeat, broadcast or
+// renewal that leaves them as they were repaints nothing.
+function playbackOwnershipPresentation() {
+  const { lockStatus, blockedReason, mirroredTrack: track } = getPlaybackOwnershipState();
+  return [lockStatus, blockedReason, track?.title, track?.artist, track?.album, track?.artworkUrl].join('\0');
+}
+
+function updatePlayerUiIfOwnershipPresentationChanged(previousPresentation) {
+  if (playbackOwnershipPresentation() !== previousPresentation && typeof updatePlayerUi === 'function') {
+    updatePlayerUi();
+  }
+}
+
 function clearBlockedPlaybackState() {
   const ownership = getPlaybackOwnershipState();
   ownership.lockStatus = 'unlocked';
@@ -14034,6 +14047,7 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
 
 function syncMirroredPlaybackState(snapshot) {
   const ownership = getPlaybackOwnershipState();
+  const previousPresentation = playbackOwnershipPresentation();
   if (snapshot?.is_playing_elsewhere) {
     if (ownership.blockedReason !== 'playing_in_another_tab') losePlaybackOwnership('ownership-takeover', false);
     ownership.lockStatus = 'locked';
@@ -14042,7 +14056,7 @@ function syncMirroredPlaybackState(snapshot) {
   } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
   }
-  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  updatePlayerUiIfOwnershipPresentationChanged(previousPresentation);
 }
 
 async function handlePlaybackOwnershipEvent() {
@@ -14165,13 +14179,14 @@ function acceptPlaybackClaim(result, prepared) {
   const leaseDeadline = result.sentAt + result.leaseMs;
   const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
   ownership.activeClaim = claim;
+  const previousPresentation = playbackOwnershipPresentation();
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
     Math.max(0, leaseDeadline - performance.now()));
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();
-  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  updatePlayerUiIfOwnershipPresentationChanged(previousPresentation);
 }
 
 async function expirePlaybackClaim(claim) {
@@ -28374,15 +28389,21 @@ function clearUtilityLoopDragState() {
   state.utility.loopDropPosition = '';
 }
 
+// Only the dragged and drop-target loops carry drag classes, so a drag event restyles the rows
+// of the loops it marks or unmarks, never the whole saved-loop list.
+let utilityLoopDragMarkedIds = [];
 function syncUtilityLoopDragUi() {
-  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
-    const id = getUtilityLoopNodeId(node);
-    const dragging = id && id === state.utility.loopDragId;
-    const dropping = id && id === state.utility.loopDropTargetId;
-    node.classList.toggle('is-dragging', Boolean(dragging));
-    node.classList.toggle('is-drop-before', Boolean(dropping && state.utility.loopDropPosition === 'before'));
-    node.classList.toggle('is-drop-after', Boolean(dropping && state.utility.loopDropPosition === 'after'));
+  const markedIds = [state.utility.loopDragId, state.utility.loopDropTargetId].filter(Boolean);
+  new Set([...utilityLoopDragMarkedIds, ...markedIds]).forEach((id) => {
+    const escapedId = cssEscape(id);
+    document.querySelectorAll(`[data-utility-loop-entry="${escapedId}"], [data-utility-loop-id="${escapedId}"]`).forEach(node => {
+      const dropping = id === state.utility.loopDropTargetId;
+      node.classList.toggle('is-dragging', id === state.utility.loopDragId);
+      node.classList.toggle('is-drop-before', dropping && state.utility.loopDropPosition === 'before');
+      node.classList.toggle('is-drop-after', dropping && state.utility.loopDropPosition === 'after');
+    });
   });
+  utilityLoopDragMarkedIds = markedIds;
 }
 
 function getUtilityLoopNodeId(node) {
@@ -28392,7 +28413,7 @@ function getUtilityLoopNodeId(node) {
 function syncUtilityLoopMoveButtons() {
   document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
     const id = button.getAttribute('data-move-utility-loop');
-    const loop = (state.utility.loops || []).find(item => String(item.id) === id);
+    const loop = getUtilityLoopIndex().byId.get(id);
     const scope = loop && getUtilityLoopOrderScope(loop.song_key);
     const index = scope?.loops.findIndex(item => String(item.id) === id) ?? -1;
     const direction = button.getAttribute('data-loop-move-direction');
@@ -28405,10 +28426,15 @@ function syncUtilityLoopMoveButtons() {
 }
 
 function updateUtilityLoopDropState(type, targetId, position, groupKey = '') {
-  state.utility.loopDropType = String(type || '');
-  state.utility.loopDropTargetId = String(targetId || '');
-  state.utility.loopDropGroupKey = String(groupKey || '');
-  state.utility.loopDropPosition = position === 'after' ? 'after' : position === 'before' ? 'before' : '';
+  const next = {
+    loopDropType: String(type || ''),
+    loopDropTargetId: String(targetId || ''),
+    loopDropGroupKey: String(groupKey || ''),
+    loopDropPosition: position === 'after' ? 'after' : position === 'before' ? 'before' : '',
+  };
+  // Dragover repeats while the pointer rests; an unchanged drop target restyles nothing.
+  if (Object.entries(next).every(([key, value]) => state.utility[key] === value)) return;
+  Object.assign(state.utility, next);
   syncUtilityLoopDragUi();
 }
 
@@ -28448,7 +28474,7 @@ function bindUtilityLoopDragAndDrop() {
         if (!event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) updateUtilityLoopDropState('', '', '');
         return;
       }
-      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) {
+      if (!reorderUtilityLoopSong(state.utility.loops, payload(), edge.target, edge.position)) {
         updateUtilityLoopDropState('', '', '');
         return;
       }
@@ -28468,7 +28494,7 @@ function bindUtilityLoopDragAndDrop() {
     });
   });
   document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
-    const currentLoop = () => (state.utility.loops || []).find(loop => String(loop.id) === getUtilityLoopNodeId(node));
+    const currentLoop = () => getUtilityLoopIndex().byId.get(getUtilityLoopNodeId(node));
     node.setAttribute('draggable', String(canReorderUtilityLoop(currentLoop())));
     if (node.dataset.dragBound === '1') return;
     node.dataset.dragBound = '1';
@@ -28479,10 +28505,11 @@ function bindUtilityLoopDragAndDrop() {
           || event.target?.closest?.('button, input, select, textarea, a, [data-loop-range-surface]')) {
         event.preventDefault(); clear(); return;
       }
+      clearUtilityLoopDragState();
       state.utility.loopDragType = 'loop'; state.utility.loopDragId = String(loop.id);
       state.utility.loopDragGroupKey = loop.song_key;
       state.utility.loopSuppressClick = false;
-      updateUtilityLoopDropState('', '', '');
+      syncUtilityLoopDragUi();
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', JSON.stringify(payload()));
@@ -28490,7 +28517,7 @@ function bindUtilityLoopDragAndDrop() {
     });
     node.addEventListener('dragover', event => {
       const position = getUtilityLoopDropPosition(node, event.clientY);
-      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), target(), position)) {
+      if (!reorderUtilityLoopSong(state.utility.loops, payload(), target(), position)) {
         updateUtilityLoopDropState('', '', ''); return;
       }
       event.preventDefault();
@@ -29901,8 +29928,25 @@ async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   }
 }
 
+// The saved-loop list is replaced, never edited in place, so one index per list serves every
+// drag event and order lookup against it.
+const utilityLoopIndexes = new WeakMap();
+function getUtilityLoopIndex(loops = state.utility.loops || []) {
+  let index = utilityLoopIndexes.get(loops);
+  if (!index) {
+    index = { byId: new Map(), bySong: new Map() };
+    for (const loop of loops) {
+      index.byId.set(String(loop.id), loop);
+      if (!index.bySong.has(loop.song_key)) index.bySong.set(loop.song_key, []);
+      index.bySong.get(loop.song_key).push(loop);
+    }
+    utilityLoopIndexes.set(loops, index);
+  }
+  return index;
+}
+
 function getUtilityLoopOrderScope(songKey, loops = state.utility.loops || []) {
-  const members = loops.filter(loop => loop.song_key === songKey);
+  const members = getUtilityLoopIndex(loops).bySong.get(songKey) || [];
   const revision = members[0]?.order_revision;
   if (!members.length || !members.every(loop => canReorderUtilityLoop(loop) && loop.order_revision === revision)) return null;
   return { songKey, revision, loops: members };
@@ -29919,7 +29963,9 @@ function replaceUtilityLoopSong(loops, songKey, members) {
   return next;
 }
 
-function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+// The dragged song's loops in their new order, or null when the drop is not a move. A drag
+// reads only that song's loops.
+function reorderUtilityLoopSong(loops, draggedItem, targetItem, position) {
   if (!['before', 'after'].includes(position) || draggedItem?.type !== 'loop' || targetItem?.type !== 'loop') return null;
   const songKey = String(draggedItem.groupKey || '');
   if (!songKey || songKey !== targetItem.groupKey || draggedItem.id === targetItem.id) return null;
@@ -29932,7 +29978,12 @@ function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
   const to = members.findIndex(loop => String(loop.id) === String(targetItem.id));
   members.splice(to + (position === 'after' ? 1 : 0), 0, moving);
   if (members.every((loop, index) => loop.id === scope.loops[index].id)) return null;
-  return replaceUtilityLoopSong(loops, songKey, members);
+  return members;
+}
+
+function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+  const members = reorderUtilityLoopSong(loops, draggedItem, targetItem, position);
+  return members && replaceUtilityLoopSong(loops, String(draggedItem.groupKey), members);
 }
 
 function captureUtilityLoopOrderView(songKey) {
@@ -34223,18 +34274,30 @@ function getCoverLookupTaskElapsedLabel(task, nowMs) {
   return formatCoverLookupTaskElapsedLabel(task, nowMs);
 }
 
+// Tasks are replaced, never edited in place, so one id index per task list serves every
+// poll and elapsed tick against it.
+const coverLookupTaskIndexes = new WeakMap();
+function getCoverLookupTaskById(taskId) {
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  let index = coverLookupTaskIndexes.get(tasks);
+  if (!index) {
+    index = new Map();
+    for (const task of tasks) {
+      const id = String(task?.id || '').trim();
+      if (id && !index.has(id)) index.set(id, task);
+    }
+    coverLookupTaskIndexes.set(tasks, index);
+  }
+  return index.get(String(taskId || '').trim()) || null;
+}
+
 function updateCoverLookupTaskElapsedLabels() {
   const body = document.getElementById('cover-lookup-drawer-body');
   if (!body || typeof body.querySelectorAll !== 'function') return;
-  const tasksById = new Map(
-    (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-      .map((task) => [String(task?.id || '').trim(), task])
-      .filter(([taskId]) => Boolean(taskId)),
-  );
   const nowMs = Date.now();
   body.querySelectorAll('[data-cover-lookup-task-elapsed]').forEach((element) => {
     const taskId = String(element.getAttribute('data-cover-lookup-task-elapsed') || '').trim();
-    const elapsedLabel = getCoverLookupTaskElapsedLabel(tasksById.get(taskId), nowMs);
+    const elapsedLabel = getCoverLookupTaskElapsedLabel(getCoverLookupTaskById(taskId), nowMs);
     element.textContent = elapsedLabel;
     element.hidden = !elapsedLabel;
   });
@@ -35630,14 +35693,7 @@ async function loadCoverLookupTasks(options = {}) {
       renderCoverLookupDrawer({ preserveInteraction: false });
     }
   }
-  const previousActiveTaskIds = activeOnly
-    ? new Set(
-      (state.coverLookup.tasks || [])
-        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
-        .map((task) => String(task?.id || ''))
-        .filter(Boolean),
-    )
-    : new Set();
+  const tasksBeforeRequest = state.coverLookup.tasks;
   try {
     const params = new URLSearchParams({ limit: '50' });
     if (activeOnly) {
@@ -35658,6 +35714,29 @@ async function loadCoverLookupTasks(options = {}) {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
+    // A poll that repeats the answer already applied to these very tasks and counts changes
+    // nothing, so it skips the per-task merge, snapshots and updates over every loaded task.
+    // Reconciliation and remote saves wait on the next answer, so they take the full path.
+    const appliedActiveAnswer = activeOnly ? {
+      answer: JSON.stringify(data),
+      tasks: tasksBeforeRequest,
+      counts: state.coverLookup.notificationCounts,
+      membershipRevision: state.coverLookup.tasksMembershipRevision,
+    } : null;
+    if (appliedActiveAnswer && state.coverLookup.tasks === tasksBeforeRequest
+        && !state.coverLookup.notificationReconciliationPending && !coverLookupPendingRemoteSaves.size
+        && Object.entries(appliedActiveAnswer).every(([key, value]) => lastAppliedActiveCoverLookupAnswer?.[key] === value)) {
+      stopCoverLookupPollingIfIdle();
+      return true;
+    }
+    const previousActiveTaskIds = activeOnly
+      ? new Set(
+        (tasksBeforeRequest || [])
+          .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+          .map((task) => String(task?.id || ''))
+          .filter(Boolean),
+      )
+      : new Set();
     const previousNotificationTotal = Number(state.coverLookup.notificationCounts?.total_count);
     const previousMembershipRevision = String(
       state.coverLookup.tasksMembershipRevision || '',
@@ -35833,6 +35912,14 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (appliedActiveAnswer && !missingActiveTask && !notificationReconciliationPending) {
+      lastAppliedActiveCoverLookupAnswer = {
+        answer: appliedActiveAnswer.answer,
+        tasks: state.coverLookup.tasks,
+        counts: state.coverLookup.notificationCounts,
+        membershipRevision: state.coverLookup.tasksMembershipRevision,
+      };
+    }
     if (missingActiveTask || notificationReconciliationPending) {
       const loadedTaskCount = (state.coverLookup.tasks || []).length;
       const loadedTasksMatchAuthoritativeCount = (
@@ -35872,6 +35959,7 @@ async function loadCoverLookupTasks(options = {}) {
 let coverLookupPollingRequest = null;
 let coverLookupBackgroundPollTicks = 0;
 let coverLookupPollInFlight = false;
+let lastAppliedActiveCoverLookupAnswer = null;
 let coverLookupHistoryRequest = null;
 let coverLookupDrawerScrollRenderTimer = 0;
 
@@ -35944,13 +36032,10 @@ function ensureCoverLookupPolling() {
     try {
       await loadCoverLookupTasksForPolling({ toast: false });
       const snapshot = state.coverLookup.modal.candidateSnapshot;
-      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-        && ['pending', 'running'].includes(String(task?.status || ''))
-      ));
+      const modalTask = getCoverLookupTaskById(state.coverLookup.modal.taskId);
       if (
         modalOpen
-        && !hasMatchingActiveTask
+        && !['pending', 'running'].includes(String(modalTask?.status || ''))
         && ['pending', 'running'].includes(String(snapshot?.status || ''))
       ) {
         await refreshCoverLookupGallery(false);
@@ -35963,8 +36048,8 @@ function ensureCoverLookupPolling() {
 
 function stopCoverLookupPollingIfIdle() {
   const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-  const activeTasks = (state.coverLookup.tasks || []).filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const shouldKeepPolling = Boolean(state.coverLookup.drawerOpen || modalOpen || activeTasks > 0);
+  const shouldKeepPolling = Boolean(state.coverLookup.drawerOpen || modalOpen
+    || (state.coverLookup.tasks || []).some((task) => ['pending', 'running'].includes(String(task?.status || ''))));
   if (shouldKeepPolling) return;
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);
@@ -46630,6 +46715,9 @@ function currentQueueIndex() {
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  // Every player update asks; the queue cursor answers without scanning a long queue.
+  const cursor = Number(queue.currentIndex) || 0;
+  if (String(queue.tracks[cursor]?.path || '') === path) return cursor;
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }

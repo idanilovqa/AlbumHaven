@@ -306,6 +306,9 @@ function currentQueueIndex() {
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  // Every player update asks; the queue cursor answers without scanning a long queue.
+  const cursor = Number(queue.currentIndex) || 0;
+  if (String(queue.tracks[cursor]?.path || '') === path) return cursor;
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }

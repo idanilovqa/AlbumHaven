@@ -7624,3 +7624,100 @@ require('node:test')('bounded interaction: notification drawer scroll renders on
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });
+
+// One running lookup among `cardinality` loaded notifications, the drawer open over its first
+// task window and the Cover Lookup modal open, so every 100 ms interval tick polls.
+function createCountedCoverLookupPolling(counter, cardinality) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const running = { id: 'task-0', status: 'running', progress: 40, album: 'Album 0', artist: 'Artist', created_at: '2026-11-15T10:00:00Z' };
+  const harness = createDrawerHarness({
+    fetch: async () => {
+      counter.count('requests');
+      return { ok: true, json: async () => ({
+        ok: true, tasks: [{ ...running }], next_cursor: null, total_count: cardinality,
+        active_count: 1, finished_count: cardinality - 1, membership_revision: 'revision-1',
+      }) };
+    },
+  });
+  const { context } = harness;
+  const getElementById = context.document.getElementById;
+  context.document.getElementById = id => (id === 'cover-lookup-modal' ? { hidden: false } : getElementById(id));
+  for (const name of ['renderCoverLookupDrawer', 'renderCoverLookupModal']) {
+    const render = context[name];
+    context[name] = (...args) => { counter.count('renderCommits'); return render(...args); };
+  }
+  // Every task list the poller stores is counted, not only the first one.
+  let tasks = [];
+  Object.defineProperty(context.state.coverLookup, 'tasks', {
+    configurable: true,
+    enumerable: true,
+    get: () => tasks,
+    set: (value) => { tasks = Array.isArray(value) ? countedCollection(value, counter) : value; },
+  });
+  context.state.coverLookup.tasks = ([running, ...Array.from({ length: cardinality - 1 }, (_value, index) => ({
+    id: `task-${index + 1}`, status: 'completed', album: `Album ${index + 1}`, artist: 'Artist',
+    created_at: '2026-11-15T09:00:00Z', finished_at: '2026-11-15T09:01:00Z',
+  }))]);
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  return harness;
+}
+
+require('node:test')('bounded interaction: Cover Lookup polling repeats nothing per loaded notification while one lookup runs among 1,000', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, intervalCalls } = createCountedCoverLookupPolling(counter, cardinality);
+    context.ensureCoverLookupPolling();
+    const poll = intervalCalls.find(({ delay }) => delay === 100).callback;
+    await poll();
+    const work = await counter.measure(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await poll();
+    });
+    assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+    assert.equal(context.state.coverLookup.tasks.length, cardinality);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#ensureCoverLookupPolling',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 600, requests: 10, renderCommits: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+require('node:test')('bounded interaction: Cover Lookup elapsed ticks relabel only the mounted task window among 1,000 notifications', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context, bodyElement, intervalCalls } = createCountedCoverLookupPolling(counter, cardinality);
+    const labels = Array.from({ length: 60 }, (_value, index) => {
+      const label = new CountedElement('SPAN');
+      label.attributes['data-cover-lookup-task-elapsed'] = `task-${index}`;
+      return label;
+    });
+    bodyElement.querySelectorAll = (selector) => {
+      counter.count('domQueries');
+      return selector === '[data-cover-lookup-task-elapsed]' ? labels : [];
+    };
+    context.syncCoverLookupElapsedTimer();
+    const tick = intervalCalls.find(({ delay }) => delay === 1000).callback;
+    tick();
+    const work = await counter.measure(() => {
+      for (let second = 0; second < 10; second += 1) tick();
+    });
+    assert.equal(labels[0].textContent, 'Elapsed 1s');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#syncCoverLookupElapsedTimer',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 10, domMutations: 600 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

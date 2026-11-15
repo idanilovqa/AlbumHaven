@@ -92,6 +92,15 @@ export async function resetCoverLookupProviderEvidence(testInfo) {
   return readJsonResponse(response, 'Cover lookup fixture evidence reset');
 }
 
+export async function setPastedCoverSaveHeld(testInfo, held) {
+  const response = await fetch(coverLookupFixtureEndpoint(testInfo, '/cover-lookup-fixture/control'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: held ? 'hold-pasted-cover-save' : 'release-pasted-cover-save' }),
+  });
+  return readJsonResponse(response, `Pasted cover save ${held ? 'hold' : 'release'}`);
+}
+
 export async function readCoverLookupProviderEvidence(testInfo) {
   const endpoint = coverLookupFixtureEndpoint(testInfo, '/cover-lookup-fixture/evidence');
   const response = await fetch(endpoint, { headers: { Accept: 'application/json' } });

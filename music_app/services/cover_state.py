@@ -5,7 +5,7 @@ import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
-from music_app.services.covers import image_dimensions
+from music_app.services.covers import image_dimensions, planned_cover_backup_name
 from music_app.services.generated_preview_storage import (
     is_generated_cover_artifact,
     is_managed_preview_path,
@@ -293,6 +293,23 @@ def _redundant_generated_cover_backup_paths(
     }
 
 
+def _inventory_cover_backup_name(candidates: list[dict[str, object]], folder: Path) -> str | None:
+    """planned_cover_backup_name from an indexed inventory, without reading the album folder."""
+    cover_path = folder / "cover.jpg"
+    cover = next((item for item in candidates if Path(str(item["path"])) == cover_path), None)
+    if cover is None:
+        return None
+    digest = cover.get("sha256")
+    # An unhashed cover is assumed unique: saves usually keep the replaced picture.
+    if digest and any(item is not cover and item.get("sha256") == digest for item in candidates):
+        return None
+    names = {Path(str(item["path"])).name.casefold() for item in candidates}
+    index = 1
+    while f"cover-existing-{index}.jpg" in names:
+        index += 1
+    return f"cover-existing-{index}.jpg"
+
+
 def _matching_local_cover_sources(
     candidates: list[dict[str, object]], active_path: Path, revision: str | None,
 ) -> Iterator[str]:
@@ -387,6 +404,7 @@ def serialize_cover_gallery_payload(
             "task": task_payload or None,
             "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
         }
+    cover_write_root = album_root
     if local_inventory is None:
         album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     if local_inventory is not None and not local_inventory.get("available"):
@@ -403,6 +421,7 @@ def serialize_cover_gallery_payload(
         is_squareish_cover=is_squareish_cover,
         active_cover_path=None if active_remote_cover else active_cover_path,
     )
+    inventory_candidates = list(local_candidates)
     if local_inventory is not None:
         if active_cover_path and not active_remote_cover and not is_managed_preview_path(active_cover_path) and active_cover_path.suffix.lower() in image_extensions and not any(Path(item["path"]) == active_cover_path for item in local_candidates):
             entry = next((entry for path, entry in (file_cache or {}).items() if path in track_paths and isinstance(entry, dict) and entry.get("cover_path") == str(active_cover_path)), {})
@@ -445,6 +464,22 @@ def serialize_cover_gallery_payload(
             candidate for candidate in local_candidates
             if str(candidate["path"]) not in redundant_backups
         ]
+        # Owner (2026-11-15, one card per picture): a cover.jpg the app copied from the selected file
+        # is not a picture of its own; the selected file's card stays, in place, and is the selection.
+        app_copy = next((
+            candidate for candidate in local_candidates
+            if candidate.get("is_active")
+            and Path(str(candidate["path"])).name.casefold() == "cover.jpg"
+            and selected_source_path
+            and str(candidate["path"]) != str(selected_source_path)
+        ), None)
+        source = app_copy and next((
+            candidate for candidate in local_candidates
+            if str(candidate["path"]) == str(selected_source_path)
+        ), None)
+        if source:
+            local_candidates.remove(app_copy)
+            source["is_active"] = True
     if active_cover_path and not active_cover_revision and not active_remote_cover:
         if local_inventory is not None:
             active_hash = next((item.get("sha256") for item in local_candidates if item.get("is_active")), None)
@@ -467,6 +502,12 @@ def serialize_cover_gallery_payload(
         "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
         "selected_source_path": selected_source_path,
+        # What the current cover.jpg becomes when a save replaces it, so a pending save can show final names.
+        "cover_backup_name": (
+            _inventory_cover_backup_name(inventory_candidates, cover_write_root)
+            if local_inventory is not None
+            else planned_cover_backup_name(cover_write_root)
+        ),
         "remote_cover": active_remote_cover,
         "local_covers": [
             item for item in local_candidates

@@ -3502,14 +3502,15 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
     }
     confirmLocalInventory = false;
   }
-  gallery = {
-    ...gallery,
-    local_covers: suppressRedundantGeneratedCoverBackups(
-      gallery.local_covers,
-      gallery.selected_source_path,
-    ),
-  };
-  if (!mutation) return { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) };
+  if (!mutation) {
+    return {
+      ...gallery,
+      local_covers: sortCoverLookupLocalCovers(suppressRedundantGeneratedCoverBackups(
+        gallery.local_covers,
+        gallery.selected_source_path,
+      )),
+    };
+  }
   let localCovers = gallery.local_covers.slice();
   let otherArt = Array.isArray(gallery.other_art) ? gallery.other_art.slice() : [];
   const hasIncomingPath = path => localCovers.some((cover) => coverLookupLocalPathMatches(cover?.path, path));
@@ -3526,8 +3527,15 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
       && coverLookupLocalPathMatches(selectedPath, mutation.selectedPath)) {
     mutation.selectedPath = '';
   }
+  // A save in flight, or a reply that still describes the replaced file, never confirms the new card.
+  const confirms = (cover, path) => confirmLocalInventory && hasIncomingPath(path) && !cover?.pending_save
+    && (!cover?.cover_revision || localCovers.some((incoming) => {
+      if (!coverLookupLocalPathMatches(incoming?.path, path)) return false;
+      const revisions = [incoming?.sha256, incoming?.cover_revision].filter(Boolean);
+      return !revisions.length || revisions.includes(cover.cover_revision);
+    }));
   mutation.addedCovers.forEach((cover, path) => {
-    if (confirmLocalInventory && hasIncomingPath(path)) {
+    if (confirms(cover, path)) {
       localCovers = localCovers.map((incoming) => {
         if (!coverLookupLocalPathMatches(incoming?.path, path)) return incoming;
         const width = Number(incoming?.width || 0) || Number(cover?.width || 0) || null;
@@ -3561,6 +3569,8 @@ function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventor
   if (!mutation.addedCovers.size && !mutation.deletedPaths.size && !mutation.selectedPath) {
     coverLookupLocalInventoryMutations.delete(key);
   }
+  // Hide redundant backups only after this page's own pending saves are laid over a possibly stale reply.
+  localCovers = suppressRedundantGeneratedCoverBackups(localCovers, optimisticSelectedPath || selectedPath);
   return {
     ...gallery,
     local_covers: sortCoverLookupLocalCovers(localCovers),
@@ -3627,15 +3637,64 @@ function cacheOptimisticLocalCoverGallery(album, selectedCover) {
   });
 }
 
+// Saves in flight per album (any modal session): a delete waits for them so the server applies them in order.
+const coverLookupPendingSaves = new Map();
+// Paths deleted while their save was still in flight; that save must not bring the cover back.
+const coverLookupDeletedWhileSaving = new Set();
+
+function trackCoverLookupSave(mutationKey) {
+  let settle;
+  const pending = new Promise((resolve) => { settle = resolve; });
+  coverLookupPendingSaves.set(mutationKey, pending);
+  return () => {
+    settle();
+    if (coverLookupPendingSaves.get(mutationKey) === pending) coverLookupPendingSaves.delete(mutationKey);
+  };
+}
+
+function coverLookupAlbumFilePath(gallery, filename) {
+  // Take the folder from a file in the album's top folder: it keeps the exact spelling the server uses
+  // for paths (album_root may be case-folded), so the temporary card keeps one identity when the save lands.
+  const topLevel = [...(gallery?.local_covers || []), ...(gallery?.other_art || [])].find((cover) => (
+    cover?.path && !/[\\/]/.test(String(cover?.relative_path ?? cover?.filename ?? 'x/'))
+  ));
+  const topLevelPath = String(topLevel?.path || '');
+  const folder = topLevelPath
+    ? topLevelPath.slice(0, Math.max(topLevelPath.lastIndexOf('\\'), topLevelPath.lastIndexOf('/')))
+    : String(gallery?.album_root || '').trim().replace(/[\\/]+$/, '');
+  if (!folder || !filename) return '';
+  return `${folder}${folder.includes('\\') ? '\\' : '/'}${filename}`;
+}
+
+// Only a gallery that says what a save does to cover.jpg (cover_backup_name, null for none) can be predicted.
+function knowsCoverBackup(gallery) {
+  return Boolean(gallery) && Object.prototype.hasOwnProperty.call(gallery, 'cover_backup_name');
+}
+
+// The backup the server announced for the current cover.jpg (cover_backup_name), as a card identity.
+function predictedCoverBackup(gallery) {
+  const name = String(gallery?.cover_backup_name || '').trim();
+  const path = coverLookupAlbumFilePath(gallery, name);
+  return path ? { path, filename: name, relative_path: name, sort_relative_path: name.toLowerCase() } : null;
+}
+
 // A save that replaces cover.jpg keeps its previous bytes as cover-existing-N.jpg.
 // Rename the cached card so reopening shows the final inventory without a late insertion.
 function cacheReplacedLocalCoverBackup(album, replacedPath, backup) {
   const backupPath = String(backup?.path || '').trim();
   const gallery = cachedCoverLookupGalleryPayload(album);
-  if (!backupPath || !gallery) return;
+  if (!gallery || !replacedPath) return;
   const isReplaced = cover => coverLookupLocalPathMatches(cover?.path, replacedPath);
   const replaced = [...(gallery.local_covers || []), ...(gallery.other_art || [])].find(isReplaced);
   if (!replaced) return;
+  if (!backupPath) {
+    cacheCoverLookupGalleryPayload(album, {
+      ...gallery,
+      local_covers: (gallery.local_covers || []).filter(cover => !isReplaced(cover)),
+      other_art: (gallery.other_art || []).filter(cover => !isReplaced(cover)),
+    });
+    return;
+  }
   const { preview_url: _preview, cover_revision: _revision, duplicate_of: _duplicate, ...known } = replaced;
   const card = { ...known, ...backup, path: backupPath, is_active: false };
   const isOtherArt = card.is_squareish === false;
@@ -3867,6 +3926,11 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
   });
 }
 
+function sameCoverLookupAlbumIdentity(left, right) {
+  const identity = (album) => String(album?.album_ref || album?.key || '').trim().toLowerCase();
+  return Boolean(identity(left)) && identity(left) === identity(right);
+}
+
 function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const originalPaths = getAlbumTrackPaths(originalAlbum);
   if (!originalPaths.size) return null;
@@ -3915,6 +3979,21 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
             && Array.from(originalPaths).every((path) => paths.has(path));
         });
         if (!renamedRelease) return false;
+        // Owner (UI-5): renaming a split release to its sibling's identity merges them back, even when the
+        // edited album only knew the moved tracks (compact gallery card), so no split chooser remains.
+        const sibling = transition.releases.find((release, index) => (
+          index !== matchingReleaseIndex && sameCoverLookupAlbumIdentity(release, renamedRelease)
+        ));
+        if (sibling) {
+          const tracks = [...(sibling.tracks || []), ...(renamedRelease.tracks || [])];
+          mergedReplacement = {
+            ...sibling,
+            tracks,
+            track_paths: Array.from(transition.paths),
+            track_count: transition.paths.size,
+          };
+          return true;
+        }
         updatedSplitReleases = transition.releases.map((release, index) => (
           index === matchingReleaseIndex ? renamedRelease : release
         ));
@@ -3975,7 +4054,7 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
     const knownSplitPaths = new Set(
       (knownSplit || []).flatMap((album) => Array.from(getAlbumTrackPaths(album))),
     );
-    const replacement = candidates.find((album) => {
+    const replacement = (mergedReplacement ? [mergedReplacement, ...candidates] : candidates).find((album) => {
       const paths = getAlbumTrackPaths(album);
       const coversOriginal = Array.from(originalPaths).every((path) => paths.has(path));
       const coversTask = taskPaths.size > 0
@@ -4578,11 +4657,17 @@ async function saveLocalCoverFromLookup(sourcePath) {
     selectedPath: previousInventoryMutation.selectedPath,
   } : null;
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
+  const replacedCoverPath = coverLookupAlbumFilePath(previousGallery, 'cover.jpg');
+  const predictedBackup = predictedCoverBackup(previousGallery);
+  const replacesCover = replacedCoverPath && knowsCoverBackup(previousGallery)
+    && !coverLookupLocalPathMatches(sourcePath, replacedCoverPath);
   coverLookupPendingMutations.set(mutationKey, session);
+  const settleSave = trackCoverLookupSave(mutationKey);
   coverLookupGalleryRequest += 1;
   try {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
+    if (replacesCover) cacheReplacedLocalCoverBackup(album, replacedCoverPath, predictedBackup);
     const optimisticSrc = applyOptimisticLocalCoverSelection(album, sourcePath);
     // The optimistic cover is already visible and a failure rolls back with an
     // error alert, so Save closes at once instead of waiting for promotion.
@@ -4605,7 +4690,10 @@ async function saveLocalCoverFromLookup(sourcePath) {
     const updatedAlbums = Array.isArray(data.updated_albums) && data.updated_albums.length
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
-    cacheReplacedLocalCoverBackup(album, data.selected_cover_path, data.replaced_cover_backup);
+    if (replacesCover && predictedBackup?.path !== data.replaced_cover_backup?.path) {
+      // The server chose another backup name than announced: rename the card once, in place.
+      cacheReplacedLocalCoverBackup(album, predictedBackup?.path || data.selected_cover_path, data.replaced_cover_backup);
+    }
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
@@ -4643,6 +4731,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     console.error('[AlbumHaven][CoverLookup] Failed to select local cover.', error);
     showToast(error.message || 'Failed to select local cover art.', 'error', 2800);
   } finally {
+    settleSave();
     await finishCoverLookupMutation(mutationKey, session);
   }
 }
@@ -4651,8 +4740,10 @@ async function deleteLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
   const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
-  if (!album || !sourcePath || isCoverLookupMutationPending(album)) return;
+  if (!album || !sourcePath) return;
   const mutationKey = buildCoverLookupMutationKey(album);
+  const pendingSave = coverLookupPendingSaves.get(mutationKey);
+  if (!pendingSave && isCoverLookupMutationPending(album)) return;
   const previousLocalCovers = Array.isArray(state.coverLookup.modal.localCovers)
     ? state.coverLookup.modal.localCovers.slice()
     : [];
@@ -4697,6 +4788,10 @@ async function deleteLocalCoverFromLookup(sourcePath) {
       refreshCoverLookupAlbumArtwork(album, [optimisticAlbum]);
     }
     renderCoverLookupModal();
+    if (pendingSave) {
+      coverLookupDeletedWhileSaving.add(String(sourcePath));
+      await pendingSave;
+    }
     const response = await fetch('/utilities/cover-lookup/local-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5026,7 +5121,10 @@ async function savePastedCoverFromLookup(imageId) {
     deletedPaths: new Set(previousInventoryMutation.deletedPaths),
     selectedPath: previousInventoryMutation.selectedPath,
   } : null;
-  const optimisticPath = `pasted-image:${String(pastedItem.id || '')}`;
+  // Owner (2026-11-15): the temporary card already has the final file's path and name.
+  const finalCoverPath = coverLookupAlbumFilePath(previousGallery, 'cover.jpg');
+  const optimisticPath = finalCoverPath || `pasted-image:${String(pastedItem.id || '')}`;
+  const optimisticFilename = finalCoverPath ? 'cover.jpg' : pastedItem.filename;
   const restorePreviousInventory = () => {
     if (previousInventoryMutationSnapshot) {
       coverLookupLocalInventoryMutations.set(inventoryKey, previousInventoryMutationSnapshot);
@@ -5071,16 +5169,21 @@ async function savePastedCoverFromLookup(imageId) {
     });
   };
   coverLookupPendingMutations.set(mutationKey, session);
+  const settleSave = trackCoverLookupSave(mutationKey);
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
   try {
     const optimisticAlbum = applyOptimisticPastedCoverSelection(album, pastedItem);
+    if (finalCoverPath && knowsCoverBackup(previousGallery)) {
+      cacheReplacedLocalCoverBackup(album, finalCoverPath, predictedCoverBackup(previousGallery));
+    }
     cacheOptimisticLocalCoverGallery(album, {
       path: optimisticPath,
       preview_url: pastedItem.data_url,
-      filename: pastedItem.filename,
+      filename: optimisticFilename,
       width: pastedItem.width,
       height: pastedItem.height,
+      pending_save: true,
     });
     const optimisticGallery = cachedCoverLookupGalleryPayload(album);
     if (optimisticGallery) {
@@ -5117,6 +5220,11 @@ async function savePastedCoverFromLookup(imageId) {
     const selectedCoverPath = String(data.selected_cover_path || updatedAlbum?.cover_path || '').trim();
     const selectedCoverRevision = String(data.cover_revision || updatedAlbum?.cover_revision || '').trim();
     restorePreviousInventory();
+    if (coverLookupDeletedWhileSaving.delete(selectedCoverPath)) {
+      // Deleted before this save landed: the queued delete owns the outcome.
+      cacheReplacedLocalCoverBackup(album, selectedCoverPath, data.replaced_cover_backup);
+      return;
+    }
     if (selectedCoverPath) {
       cacheReplacedLocalCoverBackup(album, selectedCoverPath, data.replaced_cover_backup);
       cacheOptimisticLocalCoverGallery(album, {
@@ -5156,6 +5264,7 @@ async function savePastedCoverFromLookup(imageId) {
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
     showToast(error.message || 'Failed to save pasted image.', 'error', 2800);
   } finally {
+    settleSave();
     await finishCoverLookupMutation(mutationKey, session);
   }
 }

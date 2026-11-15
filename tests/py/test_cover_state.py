@@ -268,10 +268,10 @@ def test_cover_gallery_keeps_selected_generated_backup(tmp_path: Path):
     )
 
     assert payload["selected_source_path"] == str(selected_backup)
-    assert {item["path"] for item in payload["local_covers"]} == {
-        str(active_cover),
-        str(selected_backup),
-    }
+    # Owner (2026-11-15): one card per picture; the app's cover.jpg copy of the selected file is hidden.
+    assert [(item["path"], item["is_active"]) for item in payload["local_covers"]] == [
+        (str(selected_backup), True),
+    ]
 
 
 def test_cover_gallery_prefers_persisted_selected_local_source_when_duplicate_hashes_match(
@@ -672,3 +672,25 @@ def test_image_dimensions_reuses_cached_result_for_unchanged_file(tmp_path: Path
     assert image_dimensions(cover_path) == (32, 32)
     assert image_dimensions(cover_path) == (32, 32)
     assert open_calls == 1
+
+
+def test_cover_gallery_names_the_backup_a_save_would_create(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = album_root / "song.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    cover = album_root / "cover.jpg"
+    _write_jpeg(cover, (10, 200, 40))
+    _write_jpeg(album_root / "cover-existing-1.jpg", (90, 90, 90))
+
+    def gallery():
+        return serialize_cover_gallery_payload(
+            album_root=album_root, track_paths={str(track_path)},
+            file_cache={str(track_path): {"cover_path": str(cover)}},
+            image_extensions={".jpg"}, image_dimensions=image_dimensions,
+            is_squareish_cover=lambda width, height: width == height,
+        )
+
+    assert gallery()["cover_backup_name"] == "cover-existing-2.jpg"
+    (album_root / "folder.jpg").write_bytes(cover.read_bytes())
+    assert gallery()["cover_backup_name"] is None, "no backup when another file already holds the picture"

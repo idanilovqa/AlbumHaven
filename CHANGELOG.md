@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.8 - 2026-11-14
+## Unreleased
 
 - Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
+## 0.11.8 - 2026-11-14
+
+- A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.
 
 ## 0.11.7 - 2026-11-14
 

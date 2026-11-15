@@ -8236,10 +8236,6 @@ def _artist_musicbrainz_projection(
     if credit_name:
         # Matched through a release credit: "credited as 3 Crows".
         projection["credited_as"] = credit_name
-    associated = _projected_identities(row.get("artist_identities"))
-    if associated:
-        # A person's same-named band, whose albums keep its own MBID (Alice Cooper).
-        projection["associated"] = associated
     discogs_artist_id = row.get("artist_discogs_artist_id")
     if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
         projection["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"
@@ -8756,9 +8752,7 @@ def _artist_musicbrainz_projection_joins_sql(
             join integration.musicbrainz_artists identity_artist
               on identity_artist.mbid = identity.artist_mbid
             -- The first test depends only on the outer row: other artists skip the scan.
-            where (split_match.local_artist_id is not null or artist_match.associated_artist_mbids is not null)
-              and (split_match.local_artist_id is not null
-                   or identity.artist_mbid = any(artist_match.associated_artist_mbids))
+            where split_match.local_artist_id is not null
               and identity_album.library_id = {library_id}
               and identity_album.artist_id = {artist_id}
             group by 1, 2, 3

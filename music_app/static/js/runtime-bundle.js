@@ -40285,7 +40285,10 @@ async function savePastedCoverFromLookup(imageId) {
 }
 
 async function saveCoverFromLookup() {
-  if (isCoverLookupMutationPending()) return;
+  if (isCoverLookupMutationPending()) {
+    if (state.coverLookup.modal.fallbackLocalSelectionPending) closeCoverLookupModal();
+    return;
+  }
   if (state.coverLookup.modal.artboxSlot) {
     await saveAdditionalArtworkFromLookup();
     return;

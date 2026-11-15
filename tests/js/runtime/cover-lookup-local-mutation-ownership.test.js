@@ -400,6 +400,21 @@ test('closing without reopening settles the local deletion without a new gallery
   assert.equal(h.painted.get('A'), 'A-settled');
 });
 
+test('Save closes immediately while selected-cover deletion applies its fallback', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+
+  const deletion = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  assert.equal(h.save.disabled, false, 'the optimistic fallback is immediately actionable');
+
+  await h.context.saveCoverFromLookup();
+
+  assert.equal(h.overlay.hidden, true, 'Save closes without waiting for deletion persistence');
+  assert.equal(h.requests.length, 1, 'Save does not overlap the in-flight deletion');
+  await h.settle(0);
+  await deletion;
+});
+
 for (const outcome of ['success', 'error']) {
   test(`same-session local deletion ${outcome} settles cards and releases repeat activation`, async () => {
     const h = harness(), a = album('A');

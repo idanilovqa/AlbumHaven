@@ -377,15 +377,11 @@ test('a split artist\'s panel lists each MusicBrainz artist with its albums and 
   assert.match(html, /Amarok \(Spanish fusion band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/b42d111d-5932-4c00-8562-8bbf7203f850"/s);
   assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Amarok' }), '');
 
-  // A person matched with the same-named band they belong to (Alice Cooper) is one artist:
-  // the panel names the band as an associated MusicBrainz artist.
-  const person = context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Alice Cooper', associated: [
-    { artist_mbid: '4d7928cd-7ed2-4282-8c29-c0c9f966f1bd', musicbrainz_url: 'https://musicbrainz.org/artist/4d7928cd-7ed2-4282-8c29-c0c9f966f1bd',
-      canonical_name: 'Alice Cooper', disambiguation: 'the band, active 1964–1974/5', album_count: 7 },
-  ] });
-  assert.match(person, /Also on MusicBrainz as:/);
-  assert.match(person, /Alice Cooper \(the band, active 1964–1974\/5\) · 7 albums.*href="https:\/\/musicbrainz\.org\/artist\/4d7928cd/s);
-  assert.doesNotMatch(person, /Your albums belong to/);
+  // Owner 2026-11-14: a person and their same-named band are separate artists; nothing
+  // lists a band "also on MusicBrainz" under the person any more.
+  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Alice Cooper', associated: [
+    { artist_mbid: '4d7928cd-7ed2-4282-8c29-c0c9f966f1bd', canonical_name: 'Alice Cooper', album_count: 7 },
+  ] }), '');
 });
 
 test('Editorial Album Details wraps long titles without covering header actions', () => {

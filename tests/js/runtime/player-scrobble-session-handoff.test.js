@@ -32,7 +32,7 @@ function track(number) {
     title: `Track ${number}`,
     artist: 'Fixture Artist',
     album: 'Fixture Album',
-    coverPath: '',
+    coverRef: '',
     trackNumber: String(number),
   };
 }

@@ -142,7 +142,7 @@ test('the held hydration artist carries the provider MBID through the resolver h
 
 test('the person-and-band case asserts the exact family context title', () => {
   const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
-  const start = spec.indexOf('Delivery 1.1:');
+  const start = spec.indexOf('Delivery 2 S2a:');
   const step = spec.slice(start, spec.indexOf("MBD1-11:", start));
 
   assert.ok(start >= 0);

@@ -468,7 +468,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
     # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-75:] == [
+    assert migration_names[-78:] == [
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -544,6 +544,9 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
         "0178_add_musicbrainz_associated_artists.sql",
+        "0200_create_cover_references.sql",
+        "0201_backfill_cover_references.sql",
+        "0210_create_schema_migration_attestations.sql",
     ]
 
 
@@ -3351,3 +3354,39 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "on library.local_track_files (track_id) where scan_cache_stale is true" in sql
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
+
+SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION = (
+    MIGRATIONS_DIR / "0210_create_schema_migration_attestations.sql"
+)
+
+
+def test_schema_migration_attestations_are_append_only_and_owner_written():
+    sql = " ".join(SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION.read_text(encoding="utf-8").lower().split())
+
+    assert "create table if not exists ops.schema_migration_attestations" in sql
+    # One attestation per (name, repository checksum, observed ledger checksum); an absent
+    # ledger name is a null checksum and still counts once.
+    assert (
+        "on ops.schema_migration_attestations (migration_name, repository_checksum, ledger_checksum) "
+        "nulls not distinct" in sql
+    )
+    for disposition in (
+        "'contract-present'", "'contract-present-with-extras'", "'superseded-by-unmerged'",
+        "'not-applied'", "'historical-ledger-row'",
+    ):
+        assert disposition in sql
+    assert "evidence_manifest_sha256 ~ '^[0-9a-f]{64}$'" in sql
+    assert "approved_at timestamptz not null" in sql
+    # Append-only: row changes and truncation are rejected, and the privileges are gone.
+    assert "before update or delete on ops.schema_migration_attestations for each row" in sql
+    assert "before truncate on ops.schema_migration_attestations for each statement" in sql
+    assert "revoke update, delete, truncate on table ops.schema_migration_attestations from current_user" in sql
+    assert "revoke all on table ops.schema_migration_attestations from album_haven_app" in sql
+    assert "grant select on table ops.schema_migration_attestations to album_haven_readonly" in sql
+    # Rows are written per database by the reconciliation tooling, never by the migration.
+    assert "insert into ops.schema_migration_attestations" not in sql
+    # The historical ledger itself is never rewritten.
+    for statement in ("update ops.schema_migrations", "delete from ops.schema_migrations",
+                      "insert into ops.schema_migrations", "truncate ops.schema_migrations"):
+        assert statement not in sql
+

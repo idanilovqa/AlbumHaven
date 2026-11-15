@@ -18,7 +18,7 @@ async function mount(page, {
 } = {}) {
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.emulateMedia({ reducedMotion: reduced ? 'reduce' : 'no-preference' });
-  if (visual) await page.route('**/cover?path=component-artwork', route => route.fulfill({
+  if (visual) await page.route('**/cover/component-artwork', route => route.fulfill({
     contentType: 'image/svg+xml',
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><rect width="240" height="240" fill="#19394e"/><circle cx="160" cy="72" r="48" fill="#f5b953"/><path d="M0 210 88 70 170 210ZM70 240 184 100 240 180V240Z" fill="#55b5a1"/><path d="M0 212H240V240H0Z" fill="#17303e"/></svg>',
   }));
@@ -81,7 +81,7 @@ async function mount(page, {
       palette_id: appearanceMode === 'light' ? 'paper' : 'harbor-mint', panel_index: 0,
       docked_compact_player_behavior: behavior, docked_compact_player_regular_style: regularStyle,
     });
-    await page.evaluate(() => { window.state.player.current.coverPath = 'component-artwork'; });
+    await page.evaluate(() => { window.state.player.current.coverRef = 'component-artwork'; });
   }
   for (const file of ['client-preferences-helpers.js', 'compact-player-helpers.js', 'playback-control-cluster.js',
     'compact-player-controller.js', 'shell-navigation-drawer.js']) {

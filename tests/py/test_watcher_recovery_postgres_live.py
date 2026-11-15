@@ -1537,14 +1537,11 @@ def test_repair_waits_for_captured_cross_root_barrier_peer_generation(
 def test_internal_watcher_helpers_are_denied_to_every_runtime_role(
     live_watcher_database,
 ):
-    import psycopg
-
     scope = live_watcher_database
     helper_signatures = (
         "library.local_root_relative_path(text,text)",
         "library.reject_watcher_incident_identity_change()",
         "library.prepare_legacy_watcher_rollback(timestamptz)",
-        "library.dispatch_watcher_generation_internal(bigint,timestamptz,bigint[],bigint[])",
     )
     with isolatedPostgres._connect(scope.setup_url) as connection:
         for signature in helper_signatures:
@@ -1561,31 +1558,6 @@ def test_internal_watcher_helpers_are_denied_to_every_runtime_role(
                     "select has_function_privilege(%s, %s, 'EXECUTE') as allowed",
                     (role, signature),
                 ).fetchone()["allowed"] is False
-
-    now = datetime.now(timezone.utc)
-    accepted = _repository(scope.app_url).accept_event(
-        library_id=scope.library_id, event=_created(scope, "root-a", "private-dispatch.flac"), accepted_at=now,
-    )
-    for role, database_url in (
-        ("album_haven_app", scope.app_url),
-        ("album_haven_worker", scope.worker_url),
-        ("album_haven_readonly", scope.readonly_url),
-    ):
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            with isolatedPostgres._connect(database_url) as connection:
-                isolatedPostgres._assert_connected_role(connection, role)
-                connection.execute(
-                    "select library.dispatch_watcher_generation_internal(%s,%s,null::bigint[],null::bigint[])",
-                    (accepted.generation_id, now),
-                ).fetchone()
-    recovery = _repository(scope.worker_url)
-    assert recovery.dispatch_ready(now=now, limit=32) == (accepted.generation_id,)
-    assert recovery.dispatch_ready(now=now, limit=32) == ()
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        assert connection.execute(
-            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
-            "and subject_ref=%s", (str(accepted.generation_id),),
-        ).fetchone()["count"] == 1
 
 
 def test_worker_startup_preflight_requires_live_watcher_functions_and_grants(
@@ -2114,7 +2086,7 @@ def _watcher_cover_atomic_snapshot(case):
         return result
 
 
-def test_targeted_cover_publication_atomically_completes_watcher_and_promotes_same_scope_successor(watcher_cover_atomic_case):
+def test_targeted_cover_publication_completes_watcher_then_worker_dispatches_successor(watcher_cover_atomic_case):
     case = watcher_cover_atomic_case
     scope = case.scope
 
@@ -2175,18 +2147,16 @@ def test_targeted_cover_publication_atomically_completes_watcher_and_promotes_sa
             "select job_id,watcher_job_linked_at,captured_cover_mutation_revision "
             "from library.targeted_reconciliation_intents where id=%s", (case.successor_id,),
         ).fetchone()
-        assert successor["job_id"] is not None
-        assert successor["watcher_job_linked_at"] is not None
-        assert successor["captured_cover_mutation_revision"] == 4
-        assert all(row["running_generation_id"] == case.successor_id for row in lanes)
-        assert all(row["running_job_id"] == successor["job_id"] for row in lanes)
-        assert all(row["successor_generation_id"] is None for row in lanes)
+        assert successor == {"job_id": None, "watcher_job_linked_at": None,
+                             "captured_cover_mutation_revision": 4}
+        assert all(row["running_generation_id"] is None for row in lanes)
+        assert all(row["running_job_id"] is None for row in lanes)
+        assert all(row["successor_generation_id"] == case.successor_id for row in lanes)
         jobs = connection.execute(
             "select id,kind,state,parameters from ops.jobs where subject_kind='targeted_reconciliation_intent' "
             "and subject_ref=%s", (str(case.successor_id),),
         ).fetchall()
-        assert jobs == [{"id": successor["job_id"], "kind": "targeted_reconciliation", "state": "queued",
-                         "parameters": {"intent_id": case.successor_id}}]
+        assert jobs == []
     committed = _watcher_cover_atomic_snapshot(case)
 
     replay = case.publish()
@@ -2195,13 +2165,127 @@ def test_targeted_cover_publication_atomically_completes_watcher_and_promotes_sa
         assert replay[field] == published[field]
     assert _watcher_cover_atomic_snapshot(case) == committed
 
+    recovery = _repository(scope.worker_url)
+    assert recovery.dispatch_ready(now=case.publication_time, limit=32) == (case.successor_id,)
+    assert recovery.dispatch_ready(now=case.publication_time, limit=32) == ()
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        successor = connection.execute(
+            "select job_id,watcher_job_linked_at,captured_cover_mutation_revision "
+            "from library.targeted_reconciliation_intents where id=%s", (case.successor_id,),
+        ).fetchone()
+        assert successor["job_id"] is not None
+        assert successor["watcher_job_linked_at"] is not None
+        assert successor["captured_cover_mutation_revision"] == 4
+        lanes = connection.execute(
+            "select running_generation_id,running_job_id,successor_generation_id "
+            "from library.watcher_lanes where library_id=%s", (scope.library_id,),
+        ).fetchall()
+        assert len(lanes) == len(case.participants)
+        assert all(row == {"running_generation_id": case.successor_id,
+                           "running_job_id": successor["job_id"], "successor_generation_id": None} for row in lanes)
+        assert connection.execute(
+            "select id,kind,state,parameters from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(case.successor_id),),
+        ).fetchall() == [{"id": successor["job_id"], "kind": "targeted_reconciliation", "state": "queued",
+                         "parameters": {"intent_id": case.successor_id}}]
+        assert connection.execute(
+            "select library.read_cover_mutation_revision(%s) as revision", (scope.library_id,),
+        ).fetchone()["revision"] == 5
 
-def test_targeted_cover_publication_rolls_back_after_same_scope_successor_promotion(watcher_cover_atomic_case):
+
+def test_targeted_cover_publication_rolls_back_after_repair_reevaluation(watcher_cover_atomic_case):
     import psycopg
     from psycopg import sql
 
     case = watcher_cover_atomic_case
     scope = case.scope
+    before = _watcher_cover_atomic_snapshot(case)
+    trigger_name = f"test_publication_repair_{case.generation_id}"
+    function_name = sql.Identifier("library", trigger_name)
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(sql.SQL("""
+            create function {}() returns trigger language plpgsql as $body$
+            begin
+              if new.id={} and new.state='catch_up' then
+                if not exists (
+                     select 1 from library.targeted_reconciliation_intents
+                     where id={} and watcher_completed_at is not null
+                       and committed_cover_mutation_revision=5
+                   ) or not exists (
+                     select 1 from library.watcher_barriers where id={} and completed_at is not null
+                   ) or not exists (
+                     select 1 from library.watcher_generation_repairs link
+                     join library.targeted_reconciliation_intents successor on successor.id=link.generation_id
+                     where link.repair_id=new.id and successor.id={}
+                       and successor.job_id is null and successor.watcher_job_linked_at is null
+                       and successor.captured_cover_mutation_revision=4
+                   ) or not exists (
+                     select 1 from library.watcher_repair_roots repair_root
+                     join library.watcher_lanes lane on lane.library_id=repair_root.library_id
+                       and lane.root_id=repair_root.root_id
+                     where repair_root.repair_id=new.id
+                       and repair_root.captured_accepted_sequence=lane.accepted_sequence
+                       and repair_root.captured_dirty_generation=lane.dirty_generation
+                       and repair_root.captured_accepted_sequence>lane.applied_sequence
+                   ) or exists (
+                     select 1 from library.watcher_generation_participants participant
+                     join library.watcher_lanes lane on lane.library_id=participant.library_id
+                       and lane.root_id=participant.root_id
+                     where participant.generation_id={}
+                       and (lane.applied_sequence<participant.accepted_sequence_upper
+                         or lane.running_generation_id is not null or lane.running_job_id is not null)
+                   ) or exists (
+                     select 1 from ops.jobs where subject_kind='targeted_reconciliation_intent'
+                       and subject_ref={}
+                   ) then
+                  raise exception 'publication injection ran before completed repair reevaluation';
+                end if;
+                raise exception 'forced late publication rollback';
+              end if;
+              return new;
+            end;
+            $body$
+        """).format(
+            function_name, sql.Literal(case.repair_id), sql.Literal(case.generation_id),
+            sql.Literal(case.barrier_id), sql.Literal(case.successor_id),
+            sql.Literal(case.generation_id), sql.Literal(str(case.successor_id)),
+        ))
+        connection.execute(sql.SQL(
+            "create trigger {} after update of state on library.watcher_repairs "
+            "for each row execute function {}()"
+        ).format(sql.Identifier(trigger_name), function_name))
+    try:
+        with pytest.raises(psycopg.errors.RaiseException, match="forced late publication rollback"):
+            case.publish()
+        assert _watcher_cover_atomic_snapshot(case) == before
+    finally:
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute(sql.SQL(
+                "drop trigger if exists {} on library.watcher_repairs"
+            ).format(sql.Identifier(trigger_name)))
+            connection.execute(sql.SQL("drop function if exists {}()").format(function_name))
+
+    published = case.publish()
+    assert published["publication_won"] is True
+    assert published["cover_mutation_revision"] == 5
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select job_id,watcher_job_linked_at from library.targeted_reconciliation_intents where id=%s",
+            (case.successor_id,),
+        ).fetchone() == {"job_id": None, "watcher_job_linked_at": None}
+        assert connection.execute(
+            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(case.successor_id),),
+        ).fetchone()["count"] == 0
+
+
+def test_worker_dispatch_failure_preserves_committed_cover_publication(watcher_cover_atomic_case):
+    import psycopg
+    from psycopg import sql
+
+    case = watcher_cover_atomic_case
+    scope = case.scope
+    assert case.publish()["cover_mutation_revision"] == 5
     before = _watcher_cover_atomic_snapshot(case)
     trigger_name = f"test_late_watcher_cover_{case.generation_id}"
     function_name = sql.Identifier("library", trigger_name)
@@ -2254,7 +2338,7 @@ def test_targeted_cover_publication_rolls_back_after_same_scope_successor_promot
         ).format(sql.Identifier(trigger_name), function_name))
     try:
         with pytest.raises(psycopg.errors.RaiseException, match="forced late watcher cover rollback"):
-            case.publish()
+            _repository(scope.worker_url).dispatch_ready(now=case.publication_time, limit=32)
         assert _watcher_cover_atomic_snapshot(case) == before
     finally:
         with isolatedPostgres._connect(scope.setup_url) as connection:
@@ -2263,14 +2347,32 @@ def test_targeted_cover_publication_rolls_back_after_same_scope_successor_promot
             ).format(sql.Identifier(trigger_name)))
             connection.execute(sql.SQL("drop function if exists {}()").format(function_name))
 
-    published = case.publish()
-    assert published["publication_won"] is True
-    assert published["cover_mutation_revision"] == 5
+    recovery = _repository(scope.worker_url)
+    assert recovery.dispatch_ready(now=case.publication_time, limit=32) == (case.successor_id,)
+    assert recovery.dispatch_ready(now=case.publication_time, limit=32) == ()
     with isolatedPostgres._connect(scope.setup_url) as connection:
         assert connection.execute(
             "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
             "and subject_ref=%s", (str(case.successor_id),),
         ).fetchone()["count"] == 1
+        successor = connection.execute(
+            "select job_id,watcher_job_linked_at,captured_cover_mutation_revision "
+            "from library.targeted_reconciliation_intents where id=%s", (case.successor_id,),
+        ).fetchone()
+        assert successor["job_id"] is not None
+        assert successor["watcher_job_linked_at"] is not None
+        assert successor["captured_cover_mutation_revision"] == 4
+        lanes = connection.execute(
+            "select root_id,running_generation_id,running_job_id,successor_generation_id "
+            "from library.watcher_lanes where library_id=%s order by root_id", (scope.library_id,),
+        ).fetchall()
+        assert {row["root_id"] for row in lanes} == {row["root_id"] for row in case.participants}
+        assert all(row["running_generation_id"] == case.successor_id for row in lanes)
+        assert all(row["running_job_id"] == successor["job_id"] for row in lanes)
+        assert all(row["successor_generation_id"] is None for row in lanes)
+        assert connection.execute(
+            "select library.read_cover_mutation_revision(%s) as revision", (scope.library_id,),
+        ).fetchone()["revision"] == 5
 
 
 def _expand_watcher_cover_successor_to_root_c(case):
@@ -2371,62 +2473,6 @@ def test_targeted_cover_publication_defers_expanded_successor_without_locking_ou
         assert connection.execute(
             "select library.read_cover_mutation_revision(%s) as revision", (scope.library_id,),
         ).fetchone()["revision"] == 5
-
-
-def test_private_watcher_dispatch_defers_without_prelocked_repair_proof(watcher_cover_atomic_case):
-    case = watcher_cover_atomic_case
-    scope = case.scope
-    expanded_roots = _expand_watcher_cover_successor_to_root_c(case)
-    root_ids = [row["root_id"] for row in expanded_roots]
-    assert case.publish()["publication_won"] is True
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        assert connection.execute(
-            "select successor.job_id,repair.state from library.watcher_generation_repairs link "
-            "join library.watcher_repairs repair on repair.id=link.repair_id "
-            "join library.targeted_reconciliation_intents successor on successor.id=link.generation_id "
-            "where link.repair_id=%s and link.generation_id=%s", (case.repair_id, case.successor_id),
-        ).fetchone() == {"job_id": None, "state": "catch_up"}
-    before = _watcher_cover_atomic_snapshot(case)
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        isolatedPostgres._assert_connected_role(connection, isolatedPostgres.SETUP_ROLE)
-        connection.execute(
-            "select root_id from library.watcher_lanes where library_id=%s and root_id=any(%s::bigint[]) "
-            "order by root_id for update", (scope.library_id, root_ids),
-        ).fetchall()
-
-        deferred = connection.execute(
-            "select library.dispatch_watcher_generation_internal(%s,%s,%s::bigint[],array[]::bigint[]) as job_id",
-            (case.successor_id, case.publication_time, root_ids),
-        ).fetchone()
-
-        assert deferred == {"job_id": None}
-    assert _watcher_cover_atomic_snapshot(case) == before
-
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        connection.execute("select id from library.watcher_repairs where id=%s for update", (case.repair_id,)).fetchone()
-        connection.execute(
-            "select root_id from library.watcher_lanes where library_id=%s and root_id=any(%s::bigint[]) "
-            "order by root_id for update", (scope.library_id, root_ids),
-        ).fetchall()
-
-        promoted = connection.execute(
-            "select library.dispatch_watcher_generation_internal(%s,%s,%s::bigint[],%s::bigint[]) as job_id",
-            (case.successor_id, case.publication_time, root_ids, [case.repair_id]),
-        ).fetchone()
-
-        assert promoted["job_id"] is not None
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        assert connection.execute(
-            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
-            "and subject_ref=%s", (str(case.successor_id),),
-        ).fetchone()["count"] == 1
-        lanes = connection.execute(
-            "select root_id,running_generation_id,running_job_id from library.watcher_lanes "
-            "where library_id=%s order by root_id", (scope.library_id,),
-        ).fetchall()
-        assert {row["root_id"] for row in lanes} == set(root_ids)
-        assert all(row["running_generation_id"] == case.successor_id for row in lanes)
-        assert all(row["running_job_id"] == promoted["job_id"] for row in lanes)
 
 
 def test_cross_root_move_reserves_one_barrier_for_both_roots(live_watcher_database):

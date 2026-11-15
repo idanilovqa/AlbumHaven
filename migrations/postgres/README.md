@@ -213,7 +213,6 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0248_restore_authoritative_exception_clear.sql
 0249_create_problematic_files_projection.sql
 0250_restore_incomplete_album_contract.sql
-0251_promote_scoped_watcher_successors.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.

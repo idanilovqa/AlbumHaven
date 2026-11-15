@@ -158,7 +158,6 @@ test('Problematic Files dependencies require both real-app performance targets',
 
 test('Problematic Files shared owners require both real-app performance targets', () => {
   for (const changedPath of [
-    'migrations/postgres/0251_promote_scoped_watcher_successors.sql',
     'music_app/services/library_inventory_postgres.py',
     'music_app/services/repair_previews.py',
     'music_app/routes/api_cover_helpers.py',

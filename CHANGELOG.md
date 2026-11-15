@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.10 - 2026-11-15
+
+- Android Sandbox app: Update offers the build each sandbox serves. One waiting build installs at once, switching to its sandbox (and signing in there) when it belongs to another; two or more open a build sheet. An older build is rebuilt under a newer version code by the owner's one-tap rebuild, so no uninstall is needed. Sandbox promotions now name their sandbox, branch and label; a `test_build` pull request names its sandbox with one `sandbox<N>` label. The Stable app is unchanged.
+
 ## 0.11.9 - 2026-11-15
 
 - Added the append-only migration attestation table (migration 0210) used to reconcile the production migration ledger with the repository without rewriting its history. Fresh databases need no attestations; production applies it only through the owner-approved reconciliation plan.

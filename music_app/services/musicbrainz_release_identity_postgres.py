@@ -2,8 +2,10 @@
 
 One background job per local artist (job kind ``musicbrainz_album_releases``) compares the
 artist's albums with the releases of the MusicBrainz artist each album belongs to: its own
-per-album identity first, else the artist's accepted match. The job runs after the artist's
-own job, in the same enrichment queue, and never touches media.
+per-album identity first, else the artist's accepted match; an artist the matcher left
+without one (S2: collaborations, credited performers, "Various Artists") has its albums found
+by their release credits. The job runs after the artist's own job, in the same enrichment
+queue, and never touches media.
 """
 from __future__ import annotations
 
@@ -28,14 +30,19 @@ JOB_KIND = "musicbrainz_album_releases"
 _DATE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
 _STALE_AFTER = "30 days"
 
-# An artist whose albums are compared: an accepted match or per-album identities.
+# An artist the matcher left without an identity (a collaboration, a performer credited with
+# a composer, a display name such as "Various Artists"): its albums are found by their
+# release credits instead. Split artists' undecided albums and owner decisions are left alone.
+_CREDITED_ONLY_SQL = "(matches.decision_source = 'automatic' and matches.state in ('manual_review', 'ambiguous', 'not_found'))"
+# An artist whose albums are compared: an accepted match, per-album identities or credits.
 _ARTIST_WITH_IDENTITY_SQL = """
     exists (
       select 1 from library.local_albums albums
       left join library.local_album_artist_identities identities
         on identities.library_id = albums.library_id and identities.album_key = albums.album_key
       where albums.library_id = artists.library_id and albums.artist_id = artists.id
-        and (identities.artist_mbid is not null or (matches.state = 'matched' and matches.artist_mbid is not null))
+        and (identities.artist_mbid is not null or (matches.state = 'matched' and matches.artist_mbid is not null)
+             or """ + _CREDITED_ONLY_SQL + """)
         and exists (select 1 from library.local_tracks tracks
                     where tracks.library_id = albums.library_id and tracks.album_id = albums.id)
     )
@@ -154,7 +161,7 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
 
     def load_context(self, *, job_id: int, worker_id: str) -> list[dict[str, object]]:
         """The leased artist's albums with tracks, grouped by the MusicBrainz artist each
-        belongs to: one resolver context per group."""
+        belongs to (none for albums found by their credits): one resolver context per group."""
         params = {"job_id": _positive_id(job_id), "worker_id": _bounded_text(worker_id, 128, required=True),
                   "job_kind": JOB_KIND}
         sql = _active_library_cte() + """
@@ -191,7 +198,7 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
               on remote.mbid = coalesce(identities.artist_mbid,
                                         case when matches.state = 'matched' then matches.artist_mbid end)
             where coalesce(identities.artist_mbid, case when matches.state = 'matched' then matches.artist_mbid end)
-                  is not null
+                  is not null or """ + _CREDITED_ONLY_SQL + """
             group by artists.id, artists.name, 3, remote.canonical_name
             order by 3;
         """

@@ -10,6 +10,10 @@ then the title, never a cleaned-up title alone.
   but no release's tracks prove which one.
 - ``unresolved``: kept with a diagnostic saying why.
 
+A local artist with no MusicBrainz identity (a collaboration, a credited performer, "Various
+Artists") has each album searched by its title instead; a certain release's artist credit
+then names the album's artists (Delivery 2, S2).
+
 Nothing here creates gallery entries or writes media tags: the results enrich local albums
 only, and are display data until the owner approves a correction.
 """
@@ -19,11 +23,15 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from music_app.services.musicbrainz_evidence import (
+    TITLE_RANK,
     _compact,
     _starts_remote_title,
     _track_title_forms,
+    album_level,
+    album_rank,
     album_signals,
     fold,
+    title_agreement,
 )
 from music_app.services.musicbrainz_enrichment import (
     _MAX_BROWSE_PAGES,
@@ -45,6 +53,10 @@ _BASE_REQUESTS = 40
 _REQUESTS_PER_ALBUM = 10
 _MAX_REQUESTS = 800
 _CERTAIN_SIGNALS = frozenset({"track_list", "track_count"})
+# Release searches for an album of an artist without an identity, in the artist matcher's
+# order: (with the local name as the credited name, as a phrase); then the closest releases.
+_CREDIT_SEARCHES = ((True, True), (True, False), (False, True), (False, False))
+_MAX_CREDIT_RELEASES = 3
 
 DIAGNOSTICS = {
     "no_title_match": "No release of this artist on MusicBrainz has this album's title.",
@@ -56,7 +68,8 @@ DIAGNOSTICS = {
 
 def resolve_album_releases(context: dict[str, object], *, client) -> dict[str, object]:
     """Decide the release of each album in ``context['albums']`` for one MusicBrainz artist
-    (``artist_mbid``, ``canonical_name``), named locally ``local_name``."""
+    (``artist_mbid``, ``canonical_name``), named locally ``local_name``; without an
+    ``artist_mbid``, by each album's release credits."""
     albums = [dict(album) for album in context.get("albums") or [] if isinstance(album, dict) and album.get("title")]
     budget = min(_MAX_REQUESTS, _BASE_REQUESTS + _REQUESTS_PER_ALBUM * len(albums))
     mirror = _Mirror(client, budget)
@@ -68,6 +81,8 @@ def resolve_album_releases(context: dict[str, object], *, client) -> dict[str, o
 
 def _resolve(context: dict[str, object], albums: list[dict[str, object]], mirror: _Mirror) -> dict[str, object]:
     local_name = str(context.get("local_name") or "").strip()
+    if not context.get("artist_mbid"):
+        return _resolve_by_credit(albums, local_name, mirror)
     candidate = {"mbid": str(context["artist_mbid"]).lower(), "canonical_name": context.get("canonical_name") or "",
                  "credits": {}, "releases": {}}
     names = tuple(name for name in (local_name, candidate["canonical_name"]) if name)
@@ -86,10 +101,16 @@ def _resolve(context: dict[str, object], albums: list[dict[str, object]], mirror
                 and _fetch_tracks(evidence, album, mirror) is None:
             break
 
-    results, release_groups, releases = [], {}, {}
-    for album, evidence in zip(albums, candidate["albums"]):
-        result = _decision(album, evidence)
-        results.append(result)
+    return _complete(albums, [_decision(album, evidence) for album, evidence in zip(albums, candidate["albums"])],
+                     mirror, {})
+
+
+def _complete(albums: list[dict[str, object]], results: list[dict[str, object]], mirror: _Mirror,
+              releases: dict[str, dict[str, object]]) -> dict[str, object]:
+    """Each decided album's release group and release data, its main-album end and the
+    track artists its tags lost. ``releases`` holds tracklists already fetched."""
+    release_groups = {}
+    for result in results:
         group_id = result.get("release_group_mbid")
         if group_id and group_id not in release_groups:
             found = mirror.call("lookup_release_group", group_id)
@@ -126,6 +147,69 @@ def _resolve(context: dict[str, object], albums: list[dict[str, object]], mirror
                 result["original_release_mbid"] = original_id
         result["main_disc"] = main_disc_count(discs, original=original, matched=release)
     return {"classification": "complete", "albums": results, "release_groups": release_groups, "releases": releases}
+
+
+def _resolve_by_credit(albums: list[dict[str, object]], local_name: str, mirror: _Mirror) -> dict[str, object]:
+    """Albums of a local artist with no MusicBrainz identity of its own: a collaboration
+    ("Anderson/Wakeman"), a performer MusicBrainz credits with a composer ("Inna Poroshina"
+    beside Dvořák) or a display name ("Various Artists"). Each album is searched by its
+    title, the credited name first, then the title alone, as the artist matcher searches,
+    and is compared with the closest releases' tracks. A certain release's artist credit
+    then names the album's artists, in MusicBrainz's order; the local name never does."""
+    results, releases = [], {}
+    for album in albums:
+        result, release = _credited_release(album, local_name, mirror)
+        results.append(result)
+        if release:
+            releases[release["id"]] = release
+    return _complete(albums, results, mirror, releases)
+
+
+def _credited_release(album: dict[str, object], local_name: str,
+                      mirror: _Mirror) -> tuple[dict[str, object], dict[str, object] | None]:
+    hits = []
+    for credit_name, phrase in _CREDIT_SEARCHES:
+        found = mirror.call("search_releases", album["title"], credit_name=local_name if credit_name else None,
+                            phrase=phrase)
+        if found is None:
+            return _unresolved(album, "budget_exhausted"), None
+        for release in found.get("releases") or []:
+            # A credited name may lead the title, as a composer does ("Dvořák: Complete Piano Works").
+            credited = tuple(name for name in (local_name, *(part.get(key) for part in release.get("credits") or []
+                                                             for key in ("name", "artist_name"))) if name)
+            agreements = {title_agreement(album["title"], title, credited)
+                          for title in (release.get("title"), release.get("release_group_title")) if title}
+            agreement = next((level for level in ("exact", "fuzzy") if level in agreements), None)
+            if agreement and release.get("id") and release.get("release_group_id"):
+                hits.append((release, agreement))
+        if hits:
+            break
+    if not hits:
+        return _unresolved(album, "no_title_match"), None
+    count = len(album.get("tracks") or [])
+    hits.sort(key=lambda hit: (abs(int(hit[0].get("track_count") or 0) - count), TITLE_RANK[hit[1]]))
+    best, best_release = None, None
+    for release, agreement in hits[:_MAX_CREDIT_RELEASES]:
+        found = mirror.call("lookup_release_tracklist", release["id"])
+        if found is None:
+            return _unresolved(album, "budget_exhausted"), None
+        full = found.get("release")
+        if not full:
+            continue
+        remote = {"first_release_date": release.get("date"),
+                  "tracks": [track for medium in full.get("media") or [] for track in medium.get("tracks") or []]}
+        signals = album_signals(album, remote)
+        evidence = {"title": agreement, "group": {"id": release["release_group_id"]}, "signals": signals,
+                    "level": album_level(agreement, signals), "release_id": release["id"], "disc": None}
+        certain = evidence["level"] == "strong" and _CERTAIN_SIGNALS <= signals
+        if certain or best is None or album_rank(evidence) > album_rank(best):
+            best, best_release = evidence, full
+        if certain:
+            break
+    if best is None:
+        return _unresolved(album, "no_title_match"), None
+    result = _decision(album, best)
+    return result, best_release if result["state"] == "release" else None
 
 
 def _unresolved(album: dict[str, object], diagnostic: str) -> dict[str, object]:

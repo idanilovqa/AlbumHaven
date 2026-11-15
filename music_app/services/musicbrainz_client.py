@@ -258,10 +258,11 @@ def _audio_tracks(medium: JsonDict) -> list[JsonDict]:
 
 def _artist_credit(value: object) -> list[JsonDict]:
     """An artist credit as MusicBrainz orders it: each credited name, its artist and the
-    join phrase after it ("Alan Menken" " & " "Howard Ashman")."""
+    join phrase after it ("Alan Menken" " & " "Howard Ashman"), its spaces kept."""
     return [
         {"name": _text(credit.get("name")), "artist_mbid": _valid_mbid(credit["artist"].get("id")),
-         "artist_name": _text(credit["artist"].get("name")), "join_phrase": _text(credit.get("joinphrase"))}
+         "artist_name": _text(credit["artist"].get("name")),
+         "join_phrase": _WHITESPACE.sub(" ", str(credit.get("joinphrase") or ""))}
         for credit in value or [] if isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
         and _valid_mbid(credit["artist"].get("id"))
     ] if isinstance(value, list) else []

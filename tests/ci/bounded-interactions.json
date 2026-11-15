@@ -2614,20 +2614,40 @@
     },
     {
       "id": "js:runtime/gallery-card-component.js#syncGalleryCardMetadataMotion",
-      "action": "change listeners, ResizeObserver observers installed by syncGalleryCardMetadataMotion",
+      "action": "Pan overflowing mobile gallery card metadata when a registered row or its text resizes, or reduced motion changes",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-card-component.js#syncGalleryCardMetadataMotion:event:change",
         "js:music_app/static/js/runtime/gallery-card-component.js#syncGalleryCardMetadataMotion:observer:ResizeObserver"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-card-component.js"
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/compact-player-helpers.js"
       ],
       "rules": [
         "BI-03",
         "BI-09"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "delta",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 12,
+        "production": 1200
+      },
+      "budgets": {
+        "itemsVisited": 1,
+        "domMutations": 3,
+        "domQueries": 0,
+        "animationFrames": 1,
+        "observers": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-card-component.test.js",
+      "testIdentity": "BI gallery card metadata motion refreshes only the resized row at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the resized-row set in syncGalleryCardMetadataMotion; every resize observation then measures every registered card row again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-cover-preview-cache.js#GalleryCoverPreviewCache.awaitWithAbort",

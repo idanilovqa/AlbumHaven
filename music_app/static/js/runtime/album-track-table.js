@@ -205,10 +205,12 @@ function buildAlbumTrackTableHtml(config = {}) {
 
 // Renders a track table into container without one long task: the first screen of rows paints at
 // once and the remaining rows are appended to their groups, one batch per animation frame. A newer
-// render into the same container cancels the batches of the previous one.
+// render into the same container cancels the batches of the previous one. onBatch({ complete })
+// runs after every batch; whole-table work belongs only in the complete call.
 function renderAlbumTrackTableProgressively(container, config = {}, options = {}) {
-  const initialRows = Math.max(1, Number(options.initialRows) || 60);
-  const batchRows = Math.max(1, Number(options.batchRows) || 60);
+  // About one screen of rows first; later batches stay well under a frame budget on phones.
+  const initialRows = Math.max(1, Number(options.initialRows) || 24);
+  const batchRows = Math.max(1, Number(options.batchRows) || 48);
   const onBatch = typeof options.onBatch === 'function' ? options.onBatch : () => {};
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const pending = [];
@@ -237,7 +239,7 @@ function renderAlbumTrackTableProgressively(container, config = {}, options = {}
       ?.insertAdjacentHTML('beforeend', buildCompactDataTableRowsHtml(groupConfig));
     target.next += tracks.length;
     if (target.next >= target.group.tracks.length) pending.shift();
-    onBatch();
+    onBatch({ complete: !pending.length });
     if (pending.length) scheduleBrowserAnimationFrame(appendBatch);
   };
   if (pending.length) scheduleBrowserAnimationFrame(appendBatch);

@@ -1012,8 +1012,10 @@ function openNonAlbumModal(options = {}) {
       } else if (!hydrationPending && populated) {
         // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
         renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
-          onBatch: () => {
+          // Rows are built with the current playback state; whole-table refreshes run once at the end.
+          onBatch: ({ complete }) => {
             attachSharedPlayer();
+            if (!complete) return;
             nonAlbumTrackSelectionController?.refreshRows?.();
             if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
           },

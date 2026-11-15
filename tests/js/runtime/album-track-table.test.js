@@ -736,7 +736,7 @@ test('large track tables paint a first screen of rows, then append the rest in p
   const batches = [];
 
   context.renderAlbumTrackTableProgressively(container, { groups, idPrefix: 'loose-track-table', forceGroupLabels: true }, {
-    initialRows: 60, batchRows: 40, onBatch: () => batches.push(rowCount(bodies.get('#loose-track-table-tracks-2 .compact-data-table-body').appended.join(''))),
+    initialRows: 60, batchRows: 40, onBatch: ({ complete }) => batches.push([rowCount(bodies.get('#loose-track-table-tracks-2 .compact-data-table-body').appended.join('')), complete]),
   });
 
   assert.equal(rowCount(container.innerHTML), 60, 'the first paint holds only the first screen of rows');
@@ -746,7 +746,7 @@ test('large track tables paint a first screen of rows, then append the rest in p
   runFrames();
   const appended = bodies.get('#loose-track-table-tracks-2 .compact-data-table-body').appended;
   assert.deepEqual(appended.map(rowCount), [40, 40, 10]);
-  assert.deepEqual(batches, [40, 80, 90]);
+  assert.deepEqual(batches, [[40, false], [80, false], [90, true]], 'only the last batch reports completion');
   assert.match(appended[0], /album-track-table__number">11</, 'appended rows keep their position in the group');
   assert.match(appended[2], /Song 150</);
   assert.equal(bodies.has('#loose-track-table-tracks-1 .compact-data-table-body'), false, 'complete groups are not touched');

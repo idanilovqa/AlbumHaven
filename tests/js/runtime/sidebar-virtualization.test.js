@@ -292,6 +292,14 @@ test('bounded interaction: sidebar window scroll renders only the new window at 
       querySelectorAll() { counter.count('domQueries'); return []; }
     }
     const sidebarList = new CountedElement();
+    // The structure signature is written to the list on every window change, so its bytes count.
+    sidebarList.dataset = new Proxy({}, {
+      set(target, property, value) {
+        if (property === 'sidebarStructureSignature') counter.count('markupBytes', String(value).length);
+        target[property] = value;
+        return true;
+      },
+    });
     const sidebar = new CountedElement();
     sidebar.clientHeight = 720;
     sidebarList.closest = selector => (selector === '.sidebar' ? sidebar : null);
@@ -336,6 +344,7 @@ test('bounded interaction: sidebar window scroll renders only the new window at 
     });
     const indexes = [...sidebarList.markup.matchAll(/data-sidebar-virtual-index="(\d+)"/g)].map(match => Number(match[1]));
     assert.deepEqual([indexes[0], indexes.length], [160, 160], 'the scroll must mount the window that holds row 200');
+    assert.ok(sidebarList.dataset.sidebarStructureSignature.length <= 32, 'the signature names the list, not its artists');
     return work;
   };
   await measureScalePair({

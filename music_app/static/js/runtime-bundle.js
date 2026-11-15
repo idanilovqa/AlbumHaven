@@ -4315,20 +4315,28 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
 }
 
 // Sidebar artist lists are replaced, never edited in place, so each list's
-// signature is computed once and window scrolls reuse it instead of
-// rescanning every artist.
-const sidebarArtistSignatures = new WeakMap();
-function sidebarArtistSignature(sidebarArtists) {
-  let signature = sidebarArtistSignatures.get(sidebarArtists);
-  if (signature === undefined) {
-    signature = sidebarArtists.map((item) => [
+// content is read once and named by a short generation that window scrolls
+// reuse instead of rescanning or comparing every artist. A replacement list
+// with the same content keeps its generation, so it re-renders nothing.
+const sidebarArtistGenerations = new WeakMap();
+let lastSidebarArtistContent = null;
+let lastSidebarArtistGeneration = 0;
+function sidebarArtistGeneration(sidebarArtists) {
+  let generation = sidebarArtistGenerations.get(sidebarArtists);
+  if (generation === undefined) {
+    const content = sidebarArtists.map((item) => [
       String(item?.artist || ''),
       String(item?.artist_display || item?.artist || ''),
       String(item?.count ?? ''),
     ].join('\u001f')).join('\u001e');
-    sidebarArtistSignatures.set(sidebarArtists, signature);
+    if (content !== lastSidebarArtistContent) {
+      lastSidebarArtistContent = content;
+      lastSidebarArtistGeneration += 1;
+    }
+    generation = lastSidebarArtistGeneration;
+    sidebarArtistGenerations.set(sidebarArtists, generation);
   }
-  return signature;
+  return generation;
 }
 
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
@@ -4336,11 +4344,10 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
-  const artistSignature = sidebarArtistSignature(sidebarArtists);
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
+  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -7332,16 +7339,20 @@ function syncGalleryBarSearchVisibility() {
 }
 
 // Scroll-independent bar inputs from the last full chrome update, keyed by the
-// view, its group lists, and the (small) filter state, so a scroll frame never
-// re-filters or re-counts the loaded gallery.
+// view, its group lists, and each filter field, so a scroll frame never
+// re-filters or re-counts the loaded gallery. Filter fields are compared one by
+// one because they are assigned in place; their arrays are always replaced.
 let galleryMainChromeInputs = null;
 
 function galleryMainChromeToken() {
   const view = state.view || {};
+  const filters = ensureGalleryMainState();
   return [
     view, view.artist_groups, view.artist_groups?.length,
     view.primary_artist_groups?.length, view.family_artist_groups?.length,
-    JSON.stringify(ensureGalleryMainState()),
+    filters, filters.sources?.main_library, filters.sources?.new_arrivals, filters.sources?.hoard,
+    filters.view, filters.showFeaturedOn, filters.showSplitAlbums, filters.familySelectionExplicit,
+    filters.albumTypes, filters.familyArtists, filters.familyArtistOrder,
   ];
 }
 

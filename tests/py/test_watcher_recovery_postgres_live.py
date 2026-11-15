@@ -97,36 +97,14 @@ def live_watcher_database(tmp_path_factory):
         with isolatedPostgres._connect(setup_url) as connection:
             account_id = int(
                 connection.execute(
-                    """
-                    insert into app.accounts (
-                      display_name, username_display, username_normalized,
-                      contact_email, contact_email_normalized, account_kind, is_active
-                    ) values (
-                      'Watcher Recovery', 'watcher-recovery', 'watcher-recovery',
-                      'watcher-recovery@example.invalid',
-                      'watcher-recovery@example.invalid', 'managed', true
-                    ) returning id
-                    """
-                ).fetchone()["id"]
-            )
-            account_id = int(
-                connection.execute(
                     "select account_id from app.bootstrap_owners "
                     "where owner_key = 'local-bootstrap-owner'"
                 ).fetchone()["account_id"]
             )
-            connection.execute(
-                "update library.libraries set name = 'Watcher Recovery Seed' "
-                "where owner_account_id = %s and name = 'Local Library' "
-                "and library_kind = 'local'",
-                (account_id,),
-            )
             library_id = int(
                 connection.execute(
-                    """
-                    insert into library.libraries (owner_account_id, name, library_kind)
-                    values (%s, 'Local Library', 'local') returning id
-                    """,
+                    "select id from library.libraries "
+                    "where owner_account_id=%s and name='Local Library' and library_kind='local'",
                     (account_id,),
                 ).fetchone()["id"]
             )
@@ -1559,11 +1537,14 @@ def test_repair_waits_for_captured_cross_root_barrier_peer_generation(
 def test_internal_watcher_helpers_are_denied_to_every_runtime_role(
     live_watcher_database,
 ):
+    import psycopg
+
     scope = live_watcher_database
     helper_signatures = (
         "library.local_root_relative_path(text,text)",
         "library.reject_watcher_incident_identity_change()",
         "library.prepare_legacy_watcher_rollback(timestamptz)",
+        "library.dispatch_watcher_generation_internal(bigint,timestamptz,bigint[],bigint[])",
     )
     with isolatedPostgres._connect(scope.setup_url) as connection:
         for signature in helper_signatures:
@@ -1580,6 +1561,31 @@ def test_internal_watcher_helpers_are_denied_to_every_runtime_role(
                     "select has_function_privilege(%s, %s, 'EXECUTE') as allowed",
                     (role, signature),
                 ).fetchone()["allowed"] is False
+
+    now = datetime.now(timezone.utc)
+    accepted = _repository(scope.app_url).accept_event(
+        library_id=scope.library_id, event=_created(scope, "root-a", "private-dispatch.flac"), accepted_at=now,
+    )
+    for role, database_url in (
+        ("album_haven_app", scope.app_url),
+        ("album_haven_worker", scope.worker_url),
+        ("album_haven_readonly", scope.readonly_url),
+    ):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with isolatedPostgres._connect(database_url) as connection:
+                isolatedPostgres._assert_connected_role(connection, role)
+                connection.execute(
+                    "select library.dispatch_watcher_generation_internal(%s,%s,null::bigint[],null::bigint[])",
+                    (accepted.generation_id, now),
+                ).fetchone()
+    recovery = _repository(scope.worker_url)
+    assert recovery.dispatch_ready(now=now, limit=32) == (accepted.generation_id,)
+    assert recovery.dispatch_ready(now=now, limit=32) == ()
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(accepted.generation_id),),
+        ).fetchone()["count"] == 1
 
 
 def test_worker_startup_preflight_requires_live_watcher_functions_and_grants(
@@ -1928,6 +1934,499 @@ def test_acceptance_denies_an_inactive_root_without_creating_lane_or_intent(
             (scope.library_id, root_database_id, scope.library_id),
         ).fetchone()
     assert state == {"lane_count": 0, "intent_count": 0}
+
+
+@pytest.fixture
+def watcher_cover_atomic_case(live_watcher_database):
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    publication_time = now + timedelta(seconds=4)
+    private_path = str(scope.root_paths["root-a"] / "Atomic" / "01.flac")
+    old_cover = {
+        "cover_path": str(scope.root_paths["root-a"] / "Atomic" / "cover-4.jpg"),
+        "cover_revision": "cover-4", "cover_selection_origin": "automatic",
+        "local_cover_width": 100, "local_cover_height": 200,
+    }
+    observed_cover = {
+        **old_cover, "cover_path": str(scope.root_paths["root-a"] / "Atomic" / "cover-5.jpg"),
+        "cover_revision": "cover-5", "local_cover_width": 300, "local_cover_height": 400,
+    }
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        artist_id = connection.execute(
+            "insert into library.local_artists(library_id,artist_key,name) "
+            "values(%s,'artist','Artist') returning id", (scope.library_id,),
+        ).fetchone()["id"]
+        album_id = connection.execute(
+            "insert into library.local_albums(library_id,artist_id,album_key,title,cover_path,metadata) "
+            "values(%s,%s,'artist::atomic','Atomic',%s,%s::jsonb) returning id",
+            (scope.library_id, artist_id, old_cover["cover_path"], json.dumps(old_cover)),
+        ).fetchone()["id"]
+        track_id = connection.execute(
+            "insert into library.local_tracks(library_id,album_id,artist_id,track_key,title) "
+            "values(%s,%s,%s,'artist::atomic::01','Before') returning id",
+            (scope.library_id, album_id, artist_id),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.local_track_files(track_id,library_root_id,private_path,metadata) "
+            "values(%s,%s,%s,%s::jsonb)",
+            (track_id, scope.root_database_ids["root-a"], private_path, json.dumps({"scan_cache": {
+                "source": "runtime_scan_cache", "stale": False,
+                "file_entry": {"path": private_path, "title": "Before", **old_cover},
+            }})),
+        )
+        connection.execute(
+            "insert into library.cover_mutation_state(library_id,cover_mutation_revision) values(%s,4) "
+            "on conflict(library_id) do update set cover_mutation_revision=4", (scope.library_id,),
+        )
+    app_recovery = _repository(scope.app_url)
+    accepted = app_recovery.accept_event(
+        library_id=scope.library_id, event=_moved(scope, "root-a", "root-b", "current.flac"),
+        accepted_at=now + timedelta(milliseconds=1),
+    )
+    assert app_recovery.accept_event(
+        library_id=scope.library_id, event=_created(scope, "root-a", "Atomic/01.flac"),
+        accepted_at=now + timedelta(milliseconds=2),
+    ).generation_id == accepted.generation_id
+    claim = _claim_watcher_generation(
+        scope, accepted.generation_id, now=now + timedelta(seconds=1), worker_id="watcher-cover-atomic",
+    )
+    dirty = app_recovery.mark_dirty(
+        library_id=scope.library_id, logical_root_id="root-b", reason_code="overflow",
+        observed_at=now + timedelta(milliseconds=1500),
+    )
+    successor = app_recovery.accept_event(
+        library_id=scope.library_id, event=_moved(scope, "root-a", "root-b", "successor.flac"),
+        accepted_at=now + timedelta(seconds=2),
+    )
+    assert successor.generation_id != accepted.generation_id
+    assert successor.generation_id == dirty.generation_id
+    repair_id = _seed_scanning_repair(scope, now=now + timedelta(seconds=3), logical_root_id="root-b")
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute("update library.watcher_repairs set state='catch_up' where id=%s", (repair_id,))
+        connection.execute(
+            "insert into library.watcher_generation_repairs(generation_id,repair_id,library_id,created_at) "
+            "values(%s,%s,%s,%s)", (accepted.generation_id, repair_id, scope.library_id, now),
+        )
+        participants = connection.execute(
+            "select root_id,accepted_sequence_upper from library.watcher_generation_participants "
+            "where generation_id=%s order by root_id", (accepted.generation_id,),
+        ).fetchall()
+        assert {row["root_id"] for row in participants} == {
+            scope.root_database_ids["root-a"], scope.root_database_ids["root-b"],
+        }
+        assert connection.execute(
+            "select root_id from library.watcher_generation_participants where generation_id=%s order by root_id",
+            (successor.generation_id,),
+        ).fetchall() == [{"root_id": row["root_id"]} for row in participants]
+        barrier_participants = connection.execute(
+            "select barrier_id,root_id,accepted_sequence from library.watcher_barrier_participants "
+            "where generation_id=%s order by root_id", (accepted.generation_id,),
+        ).fetchall()
+        assert len(barrier_participants) == 2
+        assert len({row["barrier_id"] for row in barrier_participants}) == 1
+        assert {row["root_id"] for row in barrier_participants} == {row["root_id"] for row in participants}
+        barrier_id = barrier_participants[0]["barrier_id"]
+        assert connection.execute(
+            "select completed_at from library.watcher_barriers where id=%s", (barrier_id,),
+        ).fetchone()["completed_at"] is None
+        queued = connection.execute(
+            "select job_id,watcher_job_linked_at,captured_cover_mutation_revision,state "
+            "from library.targeted_reconciliation_intents where id=%s", (successor.generation_id,),
+        ).fetchone()
+        assert queued == {
+            "job_id": None, "watcher_job_linked_at": None, "captured_cover_mutation_revision": 4, "state": "accepted",
+        }
+        assert connection.execute(
+            "select count(*) as participants,bool_and(next_eligible_at<=%s) as due, "
+            "bool_and(successor_generation_id=%s) as queued,bool_and(running_generation_id=%s) as source_running "
+            "from library.watcher_lanes where library_id=%s",
+            (publication_time, successor.generation_id, accepted.generation_id, scope.library_id),
+        ).fetchone() == {"participants": 2, "due": True, "queued": True, "source_running": True}
+    inventory = {
+        "artists": [{"artist_key": "artist", "name": "Artist", "sort_name": "Artist", "metadata": {}}],
+        "albums": [{"artist_key": "artist", "album_key": "artist::atomic", "title": "Atomic",
+                    "cover_path": observed_cover["cover_path"],
+                    "metadata": {**observed_cover, "noncover_marker": "published"}}],
+        "featured_artists": [],
+        "tracks": [{"album_key": "artist::atomic", "artist_key": "artist", "track_key": "artist::atomic::01",
+                    "title": "After", "disc_number": 1, "track_number": 1, "duration_seconds": 180, "metadata": {}}],
+        "track_files": [{"track_key": "artist::atomic::01", "private_path": private_path,
+                         "relative_path": str(Path("Atomic") / "01.flac"), "file_size_bytes": 1024,
+                         "modified_at_epoch": 1788710400.0,
+                         "metadata": {"scan_cache": {"source": "runtime_scan_cache", "stale": False,
+                             "file_entry": {"path": private_path, "title": "After", **observed_cover}}}}],
+    }
+    scans = PostgresScanJobRepository(database_url=scope.worker_url, connect_to_database=isolatedPostgres._connect)
+    claimed_intent = scans.load_claimed_targeted_reconciliation(
+        job_id=claim.job_id, worker_id=claim.worker_id, lease_token=claim.lease_token,
+    )
+    assert claimed_intent.watcher_generation_kind == "exact"
+    assert Path(private_path) in claimed_intent.request.paths
+    assert claimed_intent.captured_cover_mutation_revision == 4
+
+    def publish():
+        return scans.publish_claimed_targeted_reconciliation(
+            claim=claim, intent_id=accepted.generation_id, inventory=inventory, stale_scopes=(),
+            now=publication_time,
+        )
+
+    return SimpleNamespace(
+        scope=scope, publish=publish, generation_id=accepted.generation_id, claim=claim,
+        successor_id=successor.generation_id, repair_id=repair_id, participants=participants,
+        album_id=album_id, track_id=track_id, barrier_id=barrier_id,
+        private_path=private_path, observed_cover=observed_cover,
+        inventory=inventory, publication_time=publication_time,
+    )
+
+
+def _watcher_cover_atomic_snapshot(case):
+    scope = case.scope
+    tables = (
+        "cover_mutation_state", "library_roots", "local_artists", "local_albums", "local_album_featured_artists",
+        "local_tracks", "targeted_reconciliation_intents",
+        "watcher_lanes", "watcher_generation_participants", "watcher_barriers", "watcher_barrier_participants",
+        "watcher_incidents", "watcher_repairs", "watcher_repair_roots", "watcher_generation_repairs",
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        result = {table: connection.execute(
+            f"select to_jsonb(owned) as value from library.{table} owned where library_id=%s order by 1",
+            (scope.library_id,),
+        ).fetchall() for table in tables}
+        result["library"] = connection.execute(
+            "select to_jsonb(owned) as value from library.libraries owned where id=%s", (scope.library_id,),
+        ).fetchall()
+        result["files"] = connection.execute(
+            "select to_jsonb(file) as value from library.local_track_files file "
+            "join library.local_tracks track on track.id=file.track_id where track.library_id=%s order by file.id",
+            (scope.library_id,),
+        ).fetchall()
+        for table in ("targeted_reconciliation_intent_paths", "targeted_reconciliation_intent_moves"):
+            result[table] = connection.execute(
+                f"select to_jsonb(owned) as value from library.{table} owned "
+                "join library.targeted_reconciliation_intents intent on intent.id=owned.intent_id "
+                "where intent.library_id=%s order by 1", (scope.library_id,),
+            ).fetchall()
+        result["jobs"] = connection.execute(
+            "select to_jsonb(job) as value from ops.jobs job where library_id=%s order by id", (scope.library_id,),
+        ).fetchall()
+        return result
+
+
+def test_targeted_cover_publication_atomically_completes_watcher_and_promotes_same_scope_successor(watcher_cover_atomic_case):
+    case = watcher_cover_atomic_case
+    scope = case.scope
+
+    published = case.publish()
+
+    assert published["publication_won"] is True
+    assert published["cover_publication_stale"] is False
+    assert published["cover_mutation_revision"] == 5
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        album = connection.execute(
+            "select cover_path,metadata from library.local_albums where id=%s", (case.album_id,),
+        ).fetchone()
+        entry = connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' as entry from library.local_track_files where private_path=%s",
+            (case.private_path,),
+        ).fetchone()["entry"]
+        assert album["cover_path"] == case.observed_cover["cover_path"]
+        assert all(album["metadata"][key] == value for key, value in case.observed_cover.items())
+        assert all(entry[key] == value for key, value in case.observed_cover.items())
+        assert album["metadata"]["noncover_marker"] == "published"
+        assert entry["title"] == "After"
+        assert connection.execute(
+            "select title from library.local_tracks where id=%s", (case.track_id,),
+        ).fetchone()["title"] == "After"
+        assert connection.execute(
+            "select library.read_cover_mutation_revision(%s) as revision", (scope.library_id,),
+        ).fetchone()["revision"] == 5
+        assert connection.execute(
+            "select watcher_completed_at is not null as completed,captured_cover_mutation_revision "
+            "from library.targeted_reconciliation_intents where id=%s", (case.generation_id,),
+        ).fetchone() == {"completed": True, "captured_cover_mutation_revision": 4}
+        assert connection.execute(
+            "select completed_at is not null as completed from library.watcher_barriers where id=%s", (case.barrier_id,),
+        ).fetchone()["completed"] is True
+        lanes = connection.execute(
+            "select root_id,applied_sequence,running_generation_id,running_job_id,successor_generation_id "
+            "from library.watcher_lanes where library_id=%s order by root_id", (scope.library_id,),
+        ).fetchall()
+        assert {row["root_id"]: row["applied_sequence"] for row in lanes} == {
+            row["root_id"]: row["accepted_sequence_upper"] for row in case.participants
+        }
+        assert connection.execute(
+            "select state,completed_at from library.watcher_repairs where id=%s", (case.repair_id,),
+        ).fetchone() == {"state": "catch_up", "completed_at": None}
+        assert connection.execute(
+            "select repair_root.captured_accepted_sequence=lane.accepted_sequence as captured_sequence, "
+            "repair_root.captured_dirty_generation=lane.dirty_generation as captured_dirty, "
+            "repair_root.captured_accepted_sequence>lane.applied_sequence as pending_sequence "
+            "from library.watcher_repair_roots repair_root join library.watcher_lanes lane "
+            "on lane.library_id=repair_root.library_id and lane.root_id=repair_root.root_id "
+            "where repair_root.repair_id=%s", (case.repair_id,),
+        ).fetchone() == {"captured_sequence": True, "captured_dirty": True, "pending_sequence": True}
+        assert connection.execute(
+            "select generation_id from library.watcher_generation_repairs where repair_id=%s and generation_id=%s",
+            (case.repair_id, case.successor_id),
+        ).fetchone() == {"generation_id": case.successor_id}
+        successor = connection.execute(
+            "select job_id,watcher_job_linked_at,captured_cover_mutation_revision "
+            "from library.targeted_reconciliation_intents where id=%s", (case.successor_id,),
+        ).fetchone()
+        assert successor["job_id"] is not None
+        assert successor["watcher_job_linked_at"] is not None
+        assert successor["captured_cover_mutation_revision"] == 4
+        assert all(row["running_generation_id"] == case.successor_id for row in lanes)
+        assert all(row["running_job_id"] == successor["job_id"] for row in lanes)
+        assert all(row["successor_generation_id"] is None for row in lanes)
+        jobs = connection.execute(
+            "select id,kind,state,parameters from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(case.successor_id),),
+        ).fetchall()
+        assert jobs == [{"id": successor["job_id"], "kind": "targeted_reconciliation", "state": "queued",
+                         "parameters": {"intent_id": case.successor_id}}]
+    committed = _watcher_cover_atomic_snapshot(case)
+
+    replay = case.publish()
+
+    for field in ("inventory_mutation_revision", "cover_publication_stale", "cover_mutation_revision"):
+        assert replay[field] == published[field]
+    assert _watcher_cover_atomic_snapshot(case) == committed
+
+
+def test_targeted_cover_publication_rolls_back_after_same_scope_successor_promotion(watcher_cover_atomic_case):
+    import psycopg
+    from psycopg import sql
+
+    case = watcher_cover_atomic_case
+    scope = case.scope
+    before = _watcher_cover_atomic_snapshot(case)
+    trigger_name = f"test_late_watcher_cover_{case.generation_id}"
+    function_name = sql.Identifier("library", trigger_name)
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(sql.SQL("""
+            create function {}() returns trigger language plpgsql as $body$
+            begin
+              if new.library_id={} and new.running_generation_id={}
+                 and old.running_generation_id is distinct from new.running_generation_id then
+                if not exists (
+                     select 1 from library.targeted_reconciliation_intents
+                     where id={} and watcher_completed_at is not null
+                       and committed_cover_mutation_revision=5
+                   ) or not exists (
+                     select 1 from library.watcher_barriers where id={} and completed_at is not null
+                   ) or not exists (
+                     select 1 from ops.jobs job
+                     join library.targeted_reconciliation_intents successor on successor.job_id=job.id
+                     where successor.id=new.running_generation_id and successor.watcher_job_linked_at is not null
+                       and job.id=new.running_job_id and job.state='queued'
+                       and job.idempotency_key='watcher-generation:' || successor.id::text
+                   ) or exists (
+                     select 1 from library.watcher_generation_participants participant
+                     join library.watcher_lanes lane on lane.library_id=participant.library_id
+                       and lane.root_id=participant.root_id
+                     where participant.generation_id=new.running_generation_id
+                       and (lane.running_generation_id is distinct from new.running_generation_id
+                         or lane.running_job_id is distinct from new.running_job_id
+                         or lane.successor_generation_id is not null)
+                   ) or not exists (
+                     select 1 from library.watcher_generation_repairs link
+                     join library.watcher_repairs repair on repair.id=link.repair_id
+                     where link.repair_id={} and link.generation_id=new.running_generation_id
+                       and repair.state='catch_up'
+                   ) then
+                  raise exception 'watcher cover injection ran before complete successor promotion';
+                end if;
+                raise exception 'forced late watcher cover rollback';
+              end if;
+              return new;
+            end;
+            $body$
+        """).format(
+            function_name, sql.Literal(scope.library_id), sql.Literal(case.successor_id),
+            sql.Literal(case.generation_id), sql.Literal(case.barrier_id), sql.Literal(case.repair_id),
+        ))
+        connection.execute(sql.SQL(
+            "create trigger {} after update of running_generation_id on library.watcher_lanes "
+            "for each row execute function {}()"
+        ).format(sql.Identifier(trigger_name), function_name))
+    try:
+        with pytest.raises(psycopg.errors.RaiseException, match="forced late watcher cover rollback"):
+            case.publish()
+        assert _watcher_cover_atomic_snapshot(case) == before
+    finally:
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute(sql.SQL(
+                "drop trigger if exists {} on library.watcher_lanes"
+            ).format(sql.Identifier(trigger_name)))
+            connection.execute(sql.SQL("drop function if exists {}()").format(function_name))
+
+    published = case.publish()
+    assert published["publication_won"] is True
+    assert published["cover_mutation_revision"] == 5
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(case.successor_id),),
+        ).fetchone()["count"] == 1
+
+
+def _expand_watcher_cover_successor_to_root_c(case):
+    scope = case.scope
+    assert scope.root_database_ids["root-c"] not in {row["root_id"] for row in case.participants}
+    expanded = _repository(scope.app_url).accept_event(
+        library_id=scope.library_id, event=_moved(scope, "root-b", "root-c", "expanded.flac"),
+        accepted_at=case.publication_time - timedelta(milliseconds=500),
+    )
+    assert expanded.generation_id == case.successor_id
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        expanded_roots = connection.execute(
+            "select participant.root_id,lane.next_eligible_at<=%s as due "
+            "from library.watcher_generation_participants participant join library.watcher_lanes lane "
+            "on lane.library_id=participant.library_id and lane.root_id=participant.root_id "
+            "where participant.generation_id=%s order by participant.root_id",
+            (case.publication_time, case.successor_id),
+        ).fetchall()
+        assert {row["root_id"] for row in expanded_roots} == {
+            scope.root_database_ids[root] for root in ("root-a", "root-b", "root-c")
+        }
+        assert all(row["due"] for row in expanded_roots)
+
+    return expanded_roots
+
+
+def test_targeted_cover_publication_defers_expanded_successor_without_locking_outer_lane(watcher_cover_atomic_case):
+    from contextlib import contextmanager
+
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    case = watcher_cover_atomic_case
+    scope = case.scope
+    expanded_roots = _expand_watcher_cover_successor_to_root_c(case)
+
+    @contextmanager
+    def bounded_connection(database_url):
+        with isolatedPostgres._connect(database_url) as connection:
+            with connection.transaction():
+                connection.execute("set local lock_timeout='1s'")
+                connection.execute("set local statement_timeout='10s'")
+                yield connection
+
+    scans = PostgresScanJobRepository(database_url=scope.worker_url, connect_to_database=bounded_connection)
+    with isolatedPostgres._connect(scope.setup_url) as outer_lane_lock:
+        outer_lane_lock.execute(
+            "select root_id from library.watcher_lanes where library_id=%s and root_id=%s for update",
+            (scope.library_id, scope.root_database_ids["root-c"]),
+        ).fetchone()
+
+        published = scans.publish_claimed_targeted_reconciliation(
+            claim=case.claim, intent_id=case.generation_id, inventory=case.inventory, stale_scopes=(),
+            now=case.publication_time,
+        )
+
+        assert published["publication_won"] is True
+        assert published["cover_publication_stale"] is False
+        assert published["cover_mutation_revision"] == 5
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            assert connection.execute(
+                "select watcher_completed_at is not null as completed "
+                "from library.targeted_reconciliation_intents where id=%s", (case.generation_id,),
+            ).fetchone()["completed"] is True
+            assert connection.execute(
+                "select completed_at is not null as completed from library.watcher_barriers where id=%s",
+                (case.barrier_id,),
+            ).fetchone()["completed"] is True
+            assert connection.execute(
+                "select job_id,watcher_job_linked_at from library.targeted_reconciliation_intents where id=%s",
+                (case.successor_id,),
+            ).fetchone() == {"job_id": None, "watcher_job_linked_at": None}
+    recovery = _repository(scope.worker_url)
+    assert recovery.dispatch_ready(now=case.publication_time, limit=32) == (case.successor_id,)
+    assert recovery.dispatch_ready(now=case.publication_time, limit=32) == ()
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        successor = connection.execute(
+            "select job_id,captured_cover_mutation_revision from library.targeted_reconciliation_intents where id=%s",
+            (case.successor_id,),
+        ).fetchone()
+        assert successor["job_id"] is not None
+        assert successor["captured_cover_mutation_revision"] == 4
+        lanes = connection.execute(
+            "select root_id,running_generation_id,running_job_id,successor_generation_id "
+            "from library.watcher_lanes where library_id=%s order by root_id", (scope.library_id,),
+        ).fetchall()
+        assert {row["root_id"] for row in lanes} == {row["root_id"] for row in expanded_roots}
+        assert all(row["running_generation_id"] == case.successor_id for row in lanes)
+        assert all(row["running_job_id"] == successor["job_id"] for row in lanes)
+        assert all(row["successor_generation_id"] is None for row in lanes)
+        assert connection.execute(
+            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(case.successor_id),),
+        ).fetchone()["count"] == 1
+        assert connection.execute(
+            "select generation_id from library.watcher_generation_repairs where repair_id=%s and generation_id=%s",
+            (case.repair_id, case.successor_id),
+        ).fetchone() == {"generation_id": case.successor_id}
+        assert connection.execute(
+            "select library.read_cover_mutation_revision(%s) as revision", (scope.library_id,),
+        ).fetchone()["revision"] == 5
+
+
+def test_private_watcher_dispatch_defers_without_prelocked_repair_proof(watcher_cover_atomic_case):
+    case = watcher_cover_atomic_case
+    scope = case.scope
+    expanded_roots = _expand_watcher_cover_successor_to_root_c(case)
+    root_ids = [row["root_id"] for row in expanded_roots]
+    assert case.publish()["publication_won"] is True
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select successor.job_id,repair.state from library.watcher_generation_repairs link "
+            "join library.watcher_repairs repair on repair.id=link.repair_id "
+            "join library.targeted_reconciliation_intents successor on successor.id=link.generation_id "
+            "where link.repair_id=%s and link.generation_id=%s", (case.repair_id, case.successor_id),
+        ).fetchone() == {"job_id": None, "state": "catch_up"}
+    before = _watcher_cover_atomic_snapshot(case)
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        isolatedPostgres._assert_connected_role(connection, isolatedPostgres.SETUP_ROLE)
+        connection.execute(
+            "select root_id from library.watcher_lanes where library_id=%s and root_id=any(%s::bigint[]) "
+            "order by root_id for update", (scope.library_id, root_ids),
+        ).fetchall()
+
+        deferred = connection.execute(
+            "select library.dispatch_watcher_generation_internal(%s,%s,%s::bigint[],array[]::bigint[]) as job_id",
+            (case.successor_id, case.publication_time, root_ids),
+        ).fetchone()
+
+        assert deferred == {"job_id": None}
+    assert _watcher_cover_atomic_snapshot(case) == before
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute("select id from library.watcher_repairs where id=%s for update", (case.repair_id,)).fetchone()
+        connection.execute(
+            "select root_id from library.watcher_lanes where library_id=%s and root_id=any(%s::bigint[]) "
+            "order by root_id for update", (scope.library_id, root_ids),
+        ).fetchall()
+
+        promoted = connection.execute(
+            "select library.dispatch_watcher_generation_internal(%s,%s,%s::bigint[],%s::bigint[]) as job_id",
+            (case.successor_id, case.publication_time, root_ids, [case.repair_id]),
+        ).fetchone()
+
+        assert promoted["job_id"] is not None
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.jobs where subject_kind='targeted_reconciliation_intent' "
+            "and subject_ref=%s", (str(case.successor_id),),
+        ).fetchone()["count"] == 1
+        lanes = connection.execute(
+            "select root_id,running_generation_id,running_job_id from library.watcher_lanes "
+            "where library_id=%s order by root_id", (scope.library_id,),
+        ).fetchall()
+        assert {row["root_id"] for row in lanes} == set(root_ids)
+        assert all(row["running_generation_id"] == case.successor_id for row in lanes)
+        assert all(row["running_job_id"] == promoted["job_id"] for row in lanes)
 
 
 def test_cross_root_move_reserves_one_barrier_for_both_roots(live_watcher_database):

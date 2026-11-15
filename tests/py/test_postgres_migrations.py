@@ -529,6 +529,30 @@ def test_cover_consistency_worker_startup_requires_finalization_functions_and_gr
     assert f"grant execute on function {signature} to album_haven_worker" in sql
 
 
+def test_scoped_watcher_successor_migration_is_additive_and_preserves_public_contracts():
+    migration = MIGRATIONS_DIR / "0251_promote_scoped_watcher_successors.sql"
+    source = migration.read_text(encoding="utf-8")
+    assert source.splitlines()[:2] == [
+        "-- depends on: 0240_create_durable_watcher_recovery.sql",
+        "-- depends on: 0246_preserve_cover_selection_metadata.sql",
+    ]
+    sql = _normalized_sql(source)
+    assert re.findall(r"create or replace function ([a-z0-9_.]+)\(", sql) == [
+        "library.dispatch_watcher_generation_internal",
+        "library.dispatch_ready_watcher_generations",
+        "library.complete_watcher_generation",
+    ]
+    for name in ("library.dispatch_ready_watcher_generations", "library.complete_watcher_generation"):
+        replacement = sql.split(f"create or replace function {name}(", 1)[1].split("create or replace function", 1)[0]
+        assert replacement.split("language", 1)[0] == _watcher_function_sql(name).split("language", 1)[0]
+    assert "alter table" not in sql
+    assert "drop function" not in sql
+    compact = "".join(sql.split())
+    signature = "library.dispatch_watcher_generation_internal(bigint,timestamptz,bigint[],bigint[])"
+    for role in ("public", "album_haven_app", "album_haven_worker", "album_haven_readonly"):
+        assert f"revokeallonfunction{signature}from{role};" in compact
+
+
 def test_0128_is_the_exact_ordered_successor_to_0127():
     migration_names = sorted(
         path.name
@@ -536,7 +560,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
 
-    assert migration_names[-9:] == [
+    assert migration_names[-10:] == [
         "0242_preserve_full_scan_progress_on_restart.sql",
         "0243_close_cover_consistency.sql",
         "0244_preserve_newer_watcher_incident_presentation.sql",
@@ -546,6 +570,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         "0248_restore_authoritative_exception_clear.sql",
         "0249_create_problematic_files_projection.sql",
         "0250_restore_incomplete_album_contract.sql",
+        "0251_promote_scoped_watcher_successors.sql",
     ]
 
 
@@ -3604,7 +3629,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     # Migration numbers may have gaps, but each number has one owner.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-108:] == [
+    assert migration_names[-109:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -3713,6 +3738,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0248_restore_authoritative_exception_clear.sql",
         "0249_create_problematic_files_projection.sql",
         "0250_restore_incomplete_album_contract.sql",
+        "0251_promote_scoped_watcher_successors.sql",
     ]
 
 def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():

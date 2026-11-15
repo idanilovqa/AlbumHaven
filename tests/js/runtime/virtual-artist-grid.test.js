@@ -6732,3 +6732,40 @@ test('first touch scroll advances semantic ownership before it starts pagination
   assert.deepEqual(paginationOwnerGenerations, [1, 1]);
   scrollEl.dispatchEvent({ type: 'touchend', touches: [], target: scrollEl });
 });
+
+test('BI virtual grid scroll and wheel frames find the visible window by binary search at production scale', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  // One wheel intent plus one scroll event and the frame it renders, in the
+  // middle of an all-artists gallery.
+  const scrollFrame = async (artistCount) => {
+    const { context, scrollEl } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    const render = virtualGrid.render;
+    virtualGrid.render = () => {};
+    const groups = Array.from({ length: artistCount }, (_, index) => ({
+      artist: `Artist ${index}`,
+      albums: [{ key: `album-${index}`, name: `Album ${index}`, year: '2000' }],
+    }));
+    virtualGrid.setGroups([], [], groups, { preserveScroll: false });
+    virtualGrid.render = render;
+    const counter = createInteractionCounter();
+    virtualGrid.sections = countedCollection(virtualGrid.sections, counter);
+    scrollEl.scrollTop = virtualGrid.sections[Math.floor(artistCount / 2)].top;
+    virtualGrid.render();
+    return counter.measure(() => {
+      scrollEl.scrollTop += 300;
+      virtualGrid.onUserScrollIntent({ type: 'wheel' });
+      virtualGrid.onScroll();
+      virtualGrid.render();
+    });
+  };
+  const { large } = await measureScalePair({
+    id: 'js:runtime/virtual-artist-grid.js#VirtualArtistGrid.constructor',
+    small: 20,
+    large: 14000,
+    run: scrollFrame,
+    budgets: { itemsVisited: 40, requests: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 24 },
+  });
+  assert.ok(large.itemsVisited > 0);
+});

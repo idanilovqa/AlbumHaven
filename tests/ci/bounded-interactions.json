@@ -5869,14 +5869,62 @@
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.constructor:event:wheel"
       ],
       "owners": [
-        "music_app/static/js/runtime/virtual-artist-grid.js"
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-device-profiles.js",
+        "music_app/static/js/client-device-preferences.js",
+        "music_app/static/js/navigation-tree.js",
+        "music_app/static/js/runtime/alert-components.js",
+        "music_app/static/js/runtime/browser-dialog-helpers.js",
+        "music_app/static/js/runtime/compact-player-controller.js",
+        "music_app/static/js/runtime/core-state-and-helpers.js",
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/gallery-display-preference-helpers.js",
+        "music_app/static/js/runtime/gallery-main-components.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/gallery-main-state.js",
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/in-page-tabs.js",
+        "music_app/static/js/runtime/library-warning-ui.js",
+        "music_app/static/js/runtime/mobile-home.js",
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+        "music_app/static/js/runtime/notification-ui-helpers.js",
+        "music_app/static/js/runtime/player-loop-playback.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js",
+        "music_app/static/js/runtime/render-markup-helpers.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/status-ui-helpers.js",
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/view-value-helpers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js",
+        "music_app/static/js/selection-accent.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "itemsVisited": 40,
+        "requests": 0
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 24
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/virtual-artist-grid.test.js",
+      "testIdentity": "BI virtual grid scroll and wheel frames find the visible window by binary search at production scale",
+      "performanceTargets": [
+        "search-all-artists",
+        "search-browse"
+      ],
+      "rollback": "Revert the binary visible-window search in VirtualArtistGrid.render; retain this contract."
     },
     {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.onUserScrollIntent",

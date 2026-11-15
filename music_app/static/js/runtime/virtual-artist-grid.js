@@ -1727,7 +1727,18 @@ class VirtualArtistGrid {
     const effectiveBufferSections = String(state?.view?.selected_artist || '').trim()
       ? Math.max(3, configuredBufferSections)
       : configuredBufferSections;
-    let firstIndex = this.sections.findIndex((section) => section.bottom >= start);
+    // Sections are laid out top-down, so the first one reaching the window is
+    // found by binary search instead of scanning from the top of the gallery.
+    let firstIndex = -1;
+    for (let low = 0, high = this.sections.length - 1; low <= high;) {
+      const middle = (low + high) >> 1;
+      if (this.sections[middle].bottom >= start) {
+        firstIndex = middle;
+        high = middle - 1;
+      } else {
+        low = middle + 1;
+      }
+    }
     if (firstIndex === -1) firstIndex = 0;
     let lastIndex = this.sections.length - 1;
     for (let i = firstIndex; i < this.sections.length; i += 1) {

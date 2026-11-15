@@ -78,6 +78,9 @@ for (const [name, mutate, expected] of [
   ['skipped contract', reg => { reg.interactions[0].skip = true; }, /exemption field is not allowed/],
   ['library-scale operation without reason', reg => { reg.libraryScaleOperations = [{ operation: 'py:music_app/services/relations.py#build' }]; }, /must give a reason/],
   ['query in endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/view-data?surface=home'], forbidden: [] }; }, /without query/],
+  ['bare slash wildcard endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/home-data', '/*'], forbidden: [] }; }, /endpoint \/\* is a bare wildcard/],
+  ['nested bare wildcard endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/*/*'], forbidden: [] }; }, /endpoint \/\*\/\* is a bare wildcard/],
+  ['star endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['*'], forbidden: [] }; }, /endpoint \* is a bare wildcard/],
 ]) {
   test(`rejects ${name}`, () => {
     const candidate = registry([contractEntry()]);
@@ -112,12 +115,27 @@ test('a static proof with reachable hazards requires a runtime contract', () => 
   assert.match(errors.join('\n'), /1 reachable hazard\(s\) need a runtime contract \(forEach at .*:9\)/);
 });
 
-test('a contract entry must own every file where its hazards live', () => {
+test('a contract covers hazards in helper files without listing them as owners', () => {
   const errors = validateInventory(registry([contractEntry()]), {
     entrypoints: [entrypoint()],
     hazards: [{ entrypoint: KEY, rule: 'BI-01', operation: 'forEach', path: 'music_app/static/js/runtime/helpers.js', line: 2, reject: false, via: ['scan'] }],
   });
-  assert.match(errors.join('\n'), /hazard owner music_app\/static\/js\/runtime\/helpers\.js must be listed in owners/);
+  assert.deepEqual(errors, []);
+});
+
+test('a change to a file hosting a reachable hazard selects the contract', () => {
+  const helper = 'music_app/static/js/runtime/helpers.js';
+  const discovery = { hazards: [{ entrypoint: KEY, path: helper }] };
+  const reg = registry([contractEntry()]);
+  assert.deepEqual(interactionsForPaths(reg, [helper], discovery), ['BI-H01-loose-track-drag']);
+  assert.deepEqual(interactionsForPaths(reg, [helper]), []);
+  assert.deepEqual(interactionsForPaths(reg, ['music_app/static/js/runtime/other.js'], discovery), []);
+});
+
+test('bare wildcards are recognized by segment, not by containing a star', () => {
+  const { isBareWildcard } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  assert.deepEqual(['/*', '*', '/*/*', '/**'].map(isBareWildcard), [true, true, true, true]);
+  assert.deepEqual(['/', '/albums/*', '/utilities/save-task/*'].map(isBareWildcard), [false, false, false]);
 });
 
 test('request ownership allows declared endpoints and rejects others', () => {
@@ -165,9 +183,35 @@ test('sync registers new entrypoints, drops stale ones, and keeps reviewed field
   const { registry: synced, added, removed } = syncRegistry(registry([reviewed]), discovered);
   assert.deepEqual(removed, [`js:${OWNER}#install:event:stale`]);
   assert.deepEqual(added, [`js:${OWNER}#install:request:fetch`, `js:${OWNER}#openMenu:event:click`]);
-  const [install, openMenu] = synced.interactions;
-  assert.deepEqual(install.entrypoints, [KEY, `js:${OWNER}#install:request:fetch`]);
+  const [install, installRequest, openMenu] = synced.interactions;
+  // A contract never absorbs an entrypoint its budgets did not measure.
+  assert.deepEqual(install.entrypoints, [KEY]);
   assert.deepEqual(install.requestOwnership, { allowed: ['/home-data'], forbidden: ['/view-data'] });
   assert.equal(install.proof, 'contract');
+  assert.deepEqual([installRequest.id, installRequest.proof, installRequest.entrypoints], [
+    'js:runtime/album-track-table.js#install#2', 'static', [`js:${OWNER}#install:request:fetch`],
+  ]);
+  assert.deepEqual(installRequest.requestOwnership, { allowed: [], forbidden: [] });
   assert.deepEqual([openMenu.id, openMenu.proof, openMenu.workClass], ['js:runtime/album-track-table.js#openMenu', 'static', 'constant']);
+});
+
+test('sync never grants endpoints, so a synced request fails validation until its owner is reviewed', () => {
+  const { syncRegistry } = require('../../scripts/ci/bounded-interaction-registry-sync.cjs');
+  const requestKey = `js:${OWNER}#openHome:request:fetch`;
+  const request = { key: requestKey, language: 'javascript', path: OWNER, owner: 'openHome', kind: 'request', trigger: 'fetch', line: 3, targets: [{ target: '/home-data', line: 3 }] };
+  const { registry: synced } = syncRegistry(registry([]), [request]);
+  assert.deepEqual(synced.interactions[0].requestOwnership, { allowed: [], forbidden: [] });
+  assert.match(validateInventory(synced, { entrypoints: [request], hazards: [] }).join('\n'), /needs requestOwnership\.allowed/);
+});
+
+test('sync adds a reviewable empty endpoint list when a request joins a static entry', () => {
+  const { syncRegistry } = require('../../scripts/ci/bounded-interaction-registry-sync.cjs');
+  const id = 'js:runtime/album-track-table.js#openHome';
+  const click = { key: `js:${OWNER}#openHome:event:click`, language: 'javascript', path: OWNER, owner: 'openHome', kind: 'event', trigger: 'click' };
+  const request = { key: `js:${OWNER}#openHome:request:fetch`, language: 'javascript', path: OWNER, owner: 'openHome', kind: 'request', trigger: 'fetch', targets: [{ target: '/home-data', line: 3 }] };
+  const existing = { id, action: 'Open Home', entrypoints: [click.key], owners: [OWNER], rules: ['BI-03'], workClass: 'constant', proof: 'static' };
+  const { registry: synced } = syncRegistry(registry([existing]), [click, request]);
+  assert.deepEqual(synced.interactions.map(entry => [entry.id, entry.entrypoints, entry.requestOwnership]), [
+    [id, [click.key, request.key], { allowed: [], forbidden: [] }],
+  ]);
 });

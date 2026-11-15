@@ -2,11 +2,13 @@
 
 // Keeps tests/ci/bounded-interactions.json aligned with discovery without
 // discarding reviewed entries: newly discovered entrypoints join their owner's
-// entry (or a new static entry), stale entrypoints are removed, and nothing an
-// author wrote (proof, budgets, contracts, endpoint ownership) is rewritten.
-// New entries are proposals; the validator still decides whether they hold.
+// static entry (never a contract entry, whose budgets did not measure them) or
+// a new static entry, stale entrypoints are removed, and nothing an author
+// wrote (proof, budgets, contracts, endpoint ownership) is rewritten. Sync never
+// grants endpoints: an entry with requests gets an empty `allowed` list that
+// the author must fill, so validation fails until the endpoints are reviewed.
 
-const { HIGH_FREQUENCY_EVENTS, normalizeEndpoint } = require('./bounded-interaction-discovery.cjs');
+const { HIGH_FREQUENCY_EVENTS } = require('./bounded-interaction-discovery.cjs');
 
 const WORK_CLASS_ORDER = ['constant', 'delta', 'page', 'selected-set', 'affected-set', 'background-batch'];
 const KIND_LABELS = { event: 'listeners', timer: 'timers', request: 'requests', observer: 'observers', worker: 'workers' };
@@ -61,14 +63,15 @@ function proposeEntry(id, items) {
     workClass: items.map(workClassFor).sort((a, b) => WORK_CLASS_ORDER.indexOf(b) - WORK_CLASS_ORDER.indexOf(a))[0],
     proof: 'static',
   };
-  const literals = items.flatMap(item => item.targets || []).filter(target => target.target);
-  if (literals.length) {
-    entry.requestOwnership = {
-      allowed: [...new Set(literals.map(target => normalizeEndpoint(target.target)))].sort(),
-      forbidden: [],
-    };
-  }
+  if (items.some(item => item.kind === 'request')) entry.requestOwnership = { allowed: [], forbidden: [] };
   return entry;
+}
+
+function uniqueId(id, byId) {
+  if (!byId.has(id)) return id;
+  let suffix = 2;
+  while (byId.has(`${id}#${suffix}`)) suffix += 1;
+  return `${id}#${suffix}`;
 }
 
 // Returns the synchronized registry plus a summary of what changed.
@@ -95,17 +98,20 @@ function syncRegistry(registry, entrypoints) {
   for (const [id, items] of pending) {
     const existing = byId.get(id);
     added.push(...items.map(item => item.key));
-    if (!existing) {
-      const entry = proposeEntry(id, items);
+    if (!existing || existing.proof !== 'static') {
+      const entry = proposeEntry(uniqueId(id, byId), items);
       interactions.push(entry);
-      byId.set(id, entry);
+      byId.set(entry.id, entry);
       continue;
     }
-    // Joining an existing entry never widens its reviewed endpoint ownership:
-    // a new request target must still be accepted by the author.
+    // Joining an existing static entry never widens its reviewed endpoint
+    // ownership: a new request target must still be accepted by the author.
     existing.entrypoints = [...existing.entrypoints, ...items.map(item => item.key)].sort();
     existing.owners = [...new Set([...existing.owners, ...items.map(item => item.path)])].sort();
     existing.rules = [...new Set([...existing.rules, ...items.flatMap(rulesFor)])].sort();
+    if (items.some(item => item.kind === 'request') && !existing.requestOwnership) {
+      existing.requestOwnership = { allowed: [], forbidden: [] };
+    }
   }
   interactions.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { registry: { ...registry, interactions }, added: added.sort(), removed: removed.sort() };

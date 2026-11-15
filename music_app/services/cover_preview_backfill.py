@@ -11,6 +11,7 @@ from music_app.services.covers import (
     display_cover_variant_cache_root,
     display_variant_awaits_relocation,
     find_existing_cover_display_variant,
+    image_dimensions,
     resolve_cover_display_variant,
 )
 from music_app.services.postgres_connections import pooled_connection
@@ -57,10 +58,10 @@ class CoverPreviewBackfill:
         self._activity_lock = threading.Lock()
         self._last_foreground_activity = 0.0
         self._worker: threading.Thread | None = None
-        # Covers this process already handed to the generator (which reuses an
-        # existing preview). Later passes probe only new covers, revisions or
-        # storage roots; a preview removed afterwards is regenerated on demand
-        # by /cover.
+        # Covers whose preview this process saw published, or that need none.
+        # Later passes skip them and retry only failed covers and new covers,
+        # revisions or storage roots; a preview removed afterwards is
+        # regenerated on demand by /cover.
         self._settled: set[tuple[Path, str | None, Path]] = set()
 
     @property
@@ -133,7 +134,7 @@ class CoverPreviewBackfill:
                 recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
                 if recorder is not None:
                     generation_options["on_published"] = recorder
-                self._generate(
+                preview_path = self._generate(
                     source_path,
                     cache_root=cache_root,
                     max_size=_DISPLAY_COVER_SIZE,
@@ -141,7 +142,13 @@ class CoverPreviewBackfill:
                     revision=cover_revision,
                     **generation_options,
                 )
-                self._settled.add(settled_key)
+                # The generator answers with the source itself when the source is
+                # missing, the render failed or no preview is needed. Only the
+                # last is final; the others are retried on the next pass.
+                if (
+                    preview_path is not None and Path(preview_path) != source_path
+                ) or 0 < max(image_dimensions(source_path)) <= _DISPLAY_COVER_SIZE:
+                    self._settled.add(settled_key)
                 generated += 1
             if self._stop_requested.wait(self._throttle_seconds):
                 break

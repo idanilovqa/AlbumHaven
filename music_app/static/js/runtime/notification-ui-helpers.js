@@ -102,7 +102,7 @@ function placeFloatingNotifications() {
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
     return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
-  const waitingByLane = new Map();
+  const waitingBySlot = new Map();
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
     const availableWidth = `${Math.max(0, viewport.right - viewport.left - 16)}px`;
@@ -138,10 +138,12 @@ function placeFloatingNotifications() {
     if (!position) {
       node.setAttribute('data-notification-deferred', '');
       // A discardable notification that has never been shown waits alone in
-      // its lane: a newer one replaces it, so blocked lanes cannot pile up.
+      // its lane and severity: only a newer one of the same severity replaces
+      // it, so blocked lanes cannot pile up and errors outlive lesser toasts.
       if (entry.discard && !entry.presented) {
-        waitingByLane.get(entry.lane)?.discard();
-        waitingByLane.set(entry.lane, entry);
+        const slot = `${entry.lane}:${entry.severity}`;
+        waitingBySlot.get(slot)?.discard();
+        waitingBySlot.set(slot, entry);
       }
       continue;
     }
@@ -295,6 +297,10 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
+function floatingNotificationSeverity(variant) {
+  return variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
+}
+
 function buildFloatingNotificationAlertHtml(
   message,
   variant,
@@ -303,7 +309,7 @@ function buildFloatingNotificationAlertHtml(
   compact = false,
   title = '',
 ) {
-  const severity = variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
+  const severity = floatingNotificationSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
     title: compact
@@ -339,7 +345,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
     toast.remove();
     if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
   };
-  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, discard, onPlaced() {
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, discard, severity: floatingNotificationSeverity(variant), onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');

@@ -4339,7 +4339,7 @@
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
-      "action": "Place floating notifications on the next frame after a layout change; a blocked lane keeps only its newest never-shown toast, so a frame reads the fixed surfaces, the open modal's controls and a constant number of notifications",
+      "action": "Place floating notifications on the next frame after a layout change; a blocked lane keeps only its newest never-shown toast of each severity, so a frame reads the fixed surfaces, the open modal's controls and a constant number of notifications",
       "entrypoints": [
         "js:music_app/static/js/runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement:timer:requestAnimationFrame"
       ],
@@ -8140,7 +8140,7 @@
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
+      "command": "python -m pytest tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count tests/py/test_move_planner.py::test_move_availability_contract_misses_a_new_artist_without_listing_artist_folders",
       "testIdentity": "test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
       "rollback": "Revert fix(move) artist probe to restore the root listing, with its contract."
     },

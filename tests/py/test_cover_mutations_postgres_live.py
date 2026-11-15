@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -433,18 +434,18 @@ def test_live_cover_mutation_privilege_matrix(live_cover_mutation_database) -> N
                     "select has_function_privilege(%s, %s, 'EXECUTE') as allowed",
                     (role, signature),
                 ).fetchone()["allowed"]
-                assert allowed is (name in allowed_names)
+                assert allowed is (name in allowed_names), (role, name, allowed)
             assert connection.execute(
                 "select has_table_privilege(%s, 'library.cover_mutation_state', "
                 "'SELECT,INSERT,UPDATE,DELETE') as allowed",
                 (role,),
-            ).fetchone()["allowed"] is False
+            ).fetchone()["allowed"] is False, (role, "library.cover_mutation_state")
             for table in ("library.local_albums", "library.local_track_files"):
                 assert connection.execute(
                     "select has_table_privilege(%s, %s, 'INSERT,UPDATE,DELETE') "
                     "as allowed",
                     (role, table),
-                ).fetchone()["allowed"] is False
+                ).fetchone()["allowed"] is False, (role, table)
 
     for role, database_url in (
         ("album_haven_app", scope.app_url),
@@ -1035,28 +1036,130 @@ def test_live_cover_revision_index_identity_plan_and_state_cascade(
 
 def test_live_cover_migration_rerun_preserves_state(live_cover_mutation_database) -> None:
     scope = live_cover_mutation_database
-    migration_sql = (
-        Path(__file__).parents[2] / "migrations" / "postgres" / "0243_close_cover_consistency.sql"
-    ).read_text(encoding="utf-8")
-    metadata_migration_sql = (
-        Path(__file__).parents[2]
-        / "migrations"
-        / "postgres"
-        / "0246_preserve_cover_selection_metadata.sql"
-    ).read_text(encoding="utf-8")
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        before = connection.execute(
-            "select cover_mutation_revision, updated_at "
-            "from library.cover_mutation_state where library_id = %s",
-            (scope.library_id,),
-        ).fetchone()
-        connection.execute(migration_sql)
-        connection.execute(migration_sql)
-        connection.execute(metadata_migration_sql)
-        connection.execute(metadata_migration_sql)
-        after = connection.execute(
-            "select cover_mutation_revision, updated_at "
-            "from library.cover_mutation_state where library_id = %s",
-            (scope.library_id,),
-        ).fetchone()
-    assert after == before
+    migration_paths = sorted((Path(__file__).parents[2] / "migrations" / "postgres").glob("*.sql"))
+    closure_path = next(path for path in migration_paths if path.name.startswith("0243_"))
+
+    def function_contracts():
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            rows = connection.execute(
+                "select namespace.nspname || '.' || procedure.proname || '(' || "
+                "pg_get_function_identity_arguments(procedure.oid) || ')' as identity, "
+                "md5(pg_get_functiondef(procedure.oid)) as body_hash, "
+                "pg_get_userbyid(procedure.proowner) as owner, procedure.prosecdef, procedure.proconfig, "
+                "(select jsonb_agg(jsonb_build_array("
+                "case when acl.grantee=0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end, "
+                "pg_get_userbyid(acl.grantor), acl.privilege_type, acl.is_grantable) "
+                "order by acl.grantee,acl.grantor,acl.privilege_type,acl.is_grantable) "
+                "from aclexplode(coalesce(procedure.proacl,acldefault('f',procedure.proowner))) acl) as acl "
+                "from pg_proc procedure join pg_namespace namespace on namespace.oid=procedure.pronamespace "
+                "where namespace.nspname=any(%s) and procedure.prokind in ('f','p')",
+                (["app", "integration", "library", "ops"],),
+            ).fetchall()
+        return {row["identity"]: row for row in rows}
+
+    def revision_states(library_ids):
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            rows = connection.execute(
+                "select library_id,cover_mutation_revision,updated_at "
+                "from library.cover_mutation_state where library_id=any(%s) order by library_id",
+                (list(library_ids),),
+            ).fetchall()
+        assert len(rows) == len(library_ids)
+        assert {row["library_id"] for row in rows} == library_ids
+        return {row["library_id"]: row for row in rows}
+
+    def cover_provenance(owned_scopes):
+        snapshots = {}
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            for owned in owned_scopes:
+                row = connection.execute(
+                    "select album.cover_path,album.metadata as album_metadata, "
+                    "file.metadata #> '{scan_cache,file_entry}' as file_metadata "
+                    "from library.local_albums album "
+                    "join library.local_tracks track on track.album_id=album.id "
+                    "join library.local_track_files file on file.track_id=track.id "
+                    "where album.id=%s and file.id=%s",
+                    (owned.album_id, owned.file_id),
+                ).fetchone()
+                metadata = [
+                    {key: value for key, value in (row[field] or {}).items() if key in _FORBIDDEN_COVER_FIELDS}
+                    for field in ("album_metadata", "file_metadata")
+                ]
+                serialized = json.dumps([row["cover_path"], *metadata], sort_keys=True)
+                snapshots[owned.album_id] = hashlib.sha256(serialized.encode()).hexdigest()
+        return snapshots
+
+    expected_contracts = function_contracts()
+    _drop_schemas(scope.setup_url)
+    try:
+        isolatedPostgres.apply_migrations(
+            scope.setup_url, [path for path in migration_paths if path.name < closure_path.name],
+        )
+        existing = _seed_scope(scope.setup_url, scope.app_url, scope.worker_url, scope.readonly_url)
+        missing = _seed_scope(scope.setup_url, scope.app_url, scope.worker_url, scope.readonly_url)
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            library_ids = {
+                row["id"] for row in connection.execute("select id from library.libraries").fetchall()
+            }
+            connection.execute(
+                "update library.cover_mutation_state set cover_mutation_revision=7, "
+                "updated_at='2026-01-02T03:04:05Z'::timestamptz where library_id=%s",
+                (existing.library_id,),
+            )
+            existing_before = connection.execute(
+                "select library_id,cover_mutation_revision,updated_at "
+                "from library.cover_mutation_state where library_id=%s", (existing.library_id,),
+            ).fetchone()
+            connection.execute(
+                "delete from library.cover_mutation_state where library_id=%s", (missing.library_id,),
+            )
+            for owned, legacy_revision in ((existing, 100), (missing, 13)):
+                connection.execute(
+                    "update library.libraries set metadata=jsonb_build_object('cover_mutation_revision',%s) "
+                    "where id=%s", (legacy_revision, owned.library_id),
+                )
+                metadata = {"cover_revision": "legacy-selected"}
+                if owned is existing:
+                    metadata.update(cover_selection_origin="user", cover_selection_provenance="explicit")
+                connection.execute(
+                    "update library.local_albums set cover_path=%s,metadata=%s::jsonb where id=%s",
+                    (f"C:/isolated-cover-{owned.album_key}/cover.jpg", json.dumps(metadata), owned.album_id),
+                )
+                connection.execute(
+                    "update library.local_track_files set metadata=jsonb_build_object("
+                    "'scan_cache',jsonb_build_object('file_entry',%s::jsonb)) where id=%s",
+                    (json.dumps(metadata), owned.file_id),
+                )
+        provenance_before = cover_provenance((existing, missing))
+        isolatedPostgres.apply_migrations(
+            scope.setup_url, [path for path in migration_paths if path.name <= closure_path.name],
+        )
+        first = revision_states(library_ids)
+        assert first[existing.library_id] == existing_before
+        assert first[missing.library_id]["cover_mutation_revision"] == 13
+        assert cover_provenance((existing, missing)) == provenance_before
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute(closure_path.read_text(encoding="utf-8"))
+        assert revision_states(library_ids) == first
+        assert cover_provenance((existing, missing)) == provenance_before
+    finally:
+        isolatedPostgres.apply_all_migrations(scope.setup_url)
+        isolatedPostgres.grant_runtime_role_privileges(scope.setup_url, scope.app_url)
+        isolatedPostgres.seed_bootstrap_owner_and_library(scope.setup_url)
+        isolatedPostgres.assert_runtime_connection(scope.app_url)
+        isolatedPostgres.assert_runtime_grants(scope.app_url)
+
+    assert revision_states(library_ids) == first
+    assert cover_provenance((existing, missing)) == provenance_before
+    actual_contracts = function_contracts()
+    assert set(actual_contracts) == set(expected_contracts), "full-head function signatures changed"
+    changed_contracts = {
+        identity: {
+            field: {"expected": expected_value, "actual": actual_contracts[identity][field]}
+            for field, expected_value in expected_contracts[identity].items()
+            if actual_contracts[identity][field] != expected_value
+        }
+        for identity in expected_contracts
+        if actual_contracts[identity] != expected_contracts[identity]
+    }
+    assert not changed_contracts, changed_contracts

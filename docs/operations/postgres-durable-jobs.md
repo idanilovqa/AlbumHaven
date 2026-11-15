@@ -164,24 +164,74 @@ For an authentication-mail backlog, inspect only authorized aggregate status and
 
 ## Promotion
 
-Use this additive order:
+Use the verified target release's complete migration set. The current cover
+contract includes cover state `0229`, durable watcher recovery `0240`, cover
+closure `0243`, worker preflight `0245`, cover metadata `0246`, Problematic Files
+projection `0249` and incomplete-album contract `0250`, together with their other
+target migrations. A deployment ending at `0239` lacks required contracts for
+this worker. Follow the migration reference for ledger/checksum and schema
+requirements. [Migration reference](../../migrations/postgres/README.md)
 
-1. Back up Postgres and apply migrations through `0239_retire_vacated_structural_album.sql` with the migrator role.
-2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
-3. Configure the dedicated worker-role URL and mail settings, start the worker, and confirm the closed startup preflight accepts its exact handler registry, schema, function grants, table columns, and transition-sequence access before readiness. Confirm its claim filter includes every completed scan, cover, Last.fm, and authentication-mail kind.
-4. Verify the worker fingerprint and role checks before deploying the compatible web artifact that enables durable producers. Drain any old request-owned mail tasks first. Exactly one execution owner may accept each workflow during cutover.
-5. Verify `/health`, the authorized `/status` projection, unchanged scan and cover contracts, unchanged Last.fm summaries, unchanged administrator mail responses, the padded public forgot-password response, and synchronous invitation-link copying.
-6. Keep prior web artifacts out of service after mail producers are cut over; they must not reclaim job-owned outboxes.
+1. Quiesce old cover producers and their web execution path. Signal the worker
+   to stop claims and allow its configured bounded drain before enabling the
+   new coordinated cover writers and revision-fenced scans. Drain old
+   request-owned mail tasks before mail cutover. Keep one execution owner for
+   each workflow throughout the transition.
+2. Preserve remaining job/checkpoint evidence in protected operational records.
+   Missing-digest legacy checkpoints retain their compatible recovery rules,
+   including completed-publication replay. New authority/runtime checkpoint
+   phases require artifact digests. Never fabricate a digest or blanket-reset
+   legacy checkpoints to `ambiguous`.
+3. Back up Postgres before applying schema or data changes. Audit the deployed
+   ledger, recorded checksums and actual schema against the verified target
+   release, then apply every missing compatible target migration in lexical
+   order with the migrator role. Hold deployment on unknown migrations,
+   unexplained checksum/schema differences or incompatible state. Preserve
+   historical ledger rows and later function owners.
+4. Deploy the matching worker with the dedicated worker-role URL and required
+   provider/mail configuration. Start it with new web producers disabled.
+   Confirm the closed startup preflight accepts its exact handler registry,
+   schema, function grants, table columns and transition-sequence access before
+   readiness. Its claim filter must include each supported scan, cover,
+   Problematic Files projection, Last.fm and authentication-mail kind.
+5. Verify the worker fingerprint, role checks and readiness, then deploy/enable
+   the compatible web producers. Confirm cover writers use the shared
+   PostgreSQL coordinator, scans retain their cover fences, and cache readers
+   use both durable revisions.
+6. Verify `/health`, authorized `/status`, scan/cover contracts, Last.fm
+   summaries, administrator mail responses, the padded public forgot-password
+   response and synchronous invitation-link copying. Keep old web artifacts out
+   of service after producer cutover so they cannot reclaim job-owned work.
 
-Do not insert jobs manually. A worker deliberately ignores kinds without registered handlers; deploy the corresponding handler before expecting that backlog to advance.
+Do not insert jobs manually. Deploy the matching registered handler before
+expecting that backlog to advance.
 
 ## Rollback
 
-Stop new workflow cutovers, disable producer-enabled web code, signal the worker to stop claims, and allow the bounded drain to finish before deploying a previous compatible web artifact. Preserve `ops.jobs`, `ops.job_transitions`, `ops.worker_instances`, and all applied migrations. Job evidence is forward-only; rollback must not depend on destructive schema reversal or deletion of ambiguous work.
+1. Disable producer-enabled web and cover execution, signal the worker to stop
+   claims, and allow bounded drain. Verify the exact owned process tree and
+   retain evidence of claims that remain.
+2. Keep a compatible registered-kind claim-filtering worker artifact or keep the
+   worker stopped. A previous artifact must be verified against the complete
+   deployed schema, checkpoint/replay contracts and every kind it may claim.
+   Schema compatibility alone cannot prevent an older worker from claiming and
+   failing an unsupported kind such as `post_scan_cover_refresh`.
+3. Restore a previous compatible web/worker artifact or coordinator only after
+   verifying zero active claims and no cover advisory-lock holders. Ensure the
+   stopped new artifact cannot issue further cover commits. Use the deployment's
+   existing service/process controls.
+4. Retain additive schema and every applied migration, cover revisions,
+   scan-intent captures, cover checkpoints, `ops.jobs`, `ops.job_transitions`,
+   `ops.worker_instances` and the migration ledger. Preserve missing-digest
+   legacy evidence and compatible completed-publication replay. Modern
+   authority/runtime checkpoint phases continue to require digests.
+5. Preserve ambiguous work and unresolved artifact/checkpoint mismatches for
+   guarded recovery. Never fabricate digests, decrement revisions, delete
+   evidence or replay work by editing state, attempt, lease, tombstone or
+   idempotency columns. Rollback must preserve the deployed additive schema.
 
-Keep the current claim-filtering worker artifact or keep the worker stopped. A previous worker is rollback-safe only if it retains the registered-kind claim filter; schema compatibility alone is insufficient because an older worker can claim and fail an unsupported `post_scan_cover_refresh` job. Do not start such an artifact while any unsupported kind can exist.
-
-If the previous artifact is not compatible with the current schema, keep the worker stopped and restore service only with a compatible artifact. Never replay work by editing state, attempt, lease, tombstone, or idempotency columns manually.
+If no previous artifact satisfies these contracts, keep the worker stopped
+until a compatible artifact is available.
 
 ## Retention cleanup
 

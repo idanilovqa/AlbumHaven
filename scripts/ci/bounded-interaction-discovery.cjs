@@ -194,6 +194,9 @@ function indexDefinitions(files) {
   const functions = new Map();
   const methods = new Map();
   const instances = new Map();
+  const superclasses = new Map();
+  const globalExports = new Map();
+  const moduleExports = new Map();
   const add = (map, name, def) => {
     if (!name) return;
     if (!map.has(name)) map.set(name, []);
@@ -217,24 +220,245 @@ function indexDefinitions(files) {
         if (GLOBAL_OBJECTS.has(target.name)) add(instances, memberProperty(node.left), constructed(node.right));
         else if (target.type === 'ThisExpression' && className) add(instances, `${className}#${memberProperty(node.left)}`, constructed(node.right));
       }
+      if ((node.type === 'ClassDeclaration' || node.type === 'ClassExpression') && className && node.superClass?.type === 'Identifier') {
+        superclasses.set(className, node.superClass.name);
+      }
+      if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' && !node.left.computed) {
+        const target = node.left.object;
+        if (target.type === 'Identifier' && target.name === 'module' && memberProperty(node.left) === 'exports') {
+          add(moduleExports, file.path, { file, expression: node.right });
+        } else if (GLOBAL_OBJECTS.has(target.name) || (target.type === 'Identifier' && isModuleScopeParameter(file, target))) {
+          add(globalExports, memberProperty(node.left), { file, expression: node.right });
+        }
+      }
     });
   }
-  return { files, functions, methods, instances };
+  return { files, functions, methods, instances, superclasses, globalExports, moduleExports };
+}
+
+// `scope` in `(function (scope) { scope.Api = api; })(window)`: a parameter of
+// an immediately invoked function, through which a script publishes globals.
+function isModuleScopeParameter(file, reference) {
+  for (let scope = ownerOf(file, reference).scope; scope; scope = ownerOf(file, scope).scope) {
+    if (functionParamIndex(scope, reference.name) >= 0) {
+      const parent = ownerOf(file, scope).parent;
+      return parent?.type === 'CallExpression' && parent.callee === scope;
+    }
+    if (scopeDeclarations(file, scope).has(reference.name)) return false;
+  }
+  return false;
 }
 
 function unwrapChain(node) {
   return node?.type === 'ChainExpression' ? node.expression : node;
 }
 
-// Classes a call receiver is known to hold: a global singleton, `window.x`, or
-// a field assigned from a constructor on the enclosing class.
-function receiverClasses(receiver, context, index) {
-  const node = unwrapChain(receiver);
-  if (node?.type === 'Identifier') return index.instances.get(node.name) || [];
-  if (node?.type !== 'MemberExpression') return [];
-  if (GLOBAL_OBJECTS.has(node.object.name)) return index.instances.get(memberProperty(node)) || [];
-  if (node.object.type === 'ThisExpression') return index.instances.get(`${context.className}#${memberProperty(node)}`) || [];
-  return [];
+const contextAt = (file, node) => ({ file, className: ownerOf(file, node).className });
+
+// True when a name is bound in an enclosing function (a parameter, local, or
+// local function), so it is never the same-named global.
+function scopedName(reference, file) {
+  for (let scope = ownerOf(file, reference).scope; scope; scope = ownerOf(file, scope).scope) {
+    if (scopeDeclarations(file, scope).has(reference.name)) return true;
+  }
+  return false;
+}
+
+// Values one declaration can hold: its initializer and, unless it is `const`,
+// every value later assigned to it (in any script, for a top-level binding).
+function declarationValues({ declarator, scope }, name, file, index) {
+  const values = declarator.init ? [{ node: declarator.init, context: contextAt(file, declarator.init) }] : [];
+  if (ownerOf(file, declarator).parent?.kind === 'const') return values;
+  for (const other of scope ? [file] : index.files) {
+    if (other !== file && scopeDeclarations(other, null).has(name)) continue;
+    for (const value of bindingUsage(other, scope).get(name)?.assigned || []) {
+      // A destructured or loop assignment (null) holds a value not followed here.
+      if (value === null) values.push({ unknown: true });
+      else if (typeof value === 'object') values.push({ node: value, context: contextAt(other, value) });
+    }
+  }
+  return values;
+}
+
+// The parameter a name is bound by in its nearest declaring function: its
+// position and, for a destructured `{ onChange }` parameter, the property read.
+function bindingParameter(file, reference) {
+  for (let scope = ownerOf(file, reference).scope; scope; scope = ownerOf(file, scope).scope) {
+    if (!scopeDeclarations(file, scope).has(reference.name)) continue;
+    const position = scope.params.findIndex(param => patternNames(param).includes(reference.name));
+    if (position < 0) return null;
+    let param = scope.params[position];
+    let fallback = null;
+    if (param.type === 'AssignmentPattern') ({ left: param, right: fallback } = param);
+    if (param.type === 'Identifier') return { fn: scope, position, property: null, fallback };
+    const property = param.type === 'ObjectPattern' && param.properties.find(item => item.type === 'Property' && !item.computed
+      && [item.value, item.value.left].some(value => value?.type === 'Identifier' && value.name === reference.name));
+    if (!property) return { fn: scope, position, unknown: true };
+    return { fn: scope, position, property: propertyName(property.key), fallback: property.value.type === 'AssignmentPattern' ? property.value.right : null };
+  }
+  return null;
+}
+
+// The name a function is called by: its declaration, variable, method, object
+// property, or assigned member. An anonymous inline argument has none.
+function functionName(file, fn) {
+  if (fn.id) return fn.id.name;
+  const parent = ownerOf(file, fn).parent;
+  if (parent?.type === 'VariableDeclarator' && parent.init === fn && parent.id.type === 'Identifier') return parent.id.name;
+  if (['MethodDefinition', 'PropertyDefinition', 'Property'].includes(parent?.type) && parent.value === fn && !parent.computed) return propertyName(parent.key);
+  if (parent?.type === 'AssignmentExpression' && parent.right === fn) return memberProperty(parent.left);
+  return '';
+}
+
+function callSitesByName(index) {
+  if (index.callSites) return index.callSites;
+  index.callSites = new Map();
+  for (const file of index.files) {
+    walkAst(file.ast, (node) => {
+      if (node.type !== 'CallExpression' && node.type !== 'NewExpression') return;
+      const name = calleeName(node);
+      if (!name) return;
+      if (!index.callSites.has(name)) index.callSites.set(name, []);
+      index.callSites.get(name).push({ call: node, file });
+    });
+  }
+  return index.callSites;
+}
+
+// Values a parameter receives: the matching argument at every call site of its
+// function (a property of it, for a destructured parameter) and its default.
+// A Promise executor's parameters are the platform's resolvers. A function no
+// call site reaches, or a spread argument, leaves the value unknown.
+const parameterCache = new WeakMap();
+function parameterValues(parameter, file, index) {
+  const { fn, position, property } = parameter;
+  const parent = ownerOf(file, fn).parent;
+  if (parent?.type === 'NewExpression' && parent.callee.name === 'Promise' && parent.arguments[0] === fn) return [{ platform: true }];
+  if (parameter.unknown) return [{ unknown: true }];
+  if (!parameterCache.has(fn)) parameterCache.set(fn, new Map());
+  const cache = parameterCache.get(fn);
+  const key = `${position}:${property}`;
+  // A parameter that (through its callers) receives itself is unknown on the
+  // way back in, so the walk ends.
+  if (cache.has(key)) return cache.get(key) || [{ unknown: true }];
+  cache.set(key, null);
+  const values = computeParameterValues(parameter, file, index);
+  cache.set(key, values);
+  return values;
+}
+
+function computeParameterValues({ fn, position, property, fallback }, file, index) {
+  const name = functionName(file, fn);
+  const sites = (name && callSitesByName(index).get(name) || [])
+    .filter(({ call, file: callFile }) => resolveCallable(call.callee, contextAt(callFile, call), index).some(def => def.node === fn));
+  if (!sites.length) return [{ unknown: true }];
+  const values = fallback ? [{ node: fallback, context: contextAt(file, fallback) }] : [];
+  for (const { call, file: callFile } of sites) {
+    if (call.arguments.slice(0, position + 1).some(argument => argument.type === 'SpreadElement')) {
+      values.push({ unknown: true });
+      continue;
+    }
+    const argument = call.arguments[position];
+    if (!argument) continue;
+    const context = contextAt(callFile, argument);
+    if (!property) {
+      values.push({ node: argument, context });
+      continue;
+    }
+    const sources = receiverSources(argument, context, index);
+    if (!sources.length || sources.some(source => source.className)) values.push({ unknown: true });
+    for (const source of sources.filter(item => item.object)) {
+      const found = source.object.properties.filter(item => item.type === 'Property' && !item.computed && propertyName(item.key) === property);
+      if (source.object.properties.some(item => item.type === 'SpreadElement')) values.push({ unknown: true });
+      values.push(...found.map(item => ({ node: item.value, context: source.context })));
+    }
+  }
+  return values;
+}
+
+// Values a name can hold (see declarationValues and parameterValues). A name
+// that no enclosing function or the file declares is another script's
+// top-level binding or a published global (`window.Api = api`). A value whose
+// source cannot be followed is `{ unknown: true }`; a platform-supplied one
+// (a Promise executor's resolver) is `{ platform: true }`.
+//
+// The call graph does not follow parameters (`{ parameters: false }`): a
+// parameter's values come from every call site at once, so following them
+// would join unrelated callers. A call site passing a function on is followed
+// from the caller instead (see calledFunctions).
+function identifierValues(reference, context, index, { parameters = true } = {}) {
+  const found = lexicalDeclaration(context.file, reference);
+  if (found) return declarationValues(found, reference.name, context.file, index);
+  const parameter = bindingParameter(context.file, reference);
+  if (parameter) return parameters ? parameterValues(parameter, context.file, index) : [];
+  if (scopedName(reference, context.file)) return [{ unknown: true }];
+  if (scopeDeclarations(context.file, null).has(reference.name)) return [];
+  for (const file of index.files) {
+    const declarator = file !== context.file && scopeDeclarations(file, null).get(reference.name);
+    if (declarator) return declarationValues({ declarator, scope: null }, reference.name, file, index);
+  }
+  return publishedValues(reference.name, index);
+}
+
+function publishedValues(name, index) {
+  return (index.globalExports.get(name) || []).map(item => ({ node: item.expression, context: contextAt(item.file, item.expression) }));
+}
+
+// What a receiver can be: object literals (`const hooks = { onScroll() {} }`,
+// a factory's or module's returned literal, a published API object) and class
+// instances (`new C()`, a global singleton, `this.grid = new C()`), followed
+// through `const`/`let` aliases, conditionals, `require()`, and other scripts'
+// top-level bindings.
+function receiverSources(target, context, index, depth = 0) {
+  const node = unwrapChain(target);
+  if (!node || depth > MAX_RESOLUTION_DEPTH) return [];
+  const next = (child, childContext = context) => receiverSources(child, childContext, index, depth + 1);
+  switch (node.type) {
+    case 'ObjectExpression':
+      return [{ object: node, context }];
+    case 'NewExpression':
+      return node.callee.type === 'Identifier' ? [{ className: node.callee.name }] : [];
+    case 'ConditionalExpression':
+      return [...next(node.consequent), ...next(node.alternate)];
+    case 'LogicalExpression':
+      return [...next(node.left), ...next(node.right)];
+    case 'AssignmentExpression':
+      return next(node.right);
+    case 'Identifier': {
+      const instances = scopedName(node, context.file) ? [] : (index.instances.get(node.name) || []).map(className => ({ className }));
+      return [...instances, ...identifierValues(node, context, index, { parameters: false }).flatMap(value => next(value.node, value.context))];
+    }
+    case 'MemberExpression': {
+      const object = unwrapChain(node.object);
+      const property = memberProperty(node);
+      if (object.type === 'ThisExpression') return (index.instances.get(`${context.className}#${property}`) || []).map(className => ({ className }));
+      if (GLOBAL_OBJECTS.has(object.name) || (object.type === 'Identifier' && isModuleScopeParameter(context.file, object))) {
+        const instances = (index.instances.get(property) || []).map(className => ({ className }));
+        return [...instances, ...publishedValues(property, index).flatMap(value => next(value.node, value.context))];
+      }
+      return [];
+    }
+    case 'CallExpression': {
+      const specifier = node.callee.type === 'Identifier' && node.callee.name === 'require' ? stringValue(node.arguments[0]) : null;
+      if (specifier) {
+        const module = normalizePath(path.posix.join(path.posix.dirname(context.file.path), specifier));
+        return (index.moduleExports.get(module) || []).flatMap(item => next(item.expression, contextAt(item.file, item.expression)));
+      }
+      if (qualifiedCallee(node) === 'Object.freeze') return next(node.arguments[0]);
+      return resolveCallable(node.callee, context, index, depth + 1)
+        .flatMap(def => returnExpressions(def.node).flatMap(value => next(value, contextAt(def.file, value))));
+    }
+    default:
+      return [];
+  }
+}
+
+// A class method, inherited methods included.
+function classMethods(className, property, index, depth = 0) {
+  const own = index.methods.get(`${className}.${property}`);
+  if (own || depth > MAX_RESOLUTION_DEPTH) return own || [];
+  const parent = index.superclasses.get(className);
+  return parent ? classMethods(parent, property, index, depth + 1) : [];
 }
 
 // A name bound inside an enclosing function (a local function, a parameter, a
@@ -251,21 +475,45 @@ function resolveIdentifier(reference, file, index) {
   return defs;
 }
 
-function resolveCallable(target, context, index) {
+// Resolution is memoized per node and analysis; a node's own position fixes
+// its file and class, so the context adds nothing to the key.
+const callableCache = new WeakMap();
+function resolveCallable(target, context, index, depth = 0) {
   const node = unwrapChain(target);
-  if (!node) return [];
-  if (isFunction(node)) return [{ file: context.file, node, name: '<inline>' }];
-  if (node.type === 'Identifier') return resolveIdentifier(node, context.file, index);
-  if (node.type === 'CallExpression' && memberProperty(node.callee) === 'bind') {
-    return resolveCallable(node.callee.object, context, index);
+  if (!node || depth > MAX_RESOLUTION_DEPTH) return [];
+  if (depth === 0) {
+    const cached = callableCache.get(node);
+    if (cached?.index === index) return cached.defs;
+    const defs = resolveCallableUncached(node, context, index, depth);
+    callableCache.set(node, { index, defs });
+    return defs;
   }
+  return resolveCallableUncached(node, context, index, depth);
+}
+
+function resolveCallableUncached(node, context, index, depth) {
+  const next = (child, childContext = context) => resolveCallable(child, childContext, index, depth + 1);
+  if (isFunction(node)) return [{ file: context.file, node, name: '<inline>' }];
+  if (node.type === 'Identifier') {
+    const found = resolveIdentifier(node, context.file, index);
+    // `const run = heavy; run()` runs `heavy`.
+    return found.length ? found : identifierValues(node, context, index, { parameters: false }).flatMap(value => next(value.node, value.context));
+  }
+  if (node.type === 'ConditionalExpression') return [...next(node.consequent), ...next(node.alternate)];
+  if (node.type === 'LogicalExpression') return [...next(node.left), ...next(node.right)];
+  if (node.type === 'CallExpression' && memberProperty(node.callee) === 'bind') return next(node.callee.object);
   if (node.type !== 'MemberExpression') return [];
   const property = memberProperty(node);
   // `fn.call(...)` and `fn.apply(...)` run `fn`.
-  if (property === 'call' || property === 'apply') return resolveCallable(node.object, context, index);
-  if (node.object.type === 'ThisExpression') return index.methods.get(`${context.className}.${property}`) || [];
-  if (GLOBAL_OBJECTS.has(node.object.name)) return index.functions.get(property) || [];
-  return receiverClasses(node.object, context, index).flatMap(className => index.methods.get(`${className}.${property}`) || []);
+  if (property === 'call' || property === 'apply') return next(node.object);
+  if (node.object.type === 'ThisExpression') return classMethods(context.className, property, index);
+  if (GLOBAL_OBJECTS.has(node.object.name) && index.functions.has(property)) return index.functions.get(property);
+  // `hooks.onScroll()`, `grid.relayout()`, `ButtonComponent.renderButton()`.
+  return receiverSources(node.object, context, index, depth + 1).flatMap(source => (source.className
+    ? classMethods(source.className, property, index)
+    : source.object.properties
+      .filter(item => item.type === 'Property' && !item.computed && propertyName(item.key) === property)
+      .flatMap(item => next(item.value, source.context))));
 }
 
 // Classifies local bindings so iteration over freshly built local collections
@@ -721,26 +969,168 @@ function computeFunctionHazards(fnNode, file, index) {
   return hazards.sort((a, b) => a.position - b.position);
 }
 
+// ---------------------------------------------------------------------------
+// Unresolved calls. In a hot entrypoint, a call that static resolution cannot
+// follow may run any application code, so it is a hazard of its own unless the
+// evidence shows it cannot reach application code:
+//   - a member name the browser platform defines as a function (`map.get`,
+//     `el.contains`, `storage.getItem`), read from a real browser by
+//     bounded-interaction-platform-names.cjs rather than listed by hand; or
+//   - a name the application never defines as a function, method, object
+//     literal function, or assigned callable (`requestIdleCallback`): only
+//     application definitions can run application code.
+// A call through a local binding, a parameter, a computed member, or an
+// application name the platform does not define is reported: its callee may be
+// any application function. The limit: an application method that shares a
+// platform method's name (`player.pause()`) is followed only when its receiver
+// resolves; on an unknown receiver it is taken for the platform method.
+let platformNameCache = null;
+function platformNames() {
+  platformNameCache ??= new Set(require('./bounded-interaction-platform-names.json').names);
+  return platformNameCache;
+}
+
+// Every name the application can call its own code through.
+function applicationCallableNames(files, index) {
+  const names = new Set(index.functions.keys());
+  for (const key of index.methods.keys()) names.add(key.slice(key.indexOf('.') + 1));
+  const callable = node => isFunction(node) || ['Identifier', 'MemberExpression', 'CallExpression', 'ConditionalExpression', 'LogicalExpression'].includes(unwrapChain(node)?.type);
+  for (const file of files) {
+    walkAst(file.ast, (node) => {
+      if (node.type === 'Property' && (node.method || isFunction(node.value))) names.add(propertyName(node.key));
+      else if (node.type === 'AssignmentExpression' && node.left.type === 'MemberExpression' && callable(node.right)) names.add(memberProperty(node.left));
+    });
+  }
+  return names;
+}
+
+function isTopLevelApplicationBinding(name, index) {
+  return index.files.some(file => scopeDeclarations(file, null).has(name));
+}
+
+function calleeLabel(callee) {
+  const node = unwrapChain(callee);
+  if (node?.type === 'Identifier') return node.name;
+  if (node?.type === 'MemberExpression') {
+    const object = unwrapChain(node.object);
+    const base = object?.type === 'Identifier' ? object.name : object?.type === 'ThisExpression' ? 'this' : '…';
+    return node.computed ? `${base}[…]` : `${base}.${memberProperty(node)}`;
+  }
+  return '<expression>';
+}
+
+// Calls in one function body (nested inline callbacks included) that may run
+// application code static resolution cannot name.
+const unresolvedCache = new WeakMap();
+function unresolvedCalls(fnNode, context, index) {
+  if (unresolvedCache.has(fnNode)) return unresolvedCache.get(fnNode);
+  const platform = platformNames();
+  const found = [];
+  walkAst(fnNode.body || fnNode, (node) => {
+    if (node.type !== 'CallExpression') return;
+    const callee = unwrapChain(node.callee);
+    if (calleeUnknown(callee, contextAt(context.file, node), index, platform)) {
+      found.push({ ...hazardAt('BI-01', `unresolved-call:${calleeLabel(callee)}`, node, context.file), via: [] });
+    }
+  });
+  unresolvedCache.set(fnNode, found);
+  return found;
+}
+
+// True when a callee may run application code that resolution cannot name.
+// A callee that resolves is followed by the call graph instead. A local or
+// parameter is unknown when any value it can hold is (a parameter's values
+// are its call sites' arguments); a value that is a platform global or
+// resolver is not.
+function calleeUnknown(callee, context, index, platform, depth = 0) {
+  const node = unwrapChain(callee);
+  if (!node || depth > MAX_RESOLUTION_DEPTH) return true;
+  if (isFunction(node) || node.type === 'Super' || resolveCallable(node, context, index).length) return false;
+  const next = (child, childContext = context) => calleeUnknown(child, childContext, index, platform, depth + 1);
+  switch (node.type) {
+    case 'Identifier': {
+      const own = scopedName(node, context.file) || isTopLevelApplicationBinding(node.name, index);
+      if (!own) return false;
+      const values = identifierValues(node, context, index);
+      return values.some(value => value.unknown || (value.node && next(value.node, value.context)));
+    }
+    case 'MemberExpression': {
+      if (node.computed) return true;
+      const property = memberProperty(node);
+      if (platform.has(property) || !index.callableNames.has(property)) return false;
+      // `options.onPlaced()`: the property of every argument passed for `options`.
+      const object = unwrapChain(node.object);
+      const parameter = object.type === 'Identifier' && bindingParameter(context.file, object);
+      if (!parameter || parameter.property || parameter.unknown) return true;
+      const values = parameterValues({ ...parameter, property, fallback: null }, context.file, index);
+      return values.some(value => value.unknown || (value.node && next(value.node, value.context)));
+    }
+    case 'ConditionalExpression':
+      return next(node.consequent) || next(node.alternate);
+    case 'LogicalExpression':
+      return next(node.left) || next(node.right);
+    // A value that is never callable (`let cleanup = null`) adds no callee.
+    case 'Literal':
+    case 'TemplateLiteral':
+    case 'ObjectExpression':
+    case 'ArrayExpression':
+      return false;
+    default:
+      return true;
+  }
+}
+
 // Functions called (or scheduled) from a function body. A callback passed to a
 // timer or a timer helper runs as part of the caller's work, so a one-shot
 // frame or timeout scheduled from a hot handler is analyzed with that handler.
+// Likewise a function passed to an application function that calls (or
+// schedules) that parameter runs as part of the caller's work.
 function calledFunctions(fnNode, context, index) {
   const callees = [];
   walkAst(fnNode.body || fnNode, (node) => {
     if (node.type !== 'CallExpression') return;
-    callees.push(...resolveCallable(node.callee, context, index));
+    const targets = resolveCallable(node.callee, context, index);
+    callees.push(...targets);
     const name = calleeName(node);
     const helper = node.callee.type === 'Identifier' ? index.timers?.get(name) : undefined;
     const callback = DEFERRED_CALLBACK_CALLS.has(name) ? node.arguments[0] : helper && node.arguments[helper.param];
     if (callback && !isFunction(callback)) callees.push(...resolveCallable(callback, context, index));
+    node.arguments.forEach((argument, position) => {
+      if (argument === callback || isFunction(argument) || argument.type === 'SpreadElement') return;
+      if (targets.some(def => invokesParameter(def, position))) callees.push(...resolveCallable(argument, context, index));
+    });
   });
   return callees;
 }
 
+// True when a function calls its parameter at `position`, or hands it to a
+// timer or another deferred call.
+const invokedParameterCache = new WeakMap();
+function invokesParameter(def, position) {
+  if (!invokedParameterCache.has(def.node)) {
+    const invoked = new Set();
+    walkAst(def.node.body || def.node, (node) => {
+      if (node.type !== 'CallExpression') return;
+      const candidates = [node.callee, ...(DEFERRED_CALLBACK_CALLS.has(calleeName(node)) || isTimerCall(node) ? [node.arguments[0]] : [])];
+      for (const candidate of candidates) {
+        const parameter = unwrapChain(candidate)?.type === 'Identifier' && bindingParameter(def.file, unwrapChain(candidate));
+        if (parameter && parameter.fn === def.node && !parameter.property) invoked.add(parameter.position);
+      }
+    });
+    invokedParameterCache.set(def.node, invoked);
+  }
+  return invokedParameterCache.get(def.node).has(position);
+}
+
 // A call chain deeper than MAX_CALL_DEPTH is not proven bounded: the first
 // function past the limit is reported as a hazard instead of silently ignored.
-function reachableHazards(handler, context, index) {
-  const direct = functionHazards(handler.node, handler.file, index).map(hazard => ({ ...hazard, via: [] }));
+// On a hot entrypoint every call that does not resolve is a hazard too.
+function reachableHazards(handler, context, index, hot = false) {
+  const own = (def, defContext) => [
+    ...functionHazards(def.node, def.file, index),
+    ...(hot ? unresolvedCalls(def.node, defContext, index) : []),
+  ];
+  const direct = own(handler, context).map(hazard => ({ ...hazard, via: [] }));
   const indirect = [];
   const seen = new Set([handler.node]);
   const queue = calledFunctions(handler.node, context, index).map(def => ({ def, via: [def.name] }));
@@ -752,8 +1142,8 @@ function reachableHazards(handler, context, index) {
       indirect.push({ ...hazardAt('BI-01', 'call-depth-exceeded', def.node, def.file), via });
       continue;
     }
-    for (const hazard of functionHazards(def.node, def.file, index)) indirect.push({ ...hazard, via });
     const defContext = { file: def.file, className: ownerOf(def.file, def.node).className };
+    for (const hazard of own(def, defContext)) indirect.push({ ...hazard, via });
     for (const next of calledFunctions(def.node, defContext, index)) queue.push({ def: next, via: [...via, next.name] });
   }
   return { direct, indirect };
@@ -954,6 +1344,13 @@ function timerHelpers(files, index) {
   return helpers;
 }
 
+function delegatesToCallers(found, file, timers) {
+  if (found.kind !== 'timer' || found.handler?.type !== 'Identifier') return false;
+  const { scope } = ownerOf(file, found.node);
+  const helper = scope && timers.get(functionName(file, scope));
+  return Boolean(helper) && functionParamIndex(scope, found.handler.name) === helper.param;
+}
+
 function entry(file, node, kind, trigger) {
   const { owner } = ownerOf(file, node);
   return {
@@ -969,14 +1366,197 @@ function entry(file, node, kind, trigger) {
 }
 
 // Entry points plus the callback node each one runs.
+// ---------------------------------------------------------------------------
+// Listener event names. A listener whose event name is not a literal is
+// resolved through a local or file `const`, a `for-of` over a constant list,
+// `Object.entries`/`Object.keys`/`Object.values` of an object literal (or of a
+// value built from them), the destructured element of such a list (`for (const
+// [type, handler] of ...)`, `rows.forEach(([target, type]) => ...)`), or the
+// call sites of the function whose parameter it is. When the handler comes from
+// the same row (the entry's value, the same call site), each event is paired
+// with its own handler. An event name that does not resolve this way returns
+// null, and validation rejects the listener until it is made resolvable.
+
+// Rows bound to one name: maps from each name its declaring pattern binds to
+// the value it holds in that row (`{ node, file }` or `{ text }`).
+function bindingRows(reference, file, index, depth) {
+  for (let scope = ownerOf(file, reference).scope; ; scope = ownerOf(file, scope).scope) {
+    const declarations = scopeDeclarations(file, scope);
+    // A plain `const name = init` (or `let` never reassigned) is one row.
+    const declarator = declarations.get(reference.name);
+    if (declarator && !loopHeaders.has(declarator)) {
+      if (ownerOf(file, declarator).parent?.kind !== 'const' || !declarator.init) return null;
+      return [new Map([[reference.name, { node: declarator.init, file }]])];
+    }
+    const loop = loopBinding(file, scope, reference.name);
+    if (loop) return patternRows(loop.pattern, iterableElements(loop.iterable, file, index, depth + 1));
+    if (scope && patternNames({ type: 'ArrayPattern', elements: scope.params }).includes(reference.name)) {
+      return parameterRows(scope, file, index, depth);
+    }
+    if (declarations.has(reference.name) || !scope) return null;
+  }
+}
+
+// A `for (const <pattern> of <iterable>)` directly in this scope that binds the name.
+function loopBinding(file, scope, name) {
+  let found = null;
+  walkAst(scope ? scope.body : file.ast, (node) => {
+    if (found || (isFunction(node) && node !== scope)) return false;
+    if (node.type === 'ForOfStatement' && node.left.type === 'VariableDeclaration') {
+      const pattern = node.left.declarations[0].id;
+      if (patternNames(pattern).includes(name)) found = { pattern, iterable: node.right };
+    }
+    return undefined;
+  });
+  return found;
+}
+
+// Rows for a function's parameters: an inline callback of `list.forEach` (or
+// another per-element method) gets one row per element; a named function gets
+// one row per call site, mapping each parameter to that site's argument.
+function parameterRows(fn, file, index, depth) {
+  const parent = ownerOf(file, fn).parent;
+  if (parent?.type === 'CallExpression' && parent.arguments[0] === fn && parent.callee.type === 'MemberExpression'
+    && ['forEach', 'map', 'flatMap', 'filter', 'some', 'every'].includes(memberProperty(parent.callee))) {
+    return fn.params[0] ? patternRows(fn.params[0], iterableElements(parent.callee.object, file, index, depth + 1)) : null;
+  }
+  const name = functionName(file, fn);
+  const sites = (name && callSitesByName(index).get(name) || [])
+    .filter(({ call, file: callFile }) => resolveCallable(call.callee, contextAt(callFile, call), index).some(def => def.node === fn));
+  if (!sites.length || fn.params.some(param => param.type !== 'Identifier')) return null;
+  if (sites.some(({ call }) => call.arguments.some(argument => argument.type === 'SpreadElement'))) return null;
+  return sites.map(({ call, file: callFile }) => new Map(fn.params.map((param, position) => [
+    param.name, call.arguments[position] ? { node: call.arguments[position], file: callFile } : { text: undefined },
+  ])));
+}
+
+// Destructures each element of an iterable into a row of names.
+function patternRows(pattern, elements) {
+  if (!elements) return null;
+  const rows = [];
+  for (const element of elements) {
+    if (pattern.type === 'Identifier') {
+      rows.push(new Map([[pattern.name, element]]));
+      continue;
+    }
+    if (pattern.type !== 'ArrayPattern') return null;
+    const parts = element.tuple || (element.node?.type === 'ArrayExpression' ? element.node.elements.map(node => node && { node, file: element.file }) : null);
+    if (!parts) return null;
+    const row = new Map();
+    pattern.elements.forEach((item, position) => {
+      if (item?.type === 'Identifier') row.set(item.name, parts[position] || { text: undefined });
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+// Elements of a constant iterable, or null when it is not one.
+function iterableElements(expression, file, index, depth = 0) {
+  const node = unwrapChain(expression);
+  if (!node || depth > MAX_RESOLUTION_DEPTH) return null;
+  if (node.type === 'ArrayExpression') {
+    return node.elements.every(element => element && element.type !== 'SpreadElement') ? node.elements.map(element => ({ node: element, file })) : null;
+  }
+  if (node.type === 'Identifier') {
+    const rows = bindingRows(node, file, index, depth + 1);
+    if (!rows || rows.length !== 1) return null;
+    const value = rows[0].get(node.name);
+    return value?.node ? iterableElements(value.node, value.file, index, depth + 1) : null;
+  }
+  if (node.type !== 'CallExpression') return null;
+  const qualified = qualifiedCallee(node);
+  if (['Object.keys', 'Object.entries', 'Object.values'].includes(qualified)) {
+    const entries = objectEntries(node.arguments[0], file, index);
+    if (!entries) return null;
+    if (qualified === 'Object.keys') return entries.map(([key]) => ({ text: key }));
+    if (qualified === 'Object.values') return entries.map(([, value]) => value);
+    return entries.map(([key, value]) => ({ tuple: [{ text: key }, value] }));
+  }
+  // A filtered or copied constant list holds a subset of its elements.
+  if (node.callee.type === 'MemberExpression' && ['filter', 'slice', 'reverse', 'concat'].includes(memberProperty(node.callee))) {
+    return iterableElements(node.callee.object, file, index, depth + 1);
+  }
+  return null;
+}
+
+// Key/value pairs of every object literal a value can be, spreads included;
+// null when any part is not a known literal.
+function objectEntries(expression, file, index, depth = 0) {
+  if (depth > MAX_RESOLUTION_DEPTH) return null;
+  const sources = receiverSources(expression, contextAt(file, expression), index);
+  if (!sources.length || sources.some(source => !source.object)) return null;
+  const entries = [];
+  for (const { object, context } of sources) {
+    for (const property of object.properties) {
+      if (property.type === 'SpreadElement') {
+        const spread = objectEntries(property.argument, context.file, index, depth + 1);
+        if (!spread) return null;
+        entries.push(...spread);
+      } else if (property.computed) {
+        return null;
+      } else {
+        entries.push([propertyName(property.key), { node: property.value, file: context.file }]);
+      }
+    }
+  }
+  return entries;
+}
+
+// The strings a value can be, or null when any is unknown.
+function stringValues(value, index, depth = 0) {
+  if (!value || depth > MAX_RESOLUTION_DEPTH) return null;
+  if ('text' in value) return typeof value.text === 'string' ? [value.text] : [];
+  const node = unwrapChain(value.node);
+  const text = stringValue(node);
+  if (text !== null) return text.includes('${}') ? null : [text];
+  if (node?.type === 'ConditionalExpression' || node?.type === 'LogicalExpression') {
+    const sides = [node.consequent || node.left, node.alternate || node.right].map(side => stringValues({ node: side, file: value.file }, index, depth + 1));
+    return sides.some(side => !side) ? null : sides.flat();
+  }
+  if (node?.type !== 'Identifier') return null;
+  const rows = bindingRows(node, value.file, index, depth + 1);
+  if (!rows) return null;
+  const strings = rows.map(row => stringValues(row.get(node.name), index, depth + 1));
+  return strings.some(item => !item) ? null : strings.flat();
+}
+
+// Event/handler pairs of one addEventListener call, or null when an event
+// name does not resolve.
+function listenerBindings(call, file, index) {
+  const [triggerArgument, handlerArgument] = call.arguments;
+  const literal = stringValue(triggerArgument);
+  if (literal !== null && !literal.includes('${}')) return [{ trigger: literal, handler: handlerArgument, handlerFile: file }];
+  const trigger = unwrapChain(triggerArgument);
+  if (trigger?.type !== 'Identifier') {
+    const strings = stringValues({ node: trigger, file }, index);
+    return strings && [...new Set(strings)].map(text => ({ trigger: text, handler: handlerArgument, handlerFile: file }));
+  }
+  const rows = bindingRows(trigger, file, index, 0);
+  if (!rows) return null;
+  const bindings = [];
+  for (const row of rows) {
+    const strings = stringValues(row.get(trigger.name), index);
+    if (!strings) return null;
+    // The handler the same row supplies (the entry's value, the same call site).
+    const paired = handlerArgument?.type === 'Identifier' && row.get(handlerArgument.name);
+    const handler = paired?.node ? { handler: paired.node, handlerFile: paired.file } : { handler: handlerArgument, handlerFile: file };
+    bindings.push(...strings.map(text => ({ trigger: text, ...handler })));
+  }
+  return bindings;
+}
+
 function fileEntrypoints(file, index, helpers, timers) {
   const found = [];
   walkAst(file.ast, (node) => {
     if (node.type === 'CallExpression') {
       const name = calleeName(node);
       if (name === 'addEventListener') {
-        const trigger = stringValue(node.arguments[0]);
-        if (trigger) found.push({ ...entry(file, node, 'event', trigger), handler: node.arguments[1] });
+        const bindings = listenerBindings(node, file, index);
+        if (!bindings) found.push({ ...entry(file, node, 'event', '<unresolved>'), unresolvedTrigger: true });
+        for (const { trigger, handler, handlerFile } of bindings || []) {
+          found.push({ ...entry(file, node, 'event', trigger), handler, handlerFile });
+        }
       } else if (isTimerCall(node)) {
         found.push({ ...entry(file, node, 'timer', name), handler: node.arguments[0], timer: name });
       } else if (node.callee.type === 'Identifier' && timers.has(name)) {
@@ -1075,7 +1655,7 @@ function dedupeEntrypoints(entries) {
   return [...byKey.values()];
 }
 
-function publicEntry({ handler, node, timer, ...rest }) {
+function publicEntry({ handler, handlerFile, node, timer, ...rest }) {
   return rest;
 }
 
@@ -1088,24 +1668,45 @@ function analyzeFiles(files) {
   const helpers = requestHelpers(files, index);
   const timers = timerHelpers(files, index);
   index.timers = timers;
+  index.callableNames = applicationCallableNames(files, index);
   const entrypoints = [];
   const hazards = [];
   const hotKeys = new Set();
   for (const file of files) {
     for (const found of fileEntrypoints(file, index, helpers, timers)) {
+      if (found.unresolvedTrigger) {
+        // Not an entrypoint discovery can name: rejected until made resolvable.
+        const operation = 'unresolved-trigger';
+        hazards.push({
+          ...hazardAt('BI-13', operation, found.node, file), key: `${found.key}:${operation}`, entrypoint: found.key, depth: 'direct', via: [], reject: true,
+        });
+        continue;
+      }
       entrypoints.push(publicEntry(found));
-      const callback = entrypointHandler(found, file);
-      const handlers = callback ? resolveCallable(callback, { file, className: ownerOf(file, callback).className }, index) : [];
-      if (isHotEntrypoint(found, file, handlers, index)) hotKeys.add(found.key);
+      // A timer helper's own timer runs the callback its callers pass; each
+      // caller is the entrypoint for that callback, so the helper's is not.
+      const callback = delegatesToCallers(found, file, timers) ? null : entrypointHandler(found, file);
+      const callbackFile = found.handlerFile || file;
+      const handlers = callback ? resolveCallable(callback, contextAt(callbackFile, callback), index) : [];
+      const hot = isHotEntrypoint(found, file, handlers, index);
+      if (hot) hotKeys.add(found.key);
       const highFrequency = found.kind === 'event' && HIGH_FREQUENCY_EVENTS.has(found.trigger);
+      // A hot entrypoint whose callback itself does not resolve runs unknown code.
+      if (hot && callback && !handlers.length) {
+        hazards.push({
+          ...hazardAt('BI-01', `unresolved-call:${calleeLabel(callback)}`, callback, callbackFile), via: [], entrypoint: found.key, depth: 'direct', reject: false,
+        });
+      }
       for (const handler of handlers) {
         const handlerContext = { file: handler.file, className: ownerOf(handler.file, handler.node).className };
-        const { direct, indirect } = reachableHazards(handler, handlerContext, index);
+        const { direct, indirect } = reachableHazards(handler, handlerContext, index, hot);
         // Broad work directly inside a high-frequency handler is rejected; any
-        // other reachable hazard of a hot path requires a runtime contract.
+        // other reachable hazard of a hot path requires a runtime contract (an
+        // unresolved call is not broad work by itself, so it is never rejected).
         // Work bounded once per event matters only when the event repeats per frame.
         const counted = hazard => highFrequency || hazard.scale;
-        for (const hazard of direct.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'direct', reject: highFrequency });
+        const rejected = hazard => highFrequency && !hazard.operation.startsWith('unresolved-call:');
+        for (const hazard of direct.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'direct', reject: rejected(hazard) });
         for (const hazard of indirect.filter(counted)) hazards.push({ ...hazard, entrypoint: found.key, depth: 'indirect', reject: false });
       }
     }

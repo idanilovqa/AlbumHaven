@@ -834,6 +834,26 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/account-menu.js#on",
+      "action": "click/focusout/keydown/pointerdown/resize listeners installed by on",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/account-menu.js#on:event:click",
+        "js:music_app/static/js/runtime/account-menu.js#on:event:focusout",
+        "js:music_app/static/js/runtime/account-menu.js#on:event:keydown",
+        "js:music_app/static/js/runtime/account-menu.js#on:event:pointerdown",
+        "js:music_app/static/js/runtime/account-menu.js#on:event:resize"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/account-menu.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "delta",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/album-track-table.js#triggerAlbumTrackPlayActivation",
       "action": "animationend listeners installed by triggerAlbumTrackPlayActivation",
       "entrypoints": [
@@ -1784,6 +1804,27 @@
         "BI-03"
       ],
       "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/browser-dialog-helpers.js#listen",
+      "action": "click/input/keydown/pointerdown/resize/submit listeners installed by listen",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/browser-dialog-helpers.js#listen:event:click",
+        "js:music_app/static/js/runtime/browser-dialog-helpers.js#listen:event:input",
+        "js:music_app/static/js/runtime/browser-dialog-helpers.js#listen:event:keydown",
+        "js:music_app/static/js/runtime/browser-dialog-helpers.js#listen:event:pointerdown",
+        "js:music_app/static/js/runtime/browser-dialog-helpers.js#listen:event:resize",
+        "js:music_app/static/js/runtime/browser-dialog-helpers.js#listen:event:submit"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/browser-dialog-helpers.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "delta",
       "proof": "static"
     },
     {
@@ -3922,6 +3963,28 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/loop-range-controls.js#listen",
+      "action": "change/click/focusin/focusout/keydown/pointerdown/pointerenter/pointerleave listeners installed by listen",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:change",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:click",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:focusin",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:focusout",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:keydown",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:pointerdown",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:pointerenter",
+        "js:music_app/static/js/runtime/loop-range-controls.js#listen:event:pointerleave"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/loop-range-controls.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/loop-range-controls.js#visit",
       "action": "setTimeout timers installed by visit",
       "entrypoints": [
@@ -3979,8 +4042,11 @@
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:change",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:click",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:keydown",
+        "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:pointerdown",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:resize",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:scroll",
+        "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:touchstart",
+        "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:wheel",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:observer:ResizeObserver"
       ],
       "owners": [
@@ -4336,6 +4402,27 @@
       "testIdentity": "bounded interaction: notification lane observers place only the visible notifications after 500 shown toasts",
       "performanceTargets": [],
       "rollback": "Test-only contract; notification placement is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its Mutation and Resize observers."
+    },
+    {
+      "id": "js:runtime/notification-ui-helpers.js#registerFloatingNotification#2",
+      "action": "animationend/load/loadingdone/resize/scroll/transitionend listeners installed by registerFloatingNotification",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#registerFloatingNotification:event:animationend",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#registerFloatingNotification:event:load",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#registerFloatingNotification:event:loadingdone",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#registerFloatingNotification:event:resize",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#registerFloatingNotification:event:scroll",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#registerFloatingNotification:event:transitionend"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/notification-ui-helpers.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "delta",
+      "proof": "static"
     },
     {
       "id": "js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement",
@@ -7527,6 +7614,26 @@
       ],
       "owners": [
         "music_app/static/js/startup-progress.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:surface-dismissal.js#bind",
+      "action": "blur/click/keydown/pointercancel/pointerdown/pointerup listeners installed by bind",
+      "entrypoints": [
+        "js:music_app/static/js/surface-dismissal.js#bind:event:blur",
+        "js:music_app/static/js/surface-dismissal.js#bind:event:click",
+        "js:music_app/static/js/surface-dismissal.js#bind:event:keydown",
+        "js:music_app/static/js/surface-dismissal.js#bind:event:pointercancel",
+        "js:music_app/static/js/surface-dismissal.js#bind:event:pointerdown",
+        "js:music_app/static/js/surface-dismissal.js#bind:event:pointerup"
+      ],
+      "owners": [
+        "music_app/static/js/surface-dismissal.js"
       ],
       "rules": [
         "BI-03"

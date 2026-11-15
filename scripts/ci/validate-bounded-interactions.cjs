@@ -226,6 +226,11 @@ function validateInventory(registry, discovery) {
     if (!registeredBy.has(key)) errors.push(`unregistered entrypoint ${key}`);
   }
   for (const hazard of discovery.hazards.filter(item => item.reject)) {
+    if (hazard.operation === 'unresolved-trigger') {
+      errors.push(`unresolved-trigger at ${hazard.path}:${hazard.line}: discovery cannot resolve this listener's event name; `
+        + 'make it a literal, a const, a constant list, or an object literal\'s keys so the listener can be registered');
+      continue;
+    }
     const via = hazard.via?.length ? ` via ${hazard.via.join(' > ')}` : '';
     errors.push(`rejected ${hazard.rule} ${hazard.operation} at ${hazard.path}:${hazard.line} from ${hazard.entrypoint}${via}`);
   }

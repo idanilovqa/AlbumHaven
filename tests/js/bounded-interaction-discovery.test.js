@@ -278,10 +278,13 @@ test('a one-shot animation frame is not hot, an animation loop is, and a hot han
     'tween:timer:scheduleFrame': true,
   });
   const hotHazards = hazards.filter(hazard => hazard.hot).map(hazard => [hazard.entrypoint.split('#')[1], hazard.operation, hazard.via.at(-1) || '<handler>']);
+  // `row.step()` names an application function on an unknown receiver.
   assert.deepEqual(hotHazards, [
     ['animate:timer:requestAnimationFrame', 'forEach', '<handler>'],
+    ['animate:timer:requestAnimationFrame', 'unresolved-call:row.step', '<handler>'],
     ['install:event:scroll', 'forEach', 'renderRows'],
     ['tween:timer:scheduleFrame', 'forEach', '<handler>'],
+    ['tween:timer:scheduleFrame', 'unresolved-call:row.step', '<handler>'],
   ]);
 });
 
@@ -296,7 +299,152 @@ test('a name bound inside the enclosing function never resolves to a same-named 
     }
     function global(root) { root.addEventListener('wheel', () => cancel()); }
   ` });
-  assert.deepEqual([...new Set(hazards.map(hazard => hazard.entrypoint.split('#')[1]))], ['global:event:wheel']);
+  // The parameter `resolve` is not the global `resolve`; on a hot path its
+  // unknown callee is itself a hazard.
+  assert.deepEqual(hazards.map(hazard => [hazard.entrypoint.split('#')[1], hazard.operation]), [
+    ['global:event:wheel', 'forEach'],
+    ['global:event:wheel', 'querySelectorAll'],
+    ['install:event:scroll', 'unresolved-call:resolve'],
+  ]);
+});
+
+test('aliases, singleton aliases, and object literal members resolve to the code they run', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({
+    [FILE]: `
+      class VirtualArtistGrid { relayout() { document.querySelectorAll('.card').forEach(card => card.remove()); } }
+      const virtualGrid = new VirtualArtistGrid();
+      function heavy() { state.rows.forEach(row => row.seen = true); }
+      function install(root) {
+        const hooks = { onScroll() { state.tracks.forEach(track => track.seen = true); } };
+        root.addEventListener('scroll', () => { const run = heavy; run(); });
+        root.addEventListener('wheel', () => { const grid = virtualGrid; grid.relayout(); });
+        root.addEventListener('pointermove', () => hooks.onScroll());
+      }
+    `,
+    'music_app/static/js/runtime/api.js': `
+      (function (scope) {
+        function renderRows() { state.rows.map(row => row.html).join(''); }
+        const api = { renderRows };
+        if (scope) scope.RowApi = api;
+      })(typeof window !== 'undefined' ? window : null);
+    `,
+    'music_app/static/js/runtime/consumer.js': `
+      document.addEventListener('scroll', () => RowApi.renderRows());
+    `,
+  });
+  const reached = trigger => hazards.filter(hazard => hazard.entrypoint.endsWith(`:event:${trigger}`)).map(hazard => [hazard.operation, hazard.via.at(-1)]);
+  assert.deepEqual(reached('scroll').filter(([operation]) => operation === 'forEach'), [['forEach', 'heavy']]);
+  assert.deepEqual(reached('wheel'), [['forEach', 'VirtualArtistGrid.relayout'], ['querySelectorAll', 'VirtualArtistGrid.relayout']]);
+  assert.deepEqual(reached('pointermove'), [['forEach', '<inline>']]);
+  assert.deepEqual(hazards.filter(hazard => hazard.path.endsWith('api.js')).map(hazard => [hazard.operation, hazard.via.at(-1)]), [
+    ['join', 'renderRows'], ['map', 'renderRows'],
+  ]);
+});
+
+test('on a hot path a call that resolves to nothing is a hazard unless it is platform work', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    var Panel = class { refreshRows() { state.rows.forEach(row => row.seen = true); } };
+    function install(root, onScroll, handlers) {
+      root.addEventListener('scroll', (event) => {
+        onScroll(event);
+        handlers[event.type]();
+        root.contains(event.target);
+        localStore.getItem('k');
+        requestIdleCallback(() => {});
+        event.target.panel.refreshRows();
+      });
+      root.addEventListener('click', () => onScroll());
+    }
+  ` });
+  assert.deepEqual(hazards.map(hazard => [hazard.entrypoint.split('#')[1], hazard.operation, hazard.reject]), [
+    ['install:event:scroll', 'unresolved-call:handlers[…]', false],
+    ['install:event:scroll', 'unresolved-call:onScroll', false],
+    ['install:event:scroll', 'unresolved-call:….refreshRows', false],
+  ]);
+});
+
+test('a called parameter is known from its call sites, and a function passed on is followed from its caller', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function heavy() { state.rows.forEach(row => row.seen = true); }
+    function light() { return 1; }
+    function each(visit) { visit(); }
+    function notify({ onDone }) { onDone(); }
+    function settle(options) { options.onSettled?.(); }
+    function wait() { return new Promise(resolve => resolve()); }
+    function install(root, external) {
+      root.addEventListener('scroll', () => {
+        each(heavy);
+        notify({ onDone: light });
+        settle({ onSettled: light });
+        wait();
+      });
+      root.addEventListener('wheel', () => each(light));
+      root.addEventListener('pointermove', () => external());
+    }
+  ` });
+  assert.deepEqual(hazards.map(hazard => [hazard.entrypoint.split(':event:')[1], hazard.operation, hazard.via.at(-1)]), [
+    ['pointermove', 'unresolved-call:external', undefined],
+    ['scroll', 'forEach', 'heavy'],
+  ]);
+});
+
+test('listener event names resolve through constant lists, object keys, tuples, and call sites, each with its own handler', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { entrypoints, hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function heavy() { state.rows.forEach(row => row.seen = true); }
+    function light() {}
+    function loops(root) {
+      for (const type of ['pointerdown', 'wheel']) root.addEventListener(type, light);
+      const EVENT = 'keydown';
+      root.addEventListener(EVENT, light);
+    }
+    function entries(root) {
+      const listeners = { ...{ scroll: heavy }, click() {} };
+      for (const [type, handler] of Object.entries(listeners)) root.addEventListener(type, handler);
+      Object.keys({ focusin: 1 }).forEach(type => root.addEventListener(type, light));
+    }
+    function tuples() {
+      const targets = [[window, 'resize'], [document, 'load']].filter(([target]) => target);
+      targets.forEach(([target, event]) => target.addEventListener(event, light));
+    }
+    function dialog(modal) {
+      const listen = (node, name, handler) => node.addEventListener(name, handler);
+      listen(modal, 'input', heavy);
+      listen(modal, 'submit', light);
+    }
+  ` });
+  assert.deepEqual(entrypoints.filter(item => item.kind === 'event').map(item => item.key.split('#')[1]), [
+    'entries:event:click', 'entries:event:focusin', 'entries:event:scroll',
+    'listen:event:input', 'listen:event:submit',
+    'loops:event:keydown', 'loops:event:pointerdown', 'loops:event:wheel',
+    'tuples:event:load', 'tuples:event:resize',
+  ]);
+  // Each event runs its own handler: only the scroll entry and input call site reach `heavy`.
+  assert.deepEqual([...new Set(hazards.map(hazard => hazard.entrypoint.split('#')[1]))], ['entries:event:scroll', 'listen:event:input']);
+});
+
+test('a listener whose event name does not resolve is rejected until it is made resolvable', async () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { validateInventory } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+  const discovery = analyzeJavaScriptSources({ [FILE]: `
+    function install(root, options) { root.addEventListener(options.type, () => {}); }
+    function computed(root, prefix) { root.addEventListener(\`\${prefix}move\`, () => {}); }
+  ` });
+  assert.deepEqual(discovery.entrypoints, []);
+  const errors = validateInventory({ interactions: [] }, discovery);
+  assert.equal(errors.length, 2);
+  assert.ok(errors.every(error => /^unresolved-trigger at music_app\/static\/js\/runtime\/example\.js:\d+: discovery cannot resolve/.test(error)), errors.join('\n'));
+});
+
+test('a hot entrypoint whose own callback does not resolve is a hazard', () => {
+  const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
+  const { hazards } = analyzeJavaScriptSources({ [FILE]: `
+    function install(root, handlers) { root.addEventListener('scroll', handlers.scroll); }
+  ` });
+  assert.deepEqual(hazards.map(hazard => hazard.operation), ['unresolved-call:handlers.scroll']);
 });
 
 test('lookup and copy methods and indexed loops over shared collections are hazards', () => {

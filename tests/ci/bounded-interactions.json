@@ -1287,7 +1287,7 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#reconcile",
-      "action": "fetchAndRender requests installed by reconcile",
+      "action": "Reconcile a cached selected-artist view once its track modal closes, polling every 500 ms while it is open",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:request:fetchAndRender",
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:timer:scheduleBrowserTimeout"
@@ -1300,18 +1300,35 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
           "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "BI cached selected-artist reconcile waits for the track modal with constant work",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; selected-artist reconcile is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#resume",
-      "action": "scheduleBrowserTimeout timers installed by resume",
+      "action": "Resume sidebar-suspended gallery cover loads, polling every 16 ms while a superseding view request is pending",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#resume:timer:scheduleBrowserTimeout"
       ],
@@ -1322,11 +1339,28 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "BI sidebar artist cover resume waits for the pending view request with constant work",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; cover resume is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads",
-      "action": "scheduleBrowserTimeout timers installed by resumeCoverLoads",
+      "action": "Resume all-artists-suspended gallery cover loads, polling every 16 ms while a superseding view request is pending",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads:timer:scheduleBrowserTimeout"
       ],
@@ -1337,7 +1371,24 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "BI all-artists cover resume waits for the pending view request with constant work",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; cover resume is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#scheduleCachedSelectedArtistReconcile",

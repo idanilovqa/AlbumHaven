@@ -5911,3 +5911,89 @@ test('request capture: history steps request the restored view once, Home throug
     return capture.counter.snapshot();
   });
 });
+
+// Gallery handlers with `artistCount` counted loaded artist groups. Timers run
+// only when fired; requests and cover resumes are counted.
+function countedGalleryHandlers(artistCount, options = {}) {
+  const { countedCollection, createInteractionCounter } = require('../helpers/bounded-interaction-counter');
+  const counter = createInteractionCounter();
+  const fixture = createContext(options);
+  const { context, calls } = fixture;
+  const groups = Array.from({ length: artistCount }, (_, index) => ({ artist: `Artist ${index}`, albums: [{ key: `album-${index}` }] }));
+  context.state.view = {
+    ...context.state.view,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: countedCollection(groups, counter),
+  };
+  const timers = [];
+  context.scheduleBrowserTimeout = (callback) => { counter.count('timers'); timers.push(callback); return timers.length; };
+  const fetchAndRender = context.fetchAndRender;
+  context.fetchAndRender = (...args) => { counter.count('requests'); return fetchAndRender(...args); };
+  const fireNext = async () => {
+    timers.shift()();
+    await settleGallery();
+  };
+  return { ...fixture, calls, counter, fireNext, timers };
+}
+
+async function measureConstantGalleryTick(id, tick) {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const { small, large } = await measureScalePair({
+    id,
+    small: 20,
+    large: 14000,
+    run: tick,
+    budgets: { requests: 0, itemsVisited: 0, timers: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+}
+
+test('BI cached selected-artist reconcile waits for the track modal with constant work', async () => {
+  await measureConstantGalleryTick('js:runtime/bootstrap-gallery-event-handlers.js#reconcile', async (artistCount) => {
+    const { calls, context, counter, fireNext, timers } = countedGalleryHandlers(artistCount, { trackModalHidden: false });
+    context.scheduleCachedSelectedArtistReconcile({ ...context.state.view });
+    await fireNext();
+    assert.equal(timers.length, 1, 'an open track modal defers the reconcile');
+    const counts = await counter.measure(fireNext);
+    assert.equal(timers.length, 1);
+    context.document.getElementById('track-modal').hidden = true;
+    await fireNext();
+    assert.equal(calls.fetchAndRender.length, 1, 'the closed modal lets the reconcile request once');
+    return counts;
+  });
+});
+
+test('BI sidebar artist cover resume waits for the pending view request with constant work', async () => {
+  await measureConstantGalleryTick('js:runtime/bootstrap-gallery-event-handlers.js#resume', async (artistCount) => {
+    const { calls, context, counter, fireNext, timers } = countedGalleryHandlers(artistCount);
+    const resume = context.beginSidebarArtistCoverLoadSuspension();
+    context.state.ui.pendingViewRequest = { url: '/view-data?artist=Broadcast' };
+    resume(false);
+    const counts = await counter.measure(fireNext);
+    assert.equal(timers.length, 1, 'a pending view request keeps the covers suspended');
+    assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+    context.state.ui.pendingViewRequest = null;
+    await fireNext();
+    assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+    return counts;
+  });
+});
+
+test('BI all-artists cover resume waits for the pending view request with constant work', async () => {
+  await measureConstantGalleryTick('js:runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads', async (artistCount) => {
+    const { calls, context, counter, fireNext, timers } = countedGalleryHandlers(artistCount, { fetchAndRenderResult: false });
+    context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+    context.state.ui.pendingViewRequest = { url: '/view-data?gallery_scope=all' };
+    await settleGallery();
+    assert.equal(timers.length, 1, 'a superseded request defers the cover resume');
+    const counts = await counter.measure(fireNext);
+    assert.equal(timers.length, 1);
+    assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+    context.state.ui.pendingViewRequest = null;
+    await fireNext();
+    assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+    return counts;
+  });
+});

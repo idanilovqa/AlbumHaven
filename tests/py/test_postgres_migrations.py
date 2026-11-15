@@ -64,85 +64,85 @@ READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
 DURABLE_JOBS_MIGRATION = (
-    MIGRATIONS_DIR / "0099_create_durable_job_foundation.sql"
+    MIGRATIONS_DIR / "0220_create_durable_job_foundation.sql"
 )
 DURABLE_JOB_CANCELLATION_MIGRATION = (
-    MIGRATIONS_DIR / "0100_request_durable_job_cancellation.sql"
+    MIGRATIONS_DIR / "0221_request_durable_job_cancellation.sql"
 )
 DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
-    MIGRATIONS_DIR / "0101_harden_durable_job_boundaries.sql"
+    MIGRATIONS_DIR / "0222_harden_durable_job_boundaries.sql"
 )
 DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
-    MIGRATIONS_DIR / "0102_grant_worker_authorization_reads.sql"
+    MIGRATIONS_DIR / "0223_grant_worker_authorization_reads.sql"
 )
 DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
-    MIGRATIONS_DIR / "0103_add_job_transition_retention_index.sql"
+    MIGRATIONS_DIR / "0224_add_job_transition_retention_index.sql"
 )
 SCAN_JOB_INTENTS_MIGRATION = (
-    MIGRATIONS_DIR / "0104_create_scan_job_intents.sql"
+    MIGRATIONS_DIR / "0225_create_scan_job_intents.sql"
 )
 TARGETED_RECONCILIATION_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0105_grant_worker_targeted_reconciliation.sql"
+    MIGRATIONS_DIR / "0226_grant_worker_targeted_reconciliation.sql"
 )
 FULL_SCAN_LIFECYCLE_MIGRATION = (
-    MIGRATIONS_DIR / "0106_authorize_full_scan_lifecycle.sql"
+    MIGRATIONS_DIR / "0227_authorize_full_scan_lifecycle.sql"
 )
 FULL_SCAN_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0107_grant_worker_full_scan_execution.sql"
+    MIGRATIONS_DIR / "0228_grant_worker_full_scan_execution.sql"
 )
 DURABLE_COVER_STATE_MIGRATION = (
-    MIGRATIONS_DIR / "0108_create_durable_cover_job_state.sql"
+    MIGRATIONS_DIR / "0229_create_durable_cover_job_state.sql"
 )
 COVER_LOOKUP_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0109_grant_worker_cover_lookup.sql"
+    MIGRATIONS_DIR / "0230_grant_worker_cover_lookup.sql"
 )
 COVER_REFRESH_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0110_grant_worker_cover_refresh.sql"
+    MIGRATIONS_DIR / "0231_grant_worker_cover_refresh.sql"
 )
 REMOTE_COVER_SAVE_MIGRATION = (
-    MIGRATIONS_DIR / "0111_create_remote_cover_save_checkpoints.sql"
+    MIGRATIONS_DIR / "0232_create_remote_cover_save_checkpoints.sql"
 )
 DURABLE_SCAN_STATUS_MIGRATION = (
-    MIGRATIONS_DIR / "0112_complete_durable_scan_status_projection.sql"
+    MIGRATIONS_DIR / "0233_complete_durable_scan_status_projection.sql"
 )
 LASTFM_RETRY_JOB_STATE_MIGRATION = (
-    MIGRATIONS_DIR / "0113_create_lastfm_retry_job_state.sql"
+    MIGRATIONS_DIR / "0234_create_lastfm_retry_job_state.sql"
 )
 LASTFM_RETRY_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0114_grant_worker_lastfm_retry.sql"
+    MIGRATIONS_DIR / "0235_grant_worker_lastfm_retry.sql"
 )
 AUTH_MAIL_JOB_STATE_MIGRATION = (
-    MIGRATIONS_DIR / "0115_create_auth_mail_job_state.sql"
+    MIGRATIONS_DIR / "0236_create_auth_mail_job_state.sql"
 )
 AUTH_MAIL_WORKER_MIGRATION = (
-    MIGRATIONS_DIR / "0116_grant_worker_auth_mail.sql"
+    MIGRATIONS_DIR / "0237_grant_worker_auth_mail.sql"
 )
 DURABLE_WORKER_PREFLIGHT_MIGRATION = (
-    MIGRATIONS_DIR / "0117_validate_durable_worker_startup.sql"
+    MIGRATIONS_DIR / "0238_validate_durable_worker_startup.sql"
 )
 VACATED_STRUCTURAL_ALBUM_MIGRATION = (
-    MIGRATIONS_DIR / "0118_retire_vacated_structural_album.sql"
+    MIGRATIONS_DIR / "0239_retire_vacated_structural_album.sql"
 )
 WATCHER_RECOVERY_MIGRATION = (
-    MIGRATIONS_DIR / "0119_create_durable_watcher_recovery.sql"
+    MIGRATIONS_DIR / "0240_create_durable_watcher_recovery.sql"
 )
 WATCHER_SESSION_MIGRATION = (
-    MIGRATIONS_DIR / "0120_create_watcher_runtime_sessions.sql"
+    MIGRATIONS_DIR / "0241_create_watcher_runtime_sessions.sql"
 )
 WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION = (
-    MIGRATIONS_DIR / "0121_preserve_full_scan_progress_on_restart.sql"
+    MIGRATIONS_DIR / "0242_preserve_full_scan_progress_on_restart.sql"
 )
 COVER_CONSISTENCY_MIGRATION = (
-    MIGRATIONS_DIR / "0122_close_cover_consistency.sql"
+    MIGRATIONS_DIR / "0243_close_cover_consistency.sql"
 )
 LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION = (
-    MIGRATIONS_DIR / "0126_acknowledge_mixed_version_library_warnings.sql"
+    MIGRATIONS_DIR / "0247_acknowledge_mixed_version_library_warnings.sql"
 )
 AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
-    MIGRATIONS_DIR / "0127_restore_authoritative_exception_clear.sql"
+    MIGRATIONS_DIR / "0248_restore_authoritative_exception_clear.sql"
 )
 PROBLEMATIC_PROJECTION_MIGRATION = (
-    MIGRATIONS_DIR / "0128_create_problematic_files_projection.sql"
+    MIGRATIONS_DIR / "0249_create_problematic_files_projection.sql"
 )
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
@@ -212,11 +212,13 @@ def _cover_consistency_function_sql(name: str) -> str:
 
 def test_0120_is_additive_and_keeps_released_0119_bytes():
     released_0119 = WATCHER_RECOVERY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    while released_0119.startswith(b"-- depends on: "):
+        released_0119 = released_0119.partition(b"\n")[2]
     assert hashlib.sha256(released_0119).hexdigest() == (
         "c7a968f87b2d9841b5958cce16e6caca32ecb1e5a5b9708e2efa8046246a6ae6"
     )
     assert WATCHER_SESSION_MIGRATION.name == (
-        "0120_create_watcher_runtime_sessions.sql"
+        "0241_create_watcher_runtime_sessions.sql"
     )
     session_sql = _watcher_session_sql()
     assert "alter table library.watcher_lanes" not in session_sql
@@ -385,13 +387,15 @@ def test_0121_is_the_exact_ordered_successor_to_unchanged_0120():
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
     predecessor_index = migration_names.index(
-        "0120_create_watcher_runtime_sessions.sql"
+        "0241_create_watcher_runtime_sessions.sql"
     )
     assert migration_names[predecessor_index : predecessor_index + 2] == [
-        "0120_create_watcher_runtime_sessions.sql",
-        "0121_preserve_full_scan_progress_on_restart.sql",
+        "0241_create_watcher_runtime_sessions.sql",
+        "0242_preserve_full_scan_progress_on_restart.sql",
     ]
     released_0120 = WATCHER_SESSION_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    while released_0120.startswith(b"-- depends on: "):
+        released_0120 = released_0120.partition(b"\n")[2]
     assert hashlib.sha256(released_0120).hexdigest() == (
         "c42e0f839996eecf12f5b76b48ad9383ddbba7e106148cff63521d0411d44aa0"
     )
@@ -533,15 +537,15 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
     )
 
     assert migration_names[-9:] == [
-        "0121_preserve_full_scan_progress_on_restart.sql",
-        "0122_close_cover_consistency.sql",
-        "0123_preserve_newer_watcher_incident_presentation.sql",
-        "0124_close_worker_preflight_cover_contract.sql",
-        "0125_preserve_cover_selection_metadata.sql",
-        "0126_acknowledge_mixed_version_library_warnings.sql",
-        "0127_restore_authoritative_exception_clear.sql",
-        "0128_create_problematic_files_projection.sql",
-        "0129_restore_incomplete_album_contract.sql",
+        "0242_preserve_full_scan_progress_on_restart.sql",
+        "0243_close_cover_consistency.sql",
+        "0244_preserve_newer_watcher_incident_presentation.sql",
+        "0245_close_worker_preflight_cover_contract.sql",
+        "0246_preserve_cover_selection_metadata.sql",
+        "0247_acknowledge_mixed_version_library_warnings.sql",
+        "0248_restore_authoritative_exception_clear.sql",
+        "0249_create_problematic_files_projection.sql",
+        "0250_restore_incomplete_album_contract.sql",
     ]
 
 
@@ -1155,7 +1159,7 @@ def test_0128_disc_folder_digits_are_ascii_in_python_and_sql():
 
     assert library._DISC_FOLDER_RE.search("Disc 1") is not None
     assert library._DISC_FOLDER_RE.search("Disc ١") is None
-    assert library._entry_album_container({"path": unicode_disc_path}).endswith(
+    assert library._track_album_container(unicode_disc_path).casefold().endswith(
         "disc ١"
     )
     assert "[0-9]{1,2}" in function_sql
@@ -2657,7 +2661,7 @@ def test_0119_mark_dirty_is_one_app_only_security_definer_boundary():
 
 def test_0123_normalizes_crlf_before_splicing_mark_dirty_source():
     migration = (
-        MIGRATIONS_DIR / "0123_preserve_newer_watcher_incident_presentation.sql"
+        MIGRATIONS_DIR / "0244_preserve_newer_watcher_incident_presentation.sql"
     )
     sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
     splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1]
@@ -2672,7 +2676,7 @@ def test_0123_normalizes_crlf_before_splicing_mark_dirty_source():
 
 
 def test_0123_mark_dirty_preserves_newer_incident_presentation():
-    migration = MIGRATIONS_DIR / "0123_preserve_newer_watcher_incident_presentation.sql"
+    migration = MIGRATIONS_DIR / "0244_preserve_newer_watcher_incident_presentation.sql"
     assert migration.is_file()
     sql = " ".join(migration.read_text(encoding="utf-8").split())
 
@@ -2688,7 +2692,7 @@ def test_0123_mark_dirty_preserves_newer_incident_presentation():
 
 
 def test_0124_normalizes_crlf_before_splicing_worker_preflight_source():
-    migration = MIGRATIONS_DIR / "0124_close_worker_preflight_cover_contract.sql"
+    migration = MIGRATIONS_DIR / "0245_close_worker_preflight_cover_contract.sql"
     sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
     splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1]
     first_strpos = splice.index("pg_catalog.strpos(")
@@ -2702,7 +2706,7 @@ def test_0124_normalizes_crlf_before_splicing_worker_preflight_source():
 
 
 def test_0124_worker_preflight_requires_current_cover_worker_boundaries():
-    migration = MIGRATIONS_DIR / "0124_close_worker_preflight_cover_contract.sql"
+    migration = MIGRATIONS_DIR / "0245_close_worker_preflight_cover_contract.sql"
     assert migration.is_file()
     sql = " ".join(migration.read_text(encoding="utf-8").split())
 
@@ -3141,7 +3145,12 @@ def test_vacated_structural_album_sibling_sweep_is_exact_bounded_and_family_mark
     assert "candidate_album.release_year is not distinct from destination.release_year" in sql
     assert "candidate_album.metadata ->> 'edition'" in sql
     assert "not exists ( select 1 from library.local_tracks" in sql
-    assert "from library.separate_releases" not in sql
+    assert (
+        "not exists ( select 1 from library.separate_releases as separate "
+        "where separate.library_id = candidate_album.library_id "
+        "and separate.release_key = candidate_album.album_key )"
+        in sql
+    )
     assert "order by candidate_album.id" in sql
     assert "for update of candidate_album" in sql
     assert "library.retire_vacated_structural_album(" in sql
@@ -3233,6 +3242,7 @@ LOCAL_ALBUM_FEATURED_ARTIST_DELETE_GRANT_MIGRATION = (
     MIGRATIONS_DIR / "0025_grant_local_album_featured_artist_delete.sql"
 )
 ALBUM_RATINGS_MIGRATION = MIGRATIONS_DIR / "0026_create_album_ratings.sql"
+ALBUM_DISC_RATINGS_MIGRATION = MIGRATIONS_DIR / "0176_create_album_disc_ratings.sql"
 COVER_LOOKUP_TASK_DELETE_GRANT_REPAIR_MIGRATION = (
     MIGRATIONS_DIR / "0027_repair_cover_lookup_task_delete_grant.sql"
 )
@@ -3563,15 +3573,14 @@ def baseline_sql() -> str:
 
 def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered():
     migration_names = sorted(
-        path.name
-        for path in MIGRATIONS_DIR.iterdir()
+        path.name for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.lower() == ".sql"
     )
     migration_numbers = [int(name[:4]) for name in migration_names]
-
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-90:] == [
+    # Migration numbers may have gaps, but each number has one owner.
+    assert len(set(migration_numbers)) == len(migration_numbers)
+    assert migration_names[-108:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -3631,39 +3640,56 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0096_create_generated_preview_storage.sql",
         "0097_repair_generated_preview_inventory_path_constraint.sql",
         "0098_track_generated_preview_current_path.sql",
-        "0099_create_durable_job_foundation.sql",
-        "0100_request_durable_job_cancellation.sql",
-        "0101_harden_durable_job_boundaries.sql",
-        "0102_grant_worker_authorization_reads.sql",
-        "0103_add_job_transition_retention_index.sql",
-        "0104_create_scan_job_intents.sql",
-        "0105_grant_worker_targeted_reconciliation.sql",
-        "0106_authorize_full_scan_lifecycle.sql",
-        "0107_grant_worker_full_scan_execution.sql",
-        "0108_create_durable_cover_job_state.sql",
-        "0109_grant_worker_cover_lookup.sql",
-        "0110_grant_worker_cover_refresh.sql",
-        "0111_create_remote_cover_save_checkpoints.sql",
-        "0112_complete_durable_scan_status_projection.sql",
-        "0113_create_lastfm_retry_job_state.sql",
-        "0114_grant_worker_lastfm_retry.sql",
-        "0115_create_auth_mail_job_state.sql",
-        "0116_grant_worker_auth_mail.sql",
-        "0117_validate_durable_worker_startup.sql",
-        "0118_retire_vacated_structural_album.sql",
-        "0119_create_durable_watcher_recovery.sql",
-        "0120_create_watcher_runtime_sessions.sql",
-        "0121_preserve_full_scan_progress_on_restart.sql",
-        "0122_close_cover_consistency.sql",
-        "0123_preserve_newer_watcher_incident_presentation.sql",
-        "0124_close_worker_preflight_cover_contract.sql",
-        "0125_preserve_cover_selection_metadata.sql",
-        "0126_acknowledge_mixed_version_library_warnings.sql",
-        "0127_restore_authoritative_exception_clear.sql",
-        "0128_create_problematic_files_projection.sql",
-        "0129_restore_incomplete_album_contract.sql",
+        "0099_reconcile_cover_lookup_notification_album_identities.sql",
+        "0100_archive_invalid_featured_track_cover_notifications.sql",
+        "0101_create_local_album_identity_transitions.sql",
+        "0102_narrow_synthetic_unknown_album_identity_guard.sql",
+        "0103_repair_synthetic_unknown_cover_task_identities.sql",
+        "0104_create_playback_claims.sql",
+        "0105_add_playback_claim_handoffs.sql",
+        "0106_create_android_artifact_access.sql",
+        "0107_add_android_device_key_signer.sql",
+        "0112_add_problematic_file_path_projection.sql",
+        "0171_create_musicbrainz_artist_enrichment.sql",
+        "0172_add_musicbrainz_artist_discogs_link.sql",
+        "0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql",
+        "0174_add_musicbrainz_matcher_version_and_credit_name.sql",
+        "0175_add_musicbrainz_match_album_evidence.sql",
+        "0176_create_album_disc_ratings.sql",
+        "0177_create_local_album_artist_identities.sql",
+        "0178_add_musicbrainz_associated_artists.sql",
+        "0220_create_durable_job_foundation.sql",
+        "0221_request_durable_job_cancellation.sql",
+        "0222_harden_durable_job_boundaries.sql",
+        "0223_grant_worker_authorization_reads.sql",
+        "0224_add_job_transition_retention_index.sql",
+        "0225_create_scan_job_intents.sql",
+        "0226_grant_worker_targeted_reconciliation.sql",
+        "0227_authorize_full_scan_lifecycle.sql",
+        "0228_grant_worker_full_scan_execution.sql",
+        "0229_create_durable_cover_job_state.sql",
+        "0230_grant_worker_cover_lookup.sql",
+        "0231_grant_worker_cover_refresh.sql",
+        "0232_create_remote_cover_save_checkpoints.sql",
+        "0233_complete_durable_scan_status_projection.sql",
+        "0234_create_lastfm_retry_job_state.sql",
+        "0235_grant_worker_lastfm_retry.sql",
+        "0236_create_auth_mail_job_state.sql",
+        "0237_grant_worker_auth_mail.sql",
+        "0238_validate_durable_worker_startup.sql",
+        "0239_retire_vacated_structural_album.sql",
+        "0240_create_durable_watcher_recovery.sql",
+        "0241_create_watcher_runtime_sessions.sql",
+        "0242_preserve_full_scan_progress_on_restart.sql",
+        "0243_close_cover_consistency.sql",
+        "0244_preserve_newer_watcher_incident_presentation.sql",
+        "0245_close_worker_preflight_cover_contract.sql",
+        "0246_preserve_cover_selection_metadata.sql",
+        "0247_acknowledge_mixed_version_library_warnings.sql",
+        "0248_restore_authoritative_exception_clear.sql",
+        "0249_create_problematic_files_projection.sql",
+        "0250_restore_incomplete_album_contract.sql",
     ]
-
 
 def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():
     sql = _normalized_sql(COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8"))
@@ -3999,6 +4025,95 @@ def test_album_raw_artist_search_index_matches_search_preview_expression():
     assert "local_albums_normalized_raw_artists_trgm_idx" in sql
     assert "lower(btrim(coalesce(metadata ->> 'artists', '')))" in sql
     assert "gin_trgm_ops" in sql
+
+
+def test_album_identity_lineage_migration_is_additive_scoped_and_trigger_owned():
+    migration_path = MIGRATIONS_DIR / "0101_create_local_album_identity_transitions.sql"
+    assert hashlib.sha256(migration_path.read_bytes()).hexdigest() == (
+        "c08cc70188bd840a87502eda607c66d832373c054bbe232ac3ad70bb2fbb08e9"
+    )
+    sql = _normalized_sql(migration_path.read_text(encoding="utf-8"))
+
+    assert "create table library.local_album_identity_transitions" in sql
+    assert "predecessor_album_id bigint not null" in sql
+    assert "successor_album_id bigint not null" in sql
+    assert "predecessor_album_key text not null" in sql
+    assert "successor_album_key text not null" in sql
+    assert (
+        "unique (library_id, predecessor_album_id, predecessor_album_key, "
+        "successor_album_id, successor_album_key)"
+    ) in sql
+    assert "after update of album_id on library.local_tracks" in sql
+    assert "after update of album_key on library.local_albums" in sql
+    assert "old.library_id <> new.library_id" in sql
+    assert "grant select on library.local_album_identity_transitions to album_haven_app" in sql
+
+
+def test_unknown_album_identity_guard_only_rejects_the_synthetic_both_unknown_case():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0102_narrow_synthetic_unknown_album_identity_guard.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "create or replace function library.record_local_track_album_identity_transition()" in sql
+    assert "create or replace function library.record_local_album_key_identity_transition()" in sql
+    assert "lower(btrim(coalesce(successor_title, ''))) in" in sql
+    assert "and lower(btrim(coalesce(successor_artist, ''))) in" in sql
+
+
+def test_synthetic_unknown_cover_task_repair_requires_unique_exact_live_evidence():
+    sql = _normalized_sql(
+        (MIGRATIONS_DIR / "0103_repair_synthetic_unknown_cover_task_identities.sql").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "lower(btrim(artists.name)) = lower(btrim(tasks.source_artist))" in sql
+    assert "lower(btrim(albums.title)) = lower(btrim(tasks.source_album))" in sql
+    assert "having count(*) = 1" in sql
+    assert "having count(distinct resolved_paths.private_path)" in sql
+    assert "and count(distinct resolved_paths.current_album_id) = 1" in sql
+    assert "having count(distinct mappings.target_album_id) > 1" in sql
+    assert "delete from synthetic_unknown_cover_task_mappings as mappings" in sql
+    assert "current_album.title" in sql and "current_artist.name" in sql
+    assert "update library.local_tracks as tracks" in sql
+    assert "update ops.cover_lookup_tasks as tasks" in sql
+    assert "synthetic_unknown_identity_repair" in sql
+    assert "417655" not in sql
+    assert "751471" not in sql
+
+
+def test_album_raw_artist_search_index_prerequisite_relocates_pg_trgm_without_rewriting_0083():
+    migration_path = MIGRATIONS_DIR / "0083_add_album_raw_artist_search_index.sql"
+    migration_source = migration_path.read_text(encoding="utf-8")
+    migration_sql = _normalized_sql(migration_source)
+    prerequisite_path = (
+        REPO_ROOT / "scripts" / "postgres" / "prepare_0083_pg_trgm_schema.sql"
+    )
+    prerequisite_source = prerequisite_path.read_text(encoding="utf-8")
+    prerequisite_sql = _normalized_sql(prerequisite_source)
+
+    assert hashlib.sha256(migration_path.read_bytes()).hexdigest() == (
+        "6531983a2ca6020cef9df58f968c855f160993fdd82582b81fed1b04af69c1f4"
+    )
+    assert "library.gin_trgm_ops" in migration_sql
+    assert "album_haven_0083_pg_trgm_schema_v1" in prerequisite_source
+    assert "create extension if not exists pg_trgm with schema library" in prerequisite_sql
+    assert "from pg_catalog.pg_extension" in prerequisite_sql
+    assert "alter extension pg_trgm set schema library" in prerequisite_sql
+    assert "namespace.nspname = 'library'" in prerequisite_sql
+    assert "operator_class.opcname = 'gin_trgm_ops'" in prerequisite_sql
+
+
+def test_pg_trgm_prerequisite_creates_library_schema_for_fresh_database():
+    source = (
+        REPO_ROOT / "scripts" / "postgres" / "prepare_0083_pg_trgm_schema.sql"
+    ).read_text(encoding="utf-8")
+    normalized = _normalized_sql(source)
+
+    assert "create schema if not exists library authorization %I" in source
+    assert "where database.datname = current_database()" in normalized
 
 
 def test_gallery_projection_featured_role_migration_extends_field_allowlist():
@@ -5122,6 +5237,30 @@ def test_cover_lookup_task_delete_grant_repair_is_role_guarded_and_least_privile
         r"\bgrant\s+(?:select|insert|update|truncate|references|trigger)\b",
         sql,
     )
+
+
+def test_album_disc_ratings_migration_scopes_nullable_disc_authority_to_the_local_album():
+    sql = _normalized_sql(ALBUM_DISC_RATINGS_MIGRATION.read_text(encoding="utf-8"))
+
+    required_fragments = {
+        "create table if not exists app.album_disc_ratings",
+        "account_id bigint not null references app.accounts(id) on delete cascade",
+        "library_id bigint not null references library.libraries(id) on delete cascade",
+        "album_key text not null",
+        "disc_key text not null",
+        "rating smallint,",
+        "provenance text not null",
+        "check ( disc_key <> '' and disc_key = lower(btrim(disc_key)) )",
+        "rating is null or rating between 1 and 10",
+        "references library.local_albums(library_id, album_key) on update cascade on delete cascade",
+        "create unique index if not exists album_disc_ratings_account_library_album_disc_idx "
+        "on app.album_disc_ratings (account_id, library_id, album_key, disc_key)",
+        "grant select on table app.album_disc_ratings to album_haven_readonly",
+        "grant select, insert, update on table app.album_disc_ratings to album_haven_app",
+    }
+
+    assert sorted(fragment for fragment in required_fragments if fragment not in sql) == []
+    assert "delete on table app.album_disc_ratings" not in sql
 
 
 def test_album_ratings_migration_file_exists():
@@ -6695,7 +6834,7 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
 def test_durable_job_foundation_migration_file_exists():
     assert DURABLE_JOBS_MIGRATION.is_file(), (
         "durable job foundation migration SQL is not present yet; "
-        "Task 2 requires 0099_create_durable_job_foundation.sql"
+        "Task 2 requires 0220_create_durable_job_foundation.sql"
     )
 
 
@@ -6994,7 +7133,7 @@ def test_durable_job_migration_limits_app_to_enqueue_and_cancel_columns(
 def test_durable_job_cancellation_migration_file_exists():
     assert DURABLE_JOB_CANCELLATION_MIGRATION.is_file(), (
         "durable job cancellation migration SQL is not present yet; "
-        "Task 3 requires 0100_request_durable_job_cancellation.sql"
+        "Task 3 requires 0221_request_durable_job_cancellation.sql"
     )
 
 
@@ -7099,7 +7238,7 @@ def test_durable_job_worker_status_and_retention_indexes_are_partial(
 
 def test_durable_job_boundary_hardening_migration_file_exists():
     assert DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.is_file(), (
-        "Task 3 requires additive migration 0101_harden_durable_job_boundaries.sql"
+        "Task 3 requires additive migration 0222_harden_durable_job_boundaries.sql"
     )
 
 
@@ -7141,7 +7280,7 @@ def test_durable_job_boundary_hardening_enforces_transitions_and_worker_columns(
 def test_worker_authorization_read_migration_file_exists():
     assert DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.is_file(), (
         "Task 4 requires additive migration "
-        "0102_grant_worker_authorization_reads.sql"
+        "0223_grant_worker_authorization_reads.sql"
     )
 
 
@@ -7216,7 +7355,7 @@ def test_worker_authorization_reads_are_column_scoped_private_and_upgrade_safe()
 def test_durable_job_retention_index_migration_file_exists():
     assert DURABLE_JOB_RETENTION_INDEX_MIGRATION.is_file(), (
         "Task 7 requires additive migration "
-        "0103_add_job_transition_retention_index.sql"
+        "0224_add_job_transition_retention_index.sql"
     )
 
 
@@ -7244,7 +7383,7 @@ def test_durable_job_retention_index_is_ordered_and_does_not_broaden_privileges(
 def scan_job_intents_sql() -> str:
     assert SCAN_JOB_INTENTS_MIGRATION.is_file(), (
         "Task 1 requires additive migration "
-        "0104_create_scan_job_intents.sql"
+        "0225_create_scan_job_intents.sql"
     )
     return SCAN_JOB_INTENTS_MIGRATION.read_text(encoding="utf-8")
 
@@ -7625,7 +7764,7 @@ def test_full_scan_intent_stores_and_link_validates_exact_accepted_authority():
 
 def targeted_reconciliation_worker_sql() -> str:
     assert TARGETED_RECONCILIATION_WORKER_MIGRATION.is_file(), (
-        "Task 2 requires migration 0105_grant_worker_targeted_reconciliation.sql"
+        "Task 2 requires migration 0226_grant_worker_targeted_reconciliation.sql"
     )
     return TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
 

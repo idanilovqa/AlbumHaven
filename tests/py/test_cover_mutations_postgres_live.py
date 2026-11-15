@@ -1028,13 +1028,13 @@ def test_live_cover_revision_index_identity_plan_and_state_cascade(
 def test_live_cover_migration_rerun_preserves_state(live_cover_mutation_database) -> None:
     scope = live_cover_mutation_database
     migration_sql = (
-        Path(__file__).parents[2] / "migrations" / "postgres" / "0122_close_cover_consistency.sql"
+        Path(__file__).parents[2] / "migrations" / "postgres" / "0243_close_cover_consistency.sql"
     ).read_text(encoding="utf-8")
     metadata_migration_sql = (
         Path(__file__).parents[2]
         / "migrations"
         / "postgres"
-        / "0125_preserve_cover_selection_metadata.sql"
+        / "0246_preserve_cover_selection_metadata.sql"
     ).read_text(encoding="utf-8")
     with isolatedPostgres._connect(scope.setup_url) as connection:
         before = connection.execute(

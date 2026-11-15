@@ -10,6 +10,7 @@ from threading import Event, Lock
 from typing import Any
 
 from music_app.services.library_indexing import enrich_library_file_entry
+from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library_roots import get_library_roots
 from music_app.services.metadata import read_metadata_for_file
 from music_app.services.save_tasks import structural_tag_edit_resource_keys
@@ -26,6 +27,8 @@ class TargetedReconciliationResult:
     revision: int
     affected_album_keys: tuple[str, ...]
     health: str = "healthy"
+    active_track_paths: tuple[str, ...] = ()
+    new_track_paths: tuple[str, ...] = ()
 
 
 class TargetedLibraryReconciler:
@@ -312,6 +315,7 @@ class TargetedLibraryReconciler:
                 )
                 active_entries[str(path)] = enriched
 
+            clear_ambiguous_folder_covers(active_entries)
             if self._stop_event.is_set():
                 return TargetedReconciliationResult(0, (), "cancelled")
             persisted = self._repository.persist_targeted_inventory_mutation(
@@ -365,6 +369,17 @@ class TargetedLibraryReconciler:
                             for key in persisted.get("affected_album_keys", ())
                             if str(key)
                         }
+                    )
+                ),
+                active_track_paths=tuple(sorted(active_entries, key=str.casefold)),
+                new_track_paths=tuple(
+                    sorted(
+                        {
+                            str(path)
+                            for path in persisted.get("new_track_paths", ())
+                            if str(path)
+                        },
+                        key=str.casefold,
                     )
                 ),
             )

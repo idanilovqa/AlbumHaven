@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.11.8 - 2026-11-14
+
+- A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.
+
+## 0.11.7 - 2026-11-14
+
+- Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.
+
+## 0.11.6 - 2026-11-14
+
+- Serialized shared MusicBrainz artist projection writes by MBID so concurrent matches for differently spelled local artists cannot collide while replacing aliases, country, and genre labels.
+
+## 0.11.5 - 2026-11-13
+
+- Expanded real-browser regression coverage for MusicBrainz artist identities, info links, country and genre labels, split identities, and first-page repair filters.
+- Refreshed accepted MusicBrainz matches with the complete current artist projection, including Discogs links, aliases, names, type, disambiguation, country and genres, without replacing owner decisions or album identities.
+- Kept an open artist information panel visible while Gallery position restoration settles after a MusicBrainz refresh.
+
+## 0.11.4 - 2026-11-12
+
+- Kept known appearance settings when a newer client stored fields this build does not recognize.
+- Made the unsaved and recovery appearance solid black with library-source outlines enabled.
+- Recovered an unresponsive Android page after returning to the app while preserving native playback, queue, and position.
+- Kept first web playback responsive while browser decoder verification finishes in the background.
+
+## 0.11.3 - 2026-11-12
+
+- Improved MusicBrainz matching across localized, original-script, alternate, split, re-release and compilation titles, with bounded typo and mojibake handling and exact track evidence.
+- Kept evidence honest when MusicBrainz track lengths are missing or releases disagree, and gave split-artist albums enough matching attempts.
+- Linked a same-name person and band when MusicBrainz records the membership, while keeping differently named collaborations separate; migration 0178 stores the associated artist identities.
+
+## 0.11.2 - 2026-11-12
+
+- Added MusicBrainz artist identity for album artists: each artist is matched on album evidence (titles, track titles, track counts and lengths), never on a name alone, and an album that certainly matches one MusicBrainz artist gives that artist its identity. The tags themselves never change.
+- Shown matched artists with their MusicBrainz name, links to MusicBrainz and Discogs, country and genres in the Gallery and the artist info panel. Artists matched under another name say how they are tagged, and a name shared by several MusicBrainz artists lists each one with its albums.
+- Added MusicBrainz artist repairs to Problematic Files ("MBID: Unconfirmed match", "Multiple matches", "Not found", "Metadata pending") with suggested artists, owner confirmation, and filters available from the first page.
+- Imported file ratings when the watcher publishes an album, flagged "File rating mismatch" in Problematic Files, and showed a bonus disc's own rating on its disc heading.
+- Retired album rows that a track move or rescan leaves empty, carrying ratings and other owner decisions to the album that replaces them.
+- Fixed album details occasionally failing on the first open after a search, and sped up Problematic Files first-page loading and duplicate checks.
+- Added Android release promotion tooling and builds on the image with NDK 27.3, and made hosted reviews opt-in for trusted pull requests.
+
+## 0.11.1 - 2026-11-10
+
+- The song cache keeps a song once it is heard, not when it was only fetched ahead and then skipped (web and Android).
+- Fixed an intermittent Cover Lookup candidate image failure after a cover save.
+- Immediately completed Edit Tags saves remain visible until dismissed, including while opening Status.
+- Closing the artwork lightbox restores focus after Problematic Files refreshes its detail panel.
+- Migrations may be numbered and applied out of order but never share a number; a CI check enforces it, and only code merged to main migrates shared or production databases.
+
+## 0.11.0 - 2026-11-09
+
+- Added the Android app's native playback: compressed streaming decoded on the phone, gapless queues, loops, a media card with the album year, Bluetooth and lock-screen controls, playback resumption after reboot, and recently played songs kept on the device.
+- Playback starts and resumes at once, seeks inside already downloaded audio without the server, keeps playing through a Wi-Fi to mobile-data switch with no gap, and keeps a paused card so Android does not freeze the app.
+- Added one-press in-app updates for the Android app: download, verify and install from the cogwheel menu, which stays open to show progress, then reopen on the same page ("Appear on top") or offer a notification.
+- The Android app opens instantly from a copy of the last library view after Android ends it in the background, then refreshes in place; the copy and every cover cache store no file paths and are cleared on sign-out, account or sandbox switch.
+- The web player gained the same shared behavior: seeking inside received audio, socket keepalive, instant start and resume, and a browser song cache.
+- Songs started part-way down an album start faster: the server prepares the started song first and reads each MP3 once.
+- Added an Android suite to the pull-request pipeline that runs only when the Android app changes: build, lint, unit tests, decoder conformance on Linux, and on-device tests for network changes, the paused card, in-app updates, the media card and leaving for Settings.
+
 ## 0.10.0 - 2026-10-25
 
 - Added multi-root library support with source provenance, source-aware Gallery and Artist Tree filtering, duplicate-album ownership, and reconciliation across Hoard, New Arrivals, and other configured roots.

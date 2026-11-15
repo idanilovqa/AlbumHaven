@@ -225,6 +225,63 @@ export class GlobalPlayerActions {
     return this.globalPlayer.readPlaybackSummary();
   }
 
+  async expectOwnershipBlocked({ artist, album, title }) {
+    const player = this.globalPlayer;
+    await expect(player.time).toHaveText('Playing in another tab');
+    await expect(player.title).toContainText(artist);
+    await expect(player.title).toContainText(title);
+    await expect(player.albumLink).toHaveText(album);
+    await expect(player.title).toBeVisible();
+    await expect(player.albumLink).toBeVisible();
+    await expect(player.playButton).toBeDisabled();
+    await expect(player.timeline).toBeDisabled();
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Playback locked in another tab');
+    await expect(player.timelineWrap).not.toHaveClass(/\bis-idle\b/u);
+    expect(['none', 'normal']).toContain(await player.readIdleOverlayContent());
+    // The disabled treatment and status must not obscure the mirrored metadata.
+    await expect(player.playButton).not.toHaveCSS('opacity', '1');
+    await expect(player.playButton).not.toHaveCSS('cursor', 'pointer');
+    const [textBounds, status] = await Promise.all([
+      player.readOwnershipMetadataTextBounds(), player.time.boundingBox(),
+    ]);
+    expect(status).not.toBeNull();
+    for (const { selector, text, clip, metadata } of textBounds) {
+      expect(text.right - text.left, `${selector} text width`).toBeGreaterThan(0);
+      expect(text.bottom - text.top, `${selector} text height`).toBeGreaterThan(0);
+      for (const owner of [clip, metadata]) {
+        expect(text.left, `${selector} left clipping`).toBeGreaterThanOrEqual(owner.left - 1);
+        expect(text.right, `${selector} right clipping`).toBeLessThanOrEqual(owner.right + 1);
+      }
+      expect(text.right <= status.x + 1
+        || status.x + status.width <= text.left + 1
+        || text.bottom <= status.y + 1
+        || status.y + status.height <= text.top + 1, `${selector} does not overlap status`).toBe(true);
+    }
+  }
+
+  async pauseAndReadListenCheckpoint() {
+    const player = this.globalPlayer;
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    const checkpointResponse = player.page.waitForResponse(response => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/playback/session/complete'
+      && response.request().postDataJSON()?.finalized === true
+      && response.request().postDataJSON()?.completion_reason === 'paused'
+    ));
+    const releasedResponse = player.page.waitForResponse(response => (
+      response.request().method() === 'DELETE' && new URL(response.url()).pathname === '/playback/state'
+    ));
+    await player.playButton.click();
+    const [checkpoint, released] = await Promise.all([checkpointResponse, releasedResponse]);
+    expect(checkpoint.ok()).toBe(true);
+    expect(released.ok()).toBe(true);
+    const result = await checkpoint.json();
+    expect(result.entry.finalized).toBe(true);
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Play');
+    await this.waitForPlaybackState({ paused: true });
+    return { request: checkpoint.request().postDataJSON(), entry: result.entry };
+  }
+
   async waitForFullTrackTiming(options = {}) {
     await expect.poll(
       async () => (await this.globalPlayer.readPlaybackTiming()).duration,
@@ -270,14 +327,25 @@ export class GlobalPlayerActions {
     });
     await this.globalPlayer.waitForPageCondition((expected) => {
       if (typeof getPlayerPlaybackSnapshot !== 'function'
-          || typeof getStreamingPlaybackSnapshot !== 'function') return false;
+          || typeof getStreamingPlaybackSnapshot !== 'function'
+          || typeof state === 'undefined') return false;
       const playback = getPlayerPlaybackSnapshot();
       const streaming = getStreamingPlaybackSnapshot();
+      const current = state.player?.streaming?.roles?.current || null;
       const currentTime = Number(playback.currentTime || 0);
+      const currentPath = String(current?.track?.path || '');
+      const currentStreamId = Number(current?.streamId || 0);
+      const sameCurrentStream = currentStreamId === expected.currentStreamId;
+      const replacementCurrentStream = currentStreamId !== expected.currentStreamId
+        && currentStreamId !== expected.continuityStreamId;
       const firstFrameAtMs = Number(streaming.diagnostics?.firstFrameAtMs || 0);
       const seekCommittedAtMs = Number(streaming.diagnostics?.seekCommittedAtMs || 0);
       return streaming.mode === 'playing'
         && Number(streaming.generation || 0) === expected.generation
+        && currentPath === expected.currentPath
+        && currentStreamId > 0
+        && currentStreamId !== expected.continuityStreamId
+        && (sameCurrentStream || replacementCurrentStream)
         && seekCommittedAtMs > expected.seekCommittedAtMs
         && firstFrameAtMs > expected.firstFrameAtMs
         && Math.abs(currentTime - expected.targetSeconds) <= expected.toleranceSeconds;
@@ -285,6 +353,9 @@ export class GlobalPlayerActions {
       targetSeconds,
       toleranceSeconds: Number(options.toleranceSeconds || 1),
       generation: beforeSeek.generation,
+      currentPath: beforeSeek.currentPath,
+      currentStreamId: beforeSeek.currentStreamId,
+      continuityStreamId: beforeSeek.continuityStreamId,
       firstFrameAtMs: beforeSeek.firstFrameAtMs,
       seekCommittedAtMs: beforeSeek.seekCommittedAtMs,
     });
@@ -303,9 +374,22 @@ export class GlobalPlayerActions {
       seekCommittedAtMs: completion.seekCommittedAtMs,
       seekSilentFrames: completion.seekSilentFrames,
       seekCapture: completion.seekCapture,
+      currentPath: completion.currentPath,
+      currentStreamId: completion.currentStreamId,
       continuityStreamIdBeforeSeek: beforeSeek.continuityStreamId,
       visibleReadinessErrors: await this.globalPlayer.readinessErrorToasts.allTextContents(),
     };
+  }
+
+  async pauseToReleasePlaybackClaim() {
+    const player = this.globalPlayer;
+    if (player.page.isClosed() || !await player.playButton.isVisible()
+        || await player.playButton.getAttribute('aria-label') !== 'Pause') return;
+    const released = player.page.waitForResponse(response => (
+      response.request().method() === 'DELETE' && new URL(response.url()).pathname === '/playback/state'
+    ));
+    await this.togglePlaybackWithSpace({ paused: true });
+    expect((await released).ok()).toBe(true);
   }
 
   async togglePlaybackWithSpace(expectedState, options = {}) {

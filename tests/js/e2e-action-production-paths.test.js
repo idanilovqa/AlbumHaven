@@ -66,7 +66,7 @@ test('scan and cover refresh idle wait includes queued post-scan cover work', as
   assert.equal(result.pending_cover_refresh_after_scan, false);
 });
 
-test('cover cache diagnostics inspect the production unversioned key and exact stored epoch', async () => {
+test('cover cache diagnostics inspect the opaque production key and exact stored epoch', async () => {
   const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
   const productionUrl = 'http://127.0.0.1:4173/cover?path=album-cover&size=480&v=revision';
   const matchedKeys = [];
@@ -76,6 +76,8 @@ test('cover cache diagnostics inspect the production unversioned key and exact s
       const context = {
         URL,
         globalThis: {
+          crypto: globalThis.crypto,
+          TextEncoder,
           __ALBUM_HAVEN_GALLERY_COVER_CACHE__: {
             activeCount: 48,
             activeProductionUrls: [],
@@ -92,7 +94,7 @@ test('cover cache diagnostics inspect the production unversioned key and exact s
                     headers: {
                       get(header) {
                         if (String(header).toLowerCase() === 'content-type') return 'image/jpeg';
-                        if (header === 'X-Album-Haven-Cover-Production-Url') return storedProductionUrl;
+                        if (header === 'X-Album-Haven-Cover-Version') return new URL(storedProductionUrl).searchParams.get('v');
                         return '';
                       },
                     },
@@ -112,7 +114,8 @@ test('cover cache diagnostics inspect the production unversioned key and exact s
 
   const state = await GalleryPage.prototype.readCoverCacheState.call({ page }, productionUrl);
 
-  assert.deepEqual(matchedKeys, ['http://127.0.0.1:4173/cover?path=album-cover&size=480']);
+  const opaqueKey = require('node:crypto').createHash('sha256').update('/cover?path=album-cover&size=480').digest('hex');
+  assert.deepEqual(matchedKeys, [`http://127.0.0.1:4173/__album-haven-cover/${opaqueKey}`]);
   assert.equal(state.cached, true);
   assert.equal(state.cachedStatus, 200);
   assert.equal(state.cachedType, 'image/jpeg');
@@ -231,16 +234,17 @@ test('notification hover evidence waits for finite owned transitions before read
 test('cover toast entrance observer detects movement and owns bounded cleanup', async (t) => {
   const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
   const vm = require('node:vm');
-  for (const scenario of ['stable', 'translation', 'resize', 'already-settled', 'timeout', 'cancel']) {
+  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'settled-first-running-frame', 'already-settled', 'already-animating', 'timeout', 'cancel']) {
     await t.test(scenario, async () => {
       const frames = new Map();
       const timers = new Map();
       let nextId = 0;
       let settled = scenario === 'already-settled';
       let progressVisible = false;
+      let toastVisible = ['already-settled', 'already-animating'].includes(scenario);
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
-        querySelector: () => ({ textContent: 'Cover art lookup started.' }),
+        querySelector: () => ({ textContent: 'Cover search started.' }),
         classList: { contains: () => settled },
         getAnimations: () => settled ? [] : [{ playState: 'running' }],
       };
@@ -248,8 +252,20 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         querySelector: () => ({ getBoundingClientRect: () => ({ height: progressVisible ? 80 : 0 }) }),
         getBoundingClientRect: () => ({ ...rectangle }),
       };
+      const HTMLButtonElement = class {};
+      const findBetterButton = new HTMLButtonElement();
+      findBetterButton.disabled = true;
+      const modalStatus = { textContent: 'Cover search started.' };
       const context = {
-        document: { querySelector: () => modal, querySelectorAll: () => [toast] },
+        HTMLButtonElement,
+        document: {
+          querySelector: (selector) => {
+            if (selector === '.find-better') return findBetterButton;
+            if (selector === '.modal-status') return modalStatus;
+            return modal;
+          },
+          querySelectorAll: () => toastVisible ? [toast] : [],
+        },
         getComputedStyle: () => ({ opacity: settled ? '1' : '0.5' }),
         requestAnimationFrame: (callback) => { frames.set(++nextId, callback); return nextId; },
         cancelAnimationFrame: (id) => frames.delete(id),
@@ -257,7 +273,9 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         clearTimeout: (id) => timers.delete(id),
       };
       const measurement = await CoverLookup.prototype.observeStartedToastEntrance.call({
+        findBetterButtonSelector: '.find-better',
         modalDialogSelector: '.dialog',
+        modalStatusSelector: '.modal-status',
         toastSelector: '.toast',
         page: { evaluateHandle: (callback, args) => vm.runInNewContext(`(${callback})`, context)(args) },
       }, { timeout: 100 });
@@ -267,15 +285,36 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         callback();
       };
       paint();
-      assert.equal(frames.size, 1, 'no baseline until running progress is rendered');
+      if (scenario.startsWith('already-')) {
+        assert.equal(frames.size, 0, 'a pre-existing matching toast must reject observation');
+      } else {
+        assert.equal(frames.size, 1, 'the pre-search observer must remain armed');
+      }
       if (scenario === 'timeout') {
         [...timers.values()][0]();
       } else if (scenario === 'cancel') {
         measurement.cancel();
+      } else if (scenario.startsWith('already-')) {
+        // The observer rejected the stale toast before the new search action.
       } else {
         progressVisible = true;
+        if (scenario === 'settled-first-running-frame') {
+          toastVisible = true;
+          settled = true;
+        } else if (scenario !== 'settled-after-baseline') {
+          toastVisible = true;
+        }
         paint();
-        if (scenario !== 'already-settled') {
+        if (scenario === 'settled-first-running-frame') {
+          if (frames.size) paint();
+          if (frames.size) paint();
+        } else if (scenario === 'settled-after-baseline') {
+          toastVisible = true;
+          settled = true;
+          paint();
+          if (frames.size) paint();
+          if (frames.size) paint();
+        } else if (scenario !== 'already-settled') {
           if (scenario === 'translation') rectangle = { ...rectangle, x: 104, y: 48 };
           if (scenario === 'resize') rectangle = { ...rectangle, height: 710, width: 802 };
           paint();
@@ -287,12 +326,13 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         }
       }
       const result = await measurement.result;
-      if (scenario === 'already-settled') assert.match(result.error, /already settled/);
+      if (scenario.startsWith('already-')) assert.match(result.error, /already present/);
       else if (scenario === 'timeout') assert.match(result.error, /Timed out/);
       else if (scenario === 'cancel') assert.match(result.error, /cancelled/);
       else {
         assert.equal(result.baselineUnsettled, true);
-        assert.equal(result.sampledFrames, 4);
+        assert.equal(result.sampledFrames,
+          ['settled-after-baseline', 'settled-first-running-frame'].includes(scenario) ? 3 : 4);
         assert.deepEqual(JSON.parse(JSON.stringify(result.delta)), {
           height: scenario === 'resize' ? 10 : 0,
           width: scenario === 'resize' ? 2 : 0,
@@ -1147,7 +1187,7 @@ test('Last.fm production path selects its named fixture album before opening or 
   assert.doesNotMatch(spec, /clickFirstAlbumDetails\(/);
   assert.match(
     spec,
-    /selectSidebarArtistByName\(LASTFM_PLAYBACK_TARGET\.artist\)[\s\S]*clickAlbumDetailsByArtistAndAlbum\([\s\S]*LASTFM_PLAYBACK_TARGET\.artist,[\s\S]*LASTFM_PLAYBACK_TARGET\.album,[\s\S]*readTrackAt\(0\)[\s\S]*playTrackAtAndWaitForLastfmJourney\(0/,
+    /selectSidebarArtistByName\(LASTFM_PLAYBACK_TARGET\.artist\)[\s\S]*clickAlbumDetailsByArtistAndAlbum\([\s\S]*LASTFM_PLAYBACK_TARGET\.artist,[\s\S]*LASTFM_PLAYBACK_TARGET\.album,[\s\S]*readTrackAt\(LASTFM_SCROBBLE_TRACK\.index\)[\s\S]*playTrackAtAndWaitForLastfmJourney\(LASTFM_SCROBBLE_TRACK\.index/,
   );
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
 });
@@ -1170,11 +1210,11 @@ test('consecutive Last.fm evidence observes through the stop boundary and proves
   );
   assert.match(
     spec,
-    /expect\(journeys\.completions\)\.toHaveLength\(LASTFM_CONSECUTIVE_PLAYBACK_TRACKS\.length\)/,
+    /expect\(journeys\.completions\)\.toHaveLength\(playedTitles\.length\)/,
   );
   assert.match(
     spec,
-    /completionStartedAt\.every\(\(startedAt\) => startedAt\.length > 0\)[\s\S]*new Set\(completionStartedAt\)\.size[\s\S]*completionStartedAt\)\.toEqual\(scrobbleStartedAt\)/,
+    /completionStartedAt\.every\(\(startedAt\) => startedAt\.length > 0\)[\s\S]*new Set\(completionStartedAt\)\.size[\s\S]*completionStartedAt\.slice\(1\)\)\.toEqual\(scrobbleStartedAt\)/,
   );
 });
 
@@ -1243,6 +1283,20 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.keyboard|\.press\(['"]Space['"]\)/);
 });
 
+test('full-size artwork E2E owns resting and keyboard-focus presentation checks', () => {
+  const spec = read('tests/e2e/specs/galleryCoverStability.spec.js');
+  const trackModalActions = read('tests/e2e/actions/trackModalActions.js');
+
+  assert.match(
+    trackModalActions,
+    /expectCoverLightboxKeyboardFocusPresentation\([\s\S]*outline-style[\s\S]*lightboxCloseButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxPreviousButton\)[\s\S]*lightboxPreviousButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxNextButton\)[\s\S]*lightboxNextButton\.press\('Tab'\)[\s\S]*expectKeyboardRing\(this\.trackModal\.lightboxCloseButton\)/,
+  );
+  assert.match(
+    spec,
+    /expectCoverLightboxNavigationAvailable\(\)[\s\S]*expectCoverLightboxKeyboardFocusPresentation\(\)/,
+  );
+});
+
 test('player artwork search-context E2E restores playback through an action-owned reload', () => {
   const spec = read('tests/e2e/specs/playerArtworkSearchContext.spec.js');
   const globalPlayerActions = read('tests/e2e/actions/globalPlayerActions.js');
@@ -1283,7 +1337,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,
-    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle, noResultTaskTitle, failedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(noResultTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(failedTaskTitle\)/,
+    /waitForTaskStatus\(actionedTaskTitle, \/\^\(\?:\\d\+ \)\?covers found\$\/u\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearFinishedTasksAndPreserveActive\([\s\S]*\[actionedTaskTitle\],[\s\S]*activeTaskTitle[\s\S]*reloadAndOpenDrawer\(\)[\s\S]*waitForTaskActive\(activeTaskTitle\)[\s\S]*expectTaskHiddenImmediately\(actionedTaskTitle\)[\s\S]*waitForTaskStatus\(noResultTaskTitle, 'No covers found'\)[\s\S]*waitForTaskStatus\(failedTaskTitle, 'Lookup failed'\)[\s\S]*clearTaskAndExpectImmediateRemoval\(noResultTaskTitle\)[\s\S]*clearTaskAndExpectImmediateRemoval\(failedTaskTitle\)/,
   );
   assert.match(
     coverLookupActions,
@@ -1291,7 +1345,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   );
   assert.match(
     coverLookup,
-    /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, 'Art chosen'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
+    /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
   assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = String\(selection\.payload\?\.optimistic_cover_path[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
   assert.match(
@@ -1335,7 +1389,7 @@ test('FTC-COVERS-007 alert-placement scenario cleans its completed lookup state'
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarioTitle = 'FTC-COVERS-007 lookup-start alert does not reposition the cover modal';
   const scenarioMarker = `test('${scenarioTitle}',`;
-  const nextScenarioMarker = "test('FTC-COVERS-007 notification states and bulk clear preserve active work',";
+  const nextScenarioMarker = "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work',";
   const scenarioStart = spec.indexOf(scenarioMarker);
   assert.ok(scenarioStart >= 0, `Expected exact scenario title: ${scenarioTitle}`);
   assert.equal(
@@ -1608,8 +1662,12 @@ test('manual all-provider scenarios explicitly opt into normal provider results'
   const spec = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarios = [
     {
-      title: 'FTC-COVERS-007 notification states and bulk clear preserve active work',
+      title: 'FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work',
       searchMarker: 'startSearchAndReadToastPlacement()',
+    },
+    {
+      title: 'FTC-COVERS-036 notification cards keep independent album identity after cover save',
+      searchMarker: 'enterManualUrls(',
     },
     {
       title: 'FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload',
@@ -2752,6 +2810,11 @@ test('functional race checks arm transient mutation observation before submit an
   assert.match(
     playerActions,
     /const preReload = await this\.globalPlayer\.readPlaybackTiming\(\);[\s\S]*?page\.reload[\s\S]*?preReload,/,
+  );
+  assert.match(
+    reloadSpec,
+    /pauseAndReadListenCheckpoint\(\)[\s\S]*?waitForFullTrackTiming\(\)[\s\S]*?reloadAndWaitForRestoredTrack\(/,
+    'paused reload must await the listen checkpoint and claim release before reading its snapshot',
   );
   assert.match(
     reloadSpec,
@@ -5065,6 +5128,8 @@ test('search readiness waits for the committed URL query and completed view requ
   assert.match(searchPom, /searchParams\.get\('q'\)/);
   assert.match(searchPom, /const timeout = Number\(options\.timeout \|\| 30000\)/);
   assert.match(searchPom, /const initialObservation = this\.productionViewObserver\.read\(\)/);
+  assert.match(searchPom, /if \(initiallyBusy\) \{[\s\S]*?continue;/);
+  assert.match(searchPom, /await Promise\.all\(\[/);
   assert.match(searchPom, /const finalObservation = this\.productionViewObserver\.read\(\)/);
   assert.match(searchPom, /finalObservation\.stateRevision !== initialObservation\.stateRevision/);
   assert.match(searchPom, /!hasStableDomEvidence\(/);
@@ -5087,7 +5152,7 @@ test('search readiness waits for the committed URL query and completed view requ
 test('the long cover notification lifecycle owns enough CI budget to reach cancellation', () => {
   const coverLookup = read('tests/e2e/specs/coverLookup.spec.js');
   const scenarioStart = coverLookup.indexOf(
-    "test('FTC-COVERS-007 notification states and bulk clear preserve active work'",
+    "test('FTC-COVERS-007 bulk clear removes chosen covers and preserves unresolved work'",
   );
   const nextScenario = coverLookup.indexOf('\ntest(', scenarioStart + 1);
   const scenario = coverLookup.slice(scenarioStart, nextScenario);
@@ -5212,6 +5277,53 @@ test('cover lookup decode readiness wakes on image load without polling delay', 
     assert.equal(state.complete, true);
     assert.equal(state.naturalWidth, 480);
     assert.equal(state.width, 240);
+  } finally {
+    if (originalImageElement === undefined) delete globalThis.HTMLImageElement;
+    else globalThis.HTMLImageElement = originalImageElement;
+  }
+});
+
+test('cover lookup decode readiness waits for a deferred image source', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
+  const { waitForDisplayedImageDecode } = await import(moduleUrl);
+  const originalImageElement = globalThis.HTMLImageElement;
+  class FakeImageElement extends EventTarget {
+    constructor() {
+      super();
+      this.complete = true;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.currentSrc = '';
+      this.attributes = new Map([['data-cover-lookup-deferred-src', '/cover.jpg']]);
+    }
+
+    async decode() {}
+
+    getAttribute(name) {
+      return this.attributes.get(name) || '';
+    }
+
+    hasAttribute(name) {
+      return this.attributes.has(name);
+    }
+
+    getBoundingClientRect() {
+      return { width: 240, height: 240 };
+    }
+  }
+  globalThis.HTMLImageElement = FakeImageElement;
+  try {
+    const image = new FakeImageElement();
+    const readiness = waitForDisplayedImageDecode(image);
+    image.attributes.delete('data-cover-lookup-deferred-src');
+    image.currentSrc = 'http://127.0.0.1:4173/cover.jpg';
+    image.naturalWidth = 480;
+    image.naturalHeight = 480;
+    image.dispatchEvent(new Event('load'));
+
+    const state = await readiness;
+    assert.equal(state.currentSrc, image.currentSrc);
+    assert.equal(state.naturalWidth, 480);
   } finally {
     if (originalImageElement === undefined) delete globalThis.HTMLImageElement;
     else globalThis.HTMLImageElement = originalImageElement;
@@ -5379,6 +5491,86 @@ test('cover lookup drawer actions use product state and the explicit close contr
   const pom = read('tests/e2e/poms/coverLookup.js');
   assert.match(pom, /drawer\.hidden/);
   assert.match(pom, /classList\.contains\('is-open'\)/);
+});
+
+test('cover lookup results readiness waits for initial gallery placeholders but not pasted-image work', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js'),
+  ).href;
+  const { CoverLookupActions } = await import(moduleUrl);
+  const { CoverLookup } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/poms/coverLookup.js'),
+  ).href);
+  const initialGalleryLoadingSelector = Object.getOwnPropertyDescriptor(
+    CoverLookup.prototype,
+    'initialGalleryLoadingSelector',
+  ).get.call({});
+  assert.equal(
+    initialGalleryLoadingSelector,
+    '#cover-lookup-modal-body .cover-lookup-gallery-resolving, #cover-lookup-modal-body [data-cover-lookup-loading-section]:not([data-cover-lookup-loading-section="pasted"])',
+  );
+  const page = new EventEmitter();
+  page.url = () => 'http://127.0.0.1:4173/';
+
+  const originalDocument = globalThis.document;
+  const originalHTMLElement = globalThis.HTMLElement;
+  const originalHTMLTextAreaElement = globalThis.HTMLTextAreaElement;
+  const originalHTMLButtonElement = globalThis.HTMLButtonElement;
+  class TestElement {}
+  class TestTextAreaElement extends TestElement {}
+  class TestButtonElement extends TestElement {}
+  const modal = Object.assign(new TestElement(), { hidden: false });
+  const subtitle = Object.assign(new TestElement(), { textContent: 'Album' });
+  const manualInput = new TestTextAreaElement();
+  const manualExtractButton = new TestButtonElement();
+  let loadingSection = 'remote';
+  const observed = [];
+
+  globalThis.HTMLElement = TestElement;
+  globalThis.HTMLTextAreaElement = TestTextAreaElement;
+  globalThis.HTMLButtonElement = TestButtonElement;
+  globalThis.document = {
+    querySelector(selector) {
+      if (selector === '#cover-lookup-modal') return modal;
+      if (selector === '#cover-lookup-modal-subtitle') return subtitle;
+      if (selector === '#cover-lookup-pasted-urls') return manualInput;
+      if (selector === '[data-add-cover-lookup-remote="1"]') return manualExtractButton;
+      if (selector === initialGalleryLoadingSelector) {
+        return loadingSection === 'pasted' || loadingSection === '' ? null : new TestElement();
+      }
+      return null;
+    },
+  };
+
+  try {
+    const actions = new CoverLookupActions({
+      page,
+      modalSelector: '#cover-lookup-modal',
+      modalSubtitleSelector: '#cover-lookup-modal-subtitle',
+      manualUrlInputSelector: '#cover-lookup-pasted-urls',
+      manualExtractButtonSelector: '[data-add-cover-lookup-remote="1"]',
+      initialGalleryLoadingSelector,
+      async waitForPageCondition(predicate, options, selectors) {
+        assert.equal(options.timeout, 30000);
+        observed.push(predicate(selectors));
+        loadingSection = 'resolving';
+        observed.push(predicate(selectors));
+        loadingSection = '';
+        observed.push(predicate(selectors));
+        loadingSection = 'pasted';
+        observed.push(predicate(selectors));
+      },
+    });
+
+    await actions.waitForModalResultsReady();
+  } finally {
+    globalThis.document = originalDocument;
+    globalThis.HTMLElement = originalHTMLElement;
+    globalThis.HTMLTextAreaElement = originalHTMLTextAreaElement;
+    globalThis.HTMLButtonElement = originalHTMLButtonElement;
+  }
+
+  assert.deepEqual(observed, [false, false, true, true]);
 });
 
 test('utility loop summaries read the group header instead of a saved-loop title', () => {
@@ -5662,7 +5854,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
   assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
-  assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
+  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseToReleasePlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'end', 0\.75\)/);
@@ -5895,6 +6087,7 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
   const originalDocument = global.document;
   const originalGetSelected = global.getSelectedProblematicAlbum;
   try {
+    let artistDetailVisible = false;
     global.state = { utility: { selectedProblematicKey: 'neal morse::?' } };
     global.document = {
       querySelector(selector) {
@@ -5904,12 +6097,18 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
         if (selector === '#utility-problematic-detail .utility-detail-title') {
           return { textContent: '?' };
         }
+        if (selector === '#utility-problematic-detail [data-musicbrainz-artist-problem]') {
+          return artistDetailVisible
+            ? { getAttribute: () => '7' }
+            : null;
+        }
         return null;
       },
     };
     global.getSelectedProblematicAlbum = () => ({ key: 'neal morse::?', detail_loaded: true });
     const actions = new UtilityProblematicFilesActions({
       activeListItemSelector: '[data-problematic-album-key].is-active',
+      artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
       detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
       async waitForPageCondition(callback, options, argument) {
         assert.equal(options.timeout, 4321);
@@ -5917,9 +6116,23 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
           key: 'neal morse::?',
           title: '?',
           activeListItemSelector: '[data-problematic-album-key].is-active',
+          artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
           detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
         });
         assert.equal(callback(argument), true);
+        global.getSelectedProblematicAlbum = () => ({
+          key: 'neal morse::?',
+          entity_kind: 'artist',
+          local_artist_id: 7,
+          detail_loaded: false,
+        });
+        assert.equal(callback(argument), false, 'stale detail cannot satisfy artist selection');
+        artistDetailVisible = true;
+        assert.equal(
+          callback(argument),
+          true,
+          'matching visible artist detail is authoritative even though its summary row remains unloaded',
+        );
       },
     });
 
@@ -6565,12 +6778,12 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
   }
 });
 
-test('FTC-LIBROOTS-019 opens the status menu after acknowledging the watcher warning', () => {
+test('FTC-LIBROOTS-021 opens the status menu after acknowledging the watcher warning', () => {
   const spec = read('tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js');
-  const caseStart = spec.indexOf("test('FTC-LIBROOTS-019");
+  const caseStart = spec.indexOf("test('FTC-LIBROOTS-021");
   const caseSource = spec.slice(caseStart);
 
-  assert.ok(caseStart >= 0, 'Expected the FTC-LIBROOTS-019 watcher recovery scenario.');
+  assert.ok(caseStart >= 0, 'Expected the FTC-LIBROOTS-021 watcher recovery scenario.');
   assert.match(
     caseSource,
     /scanPageActions\.acknowledgeUnavailableRoot\(\);[\s\S]*?appBarActions\.openStatusMenu\(\);[\s\S]*?scanPageActions\.openStatusPageFromMenu\(\);/,
@@ -6624,6 +6837,28 @@ test('watcher recovery action opens Library Status through shared production act
   assert.match(productionFixture, /async\s*\(\{[^}]*\bscanPageActions\b[^}]*\}/s);
   assert.match(productionFixture, /\{[\s\S]*\bappBarActions\s*,[\s\S]*\bscanPageActions\s*,/);
 });
+
+test('MusicBrainz identity E2E covers native names and every manual resolution path through owned actions', () => {
+  const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
+
+  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings[\s\S]*readArtistInfoSnapshot/);
+  assert.match(spec, /MBD1-11:[\s\S]*enterManualArtistReference/);
+  assert.match(spec, /MBD1-12:[\s\S]*readMusicBrainzIdentityTable[\s\S]*expectMusicBrainzAssignmentDisabled[\s\S]*openMusicBrainzCandidate[\s\S]*selectMusicBrainzCandidate/);
+  assert.match(spec, /MBD1-13:[\s\S]*readMusicBrainzIdentityTable[\s\S]*keepCurrentMusicBrainzIdentity/);
+  assert.match(spec, /MBD1-20:[\s\S]*assignSelectedMusicBrainzIdentity/);
+  assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
+});
+
+test('MusicBrainz retry status reads rendered label and value boundaries', () => {
+  const actions = read('tests/e2e/actions/utilityProblematicFilesActions.js');
+  const start = actions.indexOf('async readMusicBrainzRetryStatus()');
+  const method = actions.slice(start, actions.indexOf('async retryMusicBrainzIdentity', start));
+
+  assert.ok(start >= 0);
+  assert.match(method, /musicBrainzRetryStatus\.innerText\(\)/);
+  assert.doesNotMatch(method, /musicBrainzRetryStatus\.textContent\(\)/);
+});
+
 test('Edit Tags duration gates use the shared timing-budget helper', () => {
   const functionalSpec = read('tests/e2e/specs/albumTagRename.spec.js');
   const performanceSpec = read('tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js');

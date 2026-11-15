@@ -539,8 +539,8 @@ def _record_inventory_sql() -> str:
           update app.generated_preview_storage storage
           set requested_mode = storage.mode,
               requested_root = storage.active_root,
-              operation_id = null,
-              operation_state = 'idle',
+              operation_id = gen_random_uuid(),
+              operation_state = 'queued',
               total_count = 0,
               completed_count = 0,
               failed_count = 0,

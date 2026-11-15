@@ -7,6 +7,7 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 import logging
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from uuid import UUID
@@ -39,6 +40,9 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
+from music_app.services.album_identity_lineage_postgres import (
+    AlbumIdentityLineageRepository,
+)
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending,
@@ -53,6 +57,10 @@ from music_app.services.library_browse_postgres import (
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
+from music_app.routes.musicbrainz_enrichment_asgi import (
+    load_problematic_artist_items,
+    project_artist_problems_into_problematic_files,
+)
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.private_route_boundary import (
     _job_status_service,
@@ -82,7 +90,15 @@ from config import PERSISTENCE_BACKEND_POSTGRES
 router = APIRouter()
 
 _ALBUM_DETAIL_QUERY_PARAMS = frozenset(
-    {"album_key", "client_surface", "client_surface_class"}
+    {
+        "album_id",
+        "album_key",
+        "client_surface",
+        "client_surface_class",
+        "resolve_lineage",
+        # The player knows only the file it plays; the album is found by that file.
+        "track_path",
+    }
 )
 
 
@@ -593,13 +609,13 @@ async def status(request: Request) -> JSONResponse:
         and identity.get("ready")
     ):
         # Deferred startup has no runtime inventory; reuse the scoped durable count.
-        payload["album_total"] = identity.get(
-            "catalog_album_count", payload["album_total"]
-        )
-    payload["allowed_actions"] = allowed_actions_for_request(
-        request,
-        ("library.loops.create",),
-    ).as_payload()
+        payload["album_total"] = identity.get("catalog_album_count", payload["album_total"])
+    # The shell reads these to show loop creation and, only while MusicBrainz
+    # enrichment runs, MusicBrainz sync and artist repair status.
+    status_actions = ("library.loops.create",)
+    if getattr(request.app.state, "musicbrainz_enrichment_api_service", None) is not None:
+        status_actions += ("catalogue.enrichment.request",)
+    payload["allowed_actions"] = allowed_actions_for_request(request, status_actions).as_payload()
 
     service = _job_status_service(request.app)
     operator_allowed = allowed_actions_for_request(
@@ -1244,7 +1260,8 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
             return True
         if candidate.startswith("#"):
             return True
-        if ":" in candidate:
+        field, _, value = candidate.partition(":")
+        if field and value:
             return True
     return False
 
@@ -1316,8 +1333,33 @@ async def album_details(request: Request) -> JSONResponse:
             status_code=400,
         )
     album_key = str(request.query_params.get("album_key") or "").strip()
-    if not album_key:
-        return JSONResponse({"ok": False, "error": "Missing album_key"}, status_code=400)
+    album_id_text = str(request.query_params.get("album_id") or "").strip()
+    resolve_lineage_first = request.query_params.get("resolve_lineage") == "1"
+    try:
+        album_id = int(album_id_text) if album_id_text else None
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
+    if album_id is not None and album_id <= 0:
+        return JSONResponse({"ok": False, "error": "Invalid album_id"}, status_code=400)
+    track_path = str(request.query_params.get("track_path") or "").strip()
+    if not album_key and album_id is None and track_path:
+        try:
+            album_id = await run_in_threadpool(
+                AlbumCoverCandidateSnapshotRepository(_app_config(request)).resolve_album_id_for_track_paths,
+                track_paths={track_path},
+            )
+        except (RuntimeError, OSError):
+            album_id = None
+        if album_id is None:
+            return JSONResponse(
+                {"ok": False, "error": "The playing track's album isn't in the library."},
+                status_code=404,
+            )
+    if not album_key and album_id is None:
+        return JSONResponse(
+            {"ok": False, "error": "Missing album_key"},
+            status_code=400,
+        )
     unsupported_postgres_non_album_response = _unsupported_postgres_non_album_modal_response(
         request,
         album_key,
@@ -1335,11 +1377,84 @@ async def album_details(request: Request) -> JSONResponse:
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        payload = await run_in_threadpool(
-            repository.build_album_detail_payload,
-            album_key,
-            client_surface_class=client_surface_class,
-        )
+        lineage = None
+        payload = None
+        if resolve_lineage_first:
+            try:
+                lineage = await run_in_threadpool(
+                    AlbumIdentityLineageRepository(_app_config(request)).resolve,
+                    album_id=album_id,
+                    album_key=album_key or None,
+                )
+            except (RuntimeError, OSError):
+                lineage = {"status": "unresolved", "album": None, "choices": []}
+            if lineage["status"] == "split":
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "This album was splitвЂ”choose the current release",
+                        "resolution_kind": "album_split",
+                        "current_releases": lineage["choices"],
+                    },
+                    status_code=409,
+                )
+            current_album = lineage.get("album")
+            if isinstance(current_album, Mapping):
+                payload = await run_in_threadpool(
+                    repository.build_album_detail_payload_by_id,
+                    current_album.get("album_id"),
+                    client_surface_class=client_surface_class,
+                )
+        if payload is None and album_id is not None:
+            current_payload = await run_in_threadpool(
+                repository.build_album_detail_payload_by_id,
+                album_id,
+                client_surface_class=client_surface_class,
+            )
+            if current_payload is not None and (
+                not album_key
+                or str(current_payload.get("key") or "").strip() == album_key
+            ):
+                payload = current_payload
+        elif payload is None:
+            payload = await run_in_threadpool(
+                repository.build_album_detail_payload,
+                album_key,
+                client_surface_class=client_surface_class,
+            )
+        if payload is None and album_id is not None and album_key:
+            payload = await run_in_threadpool(
+                repository.build_album_detail_payload,
+                album_key,
+                client_surface_class=client_surface_class,
+            )
+        if payload is None:
+            if lineage is None:
+                try:
+                    lineage = await run_in_threadpool(
+                        AlbumIdentityLineageRepository(_app_config(request)).resolve,
+                        album_id=album_id,
+                        album_key=album_key or None,
+                    )
+                except (RuntimeError, OSError):
+                    lineage = {"status": "unresolved", "album": None, "choices": []}
+                if lineage["status"] == "split":
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": "This album was splitвЂ”choose the current release",
+                            "resolution_kind": "album_split",
+                            "current_releases": lineage["choices"],
+                        },
+                        status_code=409,
+                    )
+            current_album = lineage.get("album")
+            if isinstance(current_album, Mapping):
+                payload = await run_in_threadpool(
+                    repository.build_album_detail_payload_by_id,
+                    current_album.get("album_id"),
+                    client_surface_class=client_surface_class,
+                )
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
         await run_in_threadpool(
@@ -1379,7 +1494,9 @@ def _should_use_postgres_album_detail_path(
     ):
         return False
     album_key = str(request.query_params.get("album_key") or "").strip()
-    if not album_key or album_key.startswith("non-album::"):
+    album_id = str(request.query_params.get("album_id") or "").strip()
+    track_path = str(request.query_params.get("track_path") or "").strip()
+    if (not album_key and not album_id and not track_path) or album_key.startswith("non-album::"):
         return False
     resolved_state = (
         browse_state
@@ -1481,6 +1598,7 @@ def utilities_problematic_files(
             headers={"Cache-Control": "no-store"},
         )
     _project_missing_album_actions_for_request(request, payload)
+    project_artist_problems_into_problematic_files(request, payload)
     return JSONResponse(_attach_library_watch_health(request, payload))
 
 

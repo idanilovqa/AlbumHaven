@@ -92,9 +92,27 @@ async function waitForStorageState(page, predicate, message) {
   return state;
 }
 
+// The controls stay disabled while a follow-up reconciliation of late previews runs.
+async function openIdleStorageSettings(page) {
+  const activeStates = ['queued', 'running', 'cancel_requested'];
+  const cleanStates = ['idle', 'completed'];
+  await page.goto('/admin/server');
+  const state = await waitForStorageState(
+    page,
+    (current) => !activeStates.includes(current.operation_state),
+    'preview storage should be idle before its controls are used',
+  );
+  if (!cleanStates.includes(state.operation_state)
+      || state.requested_mode !== null
+      || state.failed_count !== 0) {
+    throw new Error(`Preview storage baseline is not clean: ${JSON.stringify(state)}`);
+  }
+  await page.goto('/admin/server');
+}
+
 async function selectStorage(page, { mode, root = '' }) {
   const adminServer = new AdminServerPage(page);
-  await page.goto('/admin/server');
+  await openIdleStorageSettings(page);
   await expect(adminServer.heading).toBeVisible();
   const current = await readStorageState(page);
   await expect(adminServer.mode(current.mode)).toBeChecked({ timeout: 10_000 });
@@ -202,15 +220,20 @@ test(
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
-        const searchStartedAt = performance.now();
-        await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
+        let searchSubmittedAt = 0;
+        await searchToolbarActions.search(ARTIST, {
+          submitWithEnter: true,
+          recordSubmissionBoundary() {
+            searchSubmittedAt = performance.now();
+          },
+        });
         await searchToolbarActions.waitForQuery(ARTIST);
         await galleryActions.waitForAlbumVisible(ALBUM);
-        const galleryReadyMs = performance.now() - searchStartedAt;
+        const galleryReadyMs = performance.now() - searchSubmittedAt;
         const cover = galleryActions.albumCoverByName(ALBUM);
         // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered image to decode
         await cover.evaluate(waitForDisplayedImageDecode);
-        const firstDecodedCoverMs = performance.now() - searchStartedAt;
+        const firstDecodedCoverMs = performance.now() - searchSubmittedAt;
         const galleryReady = expectTimingBudget(
           expect,
           galleryReadyMs,
@@ -287,7 +310,11 @@ test(
         );
         expect(completed.failed_count).toBe(0);
         expect(hashAlbumFolderCaches(fixture.mediaRoot)).toMatchObject(initialHashes);
-        expect(hashTree(path.join(customRoot, 'v1'))).toEqual({});
+        // The worker clears the old cache just after it publishes the completed state.
+        await expect.poll(() => hashTree(path.join(customRoot, 'v1')), {
+          timeout: 30000,
+          intervals: [250, 500, 1000],
+        }).toEqual({});
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
@@ -312,7 +339,7 @@ test(
         const adminServer = new AdminServerPage(page);
         for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
           await page.setViewportSize(viewport);
-          await page.goto('/admin/server');
+          await openIdleStorageSettings(page);
           await expect(adminServer.form).toBeVisible();
           const bounds = await adminServer.form.boundingBox();
           expect(bounds).not.toBeNull();

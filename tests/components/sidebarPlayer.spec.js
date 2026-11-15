@@ -63,6 +63,12 @@ async function mount(page, {
     window.getPlayerPlaybackSnapshot = () => ({ src: 'fixture-audio', paused: true });
     window.resolveAlbumForPlayerTrack = () => ({ id: 'fixture-album' });
     window.openTrackModal = () => { window.albumOpenCount += 1; };
+    // The player opens the playing album through utility-list-builders.js, which this page does not load.
+    window.openPlayerTrackAlbum = async (track, options) => {
+      const album = window.resolveAlbumForPlayerTrack(track);
+      if (album) window.openTrackModal(album, options);
+      return Boolean(album);
+    };
     window.togglePlayerPlayback = () => { window.playToggleCount += 1; };
     window.getLocalStorageItem = key => window.localStorage.getItem(key) || '';
     window.setLocalStorageItem = (key, value) => {

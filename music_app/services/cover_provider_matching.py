@@ -41,14 +41,38 @@ _ALBUM_VARIANT_KEYWORDS = (
     "reissue",
     "single",
     "stereo",
+    "soundtrack",
+    "svenska",
+    "swedish",
     "version",
     "ep",
 )
 _FEATURE_VARIANT_KEYWORDS = {"feat", "feature", "featured", "featuring", "ft"}
 _MIX_VARIANT_KEYWORDS = {"mix", "mixed", "mixes", "mixing"}
+_REMASTER_VARIANT_KEYWORDS = {"remaster", "remastered"}
 _REMIX_VARIANT_KEYWORDS = {"remix", "remixed", "remixes", "remixing"}
+_VARIOUS_ARTIST_KEYS = {"va", "v a", "various", "various artist", "various artists"}
+_LANGUAGE_VARIANT_ALIASES = {
+    "chinese": "chinese",
+    "danish": "danish",
+    "dansk": "danish",
+    "dutch": "dutch",
+    "finnish": "finnish",
+    "french": "french",
+    "german": "german",
+    "italian": "italian",
+    "japanese": "japanese",
+    "korean": "korean",
+    "norwegian": "norwegian",
+    "polish": "polish",
+    "portuguese": "portuguese",
+    "russian": "russian",
+    "spanish": "spanish",
+    "svenska": "swedish",
+    "swedish": "swedish",
+}
 _COLLABORATION_SEPARATOR_RE = re.compile(
-    r"\s+(?:with|feat(?:uring)?\.?|ft\.?)\s+|\s+&\s+",
+    r"\s*,\s*|\s+(?:with|feat(?:uring)?\.?|ft\.?)\s+|\s+&\s+",
     re.IGNORECASE,
 )
 _SIMPLE_NUMBER_WORDS = {
@@ -134,7 +158,7 @@ def extract_album_part_marker(value: str) -> int | None:
     if not text:
         return None
     match = re.search(
-        r"\b(?:pt|part|volume|vol)\.?\s*([0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+        r"\b(?:pt|part|volume|vol|book)\.?\s*([0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
         text,
         flags=re.IGNORECASE,
     )
@@ -155,13 +179,26 @@ def extract_album_part_marker(value: str) -> int | None:
 def canonical_album_title_without_part_marker(value: str) -> str:
     text = transliterate_cyrillic(value or "")
     text = re.sub(
-        r"\b(?:pt|part|volume|vol)\.?\s*(?:[0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+        r"\b(?:pt|part|volume|vol|book)\.?\s*(?:[0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b",
         "",
         text,
         flags=re.IGNORECASE,
     )
     text = re.sub(r"\s+", " ", text).strip()
     return canonical_album_title(text)
+
+
+def terminal_album_sequence(value: str) -> tuple[str, int | None]:
+    normalized = canonical_album_title(value)
+    base, separator, raw_marker = normalized.rpartition(" ")
+    if not separator or not base or not raw_marker:
+        return normalized, None
+    if raw_marker.isdigit():
+        return base, int(raw_marker)
+    marker = _parse_simple_roman_numeral(raw_marker)
+    if marker is None:
+        return normalized, None
+    return base, marker
 
 
 def normalize_edition(value: str) -> str:
@@ -175,6 +212,14 @@ def build_query_variants(
     year: int | None,
 ) -> list[tuple[str, str, str | None, int | None]]:
     variants = [(artist, album, edition, year)]
+    plain_language_album = re.sub(
+        r"\s*[\(\[\{]\s*(?:svenska|swedish)\s*[\)\]\}]\s*$",
+        "",
+        album,
+        flags=re.IGNORECASE,
+    ).strip()
+    if plain_language_album and plain_language_album != album.strip():
+        variants.append((artist, plain_language_album, edition, year))
     translit_artist = transliterate_cyrillic(artist)
     translit_album = transliterate_cyrillic(album)
     translit_edition = transliterate_cyrillic(edition or "")
@@ -251,6 +296,20 @@ def has_release_type_marker(value: str) -> bool:
     return any(token in tokens for token in {"single", "ep"})
 
 
+def remaster_identity(value: str) -> tuple[bool, frozenset[int]]:
+    tokens = normalize(value).split()
+    marker_indexes = [
+        index for index, token in enumerate(tokens)
+        if token in _REMASTER_VARIANT_KEYWORDS
+    ]
+    years: set[int] = set()
+    for marker_index in marker_indexes:
+        for year_index in (marker_index - 1, marker_index + 1):
+            if 0 <= year_index < len(tokens) and re.fullmatch(r"(?:19|20)\d{2}", tokens[year_index]):
+                years.add(int(tokens[year_index]))
+    return bool(marker_indexes), frozenset(years)
+
+
 def incompatible_album_variant_markers(value: str) -> set[str]:
     normalized_initialisms = re.sub(
         r"(?<![A-Za-z0-9])e\s*\.\s*p\.?(?![A-Za-z0-9])",
@@ -266,6 +325,11 @@ def incompatible_album_variant_markers(value: str) -> set[str]:
         markers.add("remix")
     if tokens & _FEATURE_VARIANT_KEYWORDS:
         markers.add("feature")
+    markers.update(
+        f"language:{canonical}"
+        for token, canonical in _LANGUAGE_VARIANT_ALIASES.items()
+        if token in tokens
+    )
     return markers
 
 
@@ -340,9 +404,53 @@ def album_match_bonus(target_album: str, candidate_album: str) -> float:
     return 0.0
 
 
+def compound_release_title_starts_with_album(target_album: str, candidate_album: str) -> bool:
+    parts = re.split(r"\s+\+\s+", str(candidate_album or ""), maxsplit=1)
+    if len(parts) != 2 or not parts[1].strip():
+        return False
+    return canonical_album_title(parts[0]) == canonical_album_title(target_album)
+
+
+def candidate_album_title_expands_target(target_album: str, candidate_album: str) -> bool:
+    if compound_release_title_starts_with_album(target_album, candidate_album):
+        return True
+    if extract_album_part_marker(target_album) != extract_album_part_marker(candidate_album):
+        return False
+    candidate_is_remaster, _candidate_remaster_years = remaster_identity(candidate_album)
+    if candidate_is_remaster:
+        return False
+    target_title = canonical_album_title(target_album)
+    candidate_title = canonical_album_title(candidate_album)
+    return bool(target_title and candidate_title.startswith(f"{target_title} "))
+
+
 def release_year_from_match_meta(meta: dict | None) -> int | None:
     metadata = meta or {}
     return parse_year(metadata.get("year") or metadata.get("releaseDate"))
+
+
+def prefer_exact_album_title_matches(
+    matches: list[tuple[float, str, dict]],
+    *,
+    target_album: str,
+) -> list[tuple[float, str, dict]]:
+    target_title = canonical_album_title(target_album)
+    if not target_title:
+        return matches
+    exact_matches = [
+        item
+        for item in matches
+        if canonical_album_title(
+            str(
+                (item[2] or {}).get("album")
+                or (item[2] or {}).get("collectionName")
+                or (item[2] or {}).get("title")
+                or ""
+            )
+        )
+        == target_title
+    ]
+    return exact_matches or matches
 
 
 def prefer_release_year_matches(
@@ -371,6 +479,7 @@ def prefer_release_year_matches(
 
 
 def _cover_artist_match_target(target_artist: str, candidate_artist: str) -> str | None:
+    candidate_artist = re.sub(r"\*+$", "", str(candidate_artist or "").strip()).strip()
     if identity_matching.automatic_artist_identity_match_allowed(
         target_artist,
         candidate_artist,
@@ -381,6 +490,30 @@ def _cover_artist_match_target(target_artist: str, candidate_artist: str) -> str
         for component in _COLLABORATION_SEPARATOR_RE.split(str(target_artist or ""))
         if component.strip()
     ]
+    candidate_components = [
+        component.strip()
+        for component in _COLLABORATION_SEPARATOR_RE.split(candidate_artist)
+        if component.strip()
+    ]
+    if len(components) > len(candidate_components) >= 2:
+        unmatched_components = list(components)
+        for candidate_component in candidate_components:
+            match_index = next(
+                (
+                    index
+                    for index, component in enumerate(unmatched_components)
+                    if identity_matching.automatic_artist_identity_match_allowed(
+                        component,
+                        candidate_component,
+                    )
+                ),
+                None,
+            )
+            if match_index is None:
+                break
+            unmatched_components.pop(match_index)
+        else:
+            return candidate_artist
     if len(components) < 2:
         return None
     matching_components = [
@@ -410,15 +543,38 @@ def match_score(
     *,
     enforce_year: bool = True,
 ) -> float:
-    artist_match_target = _cover_artist_match_target(target_artist, candidate_artist)
-    if artist_match_target is None:
-        return 0.0
-    artist_score = similarity(artist_match_target, candidate_artist)
-    if artist_match_target != target_artist:
-        artist_score *= 0.98
+    target_is_various_artists = normalize(target_artist) in _VARIOUS_ARTIST_KEYS
+    if target_is_various_artists:
+        if enforce_year and target_year and candidate_year != target_year:
+            return 0.0
+        artist_score = 1.0
+    else:
+        artist_match_target = _cover_artist_match_target(target_artist, candidate_artist)
+        if artist_match_target is None:
+            return 0.0
+        artist_score = similarity(artist_match_target, candidate_artist)
+        if artist_match_target != target_artist:
+            artist_score *= 0.98
     album_score = similarity(target_album, candidate_album)
-    if incompatible_album_variant_markers(target_album) != incompatible_album_variant_markers(
-        candidate_album
+    target_variant_markers = incompatible_album_variant_markers(target_album)
+    candidate_variant_markers = incompatible_album_variant_markers(candidate_album)
+    target_language_markers = {marker for marker in target_variant_markers if marker.startswith("language:")}
+    candidate_language_markers = {marker for marker in candidate_variant_markers if marker.startswith("language:")}
+    if (
+        target_variant_markers - target_language_markers
+        != candidate_variant_markers - candidate_language_markers
+        or not candidate_language_markers.issubset(target_language_markers)
+    ):
+        return 0.0
+    target_album_is_remaster, target_album_remaster_years = remaster_identity(target_album)
+    target_edition_is_remaster, target_edition_remaster_years = remaster_identity(target_edition or "")
+    candidate_is_remaster, candidate_remaster_years = remaster_identity(candidate_album)
+    target_is_remaster = target_album_is_remaster or target_edition_is_remaster
+    if target_is_remaster != candidate_is_remaster:
+        return 0.0
+    target_remaster_years = target_album_remaster_years | target_edition_remaster_years
+    if target_remaster_years and candidate_remaster_years and target_remaster_years.isdisjoint(
+        candidate_remaster_years
     ):
         return 0.0
     target_album_core = canonical_album_title(target_album)
@@ -440,25 +596,57 @@ def match_score(
             or target_base_title.startswith(candidate_base_title)
         ):
             return 0.0
+    target_sequence_base, target_sequence_marker = terminal_album_sequence(target_album)
+    candidate_sequence_base, candidate_sequence_marker = terminal_album_sequence(candidate_album)
+    if (
+        target_sequence_base == candidate_sequence_base
+        and target_sequence_marker != candidate_sequence_marker
+        and (target_sequence_marker is not None or candidate_sequence_marker is not None)
+    ):
+        return 0.0
+    title_expansion_match = candidate_album_title_expands_target(
+        target_album,
+        candidate_album,
+    )
     album_core_score = similarity(target_album_core, candidate_album_core)
     is_self_titled_target = is_self_titled_album(target_artist, target_album)
+    self_titled_album_identity_matches = (
+        target_album_core == candidate_album_core
+        or re.sub(r"^the\s+", "", target_album_core) == re.sub(r"^the\s+", "", candidate_album_core)
+    )
     if is_self_titled_target:
-        if target_album_core != candidate_album_core:
+        if not self_titled_album_identity_matches:
             return 0.0
         if artist_score < 0.9:
             return 0.0
         if target_year:
             if candidate_year is None or candidate_year != target_year:
                 return 0.0
-    if is_short_album_title(target_album) and target_album_core != candidate_album_core:
+    if (
+        is_short_album_title(target_album)
+        and target_album_core != candidate_album_core
+        and not title_expansion_match
+        and not (is_self_titled_target and self_titled_album_identity_matches)
+    ):
         return 0.0
     target_tokens = meaningful_title_tokens(target_album)
     candidate_tokens = meaningful_title_tokens(candidate_album)
     if target_tokens and candidate_tokens and not (target_tokens & candidate_tokens) and album_core_score < 0.93:
         return 0.0
+    if (
+        target_tokens != candidate_tokens
+        and (target_tokens < candidate_tokens or candidate_tokens < target_tokens)
+        and not title_expansion_match
+        and not (is_self_titled_target and self_titled_album_identity_matches)
+    ):
+        return 0.0
     if has_release_type_marker(candidate_album) and not has_release_type_marker(target_album) and album_core_score < 0.9:
         return 0.0
-    if has_live_marker(target_album) != has_live_marker(candidate_album) and album_core_score < 0.95:
+    if (
+        has_live_marker(target_album) != has_live_marker(candidate_album)
+        and not title_expansion_match
+        and album_core_score < 0.95
+    ):
         return 0.0
     if suspicious_digit_album_substitution(target_album, candidate_album):
         year_delta = abs(target_year - candidate_year) if target_year and candidate_year else None
@@ -466,6 +654,8 @@ def match_score(
         artist_is_weak = artist_score < 0.78
         if year_is_off or artist_is_weak:
             return 0.0
+    if title_expansion_match:
+        album_core_score = max(album_core_score, 0.82)
     effective_album_score = max(album_score, album_core_score)
     exact_album_bonus = album_match_bonus(target_album, candidate_album)
     if album_core_score < 0.82:
@@ -658,7 +848,7 @@ def album_query_part_variants(value: str) -> list[str]:
             replacements.extend([f"Part {word_lookup[marker]}"])
         normalized_replacements = list(dict.fromkeys(replacements))
         variant_pattern = (
-            r"\b(?:pt|part|volume|vol)\.?\s*(?:[0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+            r"\b(?:pt|part|volume|vol|book)\.?\s*(?:[0-9]+|[ivx]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
         )
         for replacement in normalized_replacements:
             replaced = re.sub(variant_pattern, replacement, raw, count=1, flags=re.IGNORECASE)

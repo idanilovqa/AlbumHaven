@@ -5,10 +5,17 @@ export const LASTFM_PLAYBACK_TARGET = Object.freeze({
   year: 2026,
 });
 
+// Last.fm never scrobbles a track of 30 s or less: the album's first track is the 14 s loop source
+// and never scrobbles, while its later 32 s tracks each do.
+export const LASTFM_SCROBBLE_TRACK = Object.freeze({
+  index: 1,
+  title: `${LASTFM_PLAYBACK_TARGET.album} Track 2`,
+});
+
 export const LASTFM_CONSECUTIVE_PLAYBACK_TRACKS = Object.freeze([
-  LASTFM_PLAYBACK_TARGET.track,
-  `${LASTFM_PLAYBACK_TARGET.album} Track 2`,
+  LASTFM_SCROBBLE_TRACK.title,
   `${LASTFM_PLAYBACK_TARGET.album} Track 3`,
+  `${LASTFM_PLAYBACK_TARGET.album} Track 4`,
 ]);
 
 function resolveLastfmFixtureProviderBaseURL(testInfo) {

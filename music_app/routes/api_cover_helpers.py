@@ -10,6 +10,7 @@ from music_app.services.cache import (
 from music_app.services.cover_lookup_tasks import (
     clear_completed_cover_lookup_tasks,
     list_cover_lookup_task_summaries,
+    mark_cover_lookup_notifications_action_taken_for_track_paths,
     mark_cover_lookup_task_notification_action_taken,
 )
 from music_app.services.cover_state import (
@@ -37,6 +38,7 @@ def apply_cover_path_for_tracks(
     remote_cover_height: int | None = None,
     schedule_cache_update: bool = True,
     selection_authority: Mapping[str, object] | None = None,
+    include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     return apply_cover_selection_for_tracks(
         track_paths,
@@ -55,6 +57,7 @@ def apply_cover_path_for_tracks(
         schedule_cache_update=schedule_cache_update,
         manual_selection=selection_authority is None,
         selection_authority=selection_authority,
+        include_problematic_album=include_problematic_album,
     )
 
 
@@ -122,6 +125,7 @@ def apply_cover_selection_for_tracks(
     schedule_cache_update: bool = True,
     manual_selection: bool = False,
     selection_authority: Mapping[str, object] | None = None,
+    include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
         raise ValueError("apply_cover_selection_for_tracks requires explicit config, logger, and library_state")
@@ -137,6 +141,8 @@ def apply_cover_selection_for_tracks(
         )
 
     def find_problematic_album(updated_track_paths: set[str]) -> dict[str, object] | None:
+        if not include_problematic_album:
+            return None
         return find_problematic_album_by_track_paths(
             updated_track_paths,
             config=resolved_config,

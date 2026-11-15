@@ -188,8 +188,8 @@ test('Cover Look Up has one header, two candidates, pinned action and artwork co
   const first = await app.coverCandidates.nth(0).boundingBox(), second = await app.coverCandidates.nth(1).boundingBox();
   expect(first.y).toBeCloseTo(second.y, 0);
   expect(second.x).toBeGreaterThan(first.x);
-  await expect(app.manualCoverSearch).not.toBeVisible();
-  await expect(app.coverResults).not.toBeVisible();
+  await expect(app.manualCoverSearch).toBeVisible();
+  await expect(app.coverResults).toBeVisible();
   const before = await app.findBetterArt.boundingBox();
   await app.scrollRegion('cover', 800);
   const after = await app.findBetterArt.boundingBox();

@@ -20,7 +20,7 @@ MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "migrations"
     / "postgres"
-    / "0120_create_watcher_runtime_sessions.sql"
+    / "0241_create_watcher_runtime_sessions.sql"
 )
 _UNSET = object()
 

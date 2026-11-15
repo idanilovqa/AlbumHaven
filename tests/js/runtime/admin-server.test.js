@@ -177,6 +177,28 @@ test('failed terminal relocation exposes retry without continued polling', async
   assert.equal(ui.fetches.at(-1).url, '/admin/server/preview-storage/retry');
 });
 
+test('completed relocation with failures permits choosing a new destination', async () => {
+  const ui = runtime({
+    mode: 'album_folders', requested_mode: 'album_folders', revision: 9,
+    operation_state: 'completed_with_failures', operation_id: 'operation-1',
+    total_count: 10, completed_count: 9, failed_count: 1,
+    total_bytes: 1000, completed_bytes: 900,
+    failure_summary: [{ item_id: 4, error: 'Source preview disappeared' }],
+    suggested_path: 'C:\\Previews',
+  });
+  await mount(ui);
+
+  assert.equal(ui.albumFolders.disabled, false);
+  assert.equal(ui.custom.disabled, false);
+  assert.equal(ui.save.disabled, false);
+  assert.equal(ui.retry.hidden, false);
+
+  ui.albumFolders.checked = false;
+  ui.custom.checked = true;
+  await ui.custom.listeners.get('change')();
+  assert.equal(ui.pathInput.disabled, false);
+});
+
 test('canceled relocation offers resume so moved bytes can be reconciled', async () => {
   const ui = runtime({
     mode: 'album_folders', requested_mode: 'custom', requested_root: 'C:\\Previews',

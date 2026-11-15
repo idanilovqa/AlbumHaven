@@ -293,6 +293,17 @@ function parseLoopTime(value) {
 }
 
 function getProblematicAlbumNavigationOptions(album, selected) {
+  if (album?.entity_kind === 'artist') {
+    const artistName = String(album.name || '').trim() || 'Unknown Artist';
+    const artworkLabel = `Artist ${artistName}`;
+    return {
+      variant: 'wide', action: true, key: album.key, selected, label: artistName,
+      subtitle: `Artist · ${String(album.problem_reasons?.[0] || '')}`,
+      artworkHtml: buildAlbumArtboxHtml({ state: 'missing', label: artworkLabel }), artworkLabel,
+      count: null, countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+    };
+  }
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';

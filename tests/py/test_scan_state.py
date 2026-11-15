@@ -299,7 +299,7 @@ def test_refresh_library_state_skips_scan_for_fresh_cache_and_repairs_relations(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or ({}, 0.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -340,7 +340,7 @@ def test_refresh_library_state_skip_path_uses_explicit_dependencies_without_flas
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or ({}, 0.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False: None,
+        refresh_relation_views=lambda *, final_scan_publication=False: None,
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -430,7 +430,7 @@ def test_refresh_library_state_skips_scan_for_fresh_disk_cache_after_restart(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or ({}, 0.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
         queue_problematic_albums_prewarm=lambda: prewarm_calls.append(True),
@@ -534,7 +534,7 @@ def test_refresh_library_state_reuses_persisted_relation_views_after_restart(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or ({}, 0.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -620,7 +620,7 @@ def test_refresh_library_state_skips_old_disk_cache_when_ttl_is_disabled(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or ({}, 0.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -734,7 +734,7 @@ def test_refresh_library_state_rescans_old_disk_cache_when_ttl_is_positive(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or (new_file_cache, 55.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -884,7 +884,7 @@ def test_refresh_library_state_defers_atomic_save_to_relation_refresh(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or (new_file_cache, 55.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -962,7 +962,7 @@ def test_refresh_library_state_validates_scan_cache_adapter_before_in_memory_ski
             force=False,
             cache_lock=scan_state.Lock(),
             scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or ({}, 0.0),
-            refresh_relation_views=lambda *, seed_missing_album_ratings=False: None,
+            refresh_relation_views=lambda *, final_scan_publication=False: None,
             start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
             start_background_cover_refresh=lambda: None,
         )
@@ -1141,7 +1141,7 @@ def test_refresh_library_state_rescans_when_library_root_identity_changes(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: scan_calls.append(kwargs) or (new_file_cache, 55.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: relation_calls.append(True),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
     )
@@ -1183,7 +1183,7 @@ def test_refresh_library_state_runs_mbid_follow_up_after_successful_publish(
     _install_scan_cache_adapter(monkeypatch)
     monkeypatch.setattr(scan_state, "log_app_event", lambda *args, **kwargs: None)
 
-    def refresh_relations(*, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None) -> None:
+    def refresh_relations(*, final_scan_publication=False, expected_scan_generation=None, publication_state=None) -> None:
         order.append("relations")
 
     def queue_mbid_follow_up(library_state_arg, *, previous_albums):
@@ -1237,7 +1237,7 @@ def test_refresh_library_state_does_not_run_mbid_follow_up_for_skip_failure_or_c
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: ({}, 0.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: None,
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: None,
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
         queue_mbid_assertion_follow_up=lambda *args, **kwargs: hook_calls.append("skip"),
@@ -1258,7 +1258,7 @@ def test_refresh_library_state_does_not_run_mbid_follow_up_for_skip_failure_or_c
             force=True,
             cache_lock=scan_state.Lock(),
             scan_music_incremental=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("scan failed")),
-            refresh_relation_views=lambda *, seed_missing_album_ratings=False: None,
+            refresh_relation_views=lambda *, final_scan_publication=False: None,
             start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
             start_background_cover_refresh=lambda: None,
             queue_mbid_assertion_follow_up=lambda *args, **kwargs: hook_calls.append("failure"),
@@ -1278,7 +1278,7 @@ def test_refresh_library_state_does_not_run_mbid_follow_up_for_skip_failure_or_c
         force=True,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: (_ for _ in ()).throw(scan_state.ScanCancelled()),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False: None,
+        refresh_relation_views=lambda *, final_scan_publication=False: None,
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
         queue_mbid_assertion_follow_up=lambda *args, **kwargs: hook_calls.append("cancel"),
@@ -1315,7 +1315,7 @@ def test_refresh_library_state_mbid_follow_up_exception_does_not_block_scan_comp
         force=True,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **kwargs: ({"new": {"album": "New"}}, 55.0),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None, publication_state=None: None,
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None, publication_state=None: None,
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
         queue_mbid_assertion_follow_up=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("hook failed")),
@@ -1407,13 +1407,13 @@ def test_successful_current_generation_scan_is_published_with_rating_seed_intent
 
     def refresh_relations(
         *,
-        seed_missing_album_ratings=False,
+        final_scan_publication=False,
         expected_scan_generation=None,
         expected_cover_mutation_revision=None,
         publication_state=None,
     ):
         publication_intents.append(
-            (seed_missing_album_ratings, expected_cover_mutation_revision)
+            (final_scan_publication, expected_cover_mutation_revision)
         )
 
     scan_state.refresh_library_state(
@@ -1503,7 +1503,7 @@ def test_force_scan_repairs_legacy_rating_metadata_before_guarded_seed_publicati
 
     def publish_relations(
         *,
-        seed_missing_album_ratings=False,
+        final_scan_publication=False,
         expected_scan_generation=None,
         expected_cover_mutation_revision=None,
         publication_state=None,
@@ -1511,7 +1511,7 @@ def test_force_scan_repairs_legacy_rating_metadata_before_guarded_seed_publicati
         album = publication_state["albums"][0]
         publication_calls.append(
             {
-                "seed": seed_missing_album_ratings,
+                "seed": final_scan_publication,
                 "generation": expected_scan_generation,
                 "cover_revision": expected_cover_mutation_revision,
                 "album_key": album.key,
@@ -1608,11 +1608,11 @@ def test_current_scan_generation_registers_detached_preview_until_atomic_final_p
 
     def publish_final_relations(
         *,
-        seed_missing_album_ratings=False,
+        final_scan_publication=False,
         expected_scan_generation=None,
         publication_state=None,
     ):
-        assert seed_missing_album_ratings is True
+        assert final_scan_publication is True
         assert expected_scan_generation == 1
         assert library_state["file_cache"] is old_file_cache
         assert library_state["albums"] == [old_album]
@@ -1874,11 +1874,11 @@ def test_failed_relation_publication_keeps_prior_live_scan_state(
 
     def reject_publication(
         *,
-        seed_missing_album_ratings=False,
+        final_scan_publication=False,
         expected_scan_generation=None,
         publication_state=None,
     ):
-        assert seed_missing_album_ratings is True
+        assert final_scan_publication is True
         assert expected_scan_generation == 1
         assert library_state["file_cache"] is old_file_cache
         assert library_state["albums"] == [old_album]
@@ -1975,11 +1975,11 @@ def test_post_commit_logging_rejects_cancellation_until_scan_finally_completes(
 
     def mark_publication_committed(
         *,
-        seed_missing_album_ratings=False,
+        final_scan_publication=False,
         expected_scan_generation=None,
         publication_state=None,
     ):
-        assert seed_missing_album_ratings is True
+        assert final_scan_publication is True
         assert expected_scan_generation == 1
         library_state["scan_committed_generation"] = expected_scan_generation
 
@@ -2149,8 +2149,8 @@ def test_unsuccessful_scan_never_publishes_rating_seed_intent(
             force=True,
             cache_lock=scan_state.Lock(),
             scan_music_incremental=fail_scan,
-            refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None: (
-                publication_intents.append(seed_missing_album_ratings)
+            refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None: (
+                publication_intents.append(final_scan_publication)
             ),
             start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
             start_background_cover_refresh=lambda: None,
@@ -2245,8 +2245,8 @@ def test_stale_scan_generation_does_not_publish_rating_seed_intent(
         force=True,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=finish_after_generation_changes,
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False: (
-            publication_intents.append(seed_missing_album_ratings)
+        refresh_relation_views=lambda *, final_scan_publication=False: (
+            publication_intents.append(final_scan_publication)
         ),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,
@@ -2291,8 +2291,8 @@ def test_fresh_snapshot_hydration_rebuilds_relations_without_rating_seed_intent(
         force=False,
         cache_lock=scan_state.Lock(),
         scan_music_incremental=lambda **_kwargs: pytest.fail("fresh hydration must not scan"),
-        refresh_relation_views=lambda *, seed_missing_album_ratings=False, expected_scan_generation=None: (
-            publication_intents.append(seed_missing_album_ratings)
+        refresh_relation_views=lambda *, final_scan_publication=False, expected_scan_generation=None: (
+            publication_intents.append(final_scan_publication)
         ),
         start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
         start_background_cover_refresh=lambda: None,

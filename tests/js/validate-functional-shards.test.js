@@ -14,19 +14,22 @@ const baseFixturesPath = path.join(repoRoot, 'tests', 'e2e', 'support', 'baseFix
 const autoplayConfigPath = path.join(repoRoot, 'playwright.autoplay-allowed.config.js');
 const validatorExists = fs.existsSync(validatorPath);
 const validatorTest = validatorExists ? test : test.skip;
+const MUSICBRAINZ_FIXTURE_CASE = 'FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page';
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 53],
-  ['cover-providers-1', 12],
-  ['cover-providers-2', 12],
-  ['metadata-mutations', 15],
+  ['gallery-search-visual-1', 32],
+  ['gallery-search-visual-2', 35],
+  ['cover-providers-1', 22],
+  ['cover-providers-2', 15],
+  ['metadata-mutations', 17],
   ['playback-utilities-1', 14],
-  ['playback-utilities-2', 14],
+  ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
-  ['gallery-search-visual', 'Gallery, Search & Visual'],
+  ['gallery-search-visual-1', 'Gallery, Search & Visual 1'],
+  ['gallery-search-visual-2', 'Gallery, Search & Visual 2'],
   ['cover-providers-1', 'Cover Providers 1'],
   ['cover-providers-2', 'Cover Providers 2'],
   ['metadata-mutations', 'Metadata Mutations'],
@@ -41,8 +44,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
 ];
-const FIXTURE_RELEASE = 'fixtures-v1.0.27';
-const FIXTURE_MANIFEST_SHA256 = '1EBFCAD153AF13CA077CA2B443EB47162C5582994C58BBED8F79332B098DDBFA';
+const FIXTURE_RELEASE = 'fixtures-v1.0.30';
+const FIXTURE_MANIFEST_SHA256 = '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -64,7 +67,12 @@ function clone(value) {
 
 function invocationIsolationFixture() {
   const rows = [
-    { case: 'reads baseline A', stateMode: 'read-only', setupScope: 'suite' },
+    {
+      case: MUSICBRAINZ_FIXTURE_CASE,
+      stateMode: 'owned-mutation',
+      setupScope: 'isolated',
+      databaseScenarios: ['musicbrainz:unconfirmed-match'],
+    },
     { case: 'reads baseline B', stateMode: 'read-only', setupScope: 'suite' },
     { case: 'mutates baseline A', stateMode: 'owned-mutation' },
     { case: 'mutates baseline B', stateMode: 'owned-mutation' },
@@ -116,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved seven-way 134-case assignment', () => {
+test('functional shard contract pins the approved eight-way 166-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -130,7 +138,7 @@ test('functional shard contract pins the approved seven-way 134-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 134);
+  assert.equal(total, 166);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -237,13 +245,15 @@ validatorTest('validator accepts the exact approved ownership and rejects every 
 validatorTest('execution waves share readers and isolate each mutator despite shared setup groups', () => {
   const { shard, matrix } = invocationIsolationFixture();
   const [wave] = loadValidator().executionWavesForShard(shard, matrix);
-  const readerInvocation = wave.invocations.find((invocation) => (
-    invocation.cases.some((ownedCase) => ownedCase.case === 'reads baseline A')
+  const musicbrainzInvocation = wave.invocations.find((invocation) => (
+    invocation.cases.some((ownedCase) => ownedCase.case === MUSICBRAINZ_FIXTURE_CASE)
   ));
-  assert.deepEqual(readerInvocation.cases.map((ownedCase) => ownedCase.case), [
-    'reads baseline A', 'reads baseline B',
-  ]);
-  assert.equal(wave.invocations.length, 6);
+  const readerInvocation = wave.invocations.find((invocation) => (
+    invocation.cases.some((ownedCase) => ownedCase.case === 'reads baseline B')
+  ));
+  assert.deepEqual(musicbrainzInvocation.cases.map((ownedCase) => ownedCase.case), [MUSICBRAINZ_FIXTURE_CASE]);
+  assert.deepEqual(readerInvocation.cases.map((ownedCase) => ownedCase.case), ['reads baseline B']);
+  assert.equal(wave.invocations.length, 7);
   for (const row of matrix.filter((candidate) => candidate.stateMode !== 'read-only')) {
     const invocation = wave.invocations.find((candidate) => (
       candidate.cases.some((ownedCase) => ownedCase.case === row.case)
@@ -256,6 +266,17 @@ validatorTest('execution waves share readers and isolate each mutator despite sh
     }
   }
   assert.equal(wave.invocations.at(-1).baselineMode, 'global-mutation');
+});
+
+validatorTest('MusicBrainz SQL fixture scenarios reject suite/read-only ownership before grouping', () => {
+  const { shard, matrix } = invocationIsolationFixture();
+  const fixtureRow = matrix.find((row) => row.case === MUSICBRAINZ_FIXTURE_CASE);
+  fixtureRow.setupScope = 'suite';
+  fixtureRow.stateMode = 'read-only';
+  assert.throws(
+    () => loadValidator().executionWavesForShard(shard, matrix),
+    /MusicBrainz fixture.*isolated.*owned-mutation/i,
+  );
 });
 
 for (const [failureCode, name] of [
@@ -310,24 +331,46 @@ validatorTest(name, () => {
 
     const cleanupFailed = failureCode === 2;
     assert.deepEqual(result, { exitCode: failureCode, signal: null });
-    assert.equal(calls.length, cleanupFailed ? 5 : 12);
+    assert.equal(calls.length, cleanupFailed ? 9 : 16);
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-    assert.equal(checkpointCalls.length, cleanupFailed ? 2 : 5);
-    assert.equal(playwrightCalls.length, cleanupFailed ? 2 : 3);
-    assert.deepEqual(mediaCalls.map((call) => call.args[1]), cleanupFailed ? ['--mode=restore'] : [
-      '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
+    assert.equal(checkpointCalls.length, cleanupFailed ? 3 : 6);
+    assert.equal(playwrightCalls.length, cleanupFailed ? 3 : 4);
+    const musicbrainzCall = playwrightCalls.find((call) => (
+      call.args[call.args.indexOf('--grep') + 1].includes(MUSICBRAINZ_FIXTURE_CASE)
+    ));
+    assert.equal(musicbrainzCall.options.env.MUSICBRAINZ_ENRICHMENT_ENABLED, '1');
+    assert.equal(musicbrainzCall.options.env.MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED, '1');
+    const ordinaryCall = playwrightCalls.find((call) => (
+      call.args[call.args.indexOf('--grep') + 1].includes('mutates baseline A')
+    ));
+    assert.equal(ordinaryCall.options.env.MUSICBRAINZ_ENRICHMENT_ENABLED, undefined);
+    assert.equal(ordinaryCall.options.env.MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED, undefined);
+    const musicbrainzFixtureCall = calls.find((call) => (
+      call.args[0]?.endsWith('musicbrainzIdentityFixture.js')
+    ));
+    assert.ok(musicbrainzFixtureCall, 'MusicBrainz SQL fixture must run before its production app');
+    assert.ok(musicbrainzFixtureCall.args.includes(`--case=${MUSICBRAINZ_FIXTURE_CASE}`));
+    assert.ok(calls.indexOf(musicbrainzFixtureCall) < calls.indexOf(musicbrainzCall));
+    assert.deepEqual(mediaCalls.map((call) => call.args[1]), cleanupFailed ? [
+      '--mode=restore', '--mode=restore',
+    ] : [
+      '--mode=restore', '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
     ]);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
-      cleanupFailed ? ['--mode=capture', '--mode=restore'] : [
-        '--mode=capture', '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
+      cleanupFailed ? ['--mode=capture', '--mode=restore', '--mode=restore'] : [
+        '--mode=capture', '--mode=restore', '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
       ],
     );
     const expectedCalls = [
       'database:--mode=capture',
-      'reads baseline A, reads baseline B',
+      'reads baseline B',
+      'media:--mode=restore',
+      'database:--mode=restore',
+      `fixture:${MUSICBRAINZ_FIXTURE_CASE}`,
+      MUSICBRAINZ_FIXTURE_CASE,
       'media:--mode=restore',
       'database:--mode=restore',
       'mutates baseline A',
@@ -340,6 +383,9 @@ validatorTest(name, () => {
       'database:--mode=verify',
     ];
     assert.deepEqual(calls.map((call) => {
+      if (call.args[0].endsWith('musicbrainzIdentityFixture.js')) {
+        return `fixture:${call.args.find((arg) => arg.startsWith('--case=')).slice('--case='.length)}`;
+      }
       if (call.args[0].endsWith('run-playwright.cjs')) {
         const pattern = new RegExp(call.args[call.args.indexOf('--grep') + 1]);
         return shard.invocations[0].cases
@@ -348,7 +394,7 @@ validatorTest(name, () => {
       }
       const authority = call.executable === 'fixture-python' ? 'database' : 'media';
       return `${authority}:${call.args.find((arg) => arg.startsWith('--mode='))}`;
-    }), cleanupFailed ? expectedCalls.slice(0, 5) : expectedCalls);
+    }), cleanupFailed ? expectedCalls.slice(0, 9) : expectedCalls);
     for (const call of checkpointCalls) {
       assert.match(call.args[0], /scripts[\\/]ci[\\/]functional-fixture-checkpoint\.py$/);
       assert.ok(call.args.some((arg) => arg.includes('album_haven_ci_f_123')));
@@ -392,7 +438,7 @@ validatorTest(name, () => {
 validatorTest('shard runner can isolate one exact owned case for CI diagnosis', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
-  const shard = clone(contract.shards.find((candidate) => candidate.name === 'gallery-search-visual'));
+  const shard = clone(contract.shards.find((candidate) => candidate.name === 'gallery-search-visual-1'));
   const focusedCase = shard.invocations
     .flatMap((invocation) => invocation.cases)
     .find((ownedCase) => ownedCase.case.startsWith('FTC-ALBUM-TRACK-CREDITS-001'));
@@ -403,7 +449,7 @@ validatorTest('shard runner can isolate one exact owned case for CI diagnosis', 
   assert.deepEqual(filtered.invocations[0].cases.map((ownedCase) => ownedCase.case), [focusedCase.case]);
   assert.throws(
     () => validator.filterFunctionalShardCases(shard, ['FTC-NOT-OWNED']),
-    /not owned by functional shard gallery-search-visual/i,
+    /not owned by functional shard gallery-search-visual-1/i,
   );
 });
 
@@ -459,8 +505,8 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-  const invocationCount = 14;
-  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 15);
+    const invocationCount = 16;
+    assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 17);
     assert.equal(checkpointCalls.length, invocationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
@@ -650,7 +696,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
     assert.ok(globalMutations.length <= 1);
     for (const ownedCase of cases) waveByCase.set(ownedCase.case, wave.wave);
   }
-  assert.equal(waveByCase.size, 15);
+  assert.equal(waveByCase.size, 17);
   for (const caseName of [
     'FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards',
     'FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split',
@@ -671,7 +717,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
   );
   assert.equal(
     waves[0].invocations[0].cases[0].case,
-    'FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards',
+    'FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits',
   );
   assert.equal(
     waves[2].invocations[0].cases[0].case,
@@ -720,20 +766,22 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
     "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
     "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
-    "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+    "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+    "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
+    "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 8);
+  assert.equal(isolatedInvocations.length, 10);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   );
   const secondWaveInvocations = waves
     .filter((wave) => wave.wave === 2)
@@ -749,12 +797,14 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
       "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
       "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
       "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
-      "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+      "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+      "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
+      "FTC-COVERS-043 differently tagged CD siblings expose only their own local cover",
     ].sort(),
   );
   assert.equal(
     secondWaveInvocations.filter((invocation) => invocation.baselineMode === 'global-mutation').length,
-    1,
+    2,
   );
 });
 
@@ -762,19 +812,26 @@ validatorTest('gallery startup projections share one early app process before is
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
-  const shard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual');
-  const waves = validator.executionWavesForShard(shard, matrix);
+  const shardWaves = contract.shards
+    .filter((candidate) => candidate.name.startsWith('gallery-search-visual-'))
+    .map((shard) => validator.executionWavesForShard(shard, matrix));
+  const waves = [1, 2, 3, 4].map((wave) => ({
+    wave,
+    invocations: shardWaves.flatMap((perShard) => (
+      perShard.find((candidate) => candidate.wave === wave)?.invocations || []
+    )),
+  }));
 
-  assert.equal(waves.length, 2);
-  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2]);
+  assert.equal(waves.length, 4);
+  assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3, 4]);
   const isolatedFirstWave = waves[0].invocations.filter((invocation) => (
     invocation.baselineMode === 'isolated-app-process'
   ));
   assert.equal(isolatedFirstWave.length, 4);
-  assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
-  assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
-  const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
-  assert.equal(sharedReaderNames.length, 31);
+  const sharedReaderNames = waves[0].invocations
+    .filter((invocation) => invocation.baselineMode === 'shared-setup')
+    .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case));
+  assert.equal(sharedReaderNames.length, 32);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -788,7 +845,7 @@ validatorTest('gallery startup projections share one early app process before is
     assert.ok(sharedReaderNames.includes(caseName), `${caseName} must share the prepared gallery fixture`);
   }
   assert.deepEqual(
-    waves[0].invocations[0].cases.map((ownedCase) => ownedCase.case),
+    isolatedFirstWave[0].cases.map((ownedCase) => ownedCase.case),
     [
       'FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and keeps both raw credits',
       'FTC-SEARCH-NAV-021 keeps empty normalized artist keys isolated',
@@ -802,7 +859,10 @@ validatorTest('gallery startup projections share one early app process before is
   );
   assert.deepEqual(
     isolatedFirstWave[2].cases.map((ownedCase) => ownedCase.case),
-    ['FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox'],
+    [
+      'FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox',
+      'FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-size art is unavailable',
+    ],
   );
   assert.deepEqual(
     isolatedFirstWave[3].cases.map((ownedCase) => ownedCase.case),
@@ -815,7 +875,7 @@ validatorTest('gallery startup projections share one early app process before is
     ({ case: name }) => name.startsWith('FTC-TAGS-020 '),
   ));
   assert.ok(mobileInvocationIndex >= 0);
-  assert.ok(ddtInvocationIndex > mobileInvocationIndex);
+  assert.ok(ddtInvocationIndex >= 0);
   assert.deepEqual(
     waves[1].invocations[mobileInvocationIndex].cases.map((ownedCase) => ownedCase.case),
     ['FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale'],
@@ -922,12 +982,16 @@ validatorTest('watcher cases retain their approved playback and metadata shard o
     })))
   )).filter(({ ownedCase }) => (
     ownedCase.test === 'tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js'
+    && [
+      'FTC-LIBROOTS-021 repairs a stable watcher incident through its completion watermark',
+      'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
+    ].includes(ownedCase.case)
   ));
 
   assert.deepEqual(watcherCases.map(({ shard, ownedCase }) => [shard, ownedCase.case]), [
     [
       'metadata-mutations',
-      'FTC-LIBROOTS-019 repairs a stable watcher incident through its completion watermark',
+      'FTC-LIBROOTS-021 repairs a stable watcher incident through its completion watermark',
     ],
     [
       'playback-utilities-1',
@@ -941,17 +1005,18 @@ validatorTest('watcher cases retain their approved playback and metadata shard o
   assert.equal(ownedCase.area, 'album-details');
 });
 
-validatorTest('all seven shards use explicit effect-compatible wave budgets', () => {
+validatorTest('all eight shards use explicit effect-compatible wave budgets', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
-    ['cover-providers-1', { cases: 12, waves: [1, 2] }],
-    ['cover-providers-2', { cases: 12, waves: [1, 2] }],
-    ['metadata-mutations', { cases: 15, waves: [1, 2, 3] }],
+    ['gallery-search-visual-1', { cases: 32, waves: [1, 2] }],
+    ['gallery-search-visual-2', { cases: 35, waves: [1, 2, 3, 4] }],
+    ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
+    ['cover-providers-2', { cases: 15, waves: [1, 2] }],
+    ['metadata-mutations', { cases: 17, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
-    ['playback-utilities-2', { cases: 14, waves: [1, 2, 5] }],
+    ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],
     ['playback-utilities-3', { cases: 14, waves: [1, 2] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
@@ -1001,7 +1066,7 @@ validatorTest('read-only shard cases reuse one prepared fixture and restore once
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
-  const sourceShard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual');
+  const sourceShard = contract.shards.find((candidate) => candidate.name === 'gallery-search-visual-1');
   const readOnlyCases = sourceShard.invocations
     .flatMap((invocation) => invocation.cases.map((ownedCase) => ({ invocation, ownedCase })))
     .filter(({ ownedCase }) => {
@@ -1092,14 +1157,14 @@ validatorTest('shard runner rejects missing or root-level output ownership', () 
   };
 
   assert.throws(
-    () => validator.runFunctionalShard(contract, 'gallery-search-visual', {
+    () => validator.runFunctionalShard(contract, 'gallery-search-visual-1', {
       repoRoot,
       env: { ...baseEnv, ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT: '' },
     }),
     /non-root child of RUNNER_TEMP/,
   );
   assert.throws(
-    () => validator.runFunctionalShard(contract, 'gallery-search-visual', {
+    () => validator.runFunctionalShard(contract, 'gallery-search-visual-1', {
       repoRoot,
       env: { ...baseEnv, ALBUM_HAVEN_FUNCTIONAL_BLOB_ROOT: runnerTemp },
     }),
@@ -1107,13 +1172,13 @@ validatorTest('shard runner rejects missing or root-level output ownership', () 
   );
 });
 
-test('functional workflow uses the approved selectable seven-shard Windows matrix with isolated names and ports', () => {
+test('functional workflow uses the approved selectable eight-shard Windows matrix with isolated names and ports', () => {
   const { workflow, job } = functionalJobSource();
   assert.match(job, /name:\s*["']E2E:\s*\$\{\{\s*matrix\.shard\s*\}\}["']/);
   assert.match(workflow, /e2e_production_parity:\s*\r?\n\s+name:\s*["']E2E:\s*Production Parity["']/);
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.match(job, /fail-fast:\s*false/);
-  assert.match(job, /max-parallel:\s*7\b/);
+  assert.match(job, /max-parallel:\s*8\b/);
   assert.doesNotMatch(job, /--browser(?:=|\s+)edge\b/i);
   assert.doesNotMatch(job, /if:\s*\$\{\{\s*false\s*\}\}|if:\s*false/);
 
@@ -1128,7 +1193,7 @@ test('functional workflow uses the approved selectable seven-shard Windows matri
   for (const field of ['portBase']) {
     const values = matrix.map((entry) => entry[field]);
     assert.ok(values.every(Boolean), `every functional matrix row must define ${field}`);
-    assert.equal(new Set(values).size, 7, `${field} must be unique per functional shard`);
+    assert.equal(new Set(values).size, 8, `${field} must be unique per functional shard`);
   }
   assert.ok(matrix.every((entry) => Number(entry.portBase) > 1024));
   assert.match(job, /\$arguments = @\("--run-shard=\$\{\{\s*matrix\.shard\s*\}\}"\)/);

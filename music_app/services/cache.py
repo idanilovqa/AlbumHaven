@@ -45,7 +45,7 @@ _AUTHORITATIVE_COVER_FIELDS = frozenset(
     }
 )
 _MISSING_CACHE_FIELD = object()
-_INTEGER_TAG_FIELDS = frozenset({"year", "track_number", "disc_number", "album_rating"})
+_INTEGER_TAG_FIELDS = frozenset({"year", "track_number", "disc_number", "total_discs", "album_rating"})
 
 
 def execute_cover_mutation_for_config(
@@ -185,19 +185,24 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "path": str(entry["path"]), "mtime": entry["mtime"], "size": entry["size"],
         "album": entry["album"], "album_artist": entry["album_artist"], "title": entry["title"],
         "genre": entry.get("genre"),
-        "track_number": entry["track_number"], "disc_number": entry["disc_number"], "disc_number_raw": entry.get("disc_number_raw"), "artist": entry["artist"],
+        "track_number": entry["track_number"], "disc_number": entry["disc_number"], "disc_number_raw": entry.get("disc_number_raw"),
+        "total_discs": entry.get("total_discs"), "disc_subtitle": entry.get("disc_subtitle"), "artist": entry["artist"],
+        "artists": list(entry.get("artists") or []) if isinstance(entry.get("artists"), (list, tuple)) else [],
         "duration_seconds": entry["duration_seconds"], "cover_path": entry.get("cover_path"),
         "cover_revision": entry.get("cover_revision"),
         "local_cover_width": entry.get("local_cover_width"), "local_cover_height": entry.get("local_cover_height"),
         "cover_validation_path": entry.get("cover_validation_path"),
         "cover_validation_mtime_ns": entry.get("cover_validation_mtime_ns"),
         "cover_validation_size": entry.get("cover_validation_size"),
+        "cover_inherited_from_structural_edit": entry.get(
+            "cover_inherited_from_structural_edit"
+        ),
         "remote_cover_url": entry.get("remote_cover_url"), "remote_cover_thumbnail_url": entry.get("remote_cover_thumbnail_url"),
         "remote_cover_source": entry.get("remote_cover_source"), "remote_cover_source_label": entry.get("remote_cover_source_label"),
         "remote_cover_album_url": entry.get("remote_cover_album_url"), "remote_cover_width": entry.get("remote_cover_width"),
         "remote_cover_height": entry.get("remote_cover_height"),
         "year": entry.get("year"), "release_date": entry.get("release_date"),
-        "edition": entry.get("edition"), "album_rating": entry.get("album_rating"),
+        "edition": entry.get("edition"), "album_type": entry.get("album_type"), "album_rating": entry.get("album_rating"),
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
         "custom_collection_name": entry.get("custom_collection_name"),
@@ -214,18 +219,23 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "album": str(entry.get("album") or "") if "album" in entry else "Unknown Album", "album_artist": entry.get("album_artist") or "Unknown Artist",
         "genre": entry.get("genre"),
         "title": entry.get("title") or Path(str(entry["path"])).stem, "track_number": entry.get("track_number"),
-        "disc_number": entry.get("disc_number"), "disc_number_raw": entry.get("disc_number_raw"), "artist": entry.get("artist"),
+        "disc_number": entry.get("disc_number"), "disc_number_raw": entry.get("disc_number_raw"),
+        "total_discs": entry.get("total_discs"), "disc_subtitle": entry.get("disc_subtitle"), "artist": entry.get("artist"),
+        "artists": list(entry.get("artists") or []) if isinstance(entry.get("artists"), (list, tuple)) else [],
         "duration_seconds": entry.get("duration_seconds"), "cover_path": entry.get("cover_path"),
         "cover_revision": entry.get("cover_revision"),
         "local_cover_width": entry.get("local_cover_width"), "local_cover_height": entry.get("local_cover_height"),
         "cover_validation_path": entry.get("cover_validation_path"),
         "cover_validation_mtime_ns": entry.get("cover_validation_mtime_ns"),
         "cover_validation_size": entry.get("cover_validation_size"),
+        "cover_inherited_from_structural_edit": entry.get(
+            "cover_inherited_from_structural_edit"
+        ),
         "remote_cover_url": entry.get("remote_cover_url"), "remote_cover_thumbnail_url": entry.get("remote_cover_thumbnail_url"),
         "remote_cover_source": entry.get("remote_cover_source"), "remote_cover_source_label": entry.get("remote_cover_source_label"),
         "remote_cover_album_url": entry.get("remote_cover_album_url"), "remote_cover_width": entry.get("remote_cover_width"),
         "remote_cover_height": entry.get("remote_cover_height"),
-        "year": entry.get("year"), "edition": entry.get("edition"), "album_rating": entry.get("album_rating"),
+        "year": entry.get("year"), "edition": entry.get("edition"), "album_type": entry.get("album_type"), "album_rating": entry.get("album_rating"),
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
         "custom_collection_name": entry.get("custom_collection_name"),
@@ -415,8 +425,6 @@ def save_cache_to_disk_for_config(
     relation_views: dict[str, object] | None = None,
     relations_last_built: float | None = None,
     separate_release_keys: set[str] | None = None,
-    seed_missing_album_ratings: bool = False,
-    album_rating_seed_guard: Callable[[Callable[[], object]], object] | None = None,
     publication_commit_guard: Callable[[Callable[[], object]], object] | None = None,
     before_commit: Callable[[object], object] | None = None,
     expected_cover_mutation_revision: int | None = None,
@@ -434,10 +442,6 @@ def save_cache_to_disk_for_config(
             for key in separate_release_keys
             if str(key).strip()
         }
-    if seed_missing_album_ratings:
-        snapshot_options["seed_missing_album_ratings"] = True
-        if album_rating_seed_guard is not None:
-            snapshot_options["album_rating_seed_guard"] = album_rating_seed_guard
     if expected_cover_mutation_revision is not None:
         snapshot_options["expected_cover_mutation_revision"] = expected_cover_mutation_revision
     if expected_inventory_mutation_revision is not None:
@@ -689,6 +693,7 @@ def persist_cover_selection_for_tracks_for_config(
     expected_album_id: int | None = None,
     expected_inventory_revision: int | None = None,
     expected_cover_mutation_revision: int | None = None,
+    expected_inventory_mutation_revision: int | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     logger=None,
 ) -> dict[str, object]:
@@ -731,6 +736,10 @@ def persist_cover_selection_for_tracks_for_config(
     }
     if any(value is not None for value in baseline.values()):
         persistence_options.update(baseline)
+    if expected_inventory_mutation_revision is not None:
+        persistence_options["expected_inventory_mutation_revision"] = (
+            expected_inventory_mutation_revision
+        )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
     return adapter.persist_cover_selection(

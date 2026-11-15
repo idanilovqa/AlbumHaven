@@ -84,7 +84,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       measureInteractionToPaint(
         page,
         async () => {
-          savePayload = await coverLookupActions.saveSelectedRemoteCandidate();
+          ({ payload: savePayload } = await coverLookupActions.saveSelectedRemoteCandidate());
         },
         () => coverLookupActions.coverLookup.waitForHidden(coverLookupActions.coverLookup.modal),
       )

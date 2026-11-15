@@ -36,6 +36,22 @@ operate, or contribute to the application.
   colors, and buttons share visibly disabled states. Keep light-theme alerts
   readable without changing approved dark-theme alerts; do not add page-local
   copies or overrides of these rules.
+- Postgres migrations (owner rule, 2026-11-10): every file in `migrations/postgres`
+  has a unique four-digit number. Numbers may leave gaps and may be applied out
+  of order, but a new migration never reuses a number that main or any open pull
+  request already uses; renumber before merging when two branches collide. Only
+  code merged to main may apply migrations to a shared or production database;
+  branch work uses an isolated database or a disposable copy.
+- Production-copy development (owner rule, 2026-11-14): production stays up and
+  is never a development database. Each branch or sandbox develops against its
+  own restored copy of the production database, with media writes disabled or a
+  test library, because a database copy does not isolate the real music files.
+  Never place such copies or dumps in CI, pull requests or artifacts; CI keeps
+  synthetic fixtures. Reserve migration numbers in the owner's shared ledger
+  (private repository) before creating the file. A migration that needs
+  another migration starts with `-- depends on: <file>`, carries a higher
+  number and merges only after its dependency is on main. Never edit a
+  migration after a shared database has applied it.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - E2E tests for owner-reported regressions must assert every named
@@ -55,8 +71,8 @@ operate, or contribute to the application.
   invalidation, watcher reconciliation that can invalidate projections,
   artist-tree filtering or selection, pagination, or search-related rendering.
 - The command is the complete local search gate: PostgreSQL/API contracts,
-  JavaScript and component tests, the `gallery-search-visual` functional E2E
-  shard, and the measured `artist-family`, `search-all-artists`, and
+  JavaScript and component tests, both `gallery-search-visual` functional E2E
+  shards, and the measured `artist-family`, `search-all-artists`, and
   `search-browse` performance targets. Do not replace it with a narrower test
   selection. Keep the timed cold duplicate-projection cache-miss test in this
   gate so an interactive search cannot synchronously rebuild the global
@@ -186,15 +202,18 @@ The intended behavior is basically: worker still running → keep waiting
 
 ## Review-first CI execution
 
-- Owner-controlled pipeline labels are independent: `skip_reviews` intentionally
-  waives hosted reviewers without recording review coverage; `skip_tests` skips
-  test jobs and cannot satisfy the merge/release gate. Complete tests remain
+- Hosted reviewers are skipped by default for trusted same-repository pull
+  requests: the waiver is intentional, tests proceed, and no review coverage is
+  recorded. Owner-controlled labels are independent: `run_reviews` opts into
+  review-first gating and wins over the now-redundant `skip_reviews`;
+  `skip_tests` skips test jobs and cannot satisfy the merge/release gate.
+  Complete tests and the local review rounds in "Thorough local review" remain
   mandatory for publication. PR1 has an explicit owner-authorized review waiver;
   its preserved review snapshot and later separate review-fixes workflow are
   documented in `docs/ci-pipeline-labels-and-deferred-review.md`.
 
-- In the authoritative pull-request pipeline, classify review scope first and
-  run PR Agent Review and Codex PR Review independently when applicable. Start test and E2E jobs only
+- When `run_reviews` is set, classify review scope first in the authoritative
+  pull-request pipeline and run PR Agent Review and Codex PR Review independently when applicable. Start test and E2E jobs only
   after every applicable reviewer succeeds. A failed, cancelled, missing, or
   unexpectedly skipped review holds tests; intentional skips are checked against
   the exact review scope and pull-request context. Collect all applicable review
@@ -230,9 +249,9 @@ Every Wave 2 or later product feature must move through this sequence:
 4. Obtain owner approval for the technical design and each exact visual artifact.
 5. Record functional cases and the automated-test proposal, then add failing unit
    or integration tests for the approved behavior.
-6. Implement one complete vertical slice in React. If the slice first touches a
-   legacy UI ownership boundary, migrate that whole boundary and remove its
-   superseded live implementation.
+6. Implement one complete vertical slice on the existing UI stack. Moving to
+   React is separate, not-yet-started work; a feature never migrates a screen to
+   React as a side effect.
 7. Run focused verification and give the owner an exact manual test script or
    build.
 8. Wait for the owner's manual acceptance.
@@ -247,7 +266,7 @@ be added to the private owner registry at `docs/permissions-and-capabilities.md`
 when that repository is available; ask the owner to approve its capabilities,
 scope, reusable role-preset membership, deployment modes, and client constraints
 before technical design approval. Never infer access from an existing screen or
-tier name. All new post-migration UI uses React. When the private owner
+tier name. When the private owner
 repository is available, every visible post-migration surface must also map to
 `docs/ui-component-system.md`. Reuse approved components and tokens. If the
 catalog is insufficient, obtain owner approval for a reusable extension before

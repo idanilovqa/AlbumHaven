@@ -8,7 +8,7 @@ const componentPath = path.join(repoRoot, 'music_app', 'static', 'js', 'button-c
 
 test('shared icon renderer emits normalized decorative SVGs from a fixed registry', () => {
   const button = require(componentPath);
-  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'bolt']) {
+  for (const name of ['play', 'pause', 'edit', 'close', 'more', 'delete', 'previous', 'next', 'refresh', 'bolt']) {
     const html = button.renderIconSvg(name, { className: `ui-icon--${name}` });
     assert.match(html, /^<svg class="ui-icon ui-icon--/);
     assert.match(html, /viewBox="0 0 24 24"/);
@@ -51,6 +51,7 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
   const bootstrap = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'partials', 'appearance-bootstrap.html'), 'utf8');
   assert.match(css, /\.ui-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/s);
   assert.match(css, /\.ui-button\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
+  assert.match(css, /\.ui-button--medium\s*\{[^}]*box-sizing:\s*border-box[^}]*height:\s*34px[^}]*padding:\s*0 12px/s);
   assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*-1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
   assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-item-action-hover-border,[^}]*background:\s*var\(--appearance-item-action-hover-background,/s);
   assert.match(css, /\.ui-button:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
@@ -154,6 +155,7 @@ test('ActionButton CSS owns one 34px theme-aware surface and inert disabled trea
   assert.match(css, /\.action-button:disabled,[^{]*\.action-button\[aria-disabled='true'\]\s*\{[^}]*opacity:[^;}]+;[^}]*cursor:\s*not-allowed/s);
   assert.match(css, /\.action-button--round\s*\{[^}]*border-radius:\s*50%/s);
   assert.match(css, /\.action-button__icon\.ui-icon\s*\{[^}]*display:\s*block[^}]*stroke:\s*currentColor[^}]*fill:\s*none/s);
+  assert.match(css, /\.action-button\[aria-busy='true'\][^{]*::before\s*\{[^}]*animation:\s*spin/s);
   assert.match(css, /\.action-button--destructive:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)[^{]*\{[^}]*border-color:\s*var\(--alert-error-edge[^}]*outline-color:\s*var\(--alert-error-focus/s);
   assert.match(css, /\.action-button--destructive:focus-visible\s*\{[^}]*outline-color:\s*var\(--alert-error-focus/s);
 });
@@ -181,4 +183,65 @@ test('shared Button state changes update both native and accessible disabled sta
   setDisabled(element, true);
   assert.equal(element.disabled, true);
   assert.equal(attributes.get('aria-disabled'), 'true');
+});
+
+test('external service links render safe plain anchors with a decorative icon slot', () => {
+  const button = require(componentPath);
+  const mbid = 'c0926f5d-098c-4f29-a463-5489b43a273a';
+  assert.equal(
+    button.renderExternalServiceLink({ service: 'musicbrainz', href: `https://musicbrainz.org/artist/${mbid}`, subject: 'Neal Morse' }),
+    `<a class="ui-external-link ui-external-link--musicbrainz" href="https://musicbrainz.org/artist/${mbid}" target="_blank" rel="noopener noreferrer" aria-label="Open Neal Morse on MusicBrainz">`
+      + '<span class="ui-external-link__icon" aria-hidden="true"></span><span class="ui-external-link__text">MusicBrainz</span></a>',
+  );
+  assert.match(button.renderExternalServiceLink({ service: 'discogs', href: 'https://www.discogs.com/artist/309345' }),
+    /^<a class="ui-external-link ui-external-link--discogs" href="https:\/\/www\.discogs\.com\/artist\/309345"[^>]*aria-label="Open on Discogs">/);
+  assert.equal(button.renderExternalServiceLink({ service: 'discogs', href: 'https://evil.example/artist/1' }), '');
+  assert.throws(() => button.renderExternalServiceLink({ service: 'invented', href: 'https://example.com' }), /Unknown external service/);
+});
+
+test('external service link CSS uses panel text, a non-colour cue and the real service favicons', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
+  const rules = new Map([...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map(([, selector, body]) => [selector.trim(), body]));
+  const rule = (selector) => {
+    assert.ok(rules.has(selector), `missing rule ${selector}`);
+    return rules.get(selector);
+  };
+  assert.match(rule('.ui-external-link'), /color:\s*inherit;/, 'link text uses the surrounding text colour, not the link accent');
+  assert.match(rule('.ui-external-link'), /text-decoration:\s*none;/);
+  assert.match(rule('.ui-external-link:hover'), /text-decoration:\s*underline/);
+  assert.match(rule('.ui-external-link:focus-visible'), /text-decoration:\s*underline;\s*text-decoration-thickness:\s*2px/,
+    'keyboard focus shows a thicker underline');
+  assert.match(rule('.ui-external-link'), /outline:\s*none/, 'no outline box in any state, including the browser focus ring');
+  assert.match(rule('.ui-external-link-list'), /display:\s*flex;\s*flex-wrap:\s*wrap;\s*align-items:\s*center;\s*justify-content:\s*flex-start;\s*gap:\s*8px 16px/,
+    'links share one left-aligned row with a normal inline gap');
+  assert.doesNotMatch(rule('.ui-external-link-list'), /flex-direction:\s*column/);
+
+  const icon = rule('.ui-external-link__icon');
+  assert.match(icon, /width:\s*16px;/);
+  assert.match(icon, /height:\s*16px;/);
+  assert.match(icon, /background:\s*var\(--ui-external-link-icon\) center \/ 16px 16px no-repeat/);
+  const externalLinkRules = [...rules].filter(([selector]) => selector.includes('.ui-external-link'));
+  assert.ok(externalLinkRules.length >= 6);
+  for (const [selector, body] of externalLinkRules) {
+    assert.doesNotMatch(body, /mask/, `${selector}: icons keep their own colours instead of a single-colour mask`);
+    assert.doesNotMatch(body, /outline:(?!\s*none)|box-shadow|border:/, `${selector}: no outline box in any state`);
+  }
+
+  const icons = path.join(repoRoot, 'music_app', 'static', 'images', 'icons');
+  for (const service of ['musicbrainz', 'discogs']) {
+    assert.ok(rule(`.ui-external-link--${service}`).includes(`url("/static/images/icons/${service}-favicon-32.png")`));
+    const png = fs.readFileSync(path.join(icons, `${service}-favicon-32.png`));
+    assert.equal(png.subarray(1, 4).toString('ascii'), 'PNG');
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [32, 32], `${service} favicon is a 32 px PNG drawn at 16 px`);
+  }
+  assert.ok(fs.existsSync(path.join(icons, 'SERVICE-FAVICONS-NOTICE.txt')), 'the trademark and licence note stays next to the icons');
+  assert.ok(!fs.existsSync(path.join(icons, 'simple-icons-musicbrainz.svg')) && !fs.existsSync(path.join(icons, 'simple-icons-discogs.svg')));
+
+  assert.match(rule(":root:not([data-appearance-mode='light']) .ui-external-link--discogs .ui-external-link__icon"), /^\s*filter:\s*invert\(1\);\s*$/,
+    'dark themes, including the default, show the Discogs record in white');
+  assert.equal((css.match(/invert\(/g) || []).length, 1, 'only the dark Discogs icon is inverted');
+  for (const [selector, body] of externalLinkRules.filter(([selector]) => selector.includes('--musicbrainz'))) {
+    assert.doesNotMatch(body, /filter/, `${selector}: the MusicBrainz hexagon is never recoloured`);
+  }
 });

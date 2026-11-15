@@ -3442,6 +3442,40 @@ for (const scenario of ['eventually-ready', 'deadline', 'other-503', 'wrong-stat
   });
 }
 
+test('functional fixture warmup rereads when the library changes during its gallery read', async () => {
+  const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
+  let viewAttempts = 0;
+
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    mediaRoot,
+    sleepFn: async () => {},
+    pollIntervalMs: 1,
+    timeoutMs: 1000,
+    fetchHttpResponseCompleteFn: async (url) => {
+      if (!url.includes('/view-data?')) {
+        return { ok: true, statusCode: 200, body: '<!doctype html>' };
+      }
+      viewAttempts += 1;
+      return viewAttempts === 1
+        ? {
+          ok: false,
+          statusCode: 409,
+          body: JSON.stringify({ ok: false, restart_required: true }),
+        }
+        : {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({
+            albums: [{ cover_path: path.join(mediaRoot, 'fixture-cover.jpg') }],
+          }),
+        };
+    },
+  });
+
+  assert.equal(warmed, true);
+  assert.equal(viewAttempts, 2);
+});
+
 test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
   const requests = [];
   const mediaRoot = path.join(os.tmpdir(), 'album-haven-functional-media');
@@ -4107,6 +4141,40 @@ test('managed isolated restart controller discards stale control messages at sta
   }
 });
 
+test('managed isolated restart controller ignores only a missing request between existence check and read', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-replaced-'));
+  const controller = _private.createManagedIsolatedAppRestartController({
+    childEnv: {},
+    ownedIsolatedTempRoot: ownedRoot,
+    initialChild: createFakeChildProcess(5660),
+    ports: [4320, 4322],
+    autoStart: false,
+  });
+  const requestPath = path.join(controller.controlDirectory, 'restart-request.json');
+  fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'replaced-request' }));
+  const originalReadFileSync = fs.readFileSync;
+  let readErrorCode = 'ENOENT';
+  fs.readFileSync = (filename, ...args) => {
+    if (path.resolve(filename) === path.resolve(requestPath)) {
+      const error = new Error('Request was replaced before it could be read.');
+      error.code = readErrorCode;
+      throw error;
+    }
+    return originalReadFileSync(filename, ...args);
+  };
+
+  try {
+    assert.equal(await controller.processPendingRequest(), false);
+    assert.equal(controller.getFailure(), null);
+    readErrorCode = 'EACCES';
+    await assert.rejects(controller.processPendingRequest(), { code: 'EACCES' });
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    await controller.close();
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
 test('managed restart control accepts only the shard-owned prepared profile root', () => {
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-profile-control-'));
   const profileRoot = path.join(
@@ -4302,7 +4370,7 @@ test('managed watcher cleanup derives its only path from runner media ownership'
     assert.ok(calls[0].options.timeout > 0);
     calls.length = 0;
     await _private.cleanupManagedWatcherFixture(environment, {
-      ownedDirectoryName: 'gallery-native-response-overlap',
+      ownedDirectoryName: 'watcher-grouped-feature-credit',
       runCommandFn(command, args, options) {
         calls.push({ command, args, options });
         return { status: 0, signal: null };
@@ -4310,7 +4378,7 @@ test('managed watcher cleanup derives its only path from runner media ownership'
     });
     assert.deepEqual(calls[0].args, [
       '-m', 'tests.e2e.support.watcherFixture', '--owned-root',
-      path.join(ownedRoot, 'media', 'cases', 'gallery-native-response-overlap'),
+      path.join(ownedRoot, 'media', 'cases', 'watcher-grouped-feature-credit'),
     ]);
     await assert.rejects(
       _private.cleanupManagedWatcherFixture(environment, { ownedDirectoryName: 'not-runner-owned' }),

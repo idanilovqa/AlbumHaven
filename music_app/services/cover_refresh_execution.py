@@ -5,6 +5,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 
 from music_app.services.app_logging import flush_log_handlers, flush_log_handlers_debounced, log_app_event
@@ -99,6 +100,7 @@ def _commit_claimed_automatic_selection(
     expected_cover_revision: str | None = None,
     local_cover_width: int | None = None,
     local_cover_height: int | None = None,
+    expected_inventory_mutation_revision: int | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
 ) -> CoverMutationOutcome:
     if request.selected_cover_path is None:
@@ -112,6 +114,7 @@ def _commit_claimed_automatic_selection(
         expected_album_id=request.identity.local_album_id,
         expected_inventory_revision=request.expected_inventory_revision,
         expected_cover_mutation_revision=request.expected_cover_mutation_revision,
+        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
         local_cover_width=local_cover_width,
         local_cover_height=local_cover_height,
         reject_if_user_controlled=reject_if_user_controlled,
@@ -154,6 +157,7 @@ def _recover_claimed_automatic_selection(
 def _recover_existing_cover_selection(
     *, config, job, cover_path, file_cache, get_state, library_state,
     cache_lock, scan_generation, cover_generation,
+    expected_inventory_mutation_revision=None,
 ) -> tuple[bool, bool]:
     """Commit recovered artwork before publishing its cover fields to runtime."""
     folder = Path(job["folder"]).resolve()
@@ -264,6 +268,7 @@ def _recover_existing_cover_selection(
                 expected_origin or None,
                 expected_revision or None,
             ),
+            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
             commit_guard=commit_current,
         )
 
@@ -334,7 +339,12 @@ def _build_automatic_cover_write_guard(
     config: dict[str, object],
     folder: Path,
     track_paths: set[str],
+    automatic_write_is_current: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    cache_lock=None,
 ) -> Callable[..., object]:
+    if automatic_write_is_current is not None and cache_lock is None:
+        raise ValueError("Automatic cover currentness requires the runtime cache lock.")
     persist_selection = _cover_selection_persister(config)
     authority_repository = PostgresCoverMutationRepository(
         database_url=str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
@@ -345,6 +355,10 @@ def _build_automatic_cover_write_guard(
         *,
         cover_selection_origin: str,
     ) -> object:
+        if automatic_write_is_current is not None:
+            with cache_lock:
+                if not automatic_write_is_current():
+                    return False
         if str(cover_selection_origin or "").strip().casefold() != "automatic":
             raise ValueError("Automatic cover writes require automatic selection origin.")
         selected_cover_path = Path(
@@ -383,18 +397,21 @@ def _build_automatic_cover_write_guard(
             return write_action
 
         def write_artifact(prepared_write, _baseline):
-            promotion = begin_external_cover_write_promotion(
-                folder,
-                serialize_selection=False,
-            )
-            try:
-                written = prepared_write()
-                if not written:
-                    raise RuntimeError("Automatic cover write returned no file.")
-                record_external_cover_write(promotion)
-            except Exception:
-                rollback_local_image_promotion(promotion)
-                raise
+            with cache_lock if cache_lock is not None else nullcontext():
+                if automatic_write_is_current is not None and not automatic_write_is_current():
+                    raise RuntimeError("Automatic cover refresh changed before commit.")
+                promotion = begin_external_cover_write_promotion(
+                    folder,
+                    serialize_selection=False,
+                )
+                try:
+                    written = prepared_write()
+                    if not written:
+                        raise RuntimeError("Automatic cover write returned no file.")
+                    record_external_cover_write(promotion)
+                except Exception:
+                    rollback_local_image_promotion(promotion)
+                    raise
             written_path = Path(written)
             mutation["promotion"] = promotion
             mutation["written_path"] = written_path
@@ -413,6 +430,12 @@ def _build_automatic_cover_write_guard(
             if promotion is not None:
                 complete_local_image_promotion(promotion)
             mutation["written_path"] = artifact.private_path
+
+        def commit_current(commit_action: Callable[[], object]) -> object:
+            with cache_lock if cache_lock is not None else nullcontext():
+                if automatic_write_is_current is not None and not automatic_write_is_current():
+                    raise RuntimeError("Automatic cover refresh changed before commit.")
+                return commit_action()
 
         def commit_selection(request) -> CoverMutationOutcome:
             return _commit_claimed_automatic_selection(
@@ -435,6 +458,8 @@ def _build_automatic_cover_write_guard(
                 ),
                 local_cover_width=getattr(write_action, "local_cover_width", None),
                 local_cover_height=getattr(write_action, "local_cover_height", None),
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                commit_guard=commit_current,
             )
 
         outcome = execute_cover_mutation_for_config(
@@ -458,6 +483,10 @@ def _build_automatic_cover_write_guard(
                 mutation["promotion"]
             ),
             publish_committed=publish_committed,
+            should_cancel=(
+                (lambda: not automatic_write_is_current())
+                if automatic_write_is_current is not None else None
+            ),
         )
         if outcome.status is CoverMutationStatus.AMBIGUOUS:
             raise CommitOutcomeUnknown("Cover selection commit outcome is uncertain.")
@@ -482,6 +511,9 @@ def execute_cover_job(
     config: dict[str, object] | None = None,
     candidate_callback: Callable[..., object] | None = None,
     automatic_write_guard: Callable[..., object] | None = None,
+    automatic_write_is_current: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    cache_lock=None,
     search_run: cover_refresh_provider.AutomaticCoverSearchRun | None = None,
 ) -> tuple[Path | None, bool, dict[str, object]]:
     folder = job["folder"]
@@ -538,7 +570,17 @@ def execute_cover_job(
                 config=config,
                 folder=Path(folder),
                 track_paths=track_paths,
+                automatic_write_is_current=automatic_write_is_current,
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                cache_lock=cache_lock,
             )
+        elif effective_write_guard is not None and automatic_write_is_current is not None:
+            underlying_write_guard = effective_write_guard
+
+            def effective_write_guard(write_action, **kwargs):
+                if not automatic_write_is_current():
+                    return False
+                return underlying_write_guard(write_action, **kwargs)
         if effective_write_guard is not None:
             provider_kwargs["automatic_write_guard"] = effective_write_guard
         if enabled_provider_groups is not None:
@@ -597,11 +639,13 @@ def run_cover_jobs(
     cover_cache,
     scan_generation: int | None = None,
     cover_generation: int | None = None,
+    expected_inventory_mutation_revision: int | None = None,
     force_search: bool = False,
     allow_apple_web_fallback: bool = False,
     allow_apple_web_fallback_when_has_cover: bool = True,
     negative_cache_ttl_seconds: float | None = None,
     job_workers: int = 1,
+    allow_full_snapshot_persistence: bool = True,
 ) -> dict[str, object]:
     library_state = get_state()
     changed = False
@@ -632,6 +676,14 @@ def run_cover_jobs(
             and (cover_generation is None or int(current.get("cover_generation") or 0) == cover_generation)
             and (scan_generation is None or int(current.get("scan_generation") or 0) == scan_generation)
         )
+
+    def write_authority_if_current(write_action: Callable[[], object]) -> bool:
+        with cache_lock:
+            if not owns_progress():
+                return False
+            write_action()
+            return True
+
     candidate_publishers: dict[int, object] = {}
     candidate_callbacks: dict[int, Callable[..., object]] = {}
     candidate_snapshot_published: set[int] = set()
@@ -687,7 +739,8 @@ def run_cover_jobs(
                 search_generation=generation,
                 search_kind="automatic",
             )
-            publisher.begin_candidate_generation()
+            if not write_authority_if_current(publisher.begin_candidate_generation):
+                continue
             candidate_publishers[id(job)] = publisher
 
             def publish_candidate(
@@ -699,25 +752,29 @@ def run_cover_jobs(
                 _job_key=id(job),
             ) -> None:
                 try:
-                    candidate_payload = _automatic_candidate_payload(candidate)
-                    accepted = _publisher.publish_candidates([candidate_payload])
-                    if candidate_persistence_required and not accepted:
-                        raise RuntimeError(
-                            "candidate snapshot publication lost its claim"
-                        )
-                    if accepted:
-                        candidate_snapshot_published.add(_job_key)
-                    mark_improvement = getattr(
-                        _publisher, "mark_automatic_improvement", None
-                    )
-                    candidate_id_for = getattr(_publisher, "candidate_id_for", None)
-                    if accepted and automatic_improvement and callable(mark_improvement):
-                        qualifying_candidate_id = (
-                            candidate_id_for(candidate_payload)
-                            if callable(candidate_id_for)
-                            else None
-                        )
-                        mark_improvement(qualifying_candidate_id)
+                    def publish_if_current() -> None:
+                        candidate_payload = _automatic_candidate_payload(candidate)
+                        accepted = _publisher.publish_candidates([candidate_payload])
+                        if candidate_persistence_required and not accepted:
+                            raise RuntimeError("candidate snapshot publication lost its claim")
+                        if accepted:
+                            candidate_snapshot_published.add(_job_key)
+                        mark_improvement = getattr(_publisher, "mark_automatic_improvement", None)
+                        candidate_id_for = getattr(_publisher, "candidate_id_for", None)
+                        if (
+                            accepted
+                            and automatic_improvement
+                            and callable(mark_improvement)
+                            and owns_progress()
+                        ):
+                            qualifying_candidate_id = (
+                                candidate_id_for(candidate_payload)
+                                if callable(candidate_id_for)
+                                else None
+                            )
+                            mark_improvement(qualifying_candidate_id)
+
+                    write_authority_if_current(publish_if_current)
                 except Exception as exc:
                     if candidate_persistence_required:
                         raise
@@ -726,7 +783,6 @@ def run_cover_jobs(
                         _album_id,
                         exc,
                     )
-
             candidate_callbacks[id(job)] = publish_candidate
         except Exception as exc:
             if candidate_persistence_required:
@@ -752,9 +808,12 @@ def run_cover_jobs(
         if not callable(terminal):
             return
         try:
-            accepted = bool(terminal())
-            if candidate_persistence_required and not accepted:
-                raise RuntimeError("candidate snapshot terminal update lost its claim")
+            def settle_if_current() -> None:
+                accepted = bool(terminal())
+                if candidate_persistence_required and not accepted:
+                    raise RuntimeError("candidate snapshot terminal update lost its claim")
+
+            write_authority_if_current(settle_if_current)
         except Exception as exc:
             if candidate_persistence_required:
                 raise
@@ -774,7 +833,7 @@ def run_cover_jobs(
         if not callable(mark_seen):
             return
         try:
-            mark_seen()
+            write_authority_if_current(mark_seen)
         except Exception as exc:
             logger.warning(
                 "Applied automatic candidate acknowledgement failed album_id=%s error=%r",
@@ -804,20 +863,23 @@ def run_cover_jobs(
             }
         if provider_outcomes:
             try:
-                claimed_persister = config.get(
-                    "CLAIMED_COVER_PROVIDER_OUTCOME_PERSISTER"
-                )
-                if callable(claimed_persister):
-                    claimed_persister(
-                        album_id=job.get("album_id"),
-                        album_key=job.get("album_key"),
-                        outcomes=provider_outcomes,
+                def persist_if_current() -> None:
+                    claimed_persister = config.get(
+                        "CLAIMED_COVER_PROVIDER_OUTCOME_PERSISTER"
                     )
-                else:
-                    persist_cover_provider_outcomes(
-                        config, album_id=job.get("album_id"),
-                        album_key=job.get("album_key"), outcomes=provider_outcomes,
-                    )
+                    if callable(claimed_persister):
+                        claimed_persister(
+                            album_id=job.get("album_id"),
+                            album_key=job.get("album_key"),
+                            outcomes=provider_outcomes,
+                        )
+                    else:
+                        persist_cover_provider_outcomes(
+                            config, album_id=job.get("album_id"),
+                            album_key=job.get("album_key"), outcomes=provider_outcomes,
+                        )
+
+                write_authority_if_current(persist_if_current)
             except Exception as exc:
                 logger.warning(
                     "Automatic provider outcome persistence failed album_id=%s error=%r",
@@ -975,6 +1037,7 @@ def run_cover_jobs(
                     file_cache=file_cache, get_state=get_state, library_state=library_state,
                     cache_lock=cache_lock, scan_generation=scan_generation,
                     cover_generation=cover_generation,
+                        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 )
             except Exception as exc:
                 origin = exc.__traceback__
@@ -1123,6 +1186,9 @@ def run_cover_jobs(
                     enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"),
                     config=config,
                     candidate_callback=candidate_callbacks.get(id(job)),
+                    automatic_write_is_current=owns_progress,
+                    expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                    cache_lock=cache_lock,
                     search_run=search_run,
                 ): (index, job)
                 for index, job in enumerate(jobs, start=1)
@@ -1222,6 +1288,9 @@ def run_cover_jobs(
                 enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"),
                 config=config,
                 candidate_callback=candidate_callbacks.get(id(job)),
+                automatic_write_is_current=owns_progress,
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                cache_lock=cache_lock,
                 search_run=search_run,
             )
             finish_job(index, job, cover_path, downloaded, detail)
@@ -1237,7 +1306,7 @@ def run_cover_jobs(
     if changed:
         snapshot = None
         snapshot_options = {}
-        if needs_snapshot and not selection_conflict:
+        if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
             adapter = select_scan_cache_adapter(config)
             snapshot_options = {
                 "expected_cover_mutation_revision": adapter.load_cover_mutation_revision(),
@@ -1271,7 +1340,7 @@ def run_cover_jobs(
                     accepted_updates[path] = selection
                     if selection.get("cover_path") is not None:
                         entry.update(selection)
-                if needs_snapshot and not selection_conflict:
+                if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
                     baseline_entries = {path: dict(entry) for path, entry in current_entries.items()}
                     snapshot = {path: dict(entry) for path, entry in current_entries.items()}
                     for path, selection in accepted_updates.items():

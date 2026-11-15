@@ -6,7 +6,7 @@ Owner request: cover the Mulan gallery card showing approximately eight hours wh
 
 The companion functional-core generator supplies a synthetic Mulan (1998) album owned by Various Artists, eight existing synthetic credited artists, thirteen 240-second tracks, and one 258-second track. Generated audio matches these durations. Equal-length tracks ensure that deduplicating by duration instead of track identity cannot satisfy the test. No personal music is copied and no application routes are mocked.
 
-CI ownership: gallery-search-visual, functional-core. The added scenario requires a new fixture release; the currently pinned published fixtures-v1.0.19 does not contain it. Local validation uses the explicitly labeled fixtures-v1.0.19-mulan-local build. No published fixture release or CI pin has been changed.
+CI ownership: gallery-search-visual-2, functional-core. The added scenario requires a new fixture release; the currently pinned published fixtures-v1.0.19 does not contain it. Local validation uses the explicitly labeled fixtures-v1.0.19-mulan-local build. No published fixture release or CI pin has been changed.
 
 The duration fix joins each rollup to distinct (library_id, album_id) keys, preventing artist credits from multiplying track durations. It covers unfiltered, artist-scoped, and search gallery queries.
 

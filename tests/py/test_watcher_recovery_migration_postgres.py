@@ -12,7 +12,7 @@ from tests.e2e.support import isolatedPostgres
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "migrations" / "postgres"
-WATCHER_MIGRATION = MIGRATIONS_DIR / "0119_create_durable_watcher_recovery.sql"
+WATCHER_MIGRATION = MIGRATIONS_DIR / "0240_create_durable_watcher_recovery.sql"
 
 
 def _migration_sql() -> str:

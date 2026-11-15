@@ -215,27 +215,15 @@ function readBrowserLogHistoryEntries() {
   return browserLogHistoryStore.read();
 }
 
+// Saved through the Android app where it can (android-bridge-client.js), else by a download anchor.
 async function exportBrowserLogHistory() {
   const result = await readBrowserLogHistoryEntries();
   const exportDocument = buildBrowserLogHistoryExportDocument(result.items);
-  const blob = new Blob([`${JSON.stringify(exportDocument, null, 2)}\n`], {
-    type: 'application/json;charset=utf-8',
-  });
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
   const filenameTimestamp = exportDocument.exported_at
     .replace(/[:.]/g, '-')
     .replace('T', '_')
     .replace('Z', '');
-  anchor.href = objectUrl;
-  anchor.download = `album-haven-log-history-${filenameTimestamp}.json`;
-  anchor.hidden = true;
-  document.body.appendChild(anchor);
-  try {
-    anchor.click();
-  } finally {
-    anchor.remove();
-    URL.revokeObjectURL(objectUrl);
-  }
+  await downloadPageFile(`album-haven-log-history-${filenameTimestamp}.json`, 'application/json',
+    `${JSON.stringify(exportDocument, null, 2)}\n`);
   return exportDocument;
 }

@@ -96,10 +96,10 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
     for files in physical_folders.values():
         album_names = {_text(entry.get("album")) for entry in files} - {""}
         if len(album_names) > 1 and any(str(entry["path"]) in rejected for entry in files):
-            rejected.update(
-                (str(entry["path"]), "Mixed album metadata in one folder")
-                for entry in files
-            )
+            for entry in files:
+                path = str(entry["path"])
+                if path in rejected:
+                    rejected[path] = "Mixed album metadata in one folder"
     return rejected
 
 
@@ -133,17 +133,23 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_priv
     if not scope_album_key:
         # Scan publication owns full physical classification. Browse reads its
         # durable projection instead of rebuilding every source on each request.
-        path_scope = "and files.private_path = any(%(private_paths)s::text[])" if scope_private_paths else ""
+        path_scope = "and private_path = any(%(private_paths)s::text[])" if scope_private_paths else ""
         return f"""
         local_album_membership as materialized (
-          select files.id as file_id, files.track_id, files.private_path,
-            files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}' as problem
-          from library.local_track_files files
+          select files.id as file_id, files.track_id, files.private_path, files.problem
+          from (
+            -- Planned alone so the sparse partial index from 0112 drives it; joined
+            -- to the roots first, it read every file's metadata root by root.
+            select id, track_id, private_path, library_root_id,
+              metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}' as problem
+            from library.local_track_files
+            where scan_cache_stale is false
+              and nullif(metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
+            {path_scope}
+            offset 0
+          ) files
           join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
           join bootstrap_context on bootstrap_context.library_id = roots.library_id
-          where files.scan_cache_stale is false
-            {path_scope}
-            and nullif(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
         )
         """
     seeds = ""

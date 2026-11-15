@@ -1350,6 +1350,7 @@ class PostgresCoverJobRepository:
         limit: int,
         cursor: str | None,
         active_only: bool,
+        task_keys: Sequence[str] | None = None,
     ) -> dict[str, object]:
         page_size = max(1, min(int(limit), 50))
         cursor_values = _decode_candidate_lookup_cursor(cursor) if cursor else None
@@ -1361,6 +1362,8 @@ class PostgresCoverJobRepository:
                 "source_families": list(_CANDIDATE_LOOKUP_NOTIFICATION_SOURCES),
                 "active_statuses": list(_CANDIDATE_LOOKUP_ACTIVE_STATUSES),
                 "active_only": bool(active_only),
+                "has_task_keys": task_keys is not None,
+                "task_keys": list(task_keys or ()),
                 "has_cursor": cursor_values is not None,
                 "cursor_timestamp": cursor_values[0] if cursor_values else None,
                 "cursor_task_key": cursor_values[1] if cursor_values else None,
@@ -1376,6 +1379,7 @@ class PostgresCoverJobRepository:
                and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
                and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and (not %(active_only)s or task.status = any(%(active_statuses)s::varchar[]))
+               and (not %(has_task_keys)s or task.task_key = any(%(task_keys)s::text[]))
                and (
                  not %(has_cursor)s
                  or (coalesce(task.completed_at, task.requested_at), task.task_key)
@@ -1426,6 +1430,7 @@ class PostgresCoverJobRepository:
         actor_account_id: int,
         library_id: int,
         task_keys: Sequence[str] | None,
+        actioned_only: bool = False,
     ) -> set[str]:
         values = self._task_management_values(
             actor_account_id=actor_account_id, library_id=library_id
@@ -1441,6 +1446,7 @@ class PostgresCoverJobRepository:
             {
                 "clear_all": task_keys is None,
                 "task_keys": normalized_keys,
+                "actioned_only": bool(actioned_only),
             }
         )
         sql = """
@@ -1456,6 +1462,10 @@ class PostgresCoverJobRepository:
                and task.metadata ->> 'source_family' = any(%(source_families)s::text[])
                and coalesce(task.metadata ->> 'notification_cleared', 'false') <> 'true'
                and task.status = any(%(terminal_statuses)s::varchar[])
+               and (
+                 not %(actioned_only)s
+                 or task.metadata ->> 'notification_action_taken' = 'true'
+               )
                and (%(clear_all)s or task.task_key = any(%(task_keys)s::text[]))
                and exists (
                      select 1

@@ -82,6 +82,9 @@ export function observeExactCoverTraffic(page) {
     totalRequestCount() {
       return [...requestCounts.values()].reduce((sum, count) => sum + count, 0);
     },
+    requestUrls() {
+      return [...requestCounts.keys()];
+    },
     async waitForResponse(url, options = {}) {
       const expectedUrl = String(url || '');
       const expectedStatus = Number(options.status || 200);

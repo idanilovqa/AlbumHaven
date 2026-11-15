@@ -8,6 +8,8 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from contextlib import nullcontext
+from urllib.parse import urlparse
 
 from music_app.services.cover_provider_deadline import (
     automatic_cover_budget_active,
@@ -86,6 +88,11 @@ def _mark_request_complete() -> None:
         _NEXT_ALLOWED_AT_MONOTONIC = time.monotonic() + _MIN_REQUEST_INTERVAL_SECONDS
 
 
+def _is_loopback_url(url: str) -> bool:
+    host = (urlparse(str(url or "")).hostname or "").casefold()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
 def _wait_for_delay(delay: float, should_cancel: Callable[[], bool] | None = None) -> bool:
     if not automatic_cover_budget_active():
         time.sleep(delay)
@@ -151,34 +158,50 @@ def get_json(
     timeout: float = 15.0,
     context: str = "",
     should_cancel: Callable[[], bool] | None = None,
+    cache_failures: bool = True,
 ) -> tuple[dict | None, dict[str, object]]:
+    """Fetch MusicBrainz JSON through the shared rate-limited transport.
+
+    ``cache_failures=False`` is for identity enrichment, where a direct-entity
+    404 can be temporary mirror catch-up and must be retried rather than
+    remembered as a miss.
+    """
     del context
+
+    def failed(metadata: dict[str, object]) -> tuple[None, dict[str, object]]:
+        if cache_failures:
+            _set_cached_value(url, accept, None)
+        return None, metadata
+
     if callable(should_cancel) and should_cancel():
         return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
     cached = _get_cached_value(url, accept)
-    if cached is _CACHE_MISS:
+    if cached is _CACHE_MISS and cache_failures:
         return None, {"status": "cached_miss", "cache_hit": True}
     if isinstance(cached, dict):
-        return cached, {"status": "cache", "cache_hit": True}
+        return cached, {"status": "cache", "http_status": 200, "cache_hit": True}
 
-    with _REQUEST_LOCK:
+    # The public service is shared and rate limited; a loopback mirror is not,
+    # so its requests skip the process-wide lock, spacing and public block.
+    throttled = not _is_loopback_url(url)
+    mark_complete = _mark_request_complete if throttled else (lambda: None)
+    with _REQUEST_LOCK if throttled else nullcontext():
         if callable(should_cancel) and should_cancel():
             return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
         cached = _get_cached_value(url, accept)
-        if cached is _CACHE_MISS:
+        if cached is _CACHE_MISS and cache_failures:
             return None, {"status": "cached_miss", "cache_hit": True}
         if isinstance(cached, dict):
-            return cached, {"status": "cache", "cache_hit": True}
+            return cached, {"status": "cache", "http_status": 200, "cache_hit": True}
 
-        blocked, retry_after_seconds, blocked_reason = _blocked_state()
+        blocked, retry_after_seconds, blocked_reason = _blocked_state() if throttled else (False, 0.0, "")
         if blocked:
-            _set_cached_value(url, accept, None)
-            return None, {
+            return failed({
                 "status": "blocked",
                 "cache_hit": False,
                 "retry_after_seconds": round(retry_after_seconds, 2),
                 "blocked_reason": blocked_reason,
-            }
+            })
 
         headers = {
             "User-Agent": user_agent,
@@ -191,7 +214,9 @@ def get_json(
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             if callable(should_cancel) and should_cancel():
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
-            slot_ready = _wait_for_slot(should_cancel) if automatic_cover_budget_active() else _wait_for_slot()
+            slot_ready = True
+            if throttled:
+                slot_ready = _wait_for_slot(should_cancel) if automatic_cover_budget_active() else _wait_for_slot()
             if slot_ready is False:
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             if callable(should_cancel) and should_cancel():
@@ -201,70 +226,75 @@ def get_json(
             try:
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 if isinstance(payload, dict):
                     _set_cached_value(url, accept, payload)
-                    return payload, {"status": "network", "cache_hit": False, "attempt": attempt}
-                _set_cached_value(url, accept, None)
-                return None, {"status": "invalid_payload", "cache_hit": False, "attempt": attempt}
+                    return payload, {"status": "network", "http_status": 200, "cache_hit": False, "attempt": attempt}
+                return failed({"status": "invalid_response", "cache_hit": False, "attempt": attempt})
             except urllib.error.HTTPError as exc:
                 body = b""
                 try:
                     body = exc.read()
                 except Exception:
                     body = b""
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_http_error(int(getattr(exc, "code", 0) or 0), body)
                 if block_reason:
                     _set_block(block_reason)
-                    _set_cached_value(url, accept, None)
-                    return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
-                if _is_retryable_http_status(int(getattr(exc, "code", 0) or 0)) and attempt < _MAX_ATTEMPTS:
+                status_code = int(getattr(exc, "code", 0) or 0)
+                if _is_retryable_http_status(status_code) and attempt < _MAX_ATTEMPTS and not block_reason:
                     if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
                         return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
                 remaining_automatic_cover_seconds(float("inf"))
-                _set_cached_value(url, accept, None)
-                return None, {"status": f"http_{int(getattr(exc, 'code', 0) or 0)}", "cache_hit": False, "attempt": attempt}
+                metadata = {
+                    "status": f"http_{status_code}",
+                    "http_status": status_code,
+                    "cache_hit": False,
+                    "attempt": attempt,
+                }
+                if block_reason:
+                    metadata["blocked_reason"] = block_reason
+                return failed(metadata)
             except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout) as exc:
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_exception(getattr(exc, "reason", exc))
                 if block_reason:
                     _set_block(block_reason)
-                    _set_cached_value(url, accept, None)
-                    return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
+                    return failed({"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason})
                 if attempt < _MAX_ATTEMPTS:
                     if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
                         return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
                 remaining_automatic_cover_seconds(float("inf"))
-                _set_cached_value(url, accept, None)
-                return None, {"status": "connection_error", "cache_hit": False, "attempt": attempt}
+                reason = getattr(exc, "reason", exc)
+                status = "timeout" if isinstance(reason, (TimeoutError, socket.timeout)) else "connection_error"
+                return failed({"status": status, "cache_hit": False, "attempt": attempt})
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                mark_complete()
+                return failed({"status": "invalid_response", "cache_hit": False, "attempt": attempt})
             except Exception as exc:
-                _mark_request_complete()
+                mark_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_exception(exc)
                 if block_reason:
                     _set_block(block_reason)
-                    _set_cached_value(url, accept, None)
-                    return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
+                    return failed({"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason})
                 if attempt < _MAX_ATTEMPTS:
                     if not _wait_for_delay(_backoff_delay(attempt), should_cancel):
                         return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                     continue
                 remaining_automatic_cover_seconds(float("inf"))
-                _set_cached_value(url, accept, None)
-                return None, {"status": type(exc).__name__, "cache_hit": False, "attempt": attempt}
+                return failed({"status": type(exc).__name__, "cache_hit": False, "attempt": attempt})
 
-    _set_cached_value(url, accept, None)
-    return None, {"status": "exhausted", "cache_hit": False}
+    return failed({"status": "exhausted", "cache_hit": False})
 
 
 def default_user_agent(app_name: str, app_version: str, contact_email: str) -> str:

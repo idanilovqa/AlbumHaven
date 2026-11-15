@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from music_app.services import library_hydration
 from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
@@ -1236,3 +1237,25 @@ def test_postgres_sanitization_republishes_relations_or_marks_them_unready(
     if ensure_relations and repair != "cover":
         assert state["relation_views"] == current_views
         assert state["relations_last_built"] == 789.0
+def test_hydration_rejects_shared_art_for_multiple_releases_in_one_folder(tmp_path: Path):
+    folder = tmp_path / "Loose tracks"
+    folder.mkdir()
+    cover = folder / "AlbumArt_{GUID}_Large.jpg"
+    Image.new("RGB", (200, 200), "blue").save(cover)
+    tracks = [folder / "first.mp3", folder / "second.mp3"]
+    for track in tracks:
+        track.write_bytes(b"track")
+    cache = {
+        str(track): {
+            "path": str(track), "album": f"{track.stem} album",
+            "album_artist": f"{track.stem} artist", "cover_path": str(cover),
+        }
+        for track in tracks
+    }
+
+    sanitized, changed = sanitize_hydrated_file_cache(cache, {}, {".jpg"})
+
+    assert set(changed) == set(cache)
+    assert all(entry["cover_path"] is None for entry in sanitized.values())
+
+

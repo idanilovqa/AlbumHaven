@@ -4,6 +4,8 @@ from concurrent.futures import Future
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 import json
+import os
+from pathlib import Path
 from threading import Event, Lock
 from time import monotonic
 import uuid
@@ -81,6 +83,7 @@ _COVER_LOOKUP_LIST_TASK_FIELDS = (
     "cancel_requested",
     "caa_empty_notice",
     "selected_candidate_id",
+    "save_generation",
     "best_candidate_id",
     "candidate_revision",
     "candidate_updated_at",
@@ -175,6 +178,12 @@ def is_terminal_cover_lookup_task(task_payload: dict[str, object] | None) -> boo
     return status in _TERMINAL_COVER_LOOKUP_STATUSES
 
 
+def _is_actioned_cover_lookup_notification(task_payload: Mapping[str, object] | None) -> bool:
+    return is_terminal_cover_lookup_task(dict(task_payload or {})) and bool(
+        (task_payload or {}).get("notification_action_taken")
+    )
+
+
 def _interrupt_stale_cover_lookup_task(
     task_payload: dict[str, object],
     *,
@@ -224,6 +233,11 @@ def summarize_cover_lookup_task_for_list(
         for field in _COVER_LOOKUP_LIST_TASK_FIELDS
         if field in serialized
     }
+    job_contract = serialized.get("job_contract")
+    if isinstance(job_contract, Mapping):
+        job_kind = str(job_contract.get("job_kind") or "").strip()
+        if job_kind:
+            summary["job_kind"] = job_kind
     matches = serialized.get("possible_matches")
     if is_terminal_cover_lookup_task(serialized):
         if not isinstance(matches, list) and "possible_match_count" in serialized:
@@ -235,7 +249,7 @@ def summarize_cover_lookup_task_for_list(
                 1
                 for match in (matches or [])
                 if isinstance(match, Mapping)
-                and str(match.get("art_kind") or "cover") == "cover"
+                and str(match.get("art_kind") or "cover") in {"cover", "other"}
             )
     elif isinstance(matches, list):
         summary["possible_matches"] = matches
@@ -507,7 +521,7 @@ def list_cover_lookup_task_summaries(
 
 def count_cover_lookup_task_notifications(
     *, config: Mapping[str, object]
-) -> dict[str, int]:
+) -> dict[str, int | str]:
     _reconcile_stale_cover_lookup_tasks(config=config)
     return count_cover_lookup_notifications(dict(config))
 
@@ -518,6 +532,7 @@ def load_cover_lookup_task_summary_page(
     limit: int,
     cursor: str | None,
     active_only: bool,
+    task_ids: tuple[str, ...] = (),
 ) -> dict[str, object]:
     _reconcile_stale_cover_lookup_tasks(config=config)
     return load_cover_lookup_notification_summary_page(
@@ -525,6 +540,7 @@ def load_cover_lookup_task_summary_page(
         limit=limit,
         cursor=cursor,
         active_only=active_only,
+        task_ids=task_ids,
     )
 
 
@@ -606,14 +622,23 @@ def update_cover_lookup_task(
         requested_status = str(changes.get("status") or "").strip().casefold()
         if current_job_kind == "save_remote_selection" and requested_job_kind == "candidate_lookup":
             return
+        if (
+            current_status in {"completed", "failed", "canceled"}
+            and not requested_status
+            and "possible_matches" in changes
+        ):
+            return
         if current_status == "canceled":
             if requested_status != "canceled":
                 return
-        if current_status == "failed":
-            if requested_status not in {"", "failed"}:
-                return
-            if requested_job_kind == "candidate_lookup" and requested_status != "failed":
-                return
+        if current_status == "failed" and not (
+            requested_status in {"", "failed"}
+            or (
+                requested_status == "running"
+                and requested_job_kind == "save_remote_selection"
+            )
+        ):
+            return
         if current_status == "completed" and not (
             requested_status in {"", "completed"}
             or (
@@ -667,22 +692,96 @@ def _reclaim_terminal_internal_cover_lookup_task(
     _reclaim_cleared_cover_lookup_task_state(task_id)
 
 
+def _reusable_cover_lookup_task_id(
+    requested_track_paths: set[str],
+    *,
+    config: Mapping[str, object] | None,
+    preferred_task_id: str = "",
+    allow_preferred_path_rebind: bool = False,
+    requested_manual_urls: list[str] | None = None,
+) -> str:
+    def path_key(value: object) -> str:
+        text = str(value or "").strip()
+        return os.path.normcase(str(Path(text).resolve(strict=False))) if text else ""
+
+    normalized_paths = sorted(filter(None, (path_key(path) for path in requested_track_paths)))
+    if not normalized_paths:
+        return ""
+    normalized_manual_urls = sorted({
+        str(url or "").strip()
+        for url in (requested_manual_urls or [])
+        if str(url or "").strip()
+    })
+    if not preferred_task_id and not normalized_manual_urls:
+        return ""
+    persisted_tasks = load_cover_lookup_notifications(config) if config is not None else []
+    with _COVER_LOOKUP_TASKS_LOCK:
+        busy_ids = {task_id for task_id, futures in _COVER_LOOKUP_FUTURES.items() if futures}
+        tasks_by_id = {
+            str(task.get("id") or ""): task
+            for task in persisted_tasks
+            if str(task.get("id") or "")
+        }
+        tasks_by_id.update({
+            str(task.get("id") or ""): dict(task)
+            for task in _COVER_LOOKUP_TASKS.values()
+            if str(task.get("id") or "")
+        })
+    for task in sorted(tasks_by_id.values(), key=_sort_cover_lookup_task_key, reverse=True):
+        task_id = str(task.get("id") or "")
+        task_manual_urls = sorted({
+            str(url or "").strip()
+            for url in (task.get("manual_urls") or [])
+            if str(url or "").strip()
+        })
+        if (
+            task_id not in busy_ids
+            and (
+                task_id == preferred_task_id
+                or (not preferred_task_id and task_manual_urls == normalized_manual_urls)
+            )
+            and not bool(task.get("internal"))
+            and is_terminal_cover_lookup_task(task)
+            and (
+                (allow_preferred_path_rebind and bool(preferred_task_id))
+                or sorted(filter(None, (path_key(path) for path in (task.get("track_paths") or [])))) == normalized_paths
+            )
+        ):
+            return task_id
+    return ""
+
+
 def create_cover_lookup_task(
     album: dict[str, object],
     requested_track_paths: set[str],
     manual_urls: list[str] | None = None,
     *,
     internal: bool = False,
+    config: Mapping[str, object] | None = None,
+    preferred_task_id: str = "",
+    allow_preferred_path_rebind: bool = False,
 ) -> tuple[str, Event]:
-    task_id = uuid.uuid4().hex
+    preferred_task_id = str(preferred_task_id or "").strip()
+    reusable_task_id = _reusable_cover_lookup_task_id(
+        requested_track_paths,
+        config=config,
+        preferred_task_id=preferred_task_id,
+        allow_preferred_path_rebind=allow_preferred_path_rebind,
+        requested_manual_urls=manual_urls,
+    )
+    task_id = reusable_task_id or uuid.uuid4().hex
     cancel_event = Event()
-    _COVER_LOOKUP_CANCEL_EVENTS[task_id] = cancel_event
+    with _COVER_LOOKUP_TASKS_LOCK:
+        if task_id in _COVER_LOOKUP_TASKS:
+            _COVER_LOOKUP_TASKS[task_id] = {"id": task_id, "status": "pending"}
+        _COVER_LOOKUP_CANCEL_EVENTS[task_id] = cancel_event
     update_cover_lookup_task(
         task_id,
+        config=config,
         id=task_id,
         status="pending",
         type="cover-art-lookup",
-        internal=bool(internal),
+        internal=bool(internal and not reusable_task_id),
         artist=str(album.get("album_artist") or ""),
         album=str(album.get("name") or album.get("album") or ""),
         year=album.get("year"),
@@ -729,9 +828,17 @@ def register_cover_lookup_future(
 ) -> None:
     with _COVER_LOOKUP_TASKS_LOCK:
         _COVER_LOOKUP_FUTURES.setdefault(task_id, set()).add(future)
+        task = _COVER_LOOKUP_TASKS.get(task_id) or {}
+        job_contract = task.get("job_contract")
+        expected_job_kind = str(
+            job_contract.get("job_kind") if isinstance(job_contract, Mapping) else ""
+        ).strip()
     future.add_done_callback(
         lambda completed_future: _finish_cover_lookup_future(
-            task_id, completed_future, config=config
+            task_id,
+            completed_future,
+            config=config,
+            expected_job_kind=expected_job_kind,
         )
     )
 
@@ -741,22 +848,36 @@ def _finish_cover_lookup_future(
     future: Future,
     *,
     config: Mapping[str, object] | None,
+    expected_job_kind: str,
 ) -> None:
     worker_failed = not future.cancelled() and future.exception() is not None
     try:
         current_task = cover_lookup_result(task_id)
         if not worker_failed or not current_task or is_terminal_cover_lookup_task(current_task):
             return
+        current_job_contract = current_task.get("job_contract")
+        current_job_kind = str(
+            current_job_contract.get("job_kind")
+            if isinstance(current_job_contract, Mapping)
+            else ""
+        ).strip()
+        if current_job_kind != expected_job_kind:
+            return
         request_cover_lookup_task_stop(task_id)
+        save_failed = current_job_kind == "save_remote_selection"
         update_cover_lookup_task(
             task_id,
             config=config,
             status="failed",
             progress=100,
-            progress_label="Interrupted",
-            result_kind="interrupted",
+            progress_label="Save failed" if save_failed else "Interrupted",
+            result_kind="save-failed" if save_failed else "interrupted",
             finished_at=datetime.now(timezone.utc).isoformat(),
-            message="Cover art lookup worker stopped before it could finish.",
+            message=(
+                "Cover save worker stopped before it could finish."
+                if save_failed
+                else "Cover art lookup worker stopped before it could finish."
+            ),
         )
     finally:
         discard_cover_lookup_future(task_id, future)
@@ -857,6 +978,7 @@ def clear_completed_cover_lookup_tasks(
     task_ids: list[str] | None = None,
     *,
     config: Mapping[str, object] | None = None,
+    actioned_only: bool = False,
 ) -> int:
     normalized_task_ids = {
         str(task_id or "").strip()
@@ -873,19 +995,86 @@ def clear_completed_cover_lookup_tasks(
             status = str((task or {}).get("status") or "").strip().casefold()
             if status not in _TERMINAL_COVER_LOOKUP_STATUSES:
                 continue
+            if actioned_only and not _is_actioned_cover_lookup_notification(task):
+                continue
             removed_task_ids.append(task_id)
             _COVER_LOOKUP_TASKS.pop(task_id, None)
             _COVER_LOOKUP_TASK_REVISIONS[task_id] = _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) + 1
     for task_id in removed_task_ids:
         _COVER_LOOKUP_CANCEL_EVENTS.pop(task_id, None)
+    persisted_task_ids = normalized_task_ids
+    if actioned_only and config is not None:
+        persisted_task_ids = {
+            str(item.get("id") or "").strip()
+            for item in load_cover_lookup_notifications(config)
+            if str(item.get("id") or "").strip()
+            and (not normalized_task_ids or str(item.get("id") or "").strip() in normalized_task_ids)
+            and _is_actioned_cover_lookup_notification(item)
+        }
     persisted_removed_ids = _remove_cover_lookup_notification_tasks(
-        set(removed_task_ids) | normalized_task_ids,
+        set(removed_task_ids) | persisted_task_ids,
         config=config,
     )
     cleared_task_ids = set(removed_task_ids) | persisted_removed_ids
     for task_id in cleared_task_ids:
         _reclaim_cleared_cover_lookup_task_state(task_id)
     return len(cleared_task_ids)
+
+
+def _cover_lookup_task_track_path_keys(task: Mapping[str, object]) -> set[str]:
+    paths = task.get("track_paths") or []
+    album_payload = task.get("album_payload")
+    if not paths and isinstance(album_payload, Mapping):
+        paths = [
+            track.get("path")
+            for track in album_payload.get("tracks", [])
+            if isinstance(track, Mapping)
+        ]
+    return {
+        os.path.normcase(str(Path(text).resolve(strict=False)))
+        for value in paths
+        if (text := str(value or "").strip())
+    }
+
+
+def mark_cover_lookup_notifications_action_taken_for_track_paths(
+    track_paths: set[str],
+    *,
+    config: Mapping[str, object],
+) -> list[dict[str, object]]:
+    requested_paths = _cover_lookup_task_track_path_keys({"track_paths": track_paths})
+    if not requested_paths:
+        return []
+    tasks_by_id = {
+        str(task.get("id") or "").strip(): task
+        for task in load_cover_lookup_notifications(config)
+        if str(task.get("id") or "").strip()
+    }
+    with _COVER_LOOKUP_TASKS_LOCK:
+        tasks_by_id.update(
+            {
+                str(task.get("id") or "").strip(): dict(task)
+                for task in _COVER_LOOKUP_TASKS.values()
+                if str(task.get("id") or "").strip()
+            }
+        )
+    matching_tasks = [
+        task
+        for task in tasks_by_id.values()
+        if not bool(task.get("internal"))
+        and _cover_lookup_task_track_path_keys(task) == requested_paths
+    ]
+    if any(not is_terminal_cover_lookup_task(task) for task in matching_tasks):
+        return []
+    marked = []
+    for task in matching_tasks:
+        updated = mark_cover_lookup_task_notification_action_taken(
+            str(task.get("id") or ""),
+            config=config,
+        )
+        if updated is not None:
+            marked.append(updated)
+    return marked
 
 
 def mark_cover_lookup_task_notification_action_taken(

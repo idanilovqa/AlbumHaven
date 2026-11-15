@@ -133,8 +133,14 @@ test(refreshWhilePressed
 
   const titleBox = await card.locator('.cover-lookup-task-title').boundingBox();
   const elapsedBox = await card.locator('.cover-lookup-task-elapsed').boundingBox();
+  const metadataBox = await card.locator('.cover-lookup-task-meta').boundingBox();
+  const taskCard = page.locator('.cover-lookup-task-card').filter({ has: card });
+  const progressBox = await taskCard.locator('.cover-lookup-task-progress').boundingBox();
   expect(titleBox).not.toBeNull();
   expect(elapsedBox).not.toBeNull();
+  expect(metadataBox).not.toBeNull();
+  expect(progressBox).not.toBeNull();
+  expect(metadataBox.y + metadataBox.height).toBeLessThanOrEqual(progressBox.y - 4);
   await page.mouse.move(titleBox.x, titleBox.y + (titleBox.height / 2));
   await page.mouse.down();
   if (refreshWhilePressed) {
@@ -166,10 +172,11 @@ test(refreshWhilePressed
  }).toBe(selectedText.replaceAll('\r\n', '\n'));
 await expect.poll(() => page.evaluate(() => state.coverLookup.drawerOpen)).toBe(true);
 
-await page.evaluate(() => {
+const mutation = await page.evaluate(() => {
   window.getSelection()?.removeAllRanges();
+  const original = document.querySelector('[data-open-cover-lookup-task]');
   state.coverLookup.tasks = [{
-    id: 'running-cover-lookup',
+    id: 'metallica-cover-lookup',
     status: 'running',
     artist: 'Metallica',
     album: "Kill 'Em All",
@@ -177,7 +184,13 @@ await page.evaluate(() => {
     progress: 50,
   }];
   renderCoverLookupDrawer();
+  const updated = document.querySelector('[data-open-cover-lookup-task]');
+  return {
+    preserved: original === updated,
+    status: updated?.querySelector('.cover-lookup-task-status-label')?.textContent?.trim(),
+  };
 });
+expect(mutation).toEqual({ preserved: true, status: 'Searching' });
 
 const stopButton = page.getByRole('button', { name: 'Stop lookup', exact: true });
 const stopIcon = stopButton.locator('svg');
@@ -253,16 +266,20 @@ for (const viewport of [
     const cards = body.locator('.cover-lookup-task-card');
     await expect(cards).toHaveCount(24);
     await expect(cards.first().locator('.cover-lookup-task-title')).toBeVisible();
-    await expect(cards.first()).toHaveCSS('min-height', '66px');
+      await expect(cards.first()).toHaveCSS('height', '86px');
 
     const geometry = await page.evaluate(() => {
       const drawerElement = document.getElementById('cover-lookup-drawer');
       const bodyElement = document.getElementById('cover-lookup-drawer-body');
       const player = document.querySelector('.global-player');
       const firstCard = bodyElement.querySelector('.cover-lookup-task-card');
+      const firstMetadata = firstCard.querySelector('.cover-lookup-task-meta');
+      const firstProgress = firstCard.querySelector('.cover-lookup-task-progress');
       const drawerBox = drawerElement.getBoundingClientRect();
       const playerBox = player.getBoundingClientRect();
       const firstCardBox = firstCard.getBoundingClientRect();
+      const firstMetadataBox = firstMetadata.getBoundingClientRect();
+      const firstProgressBox = firstProgress.getBoundingClientRect();
       return {
         drawerBottom: drawerBox.bottom,
         playerTop: playerBox.top,
@@ -270,15 +287,18 @@ for (const viewport of [
         bodyScrollHeight: bodyElement.scrollHeight,
         bodyOverflowY: getComputedStyle(bodyElement).overflowY,
         firstCardHeight: firstCardBox.height,
+        firstCardProgressClearance: firstProgressBox.top - firstMetadataBox.bottom,
       };
     });
     expect(geometry.drawerBottom).toBeCloseTo(geometry.playerTop, 0);
     expect(geometry.bodyOverflowY).toBe('auto');
     expect(geometry.bodyScrollHeight).toBeGreaterThan(geometry.bodyClientHeight);
-    expect(geometry.firstCardHeight).toBeGreaterThanOrEqual(66);
+      expect(geometry.firstCardHeight).toBe(86);
+    expect(geometry.firstCardProgressClearance).toBeGreaterThanOrEqual(4);
 
     await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
     await expect(cards.last()).toBeInViewport();
+    await expect(cards.last().getByRole('button', { name: 'Delete notification', exact: true })).toBeVisible();
     const lastCardBottom = await cards.last().evaluate(element => element.getBoundingClientRect().bottom);
     expect(lastCardBottom).toBeLessThanOrEqual(geometry.playerTop);
     await expect(drawer).toBeVisible();

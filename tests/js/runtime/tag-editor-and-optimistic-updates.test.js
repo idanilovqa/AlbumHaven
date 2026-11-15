@@ -28,6 +28,24 @@ const helperPath = path.join(
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
   + '\n' + fs.readFileSync(helperPath, 'utf8');
 
+test('openTagEditor hydrates an album on mobile', () => {
+  const pending = new Map();
+  const context = vm.createContext({
+    isMobileClient: () => true,
+    getTagEditorElements: () => ({ overlay: {} }),
+    bindOverlayPointerOrigin() {},
+    albumRequiresHydration: album => album.preview_only === true,
+    getAlbumRequestKey: album => album.key,
+    loadTrackModalAlbumDetails: key => new Promise(resolve => pending.set(key, resolve)),
+    showRepairAlert() {},
+  });
+  vm.runInContext(helperSource, context);
+
+  context.openTagEditor({ key: 'mobile', preview_only: true }, { tracksMode: 'all' });
+
+  assert.equal(pending.has('mobile'), true);
+});
+
 test('summary tag editor hydrates only the latest requested album and preserves permission', async () => {
   const pending = new Map();
   const opened = [];
@@ -90,6 +108,16 @@ const primaryModalsTemplate = fs.readFileSync(path.join(
   'partials',
   'primary-modals.html',
 ), 'utf8');
+
+test('Edit Tags exposes separate total-disc and disc-title fields', () => {
+  assert.match(primaryModalsTemplate, /data-tag-field="total_discs"/);
+  assert.match(primaryModalsTemplate, /data-tag-field="disc_subtitle"/);
+});
+
+test('Edit Tags exposes Album Type separately from Edition', () => {
+  assert.match(primaryModalsTemplate, /<label>Album Type<input[^>]+data-tag-field="album_type"/);
+  assert.match(primaryModalsTemplate, /<label>Edition<input[^>]+data-tag-field="edition"/);
+});
 
 function loadHelper(albums, overrides = {}) {
   const context = {
@@ -209,6 +237,53 @@ test('album editions render the same keyboard tab component as Home', () => {
   assert.match(tabs.innerHTML, /data-in-page-tab="1" aria-selected="true" tabindex="0"/);
   assert.match(tabs.innerHTML, /Original - 1998/);
   assert.match(tabs.innerHTML, /Anniversary Remix - 2018/);
+});
+
+test('version tabs are the sole edition indicator while standalone editions retain their header tag', () => {
+  const original = {
+    key: 'original',
+    name: 'Shared Album',
+    album_artist: 'Shared Artist',
+    year: 1998,
+    release_type: 'ALBUM',
+    tabLabel: 'Original - 1998',
+    cover_path: 'C:\\Music\\Shared Artist\\Shared Album\\cover.png',
+    tracks: [],
+  };
+  const specialEdition = {
+    ...original,
+    key: 'special-edition',
+    edition: 'Special Edition',
+    tabLabel: 'Special Edition - 1998',
+  };
+  const tabbed = createTrackModalCoverContext({
+    albums: [original, specialEdition],
+    resolvePreview: async () => ({ displayUrl: 'blob:tabbed-cover', cached: true }),
+  });
+  tabbed.context.state.modalReleaseIndex = 1;
+
+  tabbed.context.renderTrackModalRelease(specialEdition);
+
+  assert.match(tabbed.elements.tabs.innerHTML, /Special Edition - 1998/);
+  assert.match(tabbed.elements.header.innerHTML, /Shared Artist/);
+  assert.match(tabbed.elements.header.innerHTML, /1998/);
+  assert.match(tabbed.elements.header.innerHTML, /ALBUM/);
+  assert.doesNotMatch(
+    tabbed.elements.header.innerHTML,
+    /album-details-header__tag">Special Edition<\/span>/,
+  );
+
+  const standalone = createTrackModalCoverContext({
+    albums: [specialEdition],
+    resolvePreview: async () => ({ displayUrl: 'blob:standalone-cover', cached: true }),
+  });
+  standalone.context.renderTrackModalRelease(specialEdition);
+
+  assert.equal(standalone.elements.tabs.hidden, true);
+  assert.match(
+    standalone.elements.header.innerHTML,
+    /album-details-header__tag">Special Edition<\/span>/,
+  );
 });
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
@@ -849,6 +924,46 @@ test('Album Details keeps an inferred ordinary CD1 and numeric CD2 out of bonus 
   );
 });
 
+test('Album Details labels a numeric bonus medium from its separate disc title', () => {
+  let renderedConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '',
+    formatLoopTime: () => '',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) {
+      renderedConfig = config;
+      return '<div>table</div>';
+    },
+  });
+  const tracks = [
+    {
+      path: 'C:\\Music\\Artist\\Album\\CD2\\01 - Bonus.mp3',
+      title: 'Bonus Track',
+      disc_number: 2,
+      disc_number_raw: '2/2',
+      total_discs: 2,
+      disc_subtitle: 'Bonus',
+      track_number: 1,
+    },
+  ];
+  const grouped = context.groupAlbumTracks(tracks);
+
+  assert.deepEqual(
+    Array.from(grouped.groups, (group) => ({
+      discLabel: group.discLabel,
+      discSubtitle: group.discSubtitle,
+      isBonus: group.isBonus,
+    })),
+    [{ discLabel: 'CD2', discSubtitle: 'Bonus', isBonus: true }],
+  );
+  context.buildTrackListHtml(tracks);
+  assert.equal(renderedConfig.groups[0].discLabel, 'CD 2 • Bonus');
+});
+
 test('Album Details treats an explicit raw bonus-disc label as bonus evidence', () => {
   const context = loadHelper([]);
   const grouped = context.groupAlbumTracks([
@@ -942,7 +1057,8 @@ for (const scenario of [
   { name: 'explicit bonus', discs: [['1', 180], ['Bonus Disc', 1350]], expected: ['180', '1350'] },
   { name: 'multiple main and bonus discs', discs: [['1', 100], ['2', 80], ['Bonus Disc', 1000], ['Extras', 350]], expected: ['180', '1350'] },
   { name: 'ordinary numbered discs', discs: [['1', 180], ['2', 1350]], expected: ['', ''] },
-  { name: 'bonus-only album', discs: [['Bonus Disc', 1350]], expected: ['', '1350'] },
+  { name: 'single bonus-labeled group', discs: [['Bonus Disc', 1350]], expected: ['', ''] },
+  { name: 'multiple bonus-only groups', discs: [['Bonus Disc', 1000], ['Extras', 350]], expected: ['', ''] },
 ]) {
   test(`Album Details supplies classified duration summaries for ${scenario.name}`, () => {
     let renderedConfig;
@@ -1946,7 +2062,7 @@ test('completed save-task response reconciles immediately without starting a wat
     [
       'Saved changes to 1 track in “Album”.',
       'success',
-      2000,
+      8000,
       { title: 'Tags updated' },
     ],
   ]);
@@ -2022,6 +2138,68 @@ test('completed refresh-required response gives its terminal payload to canonica
     ],
   );
   assert.deepEqual(settledClaims, [mutationClaim]);
+});
+
+test('refresh-required response without save task delegates terminal canonical reconciliation', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
+  const album = {
+    id: 58,
+    key: 'artist::album',
+    name: 'Album',
+    album_artist: 'Artist',
+    year: 2004,
+    tracks: [{ path: trackPath, album: 'Album', title: 'Original' }],
+  };
+  const closedModal = { hidden: true };
+  const mutationClaim = {};
+  const watchCalls = [];
+  const terminalPayload = {
+    ok: true,
+    save_task_status: 'completed',
+    requires_view_refresh: true,
+    committed_values: { [trackPath]: { year: '2014' } },
+    updated_albums: [],
+    destination_album_id: 401,
+    destination_artist: 'Artist',
+    inventory_mutation_revision: 1,
+  };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return closedModal; },
+    },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { year: '2014' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    installCommittedTagValues() {},
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert() {},
+    claimTagEditViewMutation() { return mutationClaim; },
+    tagEditViewMutationStillOwnsResources() { return true; },
+    settleTagEditViewMutation() {},
+    watchSaveTask(...args) { watchCalls.push(args); },
+    fetch: async () => ({
+      ok: true,
+      async json() { return terminalPayload; },
+    }),
+  });
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(watchCalls.length, 1);
+  assert.match(watchCalls[0][0], /^optimistic-tag-edit-/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(watchCalls[0][1].terminalPayload)),
+    terminalPayload,
+  );
+  assert.equal(watchCalls[0][1].tagEditMutationClaim, mutationClaim);
 });
 
 test('completed tag edit with reconciliation warning confirms save without a frozen or failure alert', async () => {
@@ -2780,6 +2958,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
     album_artist: 'Artist',
     tracks: [{ path: trackPath, album: 'Album' }],
   };
+  const alerts = [];
   const closedModal = { hidden: true };
   const context = loadHelper([album], {
     document: {
@@ -2796,7 +2975,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
     applyUpdatedAlbumsToCurrentView() { return [album]; },
     updateOpenTrackModalAfterTagEdit() {},
     renderView() {},
-    showRepairAlert() {},
+    showRepairAlert(...args) { alerts.push(args); },
     async prependUtilityLogHistoryEntry() {},
     async fetch() {
       return {
@@ -2804,9 +2983,7 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
         async json() {
           return {
             ok: false,
-            error: 'Permission denied while writing tags.',
-            save_task_id: 'failed-tag-save',
-            save_task_status: 'failed',
+            error: `PermissionError: cannot write ${trackPath}`,
             failure_stage: 'media_write',
             edit_outcome: 'failed_rolled_back',
             log_entry: { id: 'tag-edit-failure-42', action: 'Tag edit failed' },
@@ -2821,6 +2998,12 @@ test('manual tag edit keeps the editor closed after a logged physical write fail
   await context.confirmManualTagEdit();
 
   assert.equal(closedModal.hidden, true);
+  assert.equal(alerts.at(-1)[0], 'Failed to edit tags.');
+  assert.doesNotMatch(JSON.stringify(alerts.at(-1)), /C:\\Music|PermissionError/);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1)[3])), {
+    logHistoryEntryId: 'tag-edit-failure-42',
+    logHistoryLink: true,
+  });
 });
 
 test('failed tag save does not replace a newer tag editor session', () => {
@@ -3170,6 +3353,7 @@ function createTrackModalCoverContext(options = {}) {
   const elements = {
     overlay: new TrackModalTestElement('div'),
     cover,
+    header: new TrackModalTestElement('div'),
     title: new TrackModalTestElement('h2'),
     subtitle: new TrackModalTestElement('div'),
     list: new TrackModalTestElement('div'),
@@ -3944,6 +4128,26 @@ test('track modal shows the existing problem link from server-owned track state 
   assert.match(elements.list.innerHTML, /data-track-path="C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem\.flac"/);
 });
 
+test('album playback queue stores the canonical request key instead of the path identity', () => {
+  const trackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 Signal.flac';
+  const album = {
+    key: 'featured-on-relationship-42',
+    album_ref: 'various-artists::featured-signal-collection',
+    name: 'Featured Signal Collection',
+    album_artist: 'Various Artists',
+    tracks: [{ path: trackPath, title: 'Signal', artist: 'Solo Voice' }],
+  };
+  const context = loadHelper([album], {
+    getAlbumRequestKey: (item) => String(item?.album_ref || item?.key || ''),
+    getAlbumIdentity: () => trackPath,
+  });
+  context.state.player = { current: null, playbackQueue: null };
+
+  context.setAlbumPlaybackQueue(album, trackPath);
+
+  assert.equal(context.state.player.playbackQueue.albumRef, album.album_ref);
+});
+
 test('cross-album continuity peek is side-effect free until the exact boundary consumes it', () => {
   const firstPath = 'C:\\Music\\Artist\\First\\01.flac';
   const secondPath = 'C:\\Music\\Artist\\Second\\01.flac';
@@ -4074,6 +4278,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
       album: 'Album Beta',
       coverPath: '',
       durationSeconds: 0,
+      year: '2002',
     },
   );
   assert.equal(context.state.player.playbackQueue.currentIndex, 0);
@@ -4720,4 +4925,66 @@ test('Album Details passes exact explicit bonus and main durations to final summ
     { path: 'bonus-title.flac', title: 'Bonus', duration_seconds: 180 },
   ], { total_duration_seconds: 180 });
   assert.equal(config.bonusLength, '');
+});
+
+test('Album Details hands each disc its private disc rating and the album rating to the track table', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+
+  context.buildTrackListHtml([
+    { path: 'main.flac', title: 'Main', disc_number: 1, disc_number_raw: '1', track_number: 1 },
+    { path: 'bonus.flac', title: 'Bonus', disc_number: null, disc_number_raw: '  Bonus   Disc/2', track_number: 1 },
+  ], {
+    album_preference: { rating: 5, disc_ratings: [{ disc_key: 'bonus disc', rating: 8 }] },
+  });
+
+  assert.equal(renderedConfig.albumRating, 5);
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, (group) => [group.isBonus, group.discRating]),
+    [[false, null], [true, 8]],
+  );
+
+  context.buildTrackListHtml([
+    { path: 'bonus.flac', title: 'Bonus', disc_number: 2, disc_number_raw: 'Bonus Disc', track_number: 1 },
+  ], { album_preference: { rating: null } });
+  assert.equal(renderedConfig.albumRating, null);
+  assert.deepEqual(Array.from(renderedConfig.groups, (group) => group.discRating), [null]);
+});
+
+test('disc rating keys normalize the disc tag the way the server stores them', () => {
+  const { getTrackDiscRatingKey } = loadHelper([]);
+  assert.equal(getTrackDiscRatingKey({ disc_number_raw: '02/03', disc_number: 2 }), '2');
+  assert.equal(getTrackDiscRatingKey({ disc_number_raw: '  Bonus   DISC ' }), 'bonus disc');
+  assert.equal(getTrackDiscRatingKey({ disc_number: 3 }), '3');
+  assert.equal(getTrackDiscRatingKey({}), '');
+});
+
+test('Album Details matches a numbered second disc rating by its disc tag (All the Wars)', () => {
+  let renderedConfig;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+  });
+
+  context.buildTrackListHtml([
+    { path: 'wars-1.mp3', title: 'All the Wars', disc_number: 1, disc_number_raw: '1/2', track_number: 1 },
+    { path: 'wars-2.mp3', title: 'Light Up Your Eyes', disc_number: 2, disc_number_raw: '2/2', track_number: 9 },
+  ], { album_preference: { rating: 5, disc_ratings: [{ disc_key: '2', rating: 8 }] } });
+
+  assert.equal(renderedConfig.albumRating, 5);
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, (group) => [group.discLabel, group.discRating]),
+    [['CD 1', null], ['CD 2', 8]],
+  );
 });

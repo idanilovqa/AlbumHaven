@@ -393,13 +393,13 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
   });
 });
 
-test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', { tag: '@area:album-details' }, async ({
+test('FTC-ALBUM-DETAILS-005 ignores a sole bonus-labeled group', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
   trackModalActions,
 }) => {
-  await stepLogger.step('Open an ordinary album whose title and path contain bonus-like words', async () => {
+  await stepLogger.step('Open a one-group album with an explicit bonus disc label', async () => {
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();
     await searchToolbarActions.search(BONUS_DURATION_FALSE_POSITIVE_ALBUM, { submitWithEnter: true });
@@ -409,7 +409,7 @@ test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', { tag: '@a
     await trackModalActions.waitForLoadedSummary();
   });
 
-  await stepLogger.step('Show only the ordinary album total', async () => {
+  await stepLogger.step('Show only the aggregate album total', async () => {
     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
       headers: [],
       totals: ['Total Length: 18m 00s'],

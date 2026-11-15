@@ -12,6 +12,7 @@ const readProjectFile = (...segments) => fs.readFileSync(
 const accountTemplate = readProjectFile('music_app', 'templates', 'account.html');
 const accountCss = readProjectFile('music_app', 'static', 'css', 'account.css');
 const adminCss = readProjectFile('music_app', 'static', 'css', 'admin-members.css');
+const mobileLayoutCss = readProjectFile('music_app', 'static', 'css', 'mobile-layout.css');
 const adminNavigation = readProjectFile('music_app', 'templates', 'partials', 'admin-settings-nav.html');
 const navigationMacro = readProjectFile('music_app', 'templates', 'components', 'navigation-tree.html');
 
@@ -24,6 +25,13 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
   assert.match(navigationMacro, /if action %}type="submit"/);
   assert.match(navigationMacro, /if selected %} aria-current="{{ 'page' if settings else 'true' }}"/);
   assert.doesNotMatch(adminNavigation, /settings-back|Back to library/);
+});
+
+test('shared page headers keep Back before the title on desktop', () => {
+  assert.match(
+    mobileLayoutCss,
+    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
+  );
 });
 
 test('Admin navigation offers My account instead of unavailable placeholders', () => {

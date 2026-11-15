@@ -51,7 +51,7 @@ def test_api_view_payload_helpers_do_not_expose_dead_flask_path_fallbacks():
     assert not hasattr(api_view_payload_helpers, "_entry_matches_visible_artist_path")
 
 
-def test_build_artists_sidebar_collapses_case_only_shared_artist_variants():
+def test_build_artists_sidebar_lists_shared_album_under_each_member():
     albums = [
         SimpleNamespace(
             album_artist="MONO / A.A. Williams",
@@ -75,10 +75,37 @@ def test_build_artists_sidebar_collapses_case_only_shared_artist_variants():
 
     assert sidebar == [
         {
-            "artist": "Mono / A.A. Williams",
-            "artist_display": "Mono / A.A. Williams",
+            "artist": "A.A. Williams",
+            "artist_display": "A.A. Williams",
             "count": 2,
         },
+        {
+            "artist": "Mono",
+            "artist_display": "Mono",
+            "count": 2,
+        },
+    ]
+
+
+def test_build_artists_sidebar_sorts_by_name_without_leading_punctuation():
+    albums = [
+        SimpleNamespace(album_artist=artist, artists=[artist], is_compilation=False)
+        for artist in ("IZZ", "'Til Tuesday", "I'm with Her", "!Air")
+    ]
+
+    sidebar = build_artists_sidebar(albums)
+
+    assert [item["artist"] for item in sidebar] == [
+        "!Air",
+        "I'm with Her",
+        "IZZ",
+        "'Til Tuesday",
+    ]
+    assert [item["artist_display"] for item in sidebar] == [
+        "!Air",
+        "I'm with Her",
+        "IZZ",
+        "'Til Tuesday",
     ]
 
 

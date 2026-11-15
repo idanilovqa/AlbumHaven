@@ -119,20 +119,20 @@ def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():
     state = {"gallery_scope": "all", "visible_library_categories": ["hoard", "main_library"]}
     snapshot = browse._prepare_root_gallery_snapshot(rows, missing, aliases, state)
     assert [(row["artist_name"], row["album_key"]) for row in snapshot["ordered"]] == [
-        ("# Artist", "punctuation"), ("2 Artist", "numeric"), ("Before", "lost"),
+        ("2 Artist", "numeric"), ("# Artist", "punctuation"), ("Before", "lost"),
         ("Canonical", "shared"), ("Featured", "shared"), ("Owner", "compound"),
         ("Éclair", "unicode"), ("日本語", "japanese"),
     ]
     assert snapshot["sidebar"] == [
         {"artist": artist, "artist_display": artist, "count": 1}
-        for artist in ["# Artist", "2 Artist", "Before", "Canonical", "Featured", "Owner", "Éclair", "日本語"]
+        for artist in ["2 Artist", "# Artist", "Before", "Canonical", "Featured", "Owner", "Éclair", "日本語"]
     ]
     assert snapshot["album_count"] == 7
     assert snapshot["occurrence_count"] == 8
     page = browse._select_root_gallery_snapshot_page(snapshot, {"gallery_page_size": "2"})
     assert page[3] == {
-        "next_cursor": "WzEsICJmYWQ4YWU0ZTQzNDNiNDFiY2E3ZTI2ZTQzOTBlNmVjNGE0Y2QwYzM1ODUzYzY1Y2NkOGU0ZjI1ODExNDhmNGVhIiwgMl0",
-        "has_more": True, "revision": "fad8ae4e4343b41bca7e26e4390e6ec4a4cd0c35853c65ccd8e4f2581148f4ea", "page_size": 2,
+        "next_cursor": "WzEsICI3MTA3ZmNkYmQ5Y2YzODI3NDZjNTdjNDQzMjY4YmIzMWU4MjZiYzFkY2Y0MDA1ZjQ0NDY4MzlmZTUzMGE1ZDVkIiwgMl0",
+        "has_more": True, "revision": "7107fcdbd9cf382746c57c443268bb31e826bc1dcf4005f4446839fe530a5d5d", "page_size": 2,
     }
     continuation = browse._select_root_gallery_snapshot_page(snapshot, {
         "gallery_page_size": "2", "gallery_cursor": page[3]["next_cursor"]})

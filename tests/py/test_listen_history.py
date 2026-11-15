@@ -206,3 +206,38 @@ def test_selected_postgres_listen_history_append_update_pending_leaves_stale_jso
         "existing-track"
     ]
     assert history_path.read_text(encoding="utf-8") == '{"items":[{"id":"stale","track_ref":"old"}]}'
+
+
+@pytest.mark.parametrize("duration,heard,recorded", [
+    (8, 8, True),
+    (8, 7.75, True),
+    (8, 7.749, False),
+    (8, 0, False),
+    (10, 10, True),
+    (10, 9.8, True),
+    (0.08, 0.08, True),
+    (0, 8, False),
+    (float("nan"), 8, False),
+    (14, 14, True),
+    (14, 10, False),
+    (60, 10, False),
+    (60, 10.001, True),
+])
+def test_track_of_ten_seconds_or_less_is_recorded_once_heard_to_its_end(duration, heard, recorded):
+    measured = {
+        "measurement_version": "rendered-pcm-v1", "measured_listened_seconds": heard,
+        "duration_seconds": duration, "total_listened_seconds": 0, "max_contiguous_seconds": 0,
+    }
+    legacy = {"duration_seconds": duration, "total_listened_seconds": heard, "max_contiguous_seconds": 0}
+
+    assert listen_history.is_meaningful_listen_session(measured) is recorded
+    assert listen_history.is_meaningful_listen_session(legacy) is recorded
+
+
+def test_heard_to_the_end_uses_measured_time_not_media_distance():
+    entry = {
+        "measurement_version": "rendered-pcm-v1", "measured_listened_seconds": 1,
+        "duration_seconds": 8, "total_listened_seconds": 8, "max_contiguous_seconds": 8,
+    }
+
+    assert listen_history.is_meaningful_listen_session(entry) is False

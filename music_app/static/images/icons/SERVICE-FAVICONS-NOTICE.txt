@@ -1,0 +1,20 @@
+Service favicons for external links
+
+Files:
+  musicbrainz-favicon-32.png  MusicBrainz site icon
+                              (musicbrainz-server root/static/images/favicons/favicon-32x32.png)
+  discogs-favicon-32.png      Discogs favicon as MusicBrainz shows it in its artist
+                              external-links list
+                              (musicbrainz-server root/static/images/external-favicons/discogs-32.png)
+
+Source: the musicbrainz-server static assets of the local musicbrainz-docker mirror,
+commit 5d91d1f4df996e3c593d290d28d89f03f1c10536 (2026-08-04). The files are unmodified;
+on dark themes the button component shows the black Discogs record inverted to white with a
+CSS filter so it stays visible.
+
+Terms: musicbrainz-server is distributed under the GNU General Public License,
+version 2 or later (COPYING.md); its attribution.txt lists no separate licence for
+these two files. MusicBrainz is a trademark of the MetaBrainz Foundation, and Discogs
+is a trademark of its owner. Album Haven uses each mark only to identify a link to
+that service's public page for the artist, as MusicBrainz itself does. This use does
+not imply endorsement by either service.

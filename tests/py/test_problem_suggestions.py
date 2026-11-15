@@ -39,7 +39,26 @@ def test_unique_reversible_encoding_preserves_casing_and_never_mutates_source(su
     assert value == before
 
 
-@pytest.mark.parametrize('text', ['Jos�', 'Jos??', '?', 'plain lower case'])
+@pytest.mark.parametrize(
+    'text',
+    [
+        'Jos�',
+        'Jos??',
+        '?',
+        'plain lower case',
+        'Moyen-Âge',
+        "Les Voyages De L'Âme",
+        'Ñanguita (Edit)',
+        'Trúbrot',
+        'Róróró',
+        'Án Þín',
+        'Väärä käärme',
+        'Belle Âme',
+        'J.S. Bach: Matthäus Passion',
+        '匀愀椀氀漀爠ᤀ猀 䰀愀洀攀渀琀',
+        '䤀琠ᤀ猀 䨀甀猀琀 愀 吀栀漀甀最栀琀',
+    ],
+)
 def test_lossy_or_valid_text_is_not_an_encoding_proposal(suggestions, text):
     assert not any(item['field'] == 'artist' for item in generate(suggestions, entry(artist=text)))
 
@@ -73,6 +92,47 @@ def test_single_disc_marker_is_one_coupled_album_and_disc_proposal(suggestions):
 @pytest.mark.parametrize('album,disc', [('a quiet album (disc 2)', 1), ('album disc 1 disc 2', None)])
 def test_conflicting_or_multiple_disc_markers_have_no_proposal(suggestions, album, disc):
     assert not any(item['field'] == 'album_disc_marker' for item in generate(suggestions, entry(album=album, disc_number=disc)))
+
+
+def test_terminal_edition_descriptor_is_one_reviewable_album_and_edition_proposal(suggestions):
+    proposals = generate(
+        suggestions,
+        entry(album="300 (The Collector's Edition)", edition=''),
+    )
+    proposal = next(item for item in proposals if item['field'] == 'album_edition')
+    assert proposal['original'] == "300 (The Collector's Edition)"
+    assert proposal['corrected'] == "Album: 300; Edition: The Collector's Edition"
+    assert proposal['updates'] == {
+        'album': '300',
+        'edition': "The Collector's Edition",
+    }
+    assert proposal['reason'] == 'Edition descriptor in album name'
+
+
+@pytest.mark.parametrize('album', [
+    'Album (2024)',
+    'Album (Part II)',
+    'Album [Volume 2]',
+    'Album (Disc 2)',
+    'Album (Season 3)',
+    'Lost: Season 5 (Original Television Soundtrack)',
+    'The Journey Continues (Live)',
+])
+def test_non_edition_suffixes_never_create_an_edition_proposal(suggestions, album):
+    assert not any(
+        item['field'] == 'album_edition'
+        for item in generate(suggestions, entry(album=album, edition=''))
+    )
+
+
+def test_existing_conflicting_edition_tag_blocks_edition_title_proposal(suggestions):
+    assert not any(
+        item['field'] == 'album_edition'
+        for item in generate(
+            suggestions,
+            entry(album='Album (Deluxe Edition)', edition='Standard Edition'),
+        )
+    )
 
 
 @pytest.mark.parametrize('field', ['year', 'track_number'])

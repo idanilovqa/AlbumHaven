@@ -159,6 +159,7 @@ def _collect_problematic_album_context(
     collect_track_problem_rows: TrackProblemRowCollector,
     separate_release_candidate: SeparateReleaseCandidateBuilder,
     get_album_duplicate_sources: DuplicateSourceChecker,
+    image_dimensions: ImageDimensionsReader,
     poor_art_min_edge: int,
     include_detail_fields: bool = True,
 ) -> dict[str, object] | None:
@@ -197,6 +198,18 @@ def _collect_problematic_album_context(
     else:
         cover_width = int(getattr(album, "local_cover_width", 0) or 0)
         cover_height = int(getattr(album, "local_cover_height", 0) or 0)
+        if (
+            cover_width > 0
+            and cover_height > 0
+            and (cover_width < poor_art_min_edge or cover_height < poor_art_min_edge)
+        ):
+            try:
+                current_width, current_height = image_dimensions(cover_path_value)
+            except OSError:
+                current_width, current_height = 0, 0
+            if current_width > 0 and current_height > 0:
+                cover_width = current_width
+                cover_height = current_height
         if (
             cover_width > 0
             and cover_height > 0
@@ -291,6 +304,7 @@ def build_problematic_albums_payload(
             collect_track_problem_rows=collect_track_problem_rows,
             separate_release_candidate=separate_release_candidate,
             get_album_duplicate_sources=get_album_duplicate_sources,
+            image_dimensions=image_dimensions,
             poor_art_min_edge=poor_art_min_edge,
             include_detail_fields=False,
         )
@@ -367,6 +381,7 @@ def build_problematic_album_detail_payload(
             collect_track_problem_rows=collect_track_problem_rows,
             separate_release_candidate=separate_release_candidate,
             get_album_duplicate_sources=get_album_duplicate_sources,
+            image_dimensions=image_dimensions,
             poor_art_min_edge=poor_art_min_edge,
             include_detail_fields=True,
         )

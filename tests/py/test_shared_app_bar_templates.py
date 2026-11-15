@@ -191,6 +191,9 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     for release_type in ("studio", "ep", "live", "demo", "compilation", "single"):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
+    split_albums = album_types.one("button", **{"data-gallery-split-albums": "1"})
+    assert split_albums.attrs["aria-pressed"] == "true"
+    assert split_albums.text.strip().endswith("Show split albums")
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
     customize = album_types.one("button", **{"data-gallery-customize-preview": "1"})
     assert "disabled" in customize.attrs or customize.attrs.get("aria-disabled") == "true"

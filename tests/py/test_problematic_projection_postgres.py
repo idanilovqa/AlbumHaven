@@ -2790,7 +2790,7 @@ def test_reason_publication_uses_staged_exact_identity_and_facets():
     from pathlib import Path
 
     migration = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4124,7 +4124,7 @@ def test_claim_validity_uses_database_clock_after_lock_acquisition():
     from pathlib import Path
 
     sql = Path(
-        "migrations/postgres/0128_create_problematic_files_projection.sql"
+        "migrations/postgres/0249_create_problematic_files_projection.sql"
     ).read_text(encoding="utf-8")
     claim_function = sql.split(
         "create or replace function ops.problematic_projection_claim_valid", 1
@@ -4356,7 +4356,7 @@ def test_read_page_scopes_materialized_search_candidates_to_committed_snapshot(
 def test_source_page_bounds_each_diagnostic_phase_before_hydration():
     from pathlib import Path
 
-    migration = Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+    migration = Path("migrations/postgres/0249_create_problematic_files_projection.sql")
     sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
     source = sql.split(
         "create or replace function ops.load_claimed_problematic_projection_source",
@@ -4439,7 +4439,7 @@ def test_source_model_matches_legacy_cross_album_duplicate_provenance():
     from pathlib import Path
 
     sql = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4459,7 +4459,7 @@ def test_source_model_matches_canonical_missing_album_projection():
     from pathlib import Path
 
     sql = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4508,7 +4508,7 @@ def test_source_model_preserves_cover_quota_and_duplicate_candidate_provenance()
     from pathlib import Path
 
     sql = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4572,7 +4572,7 @@ def test_source_completion_uses_uncapped_exists_for_later_companion_work():
     from pathlib import Path
 
     sql = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4596,7 +4596,7 @@ def test_abandoned_terminal_build_atomically_coalesces_one_replacement():
     from pathlib import Path
 
     sql = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4620,7 +4620,7 @@ def test_source_page_plan_contract_uses_loader_owned_relation_and_cursor(cursor_
     from pathlib import Path
 
     migration = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()
@@ -4712,7 +4712,7 @@ def test_projection_search_facts_are_relational_bounded_and_publication_owned(
     from pathlib import Path
 
     migration = " ".join(
-        Path("migrations/postgres/0128_create_problematic_files_projection.sql")
+        Path("migrations/postgres/0249_create_problematic_files_projection.sql")
         .read_text(encoding="utf-8")
         .lower()
         .split()

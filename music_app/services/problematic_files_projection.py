@@ -27,6 +27,7 @@ from music_app.services.library_roots import (
     summarize_root_provenance_payloads,
 )
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
+from music_app.services.edition_title_normalization import reviewable_edition_title
 from music_app.services.utils import looks_like_mojibake
 
 _UNKNOWN_VALUES = {"", "unknown", "unknown artist", "unknown album", "none", "null"}
@@ -1000,6 +1001,16 @@ def _problematic_file_entry_from_row(
             if compact_scan_entry_present
             else file_entry.get("disc_number_raw")
         ),
+        "total_discs": (
+            row_payload.get("file_total_discs")
+            if compact_scan_entry_present
+            else file_entry.get("total_discs")
+        ),
+        "disc_subtitle": (
+            row_payload.get("file_disc_subtitle")
+            if compact_scan_entry_present
+            else file_entry.get("disc_subtitle")
+        ),
         "duration_seconds": (
             row_payload.get("file_duration_seconds")
             if compact_scan_entry_present
@@ -1495,6 +1506,8 @@ def _physical_file_problem_reasons(entry: Mapping[str, object]) -> Iterable[str]
         yield "Mixed album metadata in one folder"
     if entry.get("local_album_membership_problem"):
         yield str(entry["local_album_membership_problem"])
+    if reviewable_edition_title(entry.get("album"), entry.get("edition")):
+        yield "Edition descriptor in album name"
 
 def _iter_problematic_track_reasons(
     album: Mapping[str, object],

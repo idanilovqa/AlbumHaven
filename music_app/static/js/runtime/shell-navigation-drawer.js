@@ -245,9 +245,12 @@ function handleArtistsDrawerClick(event) {
   const closeTarget = event.target.closest('[data-close-artists-drawer="1"], #shell-navigation-rail-backdrop');
   if (closeTarget) {
     event.preventDefault();
+    event.stopImmediatePropagation?.();
     closeArtistsDrawer();
     return true;
   }
+
+  if (event.target.closest('#artist-tree-context-menu')) return false;
 
   if (!state.ui.artistsDrawerOpen || !isArtistsDrawerMobileViewport()) {
     return false;
@@ -258,8 +261,10 @@ function handleArtistsDrawerClick(event) {
     return false;
   }
 
-  closeArtistsDrawer({ restoreFocus: false });
-  return false;
+  event.preventDefault();
+  event.stopImmediatePropagation?.();
+  closeArtistsDrawer();
+  return true;
 }
 
 function handleArtistsDrawerKeydown(event) {

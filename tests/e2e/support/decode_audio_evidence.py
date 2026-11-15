@@ -25,8 +25,6 @@ def main() -> None:
             "f32le",
             "-ac",
             "2",
-            "-ar",
-            "48000",
             "pipe:1",
         ],
         check=True,
@@ -52,7 +50,6 @@ def main() -> None:
         "finiteSamples": finite_samples,
         "nonZeroSamples": nonzero_samples,
         "peakSample": peak_sample,
-        "sampleRate": 48000,
     }))
 
 

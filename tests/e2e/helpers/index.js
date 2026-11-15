@@ -16,6 +16,7 @@ export {
   controlLastfmProvider,
   LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
   LASTFM_PLAYBACK_TARGET,
+  LASTFM_SCROBBLE_TRACK,
   readLastfmProviderRequests,
   readLastfmProviderState,
 } from './lastfmProviderHelpers.js';
@@ -102,11 +103,13 @@ export {
   assertSustainedPlaybackContract,
   createPlaybackLifecycleObserver,
   createStreamingReplacementDiagnosticsObserver,
+  forgetKeptStreamingTracks,
   LONG_WAVEFORM_TIMING_BUDGET,
   measureSustainedPlaybackWindow,
   observePlaybackPcmTraffic,
   observeWaveformTraffic,
   readGaplessPlaybackDiagnostics,
+  runWithPlaybackEventWindowAttachment,
   waitForActivePlaybackWindow,
   waitForGaplessBoundary,
 } from './gaplessPlaybackHelpers.js';

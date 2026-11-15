@@ -16,6 +16,7 @@ from music_app.services.library_indexing import (
     start_scan_stage,
 )
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.musicbrainz_enrichment_triggers import schedule_after_scan
 from music_app.services.scan_cache_persistence import (
     ScanCachePublicationSuperseded,
     select_scan_cache_adapter,
@@ -331,6 +332,8 @@ def refresh_library_state(
     queue_mbid_assertion_follow_up: Callable[..., object] | None = None,
     expected_inventory_mutation_revision: int | None = None,
     before_commit: Callable[[object], object] | None = None,
+    queue_musicbrainz_enrichment: object | None = None,
+    recover_library_watch_health: Callable[..., int] | None = None,
 ) -> None:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
@@ -579,7 +582,7 @@ def refresh_library_state(
                 library_state["scan_phase"] = "finalizing"
                 start_scan_stage(library_state, "relations")
         relation_refresh_options: dict[str, object] = {
-            "seed_missing_album_ratings": True,
+            "final_scan_publication": True,
             "expected_scan_generation": scan_generation,
             "publication_state": publication_state,
         }
@@ -677,6 +680,41 @@ def refresh_library_state(
 
     try:
         if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
+            if (
+                requested_scan_mode == "manual_full_rescan"
+                and recover_library_watch_health is not None
+            ):
+                observed_root_ids = publication_state.get(
+                    "observed_library_root_ids"
+                )
+                try:
+                    recover_library_watch_health(
+                        scan_mode=requested_scan_mode,
+                        scan_started_at=scan_started_at,
+                        observed_root_ids=(
+                            observed_root_ids
+                            if isinstance(observed_root_ids, (set, list, tuple))
+                            else ()
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Unable to clear recovered library watcher health."
+                    )
+            if queue_musicbrainz_enrichment is not None:
+                try:
+                    schedule_after_scan(
+                        queue_musicbrainz_enrichment,
+                        scan_mode=requested_scan_mode,
+                        added_album_count=len(
+                            album_key_snapshot(publication_state.get("albums", []))
+                            - previous_album_keys
+                        ),
+                        publication_succeeded=True,
+                        superseded=False,
+                    )
+                except Exception:
+                    logger.warning("MusicBrainz enrichment scheduling failed safely.")
             finalize_post_scan_actions(
                 library_state,
                 config=cfg,

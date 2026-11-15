@@ -22,8 +22,12 @@ _MAX_EDGE = 2048
 _IMAGE_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"})
 
 
-def render_browse_artwork(path: Path) -> Response:
-    """Return only decoded image pixels from an already root-validated path."""
+def sanitized_artwork(path: Path, *, max_edge: int = _MAX_EDGE, image_format: str = "PNG") -> bytes:
+    """Decoded pixels of an already root-validated image, re-encoded without metadata.
+
+    [max_edge] bounds the longer side; JPEG output drops transparency. Raises HTTP 404 for
+    anything that is not a bounded supported image, naming no path.
+    """
     try:
         with path.open("rb") as source:
             payload = source.read(_MAX_INPUT_BYTES + 1)
@@ -32,18 +36,24 @@ def render_browse_artwork(path: Path) -> Response:
         with Image.open(BytesIO(payload)) as image:
             if image.format not in _IMAGE_FORMATS or image.width * image.height > _MAX_PIXELS:
                 raise ValueError("Artwork is not a supported bounded image.")
-            image.thumbnail((_MAX_EDGE, _MAX_EDGE))
-            mode = "RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB"
+            image.thumbnail((max_edge, max_edge))
+            alpha = image_format != "JPEG" and ("A" in image.getbands() or "transparency" in image.info)
+            mode = "RGBA" if alpha else "RGB"
             pixels = image.convert(mode)
             # A fresh image deliberately omits EXIF, comments and other metadata.
             sanitized = Image.new(mode, pixels.size)
             sanitized.paste(pixels)
             output = BytesIO()
-            sanitized.save(output, format="PNG")
+            sanitized.save(output, format=image_format, **({"quality": 85} if image_format == "JPEG" else {}))
     except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
         raise HTTPException(status_code=404, detail="Artwork not found.") from None
+    return output.getvalue()
+
+
+def render_browse_artwork(path: Path) -> Response:
+    """Return only decoded image pixels from an already root-validated path."""
     return Response(
-        output.getvalue(), media_type="image/png",
+        sanitized_artwork(path), media_type="image/png",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
 

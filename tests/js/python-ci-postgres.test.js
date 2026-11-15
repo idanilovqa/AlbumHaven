@@ -46,6 +46,20 @@ test('bootstrap checks native command exit codes without promoting stderr notice
   );
 });
 
+test('bootstrap reuses a ready PostgreSQL server only after verifying its process and data directory', () => {
+  const start = bootstrap.indexOf('function Assert-ProvisionPreflight');
+  const end = bootstrap.indexOf('\nfunction ', start + 1);
+  const preflight = bootstrap.slice(start, end);
+
+  assert.ok(preflight.indexOf('& $ready') < preflight.indexOf('Set-Service'));
+  assert.match(preflight, /if\s*\(-not\s+\$alreadyReady\)\s*\{[\s\S]*?Set-Service[\s\S]*?Start-Service/i);
+  assert.match(preflight, /pg_read_file\('postmaster\.pid'/i);
+  assert.doesNotMatch(preflight, /pg_backend_pid\(\)/i);
+  assert.match(preflight, /Get-CimInstance\s+Win32_Process/i);
+  assert.match(preflight, /Get-CimInstance\s+Win32_Service/i);
+  assert.match(preflight, /Join-Path\s+\$Pgbin\s+['"]postgres\.exe['"]/i);
+});
+
 test('schema-only bootstrap skips only fixture loading and preserves migrations and privilege probes', () => {
   assert.match(bootstrap, /Import-Module\s+Microsoft\.PowerShell\.Utility\s+-ErrorAction\s+Stop/);
   assert.match(bootstrap, /\[switch\]\$SkipFixtureLoad/);

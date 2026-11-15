@@ -319,6 +319,39 @@ function loadHelper(overrides = {}) {
 
 {
   const { context } = loadHelper();
+  const featuredAlbum = {
+    key: 'release-owner::featured-release',
+    album_artist: 'Release Owner',
+    artist_relationship: 'featured',
+    name: 'Featured Release',
+    year: 1996,
+  };
+  const groups = JSON.parse(JSON.stringify(context.buildSelectedArtistDisplayGroups(
+    [{
+      artist: 'Track Guest',
+      artist_display: 'Track Guest',
+      albums: [featuredAlbum],
+    }],
+    [{
+      artist: 'Release Owner',
+      artist_display: 'Release Owner',
+      albums: [featuredAlbum],
+    }],
+    'Track Guest',
+  )));
+
+  assert.deepEqual(groups, {
+    primaryGroups: [{
+      artist: 'Track Guest',
+      artist_display: 'Track Guest',
+      albums: [featuredAlbum],
+    }],
+    familyGroups: [],
+  });
+}
+
+{
+  const { context } = loadHelper();
   const groups = JSON.parse(JSON.stringify(context.buildDisplayGroups([
     {
       artist: 'Morse Portnoy George',

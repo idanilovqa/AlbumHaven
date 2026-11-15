@@ -441,7 +441,10 @@ export class TagEditorActions {
       'Year',
       'Track Number',
       'Disc Number',
+      'Total Discs',
+      'Disc Title',
       'Edition',
+      'Album Type',
       'Album Rating',
       'Exception',
       'Custom Collection name',
@@ -803,6 +806,8 @@ export class TagEditorActions {
       throw new Error('Explicit delivery cannot replace automatic notification dismissal coverage');
     }
     const saveTaskStatuses = new Map();
+    let savedNotificationPresentations = null;
+    let operationError;
     let editRequestCount = 0;
     const observeEditRequest = (request) => {
       if (
@@ -846,6 +851,11 @@ export class TagEditorActions {
             `Expected the non-album rarity confirmation to send no edit request before acceptance; observed ${editRequestCount}.`,
           );
         }
+      }
+      if (options.savedNotificationDelivery === 'status-page') {
+        savedNotificationPresentations = await this.tagEditor.recordRepairAlertPresentations({
+          surfaceSelector: '#library-loader',
+        });
       }
       await this.tagEditor.confirmButton.click();
       const response = await editResponsePromise;
@@ -896,9 +906,16 @@ export class TagEditorActions {
         ? String(await this.tagEditor.repairAlertMessage.textContent() || '').trim()
         : expectedCompletionMessage;
       if (options.savedNotificationDelivery === 'status-page') {
+        const presentations = savedNotificationPresentations;
+        savedNotificationPresentations = null;
         await deliverSavedNotificationThroughStatus(this.tagEditor,
           deliveredCompletionMessage,
-          { timeout, beforeNavigation: options.beforeSavedNotification });
+          {
+            timeout,
+            autoDismisses: responseTaskCompleted,
+            beforeNavigation: options.beforeSavedNotification,
+            presentations,
+          });
       } else if (options.savedNotificationDelivery === 'current-view') {
         await acknowledgeSavedNotification(this.tagEditor,
           deliveredCompletionMessage, { timeout });
@@ -914,9 +931,25 @@ export class TagEditorActions {
       await expect(this.tagEditor.overlay).toBeHidden({ timeout });
       await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
       return payload;
+    } catch (error) {
+      operationError = error;
+      throw error;
     } finally {
       this.tagEditor.page.off('request', observeEditRequest);
       this.tagEditor.page.off('response', observeSaveTask);
+      if (savedNotificationPresentations) {
+        try {
+          await this.tagEditor.stopRecordingRepairAlertPresentations(savedNotificationPresentations);
+        } catch (cleanupError) {
+          if (operationError) {
+            throw new AggregateError(
+              [operationError, cleanupError],
+              'Tag edit and saved notification recorder cleanup failed',
+            );
+          }
+          throw cleanupError;
+        }
+      }
     }
   }
 

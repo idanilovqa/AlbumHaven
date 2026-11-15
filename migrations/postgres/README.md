@@ -164,32 +164,55 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0096_create_generated_preview_storage.sql
 0097_repair_generated_preview_inventory_path_constraint.sql
 0098_track_generated_preview_current_path.sql
-0099_create_durable_job_foundation.sql
-0100_request_durable_job_cancellation.sql
-0101_harden_durable_job_boundaries.sql
-0102_grant_worker_authorization_reads.sql
-0103_add_job_transition_retention_index.sql
-0104_create_scan_job_intents.sql
-0105_grant_worker_targeted_reconciliation.sql
-0106_authorize_full_scan_lifecycle.sql
-0107_grant_worker_full_scan_execution.sql
-0108_create_durable_cover_job_state.sql
-0109_grant_worker_cover_lookup.sql
-0110_grant_worker_cover_refresh.sql
-0111_create_remote_cover_save_checkpoints.sql
-0112_complete_durable_scan_status_projection.sql
-0113_create_lastfm_retry_job_state.sql
-0114_grant_worker_lastfm_retry.sql
-0115_create_auth_mail_job_state.sql
-0116_grant_worker_auth_mail.sql
-0117_validate_durable_worker_startup.sql
-0118_retire_vacated_structural_album.sql
-0119_create_durable_watcher_recovery.sql
-0120_create_watcher_runtime_sessions.sql
-0121_preserve_full_scan_progress_on_restart.sql
-0122_close_cover_consistency.sql
-0123_preserve_newer_watcher_incident_presentation.sql
-0124_close_worker_preflight_cover_contract.sql
+0099_reconcile_cover_lookup_notification_album_identities.sql
+0100_archive_invalid_featured_track_cover_notifications.sql
+0101_create_local_album_identity_transitions.sql
+0102_narrow_synthetic_unknown_album_identity_guard.sql
+0103_repair_synthetic_unknown_cover_task_identities.sql
+0104_create_playback_claims.sql
+0105_add_playback_claim_handoffs.sql
+0106_create_android_artifact_access.sql
+0107_add_android_device_key_signer.sql
+0112_add_problematic_file_path_projection.sql
+0171_create_musicbrainz_artist_enrichment.sql
+0172_add_musicbrainz_artist_discogs_link.sql
+0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql
+0174_add_musicbrainz_matcher_version_and_credit_name.sql
+0175_add_musicbrainz_match_album_evidence.sql
+0176_create_album_disc_ratings.sql
+0177_create_local_album_artist_identities.sql
+0178_add_musicbrainz_associated_artists.sql
+0220_create_durable_job_foundation.sql
+0221_request_durable_job_cancellation.sql
+0222_harden_durable_job_boundaries.sql
+0223_grant_worker_authorization_reads.sql
+0224_add_job_transition_retention_index.sql
+0225_create_scan_job_intents.sql
+0226_grant_worker_targeted_reconciliation.sql
+0227_authorize_full_scan_lifecycle.sql
+0228_grant_worker_full_scan_execution.sql
+0229_create_durable_cover_job_state.sql
+0230_grant_worker_cover_lookup.sql
+0231_grant_worker_cover_refresh.sql
+0232_create_remote_cover_save_checkpoints.sql
+0233_complete_durable_scan_status_projection.sql
+0234_create_lastfm_retry_job_state.sql
+0235_grant_worker_lastfm_retry.sql
+0236_create_auth_mail_job_state.sql
+0237_grant_worker_auth_mail.sql
+0238_validate_durable_worker_startup.sql
+0239_retire_vacated_structural_album.sql
+0240_create_durable_watcher_recovery.sql
+0241_create_watcher_runtime_sessions.sql
+0242_preserve_full_scan_progress_on_restart.sql
+0243_close_cover_consistency.sql
+0244_preserve_newer_watcher_incident_presentation.sql
+0245_close_worker_preflight_cover_contract.sql
+0246_preserve_cover_selection_metadata.sql
+0247_acknowledge_mixed_version_library_warnings.sql
+0248_restore_authoritative_exception_clear.sql
+0249_create_problematic_files_projection.sql
+0250_restore_incomplete_album_contract.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -254,47 +277,47 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0064_grant_library_membership_delete.sql` grants the application role `DELETE` only on `library.library_memberships` so the existing authorized access-removal transaction can complete. Other runtime and readonly privileges are unchanged.
 
-`0099_create_durable_job_foundation.sql` adds the private shared job ledger, transition history, and worker heartbeat tables. It closes the initial job-kind and state sets, enforces bounded JSON and coherent lease/terminal state, and adds claim, status, retry, and retention indexes. Producers persist request origins in their acceptance transaction through an invoker-rights helper that preserves existing account ownership. The application can enqueue and request cancellation, the dedicated worker can claim and transition work, and neither the worker nor readonly role receives deletion access; retention remains migrator-owned.
+`0220_create_durable_job_foundation.sql` adds the private shared job ledger, transition history, and worker heartbeat tables. It closes the initial job-kind and state sets, enforces bounded JSON and coherent lease/terminal state, and adds claim, status, retry, and retention indexes. Producers persist request origins in their acceptance transaction through an invoker-rights helper that preserves existing account ownership. The application can enqueue and request cancellation, the dedicated worker can claim and transition work, and neither the worker nor readonly role receives deletion access; retention remains migrator-owned.
 
-`0100_request_durable_job_cancellation.sql` replaces direct application updates with a narrowly granted, migrator-owned cancellation function. It atomically cancels queued or retry-wait work with one transition, records only cooperative cancellation metadata for running work, and leaves terminal or inaccessible jobs unchanged.
+`0221_request_durable_job_cancellation.sql` replaces direct application updates with a narrowly granted, migrator-owned cancellation function. It atomically cancels queued or retry-wait work with one transition, records only cooperative cancellation metadata for running work, and leaves terminal or inaccessible jobs unchanged.
 
-`0101_harden_durable_job_boundaries.sql` closes transition history to legal state-machine edges, narrows worker updates to orchestration columns, and preserves the first accepted running-job cancellation metadata when requests repeat.
+`0222_harden_durable_job_boundaries.sql` closes transition history to legal state-machine edges, narrows worker updates to orchestration columns, and preserves the first accepted running-job cancellation metadata when requests repeat.
 
-`0102_grant_worker_authorization_reads.sql` grants the worker only the non-secret, column-scoped account, ownership, library-membership, capability, and request-origin reads required to revalidate durable-job authority from stable identifiers. It grants no table-wide reads, sequence access, or access to private identity, credential, origin-key, or filesystem fields.
+`0223_grant_worker_authorization_reads.sql` grants the worker only the non-secret, column-scoped account, ownership, library-membership, capability, and request-origin reads required to revalidate durable-job authority from stable identifiers. It grants no table-wide reads, sequence access, or access to private identity, credential, origin-key, or filesystem fields.
 
-`0103_add_job_transition_retention_index.sql` adds the timestamp-and-ID index used by bounded migrator-owned transition retention. It grants no runtime deletion privilege.
+`0224_add_job_transition_retention_index.sql` adds the timestamp-and-ID index used by bounded migrator-owned transition retention. It grants no runtime deletion privilege.
 
-`0104_create_scan_job_intents.sql` adds private full-scan and targeted-reconciliation intent records, stable root references, active full-scan exclusion, lifecycle synchronization, bounded checkpointing, orphan recovery, and claimed-intent loaders. Generic jobs retain only stable intent identities; raw paths remain in the private scan domain.
+`0225_create_scan_job_intents.sql` adds private full-scan and targeted-reconciliation intent records, stable root references, active full-scan exclusion, lifecycle synchronization, bounded checkpointing, orphan recovery, and claimed-intent loaders. Generic jobs retain only stable intent identities; raw paths remain in the private scan domain.
 
-`0105_grant_worker_targeted_reconciliation.sql` adds claimed-scope revalidation and a lease-fenced targeted inventory publication boundary. The worker receives only the narrow functions and columns needed to reconstruct authorized roots and publish one claimed reconciliation.
+`0226_grant_worker_targeted_reconciliation.sql` adds claimed-scope revalidation and a lease-fenced targeted inventory publication boundary. The worker receives only the narrow functions and columns needed to reconstruct authorized roots and publish one claimed reconciliation.
 
-`0106_authorize_full_scan_lifecycle.sql` adds an atomic created-versus-already-active acceptance result and domain-linked active full-scan cancellation. Authorized library operators can request cancellation without direct scan-domain table access, while malformed or unlinked generic jobs remain outside the cancellation boundary.
+`0227_authorize_full_scan_lifecycle.sql` adds an atomic created-versus-already-active acceptance result and domain-linked active full-scan cancellation. Authorized library operators can request cancellation without direct scan-domain table access, while malformed or unlinked generic jobs remain outside the cancellation boundary.
 
-`0107_grant_worker_full_scan_execution.sql` adds claim-scoped current-root loading, private monotonic full-scan progress, and a lease-fenced same-transaction publication boundary that records the committed inventory revision. That publication transaction also inserts exactly one server-owned, path-free `post_scan_cover_refresh` job keyed by library and resulting revision; an immutable-identity collision aborts the publication instead of accepting mismatched work. A claimed follow-up validator rechecks the exact active lease and current inventory revision. The worker receives only these narrow scan-domain functions; authenticated status reads use a separate application-only projection so private current paths never enter generic job data.
+`0228_grant_worker_full_scan_execution.sql` adds claim-scoped current-root loading, private monotonic full-scan progress, and a lease-fenced same-transaction publication boundary that records the committed inventory revision. That publication transaction also inserts exactly one server-owned, path-free `post_scan_cover_refresh` job keyed by library and resulting revision; an immutable-identity collision aborts the publication instead of accepting mismatched work. A claimed follow-up validator rechecks the exact active lease and current inventory revision. The worker receives only these narrow scan-domain functions; authenticated status reads use a separate application-only projection so private current paths never enter generic job data.
 
-`0108_create_durable_cover_job_state.sql` adds stable album, root, actor, origin, candidate-generation, revision, cancellation, and linked-job identities to cover lookup tasks; adds the bounded bulk-refresh progress projection; and registers retry-safe `cover_bulk_refresh` work without weakening existing job kinds. Historical notification metadata is scrubbed of album payloads and track paths while the private selected-cover column remains in the cover domain.
+`0229_create_durable_cover_job_state.sql` adds stable album, root, actor, origin, candidate-generation, revision, cancellation, and linked-job identities to cover lookup tasks; adds the bounded bulk-refresh progress projection; and registers retry-safe `cover_bulk_refresh` work without weakening existing job kinds. Historical notification metadata is scrubbed of album payloads and track paths while the private selected-cover column remains in the cover domain.
 
-`0109_grant_worker_cover_lookup.sql` adds claim-scoped cover-task validation, current album/root/path reconstruction, bounded cancellation observation, and row-revision-plus-lease-fenced task publication. The worker receives only execute access to these narrow functions; private paths and provider results remain confined to the cover domain.
+`0230_grant_worker_cover_lookup.sql` adds claim-scoped cover-task validation, current album/root/path reconstruction, bounded cancellation observation, and row-revision-plus-lease-fenced task publication. The worker receives only execute access to these narrow functions; private paths and provider results remain confined to the cover domain.
 
-`0110_grant_worker_cover_refresh.sql` adds atomic user bulk-refresh acceptance, one shared claimed execution scope for manual and post-scan refreshes, durable progress and cancellation, and an authenticated status projection. The worker reconstructs private inventory only through lease-fenced functions, while generic job rows and status retain opaque IDs, counts, and safe labels.
+`0231_grant_worker_cover_refresh.sql` adds atomic user bulk-refresh acceptance, one shared claimed execution scope for manual and post-scan refreshes, durable progress and cancellation, and an authenticated status projection. The worker reconstructs private inventory only through lease-fenced functions, while generic job rows and status retain opaque IDs, counts, and safe labels.
 
-`0111_create_remote_cover_save_checkpoints.sql` adds atomic remote-selection acceptance and a private, revisioned checkpoint record for download, owned-artifact, selection, promotion, publication, rollback, and ambiguous recovery states. The worker can load private candidate/root/path scope and advance or publish only through an active lease-fenced job.
+`0232_create_remote_cover_save_checkpoints.sql` adds atomic remote-selection acceptance and a private, revisioned checkpoint record for download, owned-artifact, selection, promotion, publication, rollback, and ambiguous recovery states. The worker can load private candidate/root/path scope and advance or publish only through an active lease-fenced job.
 
-`0112_complete_durable_scan_status_projection.sql` keeps authenticated scan status authoritative through publication. It projects the committed album count, exposes relation publication as active scan work, and bridges the atomically queued post-scan cover job into cover progress without exposing generic job identities or private paths.
+`0233_complete_durable_scan_status_projection.sql` keeps authenticated scan status authoritative through publication. It projects the committed album count, exposes relation publication as active scan work, and bridges the atomically queued post-scan cover job into cover progress without exposing generic job identities or private paths.
 
-`0113_create_lastfm_retry_job_state.sql` makes each accepted Last.fm provider retry an explicit one-attempt durable job. It adds stable pending-row and active-session identities, bounded attempt and disposition state, idempotent source identity, and a due-retry index while keeping scrobble payloads in the private integration domain.
+`0234_create_lastfm_retry_job_state.sql` makes each accepted Last.fm provider retry an explicit one-attempt durable job. It adds stable pending-row and active-session identities, bounded attempt and disposition state, idempotent source identity, and a due-retry index while keeping scrobble payloads in the private integration domain.
 
-`0114_grant_worker_lastfm_retry.sql` adds the lease-fenced validation, secret-loading, attempt transition, terminal convergence, and bounded legacy-adoption functions used by the worker. The worker receives execute access only and retains no direct Last.fm table access; possible-send outcomes converge to held ambiguity instead of automatic replay.
+`0235_grant_worker_lastfm_retry.sql` adds the lease-fenced validation, secret-loading, attempt transition, terminal convergence, and bounded legacy-adoption functions used by the worker. The worker receives execute access only and retains no direct Last.fm table access; possible-send outcomes converge to held ambiguity instead of automatic replay.
 
-`0115_create_auth_mail_job_state.sql` extends the existing mail outbox with stable actor, origin, accepted-attempt, checkpoint, revision, provider-disposition, and current-job fences. It classifies legacy token-bearing invitation and reset work as non-replayable, preserves completed evidence, and supports atomic tokenless intent plus generic-job composition without copying recipients, tokens, links, messages, or SMTP settings into the generic ledger.
+`0236_create_auth_mail_job_state.sql` extends the existing mail outbox with stable actor, origin, accepted-attempt, checkpoint, revision, provider-disposition, and current-job fences. It classifies legacy token-bearing invitation and reset work as non-replayable, preserves completed evidence, and supports atomic tokenless intent plus generic-job composition without copying recipients, tokens, links, messages, or SMTP settings into the generic ledger.
 
-`0116_grant_worker_auth_mail.sql` adds category-specific claimed authorization, minimum delivery-context loading, hash-only token issuance, send checkpoints, terminal convergence, welcome retry scheduling, and bounded legacy-welcome adoption. The dedicated worker receives execute access only to lease-fenced functions and no broad reads of accounts, credentials, tokens, mail outbox, throttles, audit records, or settings; uncertain invitation and reset delivery remains ambiguous and is never replayed automatically.
+`0237_grant_worker_auth_mail.sql` adds category-specific claimed authorization, minimum delivery-context loading, hash-only token issuance, send checkpoints, terminal convergence, welcome retry scheduling, and bounded legacy-welcome adoption. The dedicated worker receives execute access only to lease-fenced functions and no broad reads of accounts, credentials, tokens, mail outbox, throttles, audit records, or settings; uncertain invitation and reset delivery remains ambiguous and is never replayed automatically.
 
-`0117_validate_durable_worker_startup.sql` adds the closed startup contract used before a worker advertises readiness. It requires the exact registered handler set, every handler-owned function and execute grant, generic-ledger table and update-column grants, and transition-sequence usage. It returns only a boolean and exposes no schema, role, path, credential, or job detail.
+`0238_validate_durable_worker_startup.sql` adds the closed startup contract used before a worker advertises readiness. It requires the exact registered handler set, every handler-owned function and execute grant, generic-ledger table and update-column grants, and transition-sequence usage. It returns only a boolean and exposes no schema, role, path, credential, or job detail.
 
-`0118_retire_vacated_structural_album.sql` adds narrow application and worker boundaries for retiring zero-track album rows after structural and durable targeted reconciliation. It validates and locks same-library identities, preserves real track tombstones and cover-save checkpoint references, moves durable key/ID dependents with conflict-safe semantics, and sweeps only exact artist/title/year/edition siblings. The family-wide `separate_releases` marker does not protect an otherwise empty duplicate row; track ownership and active cover checkpoints remain row-specific guards. The targeted worker entry point additionally requires the current job attempt, lease, intent, and committed publication before using server-recorded affected album keys. Roles receive only function execution rather than destructive table privileges.
+`0239_retire_vacated_structural_album.sql` adds narrow application and worker boundaries for retiring zero-track album rows after structural and durable targeted reconciliation. It validates and locks same-library identities, preserves real track tombstones and cover-save checkpoint references, moves durable key/ID dependents with conflict-safe semantics, and sweeps only exact artist/title/year/edition siblings. The family-wide `separate_releases` marker does not protect an otherwise empty duplicate row; track ownership and active cover checkpoints remain row-specific guards. The targeted worker entry point additionally requires the current job attempt, lease, intent, and committed publication before using server-recorded affected album keys. Roles receive only function execution rather than destructive table privileges.
 
-`0119_create_durable_watcher_recovery.sql` expands targeted reconciliation with
+`0240_create_durable_watcher_recovery.sql` expands targeted reconciliation with
 root-relative watcher scope, one durable running/successor lane per active root,
 cross-root barriers, stable incidents, acknowledgements, and repair watermarks.
 Apply it transactionally after `0118`; verify the worker startup preflight and
@@ -303,7 +326,7 @@ back before invoking the migrator-only rollback routine. Rollback preserves any
 unapplied lane as a `rollback_pending_work` incident; do not drop retained lane,
 incident, or legacy-import evidence until an operator has reconciled it.
 
-`0120_create_watcher_runtime_sessions.sql` adds token-fenced watcher-session
+`0241_create_watcher_runtime_sessions.sql` adds token-fenced watcher-session
 evidence and database-root participants. Deployments support one watcher writer
 per library. Apply `0120` before starting matching application code: old code
 ignores the additive schema, while new code fails closed before starting its
@@ -312,7 +335,7 @@ flush, and finish its session before deploying old code. If shutdown or rollback
 cannot prove a clean finish, leave the session row, participant rows, and
 additive schema intact so the next compatible startup can recover them.
 
-`0121_preserve_full_scan_progress_on_restart.sql` keeps a gracefully drained
+`0242_preserve_full_scan_progress_on_restart.sql` keeps a gracefully drained
 full-scan intent retryable without discarding its visible progress. It clears
 only the execution-attempt fence when the job moves from `running` to
 attempt-preserving `retry_wait`; the existing trigger, lock order, privileges,
@@ -324,7 +347,7 @@ through the existing lease boundary. Roll application code back first; retain
 worker attempt. If function rollback is operationally required, restore the
 `0104` definition only after all full-scan jobs have left `retry_wait`.
 
-`0122_close_cover_consistency.sql` adds a per-library cover-mutation revision,
+`0243_close_cover_consistency.sql` adds a per-library cover-mutation revision,
 path-private album identity resolution, revision-fenced cover commits and scan
 observations, and durable post-authority finalization checkpoints. Apply it
 after `0121`. The migration is additive: old workers may drain through the
@@ -336,11 +359,11 @@ schema or decrement revisions during rollback.
 
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
-`0123_preserve_newer_watcher_incident_presentation.sql` keeps delayed watcher
+`0244_preserve_newer_watcher_incident_presentation.sql` keeps delayed watcher
 events from replacing a newer unresolved warning's reason or last-seen time.
 Occurrence counts and durable recovery sequence fences still advance.
 
-`0124_close_worker_preflight_cover_contract.sql` updates the retained worker
+`0245_close_worker_preflight_cover_contract.sql` updates the retained worker
 preflight baseline to require the current claimed cover-selection signature and
 claimed provider-outcome boundary. Fresh installs and upgrades therefore check
 the same least-privilege worker contract.
@@ -357,7 +380,8 @@ Its B-tree covers the library-and-canonical-name scope lookup in normalized-key
 order. The runtime role can read the table and invoke only the bounded
 replacement function; it has no direct table-write privileges.
 
-`0081` through `0091` are unreleased branch migrations. Their presence in a
+`0099` through `0107` are unreleased branch migrations.
+Their presence in a
 working checkout or sandbox does not establish that a deployment ledger has
 recorded them. Release rollout must apply and checksum them in lexical order
 before starting the matching application version. Run `0083` outside an
@@ -399,9 +423,146 @@ Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated 
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
 
-`0128_create_problematic_files_projection.sql` adds the durable, library-scoped
+`0249_create_problematic_files_projection.sql` adds the durable, library-scoped
 Problematic Files projection, bounded source and integrity cursors, indexed
 committed readers, exact worker capability verification, and least-privilege
 worker functions. Apply it before starting workers that register
 `problematic_files_projection`; legacy workers remain compatible during the
 additive rollout.
+Migration `0100_archive_invalid_featured_track_cover_notifications.sql` archives only notification tasks that migration `0099` incorrectly reconciled from a synthetic one-track featured-artist album to an unrelated multi-track album. It changes the task source family so old and new application versions omit the notification, records the exact reason and former source family for rollback, and preserves task rows and candidate snapshots. Reruns are idempotent. Rollback restores `metadata.source_family` from `album_identity_reconciliation_repair.previous_source_family` and removes the two repair keys.
+
+Migration `0101_create_local_album_identity_transitions.sql` adds append-only album identity lineage for scan, watcher, and structural-edit moves. Migration `0102_narrow_synthetic_unknown_album_identity_guard.sql` keeps valid VA and known-artist loose-track successors while excluding the synthetic `Unknown Artist / Unknown Album` catch-all. Migration `0103_repair_synthetic_unknown_cover_task_identities.sql` repairs only legacy cover tasks with complete active paths and one exact artist/title/year target; ambiguous rows remain unchanged.
+
+Migration `0104_create_playback_claims.sql` adds the durable, account-and-library-
+scoped playback ownership lease used by web and mobile clients. PostgreSQL stores
+only the 32-byte digest of each renewable claim token; the raw credential is not
+persisted. The table is additive, and older application versions leave it unused.
+
+Migration `0105_add_playback_claim_handoffs.sql` extends each claim with four
+nullable fields: the one-time handoff ID, 32-byte handoff-token digest, 32-byte
+completion fingerprint, and handoff expiry. Its constraint requires all four
+fields to be null or present together and validates both digests. These fields
+hold short-lived ownership-transfer state only; they do not add credentials or
+metadata markers to listen history.
+
+Apply `0104` and then `0105`, with their checksums recorded, before starting an
+application version that reads or writes playback claims or reload handoffs.
+Existing application versions remain compatible with both additive migrations.
+For rollback, stop or roll back the claim-aware application before changing this
+schema. Prefer retaining the table and nullable columns: expired claim and
+handoff rows are harmless, while rewriting or removing an applied migration
+would invalidate ledger history. Dropping the table discards only transient
+ownership leases, not listen-history rows, but must not occur while any running
+application depends on durable ownership.
+
+Migration `0106_create_android_artifact_access.sql` adds two additive tables for
+attested Android update downloads. `app.android_artifact_challenges` holds only the
+SHA-256 of each single-use, two-minute attestation or request nonce, bound to the
+account, session, channel and purpose. `app.android_device_keys` holds the attested
+public key (SubjectPublicKeyInfo DER), its digest and security level per account and
+channel; no private key, token or certificate chain is stored. Older application
+versions leave both tables unused. For rollback, roll back the application first;
+retaining the tables is harmless, and dropping them only forces every device to
+attest again.
+
+Migration `0107_add_android_device_key_signer.sql` adds the nullable
+`signing_certificate_sha256` (32 bytes) to `app.android_device_keys`: the allowed
+signing certificate a key's attestation matched. The server rechecks it, and the
+key's security level, against the current configuration on every signed request
+and download. It is a separate migration rather than an edit of `0106`, whose
+checksum sandboxes may already have recorded. Existing rows keep null; nothing is
+inferred for them, so those devices are refused until the app attests again. The
+table's existing grants cover the column. For rollback, roll back the application
+first; the column can stay.
+
+Migration `0086_create_root_gallery_projection.sql` adds the derived,
+library-scoped Gallery projection and its transactional invalidation boundary.
+Rollback first disables projection readers and writers, then removes its triggers,
+functions, and projection tables in dependency order; local inventory remains the
+source of truth.
+
+Migration `0172_add_musicbrainz_artist_discogs_link.sql` follows it for the same
+reason. It adds a nullable, range-checked `discogs_artist_id` to
+`integration.musicbrainz_artists`: the Discogs artist named by the MusicBrainz
+artist's url-rels, or null when MusicBrainz lists none or several. Only the ID is
+stored; the public link is derived from it. Rollback drops the column after
+readers stop selecting it.
+
+Migration `0173_recheck_musicbrainz_matches_from_stored_artist_mbids.sql` repairs
+Delivery 1 data: it deletes only automatic, matched artist rows whose evidence is
+"MusicBrainz embedded evidence agreed.", because that evidence was a stored local
+artist MBID from Last.fm's name lookup rather than file tags, and was accepted
+without the album check. Manual choices and search-evidence matches are kept. The
+startup backfill and the owner's MusicBrainz sync then re-check those artists with
+the corrected matcher. It is idempotent; rollback is the next re-check, which
+re-creates any row the albums confirm.
+
+Migration `0174_add_musicbrainz_matcher_version_and_credit_name.sql` adds two
+columns to `library.local_artist_musicbrainz_matches`. `matcher_version` (existing
+rows are 1) lets the startup backfill re-check every non-manual decision made by
+an older matcher; a re-check that finds another artist moves a match to conflict
+instead of replacing it. `credit_name` keeps the local name an artist was matched
+under through a release credit ("credited as 3 Crows"). Adding columns with a
+constant default does not rewrite the table. Rollback stops the readers and drops
+both columns; the next backfill then treats every row as version 1 again.
+
+Migration `0175_add_musicbrainz_match_album_evidence.sql` adds the nullable
+`album_evidence` array to `library.local_artist_musicbrainz_matches`. Matcher
+version 3 writes the albums a later data-correction list can propose fixing: every
+agreeing album of an artist matched under another credited name, and every album
+that matched one disc of a multi-disc release (a box-set disc or a bonus EP tagged
+as its own album), each with the MusicBrainz release group, release, disc and
+agreeing signals. Existing rows stay null until their re-check. Adding a nullable
+column does not rewrite the table. Rollback drops the column.
+
+Migration `0176_create_album_disc_ratings.sql` adds the app-owned per-account
+`app.album_disc_ratings` table: one rating per disc of a local album, read from
+the disc's own file tags and shown on a later disc's heading only when it differs
+from the album's. Its number follows 0175 because sandbox ledgers already record a
+different `0099`. Rows follow album re-keys by cascade; when a scan empties an
+album row, its disc ratings are carried to the successor row like album ratings,
+or the row is kept. Rollback drops the table; album ratings are unaffected.
+
+Migration `0177_create_local_album_artist_identities.sql` adds
+`library.local_album_artist_identities`, one row per local album naming the
+MusicBrainz artist the album certainly belongs to (its title, track titles and
+track count agree with one of that artist's releases), with the matched release
+as evidence and a `tag_differs` flag for a later approved tag correction. It also
+adds the `per_album` state to `local_artist_musicbrainz_matches`, for a local
+name whose albums belong to several MusicBrainz artists. Rows follow an album's
+re-key by cascade and are carried to a successor row like ratings when a scan
+empties an album row. The runtime role may delete rows, because a re-check
+replaces an artist's automatic identities; owner choices are kept. Rollback stops
+the readers, drops the table and restores the state check without `per_album`
+(after re-checking those artists).
+
+Migration `0178_add_musicbrainz_associated_artists.sql` adds the nullable
+`associated_artist_mbids` array to `local_artist_musicbrainz_matches`: the
+same-named MusicBrainz groups a matched person is a member of (Alice Cooper and
+his 1969-74 group), shown under the one local artist while each album keeps its
+own MBID. It is additive; running code that does not know the column ignores it.
+Rollback stops the readers and drops the column.
+
+Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
+`0099` through `0170` are already taken by unmerged branches or recorded in the
+production ledger, so it skips them instead of colliding. It adds the bounded
+artist-only MusicBrainz canonical projection, aliases, countries, complete tag
+facts, current library-scoped matches and candidates, durable jobs, and diagnostic
+history. The display view chooses at most three official genres, preferring
+positive-vote genres and using zero-vote genres only when the artist has no
+positive-vote genre; negative-vote and non-genre tags remain retained but are not
+displayed. Rollback first disables scheduling, workers, and enrichment readers.
+The additive tables remain as retained identity and audit evidence until a
+separately authorized contraction.
+
+Migration `0112_add_problematic_file_path_projection.sql` also uses a reserved
+number: it comes from the Problematic Files performance work and is already in
+the production ledger. It adds stored generated columns to
+`library.local_track_files` that project the existing path and file-album tags
+(path-key presence, physical parent, source directory, physical album container,
+and duplicate album identity), plus a partial index on the projected membership
+problem. No user-owned value is read or changed. Adding stored columns rewrites
+the table under an exclusive lock, so apply it in a controlled migration window
+before starting application writers. Problematic Files falls back to the inline
+expressions on databases without these columns, so rollback only drops the index
+and the columns; a running server retries with the inline form once it finds them gone.

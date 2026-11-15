@@ -1547,6 +1547,27 @@ async function fetchAndRender(url, push = true, options = {}) {
         'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
+    const responseInventoryMutationRevision = Number(data?.inventory_mutation_revision);
+    const responseProjectionIsCurrent = data?.gallery_page?.projection_stale !== true;
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(responseInventoryMutationRevision)
+      && responseInventoryMutationRevision >= 0) {
+      [
+        payloadToApply?.primary_artist_groups,
+        payloadToApply?.family_artist_groups,
+        payloadToApply?.artist_groups,
+      ].forEach((groups) => {
+        if (!Array.isArray(groups)) return;
+        groups.forEach((group) => {
+          if (!Array.isArray(group?.albums)) return;
+          group.albums.forEach((album) => {
+            if (album && typeof album === 'object') {
+              album.identity_revision = responseInventoryMutationRevision;
+            }
+          });
+        });
+      });
+    }
     applyViewPayload(payloadToApply, responseApplyOptions);
     const previousAppliedInventoryMutationRevision = Number(
       state.ui.appliedViewInventoryMutationRevision,
@@ -1558,8 +1579,13 @@ async function fetchAndRender(url, push = true, options = {}) {
         !Number.isSafeInteger(previousAppliedInventoryMutationRevision)
         || appliedInventoryMutationRevision > previousAppliedInventoryMutationRevision
       );
-    if (Number.isSafeInteger(appliedInventoryMutationRevision)
-      && appliedInventoryMutationRevision >= 0) {
+    // A library view without its tree stays behind this revision until a full refresh adds it.
+    const rootViewLacksArtistTree = String(url).includes('omit_sidebar=1')
+      && !/[?&](?:artist|q)=/.test(String(url));
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(appliedInventoryMutationRevision)
+      && appliedInventoryMutationRevision >= 0
+      && !rootViewLacksArtistTree) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
       const observedInventoryMutationRevision = Number(
         state.status?.inventory_mutation_revision,

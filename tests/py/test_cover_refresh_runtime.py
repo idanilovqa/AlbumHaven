@@ -629,8 +629,9 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
         "cover_generation": 7,
     }
 
+    get_state = lambda: library_state
     result = cover_refresh_runtime.refresh_cover_artwork_request(
-        get_state=lambda: library_state,
+        get_state=get_state,
         cache_lock=threading.Lock(),
         config=runtime_config,
         logger=logger,
@@ -667,6 +668,8 @@ def test_refresh_cover_artwork_request_runs_background_jobs_with_runtime_context
     assert executed[0]["logger"] is logger
     assert executed[0]["negative_cache_ttl_seconds"] == 321.0
     assert executed[0]["job_workers"] == 4
+    assert executed[0]["get_state"] is get_state
+    assert result["processed"] == 1
     assert library_state["covers_in_progress"] is False
     assert len(logged) == 1
     assert logged[0]["mode"] == "background"
@@ -793,6 +796,7 @@ def test_existing_cover_recovery_uses_claimed_persister_with_exact_fence(
         entries[case.track].update(cover_selection_origin=origin, cover_revision=revision)
     calls, commits = [], []
     selected_revision = cover_refresh_execution.cover_revision_for_path(case.cover)
+    case.kwargs["expected_inventory_mutation_revision"] = 23
 
     def persist(track_paths, selected_cover_path, **options):
         calls.append((track_paths, selected_cover_path))
@@ -803,6 +807,7 @@ def test_existing_cover_recovery_uses_claimed_persister_with_exact_fence(
             "expected_album_id",
             "expected_inventory_revision",
             "expected_cover_mutation_revision",
+            "expected_inventory_mutation_revision",
             "local_cover_width",
             "local_cover_height",
             "reject_if_user_controlled",
@@ -818,6 +823,7 @@ def test_existing_cover_recovery_uses_claimed_persister_with_exact_fence(
         assert options["expected_album_id"] == 19
         assert options["expected_inventory_revision"] == 0
         assert options["expected_cover_mutation_revision"] == 0
+        assert options["expected_inventory_mutation_revision"] == 23
         assert options["reject_if_user_controlled"] is True
         assert options["expected_cover_state"] == (origin, revision)
         assert case.entries[case.track]["cover_path"] is None

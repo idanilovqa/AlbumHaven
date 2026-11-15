@@ -69,6 +69,12 @@ test('same-origin unsafe fetch receives the readable session CSRF cookie as a he
   assert.equal(calls[0][1].credentials, 'same-origin');
 });
 
+test('session CSRF cookie reader is shared with non-fetch browser transports', () => {
+  const { window } = load('__Host-album_haven_csrf=beacon%20token');
+
+  assert.equal(window.readSessionCsrfCookie(), 'beacon token');
+});
+
 test('safe or cross-origin fetches never receive the CSRF header', async () => {
   const { window, calls } = load();
 

@@ -116,10 +116,15 @@ def test_extract_album_part_marker_parses_numeric_roman_and_simple_word_markers(
     assert matching.extract_album_part_marker("Songs, Pt. 2") == 2
     assert matching.extract_album_part_marker("Songs Part IV") == 4
     assert matching.extract_album_part_marker("Songs Volume Three") == 3
+    assert matching.extract_album_part_marker("Chronicles of Father Robin Book III") == 3
 
 
 def test_canonical_album_title_without_part_marker_keeps_base_title_only():
     assert matching.canonical_album_title_without_part_marker("Songs, Pt. II (Deluxe Edition)") == "songs"
+    assert (
+        matching.canonical_album_title_without_part_marker("Chronicles of Father Robin Book III")
+        == "chronicles of father robin"
+    )
 
 
 def test_build_query_variants_expands_symbols_and_dedupes_results():
@@ -169,6 +174,69 @@ def test_album_match_bonus_rewards_exact_and_near_prefix_album_titles():
     assert matching.album_match_bonus("Blue Sky", "Blue Sky") == pytest.approx(0.35)
     assert matching.album_match_bonus("Blue Sky", "Blue Sky II") == pytest.approx(0.12)
     assert matching.album_match_bonus("Blue Sky", "Red Moon") == pytest.approx(0.0)
+
+
+def test_match_score_accepts_exact_first_disc_title_in_compound_release_title():
+    assert matching.match_score(
+        target_artist="Miriodor",
+        target_album="Parade",
+        target_edition=None,
+        target_year=2005,
+        candidate_artist="Miriodor",
+        candidate_album="Parade + Live at NEARfest",
+        candidate_year=2005,
+    ) > 0.0
+
+
+def test_match_score_accepts_unseparated_partial_title_for_same_artist():
+    assert matching.match_score(
+        target_artist="Miriodor",
+        target_album="Parade",
+        target_edition=None,
+        target_year=2005,
+        candidate_artist="Miriodor",
+        candidate_album="Parade Live at NEARfest",
+        candidate_year=2005,
+    ) > 0.0
+
+
+def test_match_score_rejects_partial_title_for_a_different_numbered_part():
+    assert matching.match_score(
+        target_artist="Miriodor",
+        target_album="Parade",
+        target_edition=None,
+        target_year=2005,
+        candidate_artist="Miriodor",
+        candidate_album="Parade Part 2",
+        candidate_year=2005,
+    ) == 0.0
+
+
+def test_exact_album_title_candidates_displace_partial_title_candidates():
+    exact = (1.5, "https://images.example/parade.jpg", {"album": "Parade"})
+    partial = (
+        1.2,
+        "https://images.example/parade-live.jpg",
+        {"collectionName": "Parade + Live at NEARfest"},
+    )
+
+    assert matching.prefer_exact_album_title_matches(
+        [partial, exact],
+        target_album="Parade",
+    ) == [exact]
+
+
+def test_partial_album_title_candidates_remain_when_no_exact_title_exists():
+    partial = (
+        1.2,
+        "https://images.example/parade-live.jpg",
+        {"collectionName": "Parade + Live at NEARfest"},
+    )
+
+    assert matching.prefer_exact_album_title_matches(
+        [partial],
+        target_album="Parade",
+    ) == [partial]
 
 
 def test_edition_match_bonus_rewards_contained_and_high_combined_similarity():
@@ -245,12 +313,43 @@ def test_match_score_applies_exact_near_and_far_year_scoring():
     assert far_year == pytest.approx(1.13)
 
 
+@pytest.mark.parametrize("candidate_album", ["Sanctuary II", "Sanctuary 2"])
+def test_match_score_accepts_equivalent_terminal_album_sequences(candidate_album):
+    assert matching.match_score(
+        target_artist="Robert Reed",
+        target_album="Sanctuary II",
+        target_edition=None,
+        target_year=2016,
+        candidate_artist="Robert Reed",
+        candidate_album=candidate_album,
+        candidate_year=2016,
+    ) > 0.0
+
+
 @pytest.mark.parametrize(
     ("target_artist", "target_album", "target_year", "candidate_artist", "candidate_album", "candidate_year"),
     [
         ("Test Artist", "Songs Pt. 1", 2001, "Test Artist", "Songs Pt. 2", 2001),
         ("Test Artist", "Songs Pt. 1", 2001, "Test Artist", "Songs", 2001),
+        (
+            "Magenta",
+            "The White Witch: A Symphonic Trilogy, Book III",
+            2023,
+            "Magenta",
+            "The White Witch: A Symphonic Trilogy, Book II",
+            2023,
+        ),
         ("Test Artist", "II", 2001, "Test Artist", "III", 2001),
+        ("Jordsjø", "Jordsjø II", None, "Jordsjø", "Jordsjø", None),
+        ("Robert Reed", "Sanctuary II", 2016, "Robert Reed", "Sanctuary I", 2014),
+        ("Robert Reed", "Sanctuary III", 2018, "Robert Reed", "Sanctuary IV", 2025),
+        ("Muse", "Drones", 2015, "Rain and Drones for Meditation and Music", "Rain and Drones for Meditation and Music", None),
+        ("Neural Code", "Neural Code", 2009, "Obsidian Code", "Obsidian Code", 2009),
+        ("Saidian", "Phoenix", 2006, "Unknown Artist", "Unrelated Album", None),
+        ("Six Magics", "Animal", 2008, "Magical Animals", "Magical Animals", 2008),
+        ("Test Artist", "Sequence 2", 2001, "Test Artist", "Sequence 1", 2001),
+        ("Satellite", "Evening Games", 2005, "Satellite", "Games", 2005),
+        ("The Tangent", "L'Etagere Du Travail", 2013, "The Tangent", "L'Etagere", 2013),
         ("Artist", "Artist", 2001, "Another Band", "Artist", 2001),
         ("Test Artist", "Blue Sky", 2001, "Test Artist", "Blue Sk EP", 2001),
         ("Test Artist", "Blue Sky Live", 2001, "Test Artist", "Blue Sky", 2001),
@@ -347,6 +446,102 @@ def test_match_score_rejects_false_single_remix_and_feature_variants_but_keeps_l
     assert false_variant_scores == [0.0, 0.0, 0.0, 0.0]
     assert all(score > 0.0 for score in legitimate_edition_scores)
     assert other_band_score == 0.0
+
+
+def test_match_score_accepts_provider_leading_article_artist_alias_for_self_titled_album():
+    assert matching.match_score(
+        "Soft Machine",
+        "Soft Machine",
+        None,
+        1968,
+        "The Soft Machine*",
+        "The Soft Machine",
+        1968,
+    ) > 0.7
+
+
+def test_match_score_accepts_provider_collaborator_subset_for_same_release():
+    assert matching.match_score(
+        "Skruk, Mahsa Vahdat & Ellen Bødtker",
+        "Braids Of Innocence",
+        None,
+        2022,
+        "Mahsa Vahdat & Skruk",
+        "Braids Of Innocence",
+        2022,
+    ) > 0.7
+
+
+def test_swedish_language_qualifier_is_an_edition_variant_and_gets_plain_query():
+    assert matching.canonical_album_title("Carolus Rex (Svenska)") == "carolus rex"
+    assert ("Sabaton", "Carolus Rex", "", 2012) in matching.build_query_variants(
+        "Sabaton",
+        "Carolus Rex (Svenska)",
+        None,
+        2012,
+    )
+
+
+def test_match_score_accepts_named_provider_credit_for_various_artists_soundtrack():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="Mulan",
+        target_edition=None,
+        target_year=1998,
+        candidate_artist="Lea Salonga & Donny Osmond",
+        candidate_album="Mulan (Original Motion Picture Soundtrack)",
+        candidate_year=1998,
+    ) > 0.0
+
+
+def test_match_score_accepts_exact_various_artists_soundtrack_when_relaxed_provider_omits_year():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="The Hunchback of Notre Dame",
+        target_edition=None,
+        target_year=1996,
+        candidate_artist="Various Artists",
+        candidate_album="The Hunchback of Notre Dame (Original Motion Picture Soundtrack)",
+        candidate_year=None,
+        enforce_year=False,
+    ) > 0.0
+
+
+def test_match_score_rejects_wrong_year_for_various_artists_soundtrack_when_year_is_enforced():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="The Hunchback of Notre Dame",
+        target_edition=None,
+        target_year=1996,
+        candidate_artist="Various Artists",
+        candidate_album="The Hunchback of Notre Dame (Original Motion Picture Soundtrack)",
+        candidate_year=2021,
+        enforce_year=True,
+    ) == 0.0
+
+
+def test_match_score_rejects_unrequested_localized_soundtrack_version():
+    assert matching.match_score(
+        target_artist="Various Artists",
+        target_album="Mulan",
+        target_edition=None,
+        target_year=1998,
+        candidate_artist="Various Artists",
+        candidate_album="Mulan (Original Motion Picture Soundtrack/Japanese Version)",
+        candidate_year=1998,
+    ) == 0.0
+
+
+def test_match_score_allows_provider_to_omit_requested_language_qualifier():
+    assert matching.match_score(
+        target_artist="Sabaton",
+        target_album="Carolus Rex (Svenska)",
+        target_edition=None,
+        target_year=2012,
+        candidate_artist="Sabaton",
+        candidate_album="Carolus Rex",
+        candidate_year=2012,
+    ) > 0.0
 
 
 def test_match_score_rejects_prefixed_and_suffixed_tribute_artist_identities():
@@ -525,7 +720,7 @@ def test_match_score_preserves_normalized_same_artist_identities(candidate_artis
         target_edition=None,
         target_year=1983,
         candidate_artist=candidate_artist,
-        candidate_album="Kill 'Em All (Remastered Deluxe Edition)",
+        candidate_album="Kill 'Em All (Deluxe Edition)",
         candidate_year=1983,
     ) > 0.0
 
@@ -538,7 +733,6 @@ def test_match_score_preserves_normalized_same_artist_identities(candidate_artis
         ("Single", "Single"),
         ("The Mix", "The Mix"),
         ("Control Album", "Control Album (Deluxe Edition)"),
-        ("Control Album", "Control Album (Remastered Version)"),
     ],
 )
 def test_match_score_preserves_compatible_intrinsic_markers_and_editions(
@@ -554,6 +748,40 @@ def test_match_score_preserves_compatible_intrinsic_markers_and_editions(
         candidate_album=candidate_album,
         candidate_year=2001,
     ) > 0.0
+
+
+@pytest.mark.parametrize(
+    ("target_album", "target_edition", "candidate_album", "candidate_year", "matches"),
+    [
+        ("The Knowing", None, "The Knowing", 2000, True),
+        ("The Knowing", None, "The Knowing (Remastered)", 2000, False),
+        ("The Knowing", "Remastered", "The Knowing", 2000, False),
+        ("The Knowing [Remastered]", None, "The Knowing", 2000, False),
+        ("The Knowing", "Digitally Remastered", "The Knowing - Remaster", 2000, True),
+        ("The Knowing", "2011 REMASTER", "The Knowing (2011 Remastered)", 2011, True),
+        ("The Knowing [2011 Remaster]", None, "The Knowing (2020 Remastered)", 2000, False),
+        ("The Knowing", "2011 Remastered", "The Knowing - 2020 Remaster", 2000, False),
+        ("The Knowing", "2011 Digitally Remastered", "The Knowing - 2020 Remaster", 2000, False),
+    ],
+)
+def test_match_score_requires_compatible_remaster_identity(
+    target_album,
+    target_edition,
+    candidate_album,
+    candidate_year,
+    matches,
+):
+    score = matching.match_score(
+        target_artist="Novembers Doom",
+        target_album=target_album,
+        target_edition=target_edition,
+        target_year=2000,
+        candidate_artist="Novembers Doom",
+        candidate_album=candidate_album,
+        candidate_year=candidate_year,
+    )
+
+    assert (score > 0.0) is matches
 
 
 @pytest.mark.parametrize("variant", ["Remixed", "Remixes", "Remixing"])

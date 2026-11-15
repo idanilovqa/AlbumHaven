@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { expect } from '@playwright/test';
+import { authenticatedPageGet } from './authenticatedPageRequest.js';
 
 export function problemDetailExpectation(payload) {
   assert.ok(payload && String(payload.key || ''), 'Detail oracle requires a stable album key');
@@ -99,6 +100,12 @@ export function observeProblematicDetails(page) {
     change = new Promise(nextResolve => { resolveChange = nextResolve; });
     resolve();
   };
+  let summary = null;
+  // Arrival order of summaries. Chrome may drop an older body before the capture
+  // reads it; that is tolerated only while a newer complete summary is captured.
+  let summarySequence = 0;
+  let capturedSummarySequence = 0;
+  let droppedSummarySequence = 0;
   const remember = (key, payload) => {
     assert.ok(key && payload && payload.key === key, 'Observed detail must match the independently requested key');
     details.set(key, JSON.stringify(payload));
@@ -106,14 +113,33 @@ export function observeProblematicDetails(page) {
   const responseListener = response => {
     const url = new URL(response.url());
     if (!['/utilities/problematic-files', '/utilities/problematic-files/detail'].includes(url.pathname)) return;
+    const isDetail = url.pathname.endsWith('/detail');
+    const sequence = isDetail ? 0 : ++summarySequence;
     const task = (async () => {
       assert.equal(response.ok(), true, 'Normal problematic data response must succeed');
-      const payload = await response.json();
-      if (url.pathname.endsWith('/detail')) {
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        // Superseded detail requests and older summaries can lose their bodies before this
+        // read. Callers poll for every detail they assert on; summary() requires the newest.
+        if (!/No resource with given identifier found/.test(String(error?.message))) throw error;
+        if (sequence) droppedSummarySequence = Math.max(droppedSummarySequence, sequence);
+        return;
+      }
+      if (isDetail) {
         remember(url.searchParams.get('album_key'), payload);
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');
-        if (payload.complete !== false) summaries.push(JSON.stringify(payload.items));
+        // A bounded first page (complete: false) is never the complete summary.
+        if (payload.complete !== false) {
+          const captured = JSON.stringify(payload.items);
+          summaries.push(captured);
+          if (sequence > capturedSummarySequence) {
+            capturedSummarySequence = sequence;
+            summary = captured;
+          }
+        }
         assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
           'Any initial detail must belong to captured summary');
         if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
@@ -126,16 +152,43 @@ export function observeProblematicDetails(page) {
   };
   page.on('response', responseListener);
   const settle = async () => {
-    await Promise.all([...pending]);
+    while (pending.size) await Promise.all([...pending]);
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
-    async summary(version = 1) {
-      assert.ok(Number.isInteger(version) && version > 0, 'Complete summary version must be a positive integer');
+    async summary(version) {
+      if (version !== undefined) {
+        assert.ok(Number.isInteger(version) && version > 0, 'Complete summary version must be a positive integer');
+      }
       while (true) {
         const observedChange = change;
         await settle();
-        if (summaries[version - 1]) return JSON.parse(summaries[version - 1]);
+        if (version !== undefined && summaries[version - 1]) return JSON.parse(summaries[version - 1]);
+        if (version === undefined && summary) {
+          assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');
+          return JSON.parse(summary);
+        }
+        if (version === undefined && page.request && typeof page.request.get === 'function') {
+          // Drain a complete response queued behind a bounded first page before recovery.
+          await new Promise(resolve => setImmediate(resolve));
+          await settle();
+          if (summary) continue;
+          const response = await authenticatedPageGet(page, '/utilities/problematic-files');
+          assert.equal(response.ok(), true, 'Fallback problematic summary request must succeed');
+          const payload = await response.json();
+          assert.notEqual(payload.complete, false, 'Fallback problematic summary must be complete');
+          assert.ok(Array.isArray(payload.items), 'Fallback problematic summary must expose items');
+          const keys = payload.items.map(item => String(item?.key || ''));
+          assert.ok(keys.every(Boolean), 'Fallback problematic summary identities must be nonempty');
+          assert.equal(new Set(keys).size, keys.length, 'Fallback problematic summary identities must be unique');
+          assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
+            'Fallback initial detail must belong to its summary');
+          if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
+          capturedSummarySequence = ++summarySequence;
+          summary = JSON.stringify(payload.items);
+          summaries.push(summary);
+          continue;
+        }
         assert.equal(disposed, false, `Problematic evidence capture disposed before complete summary version ${version}`);
         await observedChange;
       }
@@ -196,7 +249,10 @@ export async function exerciseProblematicNativeJumps({ page, shell, capture, exp
     await expect.poll(async () => Boolean(await capture.detail(item.key))).toBe(true);
     const expected = problemDetailExpectation(await capture.detail(item.key));
     await expect(shell.heading).toHaveText(expected.title);
-    if (expected.renderedPaths.length) await shell.detailTrackByPath(expected.renderedPaths[0]).scrollIntoViewIfNeeded();
+    if (expected.renderedPaths.length) {
+      await shell.waitForProblematicSummarySettled();
+      await shell.detailTrackByPath(expected.renderedPaths[0]).scrollIntoViewIfNeeded();
+    }
     await expect(async () => {
       expectProblematicRenderedIdentity(await shell.readProblemSelectionEvidence(), item, expected, requireTracks);
     }).toPass({ timeout: 10000 });

@@ -88,6 +88,16 @@ test('disabled actions reject click and keyboard activation without closing the 
   }
 });
 
+test('a row that reports its own progress keeps the menu open after its action', () => {
+  const { trigger, menu, items, fire } = harness();
+  items[2].setAttribute('data-account-menu-keep-open', '');
+  fire(trigger, 'click');
+  const click = fire(menu, 'click', { target: items[2] });
+  assert.equal(menu.hidden, false);
+  assert.equal(click.defaultPrevented, false);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+});
+
 test('enabled activation closes without suppressing the action; outside click and focus dismiss', () => {
   const { component, trigger, menu, items, document, fire } = harness();
   fire(trigger, 'click');

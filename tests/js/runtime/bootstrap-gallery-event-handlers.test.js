@@ -442,6 +442,55 @@ test('touch long press opens the artist tree context menu and consumes the synth
   assert.equal(clickStopped, true);
 });
 
+test('touch long press opens the album card context menu and consumes the synthetic click', () => {
+  const { context, calls } = createContext();
+  const album = { key: 'broadcast::tender-buttons' };
+  const opened = [];
+  const trigger = {
+    getAttribute(name) {
+      return name === 'data-album-key' ? album.key : null;
+    },
+  };
+  const card = { querySelector: () => trigger };
+  const target = {
+    closest(selector) {
+      return selector === '.album-card' ? card : null;
+    },
+  };
+  context.getIndexedAlbum = key => (key === album.key ? album : null);
+  context.showAlbumCardContextMenu = (...args) => opened.push(args);
+
+  context.handleGalleryBootstrapPointerDown({
+    pointerType: 'touch',
+    isPrimary: true,
+    pointerId: 8,
+    clientX: 21,
+    clientY: 63,
+    target,
+  });
+  const longPressTimer = calls.scheduledSearchCommits.find(({ delay }) => delay === 500);
+  assert.ok(longPressTimer);
+  longPressTimer.callback();
+  assert.deepEqual(opened, [[21, 63, album]]);
+
+  let pointerUpPrevented = false;
+  context.handleGalleryBootstrapPointerUp({
+    pointerId: 8,
+    preventDefault() { pointerUpPrevented = true; },
+  });
+  assert.equal(pointerUpPrevented, true);
+
+  let clickPrevented = false;
+  let clickStopped = false;
+  assert.equal(context.consumeAlbumCardLongPressClick({
+    target,
+    preventDefault() { clickPrevented = true; },
+    stopPropagation() { clickStopped = true; },
+  }), true);
+  assert.equal(clickPrevented, true);
+  assert.equal(clickStopped, true);
+});
+
 test('scroll movement cancels an artist tree long press before the menu opens', () => {
   const { context, calls } = createContext();
   const opened = [];
@@ -769,6 +818,120 @@ test('rapid lightbox wheel input keeps one stable untransformed zoom origin', ()
     'the deterministic target rectangle must retain cursor-relative zoom after panning',
   );
   assert.equal(rectReads, 1);
+});
+
+test('lightbox double click zooms into the selected image point and toggles back out', () => {
+  const { context } = createContext();
+  let prevented = 0;
+  const image = {
+    style: {},
+    dataset: {},
+    classList: {
+      toggle() {},
+    },
+    getBoundingClientRect() {
+      return { left: 100, top: 50, width: 200, height: 100 };
+    },
+  };
+  context.state.lightbox = {
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    dragging: false,
+    zoomBasisRect: null,
+    zoomOriginX: 50,
+    zoomOriginY: 50,
+  };
+  context.document.getElementById = (id) => (
+    id === 'image-lightbox' ? { hidden: false } : null
+  );
+  vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
+  context.getLightboxElements = () => ({ image });
+  const event = {
+    target: {
+      closest(selector) {
+        return selector === '#image-lightbox-image' ? image : null;
+      },
+    },
+    clientX: 150,
+    clientY: 75,
+    preventDefault() {
+      prevented += 1;
+    },
+  };
+
+  assert.equal(context.handleGalleryBootstrapDoubleClick(event), true);
+  assert.equal(context.state.lightbox.zoom, 2);
+  assert.equal(image.style.transformOrigin, '25% 25%');
+  assert.equal(image.style.transform, 'translate(0px, 0px) scale(2)');
+
+  assert.equal(context.handleGalleryBootstrapDoubleClick(event), true);
+  assert.equal(context.state.lightbox.zoom, 1);
+  assert.equal(image.style.transformOrigin, '50% 50%');
+  assert.equal(image.style.transform, 'translate(0px, 0px) scale(1)');
+  assert.equal(prevented, 2);
+});
+
+test('lightbox touch double tap repeatedly toggles point zoom without native double-click duplication', () => {
+  const { context } = createContext();
+  const image = {
+    style: {},
+    dataset: {},
+    classList: {
+      toggle() {},
+    },
+    getBoundingClientRect() {
+      return { left: 100, top: 50, width: 200, height: 100 };
+    },
+  };
+  context.state.lightbox = {
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    dragging: false,
+    zoomBasisRect: null,
+    zoomOriginX: 50,
+    zoomOriginY: 50,
+  };
+  context.document.getElementById = (id) => (
+    id === 'image-lightbox' ? { hidden: false } : null
+  );
+  vm.runInContext(modalHelperSource, context, { filename: modalHelperPath });
+  context.getLightboxElements = () => ({ image });
+  context.startLightboxDrag = () => {};
+  const touch = (timeStamp) => ({
+    target: {
+      closest(selector) {
+        return selector === '#image-lightbox-image' ? image : null;
+      },
+    },
+    pointerId: 7,
+    pointerType: 'touch',
+    isPrimary: true,
+    clientX: 150,
+    clientY: 75,
+    timeStamp,
+    preventDefault() {},
+  });
+  const doubleTap = (firstTimeStamp) => {
+    const first = touch(firstTimeStamp);
+    context.handleGalleryBootstrapPointerDown(first);
+    context.handleGalleryBootstrapPointerUp(first);
+    const second = touch(firstTimeStamp + 120);
+    context.handleGalleryBootstrapPointerDown(second);
+    context.handleGalleryBootstrapPointerUp(second);
+    return second;
+  };
+
+  const firstDoubleTap = doubleTap(100);
+  assert.equal(context.state.lightbox.zoom, 2);
+  assert.equal(image.style.transformOrigin, '25% 25%');
+  context.handleGalleryBootstrapDoubleClick(firstDoubleTap);
+  assert.equal(context.state.lightbox.zoom, 2, 'synthetic dblclick must not undo the touch gesture');
+
+  doubleTap(700);
+  assert.equal(context.state.lightbox.zoom, 1);
+  assert.equal(image.style.transformOrigin, '50% 50%');
 });
 
 function createSidebarArtistEvent(artist = 'Broadcast') {
@@ -1449,6 +1612,9 @@ test('library-home navigation opens Home on mobile instead of All artists', () =
   assert.equal(calls.buildApiUrl.at(-1).surface_request, 'home');
   assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
   assert.equal(calls.buildApiUrl.at(-1).all_artists_active, false);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(calls.applyViewPayload[0].payload.surface.active, 'home');
+  assert.equal(calls.applyViewPayload[0].runtimeOptions.trackSidebarReveal, false);
   assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
 });
 
@@ -1550,6 +1716,30 @@ test('handleSidebarArtistSelectionClick closes the mobile drawer before loading 
     url: '/view-data?artist=&gallery_scope=all&omit_sidebar=1',
     push: true,
   }]);
+});
+
+test('sidebar artist navigation suspends old gallery covers until the selected view renders', async () => {
+  let finishRequest;
+  const { context, calls } = createContext({
+    fetchAndRenderResult: new Promise((resolve) => {
+      finishRequest = resolve;
+    }),
+  });
+
+  context.handleSidebarArtistSelectionClick(createSidebarArtistEvent('Broadcast').event);
+
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+
+  finishRequest(true);
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.resumeSelectedArtistCoverLoadsAfterUserAction)),
+    [9],
+  );
 });
 
 test('all-artists cover suspension survives a queued production view request', async () => {
@@ -3563,6 +3753,7 @@ test('selecting a different tree artist preserves search and resets filters whil
     view: 'covers',
     familyArtists: [],
     showFeaturedOn: true,
+    showSplitAlbums: true,
   });
 });
 
@@ -3962,7 +4153,10 @@ test('sidebar navigation releases every suspension owned by an abandoned search 
 
   assert.equal(context.state.ui.pendingSearchCommitTimer, 0);
   assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
-  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.resumeSelectedArtistCoverLoadsAfterUserAction)),
+    [9, 10],
+  );
   assert.deepEqual(calls.waveformPeakLoadResumptions, [{ id: 1 }]);
 });
 

@@ -817,7 +817,7 @@ def test_terminal_projection_replacement_uses_an_authorized_server_surface():
     from pathlib import Path
 
     sql = Path(
-        "migrations/postgres/0128_create_problematic_files_projection.sql"
+        "migrations/postgres/0249_create_problematic_files_projection.sql"
     ).read_text(encoding="utf-8")
     failure_sql = sql.split(
         "create or replace function ops.fail_claimed_problematic_projection",

@@ -100,11 +100,13 @@ Invoke-Checked {
         --config=playwright.component.config.js --workers=1
 } 'Search component tests'
 
-Invoke-Checked {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $functionalRunner `
-        -Shard gallery-search-visual -PythonPath $PythonPath `
-        -FixtureDistribution $fixtureDistributionRoot
-} 'Search functional E2E shard'
+foreach ($searchShard in @('gallery-search-visual-1', 'gallery-search-visual-2')) {
+    Invoke-Checked {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $functionalRunner `
+            -Shard $searchShard -PythonPath $PythonPath `
+            -FixtureDistribution $fixtureDistributionRoot
+    } "Search functional E2E shard $searchShard"
+}
 
 New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
 try {

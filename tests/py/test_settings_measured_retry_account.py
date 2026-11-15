@@ -20,7 +20,8 @@ def test_changed_pending_source_does_not_block_later_valid_listen(ledger, monkey
     valid_owner = {**own, 'track_id': next_track, 'path': next_path}
 
     def queue(owner, **changes):
-        payload = measured(owner, finalized=True, library_track_id=str(owner['track_id']), **changes)
+        payload = measured(owner, finalized=True, measured_listened_seconds=60,
+                           max_measured_contiguous_seconds=60, library_track_id=str(owner['track_id']), **changes)
         result, status = bridge.record_playback_session_complete(
             config, payload, account_id=owner['account_id'], library_id=owner['library_id'],
             lastfm_session=None, user_timezone='UTC',
@@ -73,7 +74,8 @@ def test_changed_pending_source_does_not_block_later_valid_listen(ledger, monkey
 def test_measured_retry_uses_each_persisted_account_credential_once(ledger, monkeypatch):
     config = {**ledger["config"], "LASTFM_API_ENABLED":True}
     for index, owner in enumerate((ledger["own"], ledger["other"])):
-        payload = measured(owner, finalized=True, library_track_id=str(owner["track_id"]))
+        payload = measured(owner, finalized=True, measured_listened_seconds=60,
+                           max_measured_contiguous_seconds=60, library_track_id=str(owner["track_id"]))
         bridge.record_playback_session_complete(config,payload,account_id=owner["account_id"],library_id=owner["library_id"],
             lastfm_session=None,user_timezone="UTC",normalize_playback_track_payload=normalize_playback_track_payload,
             is_meaningful_listen_session=history.is_meaningful_listen_session,
@@ -91,7 +93,8 @@ def test_measured_retry_uses_each_persisted_account_credential_once(ledger, monk
 def test_measured_retry_does_not_resubmit_uncertain_receipt(ledger, monkeypatch):
     config = {**ledger["config"], "LASTFM_API_ENABLED": True}
     owner = ledger["own"]
-    payload = measured(owner, finalized=True, library_track_id=str(owner["track_id"]))
+    payload = measured(owner, finalized=True, measured_listened_seconds=60,
+                       max_measured_contiguous_seconds=60, library_track_id=str(owner["track_id"]))
     body, _status = bridge.record_playback_session_complete(
         config, payload, account_id=owner["account_id"], library_id=owner["library_id"],
         lastfm_session=None, user_timezone="UTC",
@@ -122,7 +125,8 @@ def test_measured_retry_records_actual_provider_outcome_with_row_scope(ledger, m
     config = {**ledger["config"], "LASTFM_API_ENABLED": True}
     owner = ledger["own"]
     bridge.record_playback_session_complete(
-        config, measured(owner, finalized=True, library_track_id=str(owner["track_id"])),
+        config, measured(owner, finalized=True, measured_listened_seconds=60,
+                         max_measured_contiguous_seconds=60, library_track_id=str(owner["track_id"])),
         account_id=owner["account_id"], library_id=owner["library_id"],
         lastfm_session=None, user_timezone="UTC",
         normalize_playback_track_payload=normalize_playback_track_payload,
@@ -155,7 +159,8 @@ def test_retry_limit_applies_after_connected_account_selection(ledger, monkeypat
     own, other = ledger['own'], ledger['other']
     def pending(owner, **changes):
         body, status = bridge.record_playback_session_complete(
-            config, measured(owner, finalized=True, library_track_id=str(owner['track_id']), **changes),
+            config, measured(owner, finalized=True, measured_listened_seconds=60,
+                             max_measured_contiguous_seconds=60, library_track_id=str(owner['track_id']), **changes),
             account_id=owner['account_id'], library_id=owner['library_id'],
             lastfm_session=None, user_timezone='UTC',
             normalize_playback_track_payload=normalize_playback_track_payload,

@@ -293,7 +293,36 @@ def test_candidate_lookup_notification_page_is_bounded_scoped_and_cursor_based()
         )
 
 
-def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped():
+@pytest.mark.parametrize(
+    "task_keys", [None, [], [f"{index:03d}" + "x" * 197 for index in range(60)]]
+)
+def test_candidate_lookup_notification_page_filters_task_keys_before_limit(task_keys):
+    connection = _Connection([[], {}])
+    repository = _repository(connection, _Jobs())
+
+    page = repository.load_candidate_lookup_task_summary_page(
+        actor_account_id=7,
+        library_id=19,
+        limit=1,
+        cursor=None,
+        active_only=False,
+        task_keys=task_keys,
+    )
+
+    assert page["items"] == []
+    sql, parameters = connection.executed[0]
+    assert "not %(has_task_keys)s or task.task_key = any(%(task_keys)s::text[])" in sql
+    assert sql.index("task.task_key = any") < sql.index("limit %(page_limit)s")
+    assert sql.index("task.library_id = %(library_id)s") < sql.index("limit %(page_limit)s")
+    assert sql.index("membership.account_id = %(actor_account_id)s") < sql.index(
+        "limit %(page_limit)s"
+    )
+    assert parameters["has_task_keys"] is (task_keys is not None)
+    assert parameters["task_keys"] == (task_keys or [])
+
+
+@pytest.mark.parametrize("actioned_only", [False, True])
+def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped(actioned_only):
     class CheckpointConnection(_Connection):
         def __init__(self):
             super().__init__([[{"task_key": "lookup-opaque-42"}]])
@@ -315,6 +344,7 @@ def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped()
         actor_account_id=7,
         library_id=19,
         task_keys=["lookup-opaque-42"],
+        actioned_only=actioned_only,
     )
 
     assert removed == {"lookup-opaque-42"}
@@ -327,6 +357,11 @@ def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped()
     assert "source_family' = any(%(source_families)s::text[])" in sql
     assert "membership.account_id = %(actor_account_id)s" in sql
     assert parameters["task_keys"] == ["lookup-opaque-42"]
+    assert (
+        "not %(actioned_only)s or task.metadata ->> 'notification_action_taken' = 'true'"
+        in sql
+    )
+    assert parameters["actioned_only"] is actioned_only
     assert connection.remote_save_checkpoints == {
         "lookup-opaque-42": "publication_completed"
     }

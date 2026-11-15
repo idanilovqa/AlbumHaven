@@ -36,7 +36,7 @@ class _ConcurrentMigrationConnection:
         *,
         fail_concurrent_once: bool = False,
         index_contract: dict[str, object] | None = None,
-        pg_trgm_schema: str = "library",
+        extension_schema: str = "library",
     ) -> None:
         self._autocommit = False
         self.in_transaction = False
@@ -46,7 +46,7 @@ class _ConcurrentMigrationConnection:
         self.index_ready = False
         self.fail_concurrent_once = fail_concurrent_once
         self.index_contract = dict(index_contract) if index_contract is not None else None
-        self.pg_trgm_schema = pg_trgm_schema
+        self.extension_schema = extension_schema
         self.events: list[str] = []
 
     @property
@@ -99,15 +99,19 @@ class _ConcurrentMigrationConnection:
             self.ledger[str(params[0])] = str(params[1])
             self.events.append(f"ledger:{params[0]}")
             return _Result()
+        if "album_haven_0083_pg_trgm_schema_v1" in query:
+            self.events.append(f"pg-trgm-schema:{self.extension_schema}->library")
+            self.extension_schema = "library"
+            return _Result()
         if "album_haven_0083_index_contract_v1" in query:
             if not self.index_exists or self.index_contract is None:
                 state = "missing"
                 event = "index-contract:missing"
             else:
                 quoted_schema = (
-                    self.pg_trgm_schema
-                    if self.pg_trgm_schema.isidentifier()
-                    else f'"{self.pg_trgm_schema}"'
+                    self.extension_schema
+                    if self.extension_schema.isidentifier()
+                    else f'"{self.extension_schema}"'
                 )
                 expected_contract = {
                     **_READY_0083_INDEX_CONTRACT,
@@ -138,18 +142,18 @@ class _ConcurrentMigrationConnection:
             assert "deptype = 'e'" in query
             self.events.append("discover-opclass")
             quoted_schema = (
-                self.pg_trgm_schema
-                if self.pg_trgm_schema.isidentifier()
-                else f'"{self.pg_trgm_schema}"'
+                self.extension_schema
+                if self.extension_schema.isidentifier()
+                else f'"{self.extension_schema}"'
             )
             return _Result(
                 [{"qualified_operator_class": f"{quoted_schema}.gin_trgm_ops"}]
             )
         if "create index concurrently" in query:
             quoted_schema = (
-                self.pg_trgm_schema
-                if self.pg_trgm_schema.isidentifier()
-                else f'"{self.pg_trgm_schema}"'
+                self.extension_schema
+                if self.extension_schema.isidentifier()
+                else f'"{self.extension_schema}"'
             )
             if "gin_trgm_ops" in query:
                 assert f"{quoted_schema}.gin_trgm_ops".casefold() in query
@@ -211,6 +215,44 @@ def test_isolated_migrator_runs_concurrent_index_outside_transaction_and_validat
     assert connection.events.index("concurrent-index") < connection.events.index("autocommit=False")
 
 
+def test_isolated_migrator_relocates_pg_trgm_before_running_0083(
+    tmp_path,
+    monkeypatch,
+):
+    migrations_root = tmp_path / "migrations" / "postgres"
+    migrations_root.mkdir(parents=True)
+    migration_path = migrations_root / "0083_add_album_raw_artist_search_index.sql"
+    migration_path.write_text(
+        "create index concurrently if not exists "
+        "local_albums_normalized_raw_artists_trgm_idx "
+        "on library.local_albums using gin "
+        "((lower(metadata::text)) library.gin_trgm_ops);",
+        encoding="utf-8",
+    )
+    postgres_scripts = tmp_path / "scripts" / "postgres"
+    postgres_scripts.mkdir(parents=True)
+    (postgres_scripts / "prepare_0083_pg_trgm_schema.sql").write_text(
+        "-- album_haven_0083_pg_trgm_schema_v1\nselect 1;\n",
+        encoding="utf-8",
+    )
+    (postgres_scripts / "verify_0083_album_raw_artist_index.sql").write_text(
+        "-- album_haven_0083_index_contract_v1\nselect 'ready';\n",
+        encoding="utf-8",
+    )
+    connection = _ConcurrentMigrationConnection(extension_schema="public")
+    connection.ledger_exists = True
+    monkeypatch.setattr(isolated, "ROOT", tmp_path)
+    monkeypatch.setattr(isolated, "_connect", lambda _database_url: connection)
+
+    isolated.apply_migrations("postgresql://owned", [migration_path])
+
+    assert connection.extension_schema == "library"
+    assert connection.events.index("pg-trgm-schema:public->library") < connection.events.index(
+        "concurrent-index"
+    )
+    assert migration_path.name in connection.ledger
+
+
 def test_isolated_migrator_cleans_failed_concurrent_index_before_retry(
     tmp_path,
     monkeypatch,
@@ -259,6 +301,7 @@ def test_isolated_migrator_can_apply_and_ledger_an_aggregate_upgrade_in_stages(
         encoding="utf-8",
     )
     connection = _ConcurrentMigrationConnection()
+    monkeypatch.setattr(isolated, "ROOT", tmp_path)
     monkeypatch.setattr(isolated, "_connect", lambda _database_url: connection)
 
     isolated.apply_migrations("postgresql://owned", [bootstrap_path])
@@ -311,6 +354,10 @@ def test_isolated_migrator_rebuilds_same_name_wrong_0083_index_before_ledger(
         / "verify_0083_album_raw_artist_index.sql"
     )
     verifier.parent.mkdir(parents=True)
+    (verifier.parent / "prepare_0083_pg_trgm_schema.sql").write_text(
+        "-- album_haven_0083_pg_trgm_schema_v1\nselect 1;\n",
+        encoding="utf-8",
+    )
     verifier.write_text(
         "-- album_haven_0083_index_contract_v1\nselect 'ready';\n",
         encoding="utf-8",
@@ -361,7 +408,7 @@ def test_isolated_migrator_uses_extension_owned_quoted_0083_opclass_before_ledge
         "-- album_haven_0083_index_contract_v1\nselect 'ready';\n",
         encoding="utf-8",
     )
-    connection = _ConcurrentMigrationConnection(pg_trgm_schema="extensions-safe")
+    connection = _ConcurrentMigrationConnection(extension_schema="extensions-safe")
     connection.ledger_exists = True
     monkeypatch.setattr(isolated, "ROOT", tmp_path)
     monkeypatch.setattr(isolated, "_connect", lambda _database_url: connection)

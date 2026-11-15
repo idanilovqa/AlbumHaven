@@ -9,6 +9,7 @@ from music_app.services.cache import (
     schedule_cache_updates_save_for_config,
 )
 from music_app.services.covers import find_cover_image, image_dimensions
+from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.exception_overrides import apply_exception_override
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.metadata import file_metadata_schema_is_current
@@ -292,6 +293,7 @@ def sanitize_hydrated_file_cache(
         ):
             changed_entries[path_str] = dict(entry)
 
+    changed_entries.update(clear_ambiguous_folder_covers(sanitized_file_cache))
     return sanitized_file_cache, changed_entries
 
 

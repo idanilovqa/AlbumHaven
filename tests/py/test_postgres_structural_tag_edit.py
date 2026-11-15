@@ -29,19 +29,19 @@ _COVER_CONSISTENCY_MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "migrations"
     / "postgres"
-    / "0122_close_cover_consistency.sql"
+    / "0243_close_cover_consistency.sql"
 )
 _AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "migrations"
     / "postgres"
-    / "0127_restore_authoritative_exception_clear.sql"
+    / "0248_restore_authoritative_exception_clear.sql"
 )
 _RESTORE_INCOMPLETE_ALBUM_CONTRACT_MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "migrations"
     / "postgres"
-    / "0129_restore_incomplete_album_contract.sql"
+    / "0250_restore_incomplete_album_contract.sql"
 )
 
 
@@ -331,6 +331,7 @@ def test_postgres_album_rename_is_targeted_and_never_round_trips_a_snapshot(monk
         "destination_album_id": 41,
         "destination_album_key": "artist::new album",
         "destination_artist_name": "Artist",
+        "cover_inherited_from_structural_edit": False,
     }
     _function_sql, mutation_params = _structural_noncover_call(connection)
     mutation_sql = next(
@@ -1876,7 +1877,7 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
                          where credits.album_id=%s"""
         assert set(connection.execute(credits_sql, (source_id,)).fetchall()) == source_credits
         if not existing_destination:
-            expected_credits = {(solo, "owner"), (solo, "featured_track_artist")}
+            expected_credits = {(solo, "owner")}
             if selected_has_guest:
                 expected_credits.add(("Featured Voice", "featured_track_artist"))
             assert set(connection.execute(credits_sql, (destination[0],)).fetchall()) == expected_credits
@@ -1900,6 +1901,245 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
             connection.rollback()
         connection.close()
         isolatedPostgres.reset_application_tables(_ISOLATED_SETUP_DATABASE_URL)
+
+
+def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup required for cover reconciliation contract.")
+    isolatedPostgres.prepare_isolated_database(
+        _ISOLATED_SETUP_DATABASE_URL,
+        database_url,
+    )
+    from music_app.services.scan_cache_persistence import (
+        PostgresScanCacheAdapter,
+        _structural_destination_album_projection,
+    )
+
+    token = uuid4().hex
+    artist = f"Cover Reconciliation Artist {token}"
+    source_title = f"Source Album {token}"
+    destination_title = f"Canonical Album {token}"
+    paths = [
+        f"C:/__cover_reconciliation__/{token}/01 Selected.flac",
+        f"C:/__cover_reconciliation__/{token}/02 Remaining.flac",
+    ]
+    source_cover_path = f"C:/__cover_reconciliation__/{token}/source.jpg"
+    canonical_cover_path = f"C:/__cover_reconciliation__/{token}/canonical.jpg"
+    previous = {
+        path: {
+            "path": path,
+            "album": source_title,
+            "album_artist": artist,
+            "artist": artist,
+            "title": f"Track {index}",
+            "track_number": str(index),
+            "disc_number": "1",
+            "year": 2026,
+            "release_date": "2026",
+            "mtime": 1000.0 + index,
+            "size": 2000 + index,
+            "cover_path": source_cover_path,
+            "cover_revision": "source-revision",
+            "cover_selection_origin": "automatic",
+            "cover_selection_provenance": "provider",
+        }
+        for index, path in enumerate(paths, start=1)
+    }
+    selected_path = paths[0]
+    updated = {
+        selected_path: {
+            **previous[selected_path],
+            "album": destination_title,
+        }
+    }
+
+    connection = psycopg.connect(database_url)
+    try:
+        proxy = _CommitSuppressingConnection(connection)
+        adapter = PostgresScanCacheAdapter(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+            connect=lambda _url: proxy,
+        )
+        separate_release_key = f"{artist.casefold()}::{destination_title.casefold()}"
+        destination_projection = _structural_destination_album_projection(
+            adapter._build_albums,
+            updated,
+            frozenset({"album"}),
+            {separate_release_key},
+        )
+        edited_destination_key = destination_projection.key
+        canonical_album_key = (
+            separate_release_key
+            if edited_destination_key != separate_release_key
+            else f"{separate_release_key}::year::2026"
+        )
+        library_id = connection.execute(
+            """select libraries.id
+               from app.bootstrap_owners owners
+               join library.libraries libraries
+                 on libraries.owner_account_id = owners.account_id
+              where owners.owner_key = 'local-bootstrap-owner'
+                and libraries.name = 'Local Library'
+                and libraries.library_kind = 'local'"""
+        ).fetchone()[0]
+        library_root_id = connection.execute(
+            """insert into library.library_roots
+                       (library_id, root_path, root_kind, is_active, metadata)
+                values (%s, %s, 'main_library', true, %s::jsonb)
+                returning id""",
+            (
+                library_id,
+                f"C:/__cover_reconciliation__/{token}",
+                json.dumps({"root_id": f"cover-reconciliation-{token}"}),
+            ),
+        ).fetchone()[0]
+        artist_id = connection.execute(
+            """insert into library.local_artists
+                       (library_id, artist_key, name, metadata)
+                values (%s, %s, %s, '{}'::jsonb)
+                returning id""",
+            (library_id, artist.casefold(), artist),
+        ).fetchone()[0]
+        connection.execute(
+            """insert into library.separate_releases (library_id, release_key)
+                values (%s, %s)""",
+            (library_id, separate_release_key),
+        )
+        source_album_id = connection.execute(
+            """insert into library.local_albums
+                       (library_id, artist_id, album_key, title, release_year,
+                        cover_path, metadata)
+                values (%s, %s, %s, %s, 2026, %s, %s::jsonb)
+                returning id""",
+            (
+                library_id,
+                artist_id,
+                f"source-{token}",
+                source_title,
+                source_cover_path,
+                json.dumps(
+                    {
+                        "album_artist": artist,
+                        "release_date": "2026",
+                        "cover_revision": "source-revision",
+                        "cover_selection_origin": "automatic",
+                        "cover_selection_provenance": "provider",
+                    }
+                ),
+            ),
+        ).fetchone()[0]
+        canonical_album_id = connection.execute(
+            """insert into library.local_albums
+                       (library_id, artist_id, album_key, title, release_year,
+                        cover_path, metadata)
+                values (%s, %s, %s, %s, 2026, %s, %s::jsonb)
+                returning id""",
+            (
+                library_id,
+                artist_id,
+                canonical_album_key,
+                destination_title,
+                canonical_cover_path,
+                json.dumps(
+                    {
+                        "album_artist": artist,
+                        "release_date": "2026",
+                        "cover_revision": "canonical-revision",
+                        "cover_selection_origin": "user",
+                        "cover_selection_provenance": "explicit",
+                    }
+                ),
+            ),
+        ).fetchone()[0]
+        edited_destination_id = connection.execute(
+            """insert into library.local_albums
+                       (library_id, artist_id, album_key, title, release_year,
+                        cover_path, metadata)
+                values (%s, %s, %s, %s, 2026, %s, %s::jsonb)
+                returning id""",
+            (
+                library_id,
+                artist_id,
+                edited_destination_key,
+                destination_title,
+                source_cover_path,
+                json.dumps(
+                    {
+                        "album_artist": artist,
+                        "release_date": "2026",
+                        "cover_revision": "source-revision",
+                        "cover_selection_origin": "automatic",
+                        "cover_selection_provenance": "provider",
+                    }
+                ),
+            ),
+        ).fetchone()[0]
+        for index, (path, entry) in enumerate(previous.items(), start=1):
+            track_id = connection.execute(
+                """insert into library.local_tracks
+                           (library_id, album_id, artist_id, track_key, title,
+                            track_number, metadata)
+                    values (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                    returning id""",
+                (
+                    library_id,
+                    source_album_id,
+                    artist_id,
+                    f"cover-reconciliation-{token}-{index}",
+                    entry["title"],
+                    index,
+                    json.dumps({"album": source_title, "artist": artist}),
+                ),
+            ).fetchone()[0]
+            connection.execute(
+                """insert into library.local_track_files
+                           (track_id, library_root_id, private_path, metadata)
+                    values (%s, %s, %s, jsonb_build_object(
+                        'scan_cache', jsonb_build_object(
+                            'source', 'scan_cache',
+                            'stale', false,
+                            'file_entry', %s::jsonb
+                        )
+                    ))""",
+                (track_id, library_root_id, path, json.dumps(entry)),
+            )
+
+        result = adapter.persist_structural_tag_edit(
+            changed_paths={selected_path},
+            previous_file_entries=previous,
+            updated_file_entries=updated,
+            changed_field_names={"album"},
+        )
+
+        assert result["destination_album_id"] == edited_destination_id
+        assert edited_destination_id != canonical_album_id
+        owner_id, owner_cover_path, owner_origin, owner_provenance, file_entry = (
+            connection.execute(
+                """select tracks.album_id,
+                          albums.cover_path,
+                          albums.metadata ->> 'cover_selection_origin',
+                          albums.metadata ->> 'cover_selection_provenance',
+                          files.metadata #> '{scan_cache,file_entry}'
+                 from library.local_track_files files
+                 join library.local_tracks tracks on tracks.id = files.track_id
+                 join library.local_albums albums on albums.id = tracks.album_id
+                where files.private_path = %s""",
+                (selected_path,),
+            ).fetchone()
+        )
+        assert owner_id == canonical_album_id
+        assert owner_cover_path == canonical_cover_path
+        assert owner_origin == "user"
+        assert owner_provenance == "explicit"
+        assert file_entry["cover_path"] == canonical_cover_path
+        assert file_entry["cover_revision"] == "canonical-revision"
+        assert file_entry["cover_selection_origin"] == "user"
+        assert file_entry["cover_selection_provenance"] == "explicit"
+        assert file_entry["cover_inherited_from_structural_edit"] is True
+    finally:
+        connection.rollback()
+        connection.close()
 
 
 def test_live_postgres_blank_album_restore_preserves_mixed_track_identity_and_atomicity():
@@ -2481,6 +2721,85 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
     assert "destination_album_metadata" not in destination_state
 
 
+def test_postgres_partial_album_move_publishes_source_and_destination_cover_authority(
+    monkeypatch,
+):
+    paths, previous, updated = _entries()
+    result_row = _successful_result(path_count=1)
+    result_row.update(
+        {
+            "source_album_track_file_count": 2,
+            "source_album_id": 17,
+            "source_album_key": "artist::old album",
+        }
+    )
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.persist_structural_tag_edit(
+        changed_paths={paths[0]},
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album"},
+    )
+
+    cover_publications = [
+        (sql, params)
+        for sql, params in connection.executed
+        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+    ]
+    assert len(cover_publications) == 1
+    publication_sql, publication_params = cover_publications[0]
+    normalized_publication_sql = _normalized_sql(publication_sql)
+    assert publication_params == {
+        "album_ids": [17, 41],
+        "active_paths": [paths[0]],
+        "cover_inherited_from_structural_edit": True,
+    }
+    assert "join repaired_albums album on album.id = tracks.album_id" in (
+        normalized_publication_sql
+    )
+    assert "'cover_path', album.cover_path" in normalized_publication_sql
+    assert "'cover_selection_origin', album.metadata -> 'cover_selection_origin'" in (
+        normalized_publication_sql
+    )
+    assert "'cover_inherited_from_structural_edit'" in normalized_publication_sql
+    assert "'cover_selection_provenance', album.metadata -> 'cover_selection_provenance'" in (
+        normalized_publication_sql
+    )
+
+
+def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owner(
+    monkeypatch,
+):
+    paths, previous, updated = _entries()
+    result_row = _successful_result(path_count=1)
+    result_row.update(source_album_track_file_count=2, source_album_id=17)
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.persist_structural_tag_edit(
+        changed_paths={paths[0]},
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album"},
+    )
+
+    publication_sql, publication_params = next(
+        (sql, params)
+        for sql, params in connection.executed
+        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+    )
+    normalized_publication_sql = _normalized_sql(publication_sql)
+    assert publication_params == {
+        "album_ids": [17, 41],
+        "active_paths": [paths[0]],
+        "cover_inherited_from_structural_edit": True,
+    }
+    assert "selected_files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
+    assert "selected_tracks.album_id = album.id" in normalized_publication_sql
+
+
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(
     monkeypatch,
 ):
@@ -2739,6 +3058,49 @@ def test_semantic_album_reconciliation_rekeys_version_and_cover_dependencies():
     ) in normalized_sql
     assert "update ops.cover_lookup_tasks" in normalized_sql
     assert "set album_key = semantic_album_candidates.canonical_album_key" in normalized_sql
+    cover_task_sql = normalized_sql.split(
+        "update ops.cover_lookup_tasks", 1
+    )[1].split("update library.local_tracks", 1)[0]
+    assert "semantic_album_candidates.canonical_album_id" in cover_task_sql
+    assert "{source_payload,album_payload}" in cover_task_sql
+
+
+def test_semantic_album_key_adoption_rebinds_lookup_payload_identity():
+    from music_app.services.scan_cache_persistence import (
+        _semantic_local_album_key_adoption_sql,
+    )
+
+    normalized_sql = _normalized_sql(
+        " ".join(_semantic_local_album_key_adoption_sql())
+    )
+    cover_task_sql = normalized_sql.split(
+        "update ops.cover_lookup_tasks", 1
+    )[1].split("with updated_album_ratings", 1)[0]
+
+    assert "adoptions.album_id" in cover_task_sql
+    assert "adoptions.canonical_album_key" in cover_task_sql
+    assert "{source_payload,album_payload}" in cover_task_sql
+
+
+def test_structural_album_identity_rebind_preserves_lookup_task_state():
+    from music_app.services.scan_cache_persistence import (
+        _rebind_cover_lookup_tasks_after_structural_edit_sql,
+    )
+
+    normalized_sql = _normalized_sql(
+        _rebind_cover_lookup_tasks_after_structural_edit_sql()
+    )
+
+    assert "update ops.cover_lookup_tasks as tasks" in normalized_sql
+    assert "set album_key = %(destination_album_key)s" in normalized_sql
+    assert "{source_payload,album_payload}" in normalized_sql
+    assert "%(source_album_id)s::text" in normalized_sql
+    assert "%(source_album_key)s" in normalized_sql
+    assert "tasks.album_key = %(source_album_key)s" in normalized_sql
+    assert "%(destination_album_id)s::bigint" in normalized_sql
+    assert "jsonb_strip_nulls" not in normalized_sql
+    assert "requested_at" not in normalized_sql
+    assert "completed_at" not in normalized_sql
 
 
 def test_semantic_album_reconciliation_serializes_bootstrap_library_before_candidates(
@@ -3459,6 +3821,142 @@ def test_selected_postgres_compensation_restores_only_fields_changed_per_path(
         (first_path, {"album": "Old"}),
         (second_path, {"title": "Second"}),
     ]
+
+
+@pytest.mark.parametrize("state_kind", ["disc_rating", "artist_identity"])
+@pytest.mark.parametrize("destination_state", ["absent", "equal", "conflicting"])
+@pytest.mark.parametrize("operation", ["retirement", "semantic_consolidation"])
+def test_live_postgres_structural_consolidation_preserves_album_decisions(
+    state_kind, destination_state, operation,
+):
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup is required for retirement preservation.")
+    isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
+    token = uuid4().hex
+    with psycopg.connect(_ISOLATED_SETUP_DATABASE_URL) as setup:
+        try:
+            library_id, account_id = setup.execute(
+                "select id, owner_account_id from library.libraries where name='Local Library'"
+            ).fetchone()
+            artist_id = setup.execute(
+                "insert into library.local_artists(library_id,artist_key,name) "
+                "values(%s,%s,'Retirement Artist') returning id",
+                (library_id, f"retirement-artist-{token}"),
+            ).fetchone()[0]
+            album_keys = [f"retirement-source-{token}", f"retirement-destination-{token}"]
+            if operation == "semantic_consolidation":
+                setup.execute(
+                    "insert into library.separate_releases(library_id,release_key) values(%s,%s)",
+                    (library_id, "retirement artist::retirement album"),
+                )
+            album_ids_by_key = {}
+            for album_key in reversed(album_keys):
+                is_source = album_key == album_keys[0]
+                title = "Retirement Album"
+                if operation == "retirement" and is_source:
+                    title = "Previous Retirement Album"
+                album_ids_by_key[album_key] = setup.execute(
+                    "insert into library.local_albums(library_id,artist_id,album_key,title,metadata) "
+                    "values(%s,%s,%s,%s,%s::jsonb) returning id",
+                    (library_id, artist_id, album_key, title,
+                     json.dumps({"retirement_source_note": token} if is_source else {"canonical_note": token})),
+                ).fetchone()[0]
+            album_ids = [album_ids_by_key[key] for key in album_keys]
+            task_id, task_requested_at = setup.execute(
+                "insert into ops.cover_lookup_tasks "
+                "(library_id,local_album_id,album_key,task_key,status,metadata) "
+                "values(%s,%s,%s,%s,'pending',%s::jsonb) returning id,requested_at",
+                (library_id, album_ids[0], album_keys[0], f"retirement-task-{token}",
+                 json.dumps({"retained": token, "source_payload": {"album_payload": {
+                     "id": album_ids[0], "album_id": album_ids[0], "key": album_keys[0],
+                     "retained": token,
+                 }}})),
+            ).fetchone()
+            if state_kind == "disc_rating":
+                source_value, other_value = 7, None
+                table, value_column = "app.album_disc_ratings", "rating"
+                for index, album_key in enumerate(album_keys):
+                    if index and destination_state == "absent":
+                        continue
+                    setup.execute(
+                        "insert into app.album_disc_ratings "
+                        "(account_id,library_id,album_key,disc_key,rating,provenance) "
+                        "values(%s,%s,%s,'bonus disc',%s,'user')",
+                        (account_id, library_id, album_key,
+                         other_value if index and destination_state == "conflicting" else source_value),
+                    )
+            else:
+                source_value, other_value = uuid4(), uuid4()
+                table, value_column = "library.local_album_artist_identities", "artist_mbid"
+                for mbid in (source_value, other_value):
+                    setup.execute(
+                        "insert into integration.musicbrainz_artists(mbid,canonical_name,refreshed_at) "
+                        "values(%s,'Retirement Artist',now())", (mbid,),
+                    )
+                for index, album_key in enumerate(album_keys):
+                    if index and destination_state == "absent":
+                        continue
+                    setup.execute(
+                        "insert into library.local_album_artist_identities "
+                        "(library_id,album_key,artist_mbid,decision_source,matcher_version) "
+                        "values(%s,%s,%s,'manual',4)",
+                        (library_id, album_key,
+                         other_value if index and destination_state == "conflicting" else source_value),
+                    )
+            revision = setup.execute(
+                "select coalesce((metadata->>'inventory_mutation_revision')::bigint,0) "
+                "from library.libraries where id=%s", (library_id,),
+            ).fetchone()[0]
+            setup.execute("set local role album_haven_app")
+            if operation == "retirement":
+                disposition = setup.execute(
+                    "select library.retire_vacated_structural_album(%s,%s,%s,%s,%s)",
+                    (library_id, *album_ids, *album_keys),
+                ).fetchone()[0]
+                expected = "preserved_user_state" if destination_state == "conflicting" else "retired"
+                assert disposition == expected
+            else:
+                canonical = setup.execute(
+                    "select * from library.reconcile_targeted_album_noncover(%s,%s,%s,true)",
+                    (library_id, album_ids[0], revision),
+                ).fetchone()
+                assert canonical == (album_ids[1], album_keys[1])
+            setup.execute("reset role")
+            task_album_id, task_album_key, task_status, requested_at, task_metadata = setup.execute(
+                "select local_album_id,album_key,status,requested_at,metadata "
+                "from ops.cover_lookup_tasks where id=%s", (task_id,),
+            ).fetchone()
+            expected_index = 0 if destination_state == "conflicting" else 1
+            assert (task_album_id, task_album_key) == (album_ids[expected_index], album_keys[expected_index])
+            assert (task_status, requested_at) == ("pending", task_requested_at)
+            assert task_metadata["retained"] == token
+            task_album = task_metadata["source_payload"]["album_payload"]
+            assert (task_album["id"], task_album["album_id"], task_album["key"]) == (
+                album_ids[expected_index], album_ids[expected_index], album_keys[expected_index],
+            )
+            assert task_album["retained"] == token
+            assert setup.execute(
+                "select exists(select 1 from library.local_albums where id=%s)",
+                (album_ids[0],),
+            ).fetchone()[0] is (destination_state == "conflicting")
+            assert setup.execute(
+                f"select {value_column} from {table} where library_id=%s and album_key=%s",
+                (library_id, album_keys[1]),
+            ).fetchone()[0] == (other_value if destination_state == "conflicting" else source_value)
+            if destination_state == "conflicting":
+                assert setup.execute(
+                    f"select {value_column} from {table} where library_id=%s and album_key=%s",
+                    (library_id, album_keys[0]),
+                ).fetchone()[0] == source_value
+            if operation == "semantic_consolidation":
+                canonical_metadata = setup.execute(
+                    "select metadata from library.local_albums where id=%s", (album_ids[1],),
+                ).fetchone()[0]
+                assert canonical_metadata["canonical_note"] == token
+                assert ("retirement_source_note" in canonical_metadata) is (destination_state != "conflicting")
+        finally:
+            setup.rollback()
 
 
 def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_revision(monkeypatch):

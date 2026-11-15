@@ -6,6 +6,7 @@ export class LoginPage {
     this.username = page.getByLabel('Username');
     this.password = page.getByLabel('Password', { exact: true });
     this.submit = page.getByRole('button', { name: 'Sign in' });
+    this.startupProgress = page.getByRole('region', { name: 'Loading Album Haven' });
   }
 
   async open(returnTo = '/') {
@@ -16,7 +17,17 @@ export class LoginPage {
   async signIn(username, password) {
     await this.username.fill(username);
     await this.password.fill(password);
-    await this.submit.click();
+    // The sign-in script posts in the background; its answer carries the session cookie (or the
+    // rejection), so a caller's next request never races it.
+    const [response] = await Promise.all([
+      this.page.waitForResponse((answer) => new URL(answer.url()).pathname === '/login'
+        && answer.request().method() === 'POST'),
+      this.submit.click(),
+    ]);
+    // An accepted sign-in navigates on to its return path; a caller's next navigation must not abort it.
+    if (response.ok()) {
+      await this.page.waitForURL((url) => url.pathname !== '/login');
+    }
   }
 }
 

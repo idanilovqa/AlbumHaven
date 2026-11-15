@@ -11,12 +11,13 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual', 53],
-  ['cover-providers-1', 12],
-  ['cover-providers-2', 12],
-  ['metadata-mutations', 15],
+  ['gallery-search-visual-1', 32],
+  ['gallery-search-visual-2', 35],
+  ['cover-providers-1', 22],
+  ['cover-providers-2', 15],
+  ['metadata-mutations', 17],
   ['playback-utilities-1', 14],
-  ['playback-utilities-2', 14],
+  ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
 ]);
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
@@ -136,7 +137,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   const shards = Array.isArray(contract?.shards) ? contract.shards : [];
   const expectedNames = EXPECTED_SHARDS.map(([name]) => name);
   if (JSON.stringify(shards.map((shard) => shard.name)) !== JSON.stringify(expectedNames)) {
-    errors.push('functional shards must use the exact approved seven-shard order');
+    errors.push('functional shards must use the exact approved eight-shard order');
   }
   for (const [name, expectedCount] of EXPECTED_SHARDS) {
     const shard = shards.find((candidate) => candidate.name === name);
@@ -209,7 +210,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 134) errors.push(`functional contract owns ${owned.length} cases; expected 134`);
+  if (owned.length !== 166) errors.push(`functional contract owns ${owned.length} cases; expected 166`);
   return errors;
 }
 
@@ -244,7 +245,11 @@ function loadFunctionalCaseMatrix(repoRoot) {
 }
 
 function executionWavesForShard(shard, matrixRows) {
-  const maximumWave = shard.name.startsWith('playback-utilities-') ? 5 : 3;
+  const maximumWave = shard.name.startsWith('playback-utilities-')
+    ? 5
+    : shard.name === 'metadata-mutations'
+      ? 3
+      : 4;
   const matrixByCase = new Map(matrixRows.map((row) => [caseKey(row), row]));
   const waves = new Map();
   for (const invocation of shard.invocations || []) {
@@ -257,6 +262,12 @@ function executionWavesForShard(shard, matrixRows) {
       const matrixRow = matrixByCase.get(caseKey(normalizedCase));
       if (!matrixRow) {
         throw new Error(`functional case is missing from the test-data matrix: ${ownedCase.case}`);
+      }
+      const hasMusicBrainzFixture = (matrixRow.databaseScenarios || [])
+        .some((scenario) => String(scenario).startsWith('musicbrainz:'));
+      if (hasMusicBrainzFixture
+          && (matrixRow.setupScope !== 'isolated' || matrixRow.stateMode !== 'owned-mutation')) {
+        throw new Error(`MusicBrainz fixture requires isolated/owned-mutation ownership: ${ownedCase.case}`);
       }
       const isReadOnly = matrixRow.setupScope === 'suite' && matrixRow.stateMode === 'read-only';
       const isIsolated = matrixRow.setupScope === 'isolated';
@@ -311,11 +322,15 @@ function executionWavesForShard(shard, matrixRows) {
               : isOwnedMutation ? 'owned-mutation' : 'shared-setup',
           appProcessOrder: isIsolatedAppProcess ? appProcessOrder || 'before-shared' : null,
           cases: [],
+          fixtureCases: [],
         };
         wave.invocationByKey.set(invocationKey, groupedInvocation);
         wave.invocations.push(groupedInvocation);
       }
       groupedInvocation.cases.push(ownedCase);
+      if (hasMusicBrainzFixture) {
+        groupedInvocation.fixtureCases.push(ownedCase.case);
+      }
       wave.rows.push(matrixRow);
     }
   }
@@ -411,6 +426,7 @@ function runFunctionalShard(contract, shardName, options = {}) {
   const runnerPath = path.join(repoRoot, 'scripts', 'run-playwright.cjs');
   const checkpointPath = path.join(repoRoot, 'scripts', 'ci', 'functional-fixture-checkpoint.py');
   const mediaCheckpointPath = path.join(repoRoot, 'scripts', 'ci', 'restore-functional-media.cjs');
+  const musicbrainzFixturePath = path.join(repoRoot, 'tests', 'e2e', 'helpers', 'musicbrainzIdentityFixture.js');
   let failed = false;
   const checkpointEnv = {
     ...env,
@@ -471,6 +487,26 @@ function runFunctionalShard(contract, shardName, options = {}) {
         }
       }
       invocationIndex += 1;
+      for (const fixtureCase of invocation.fixtureCases) {
+        const fixtureResult = spawnSyncFn(
+          process.execPath,
+          [musicbrainzFixturePath, `--case=${fixtureCase}`],
+          {
+            cwd: repoRoot,
+            env: {
+              ...checkpointEnv,
+              ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: databaseUrl,
+            },
+            stdio: 'inherit',
+            windowsHide: true,
+          },
+        );
+        if (fixtureResult.signal) return { exitCode: 1, signal: fixtureResult.signal };
+        if (fixtureResult.error || fixtureResult.status !== 0) {
+          failed = true;
+          break execution;
+        }
+      }
       const invocationName = [
         `wave-${String(wave.wave).padStart(2, '0')}`,
         String(invocationIndex).padStart(2, '0'),
@@ -486,6 +522,13 @@ function runFunctionalShard(contract, shardName, options = {}) {
         PLAYWRIGHT_PROVIDER_PORT: String(portBase + 2),
         PLAYWRIGHT_BLOB_OUTPUT_FILE: path.join(blobRoot, `${invocationName}.zip`),
       };
+      if (invocation.fixtureCases.length) {
+        childEnv.MUSICBRAINZ_ENRICHMENT_ENABLED = '1';
+        childEnv.MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED = '1';
+      }
+      if (invocation.fixtureCases.some((caseName) => caseName.startsWith('FTC-MBID-001 '))) {
+        childEnv.ALBUM_HAVEN_E2E_MUSICBRAINZ_HYDRATION_HOLD = '1';
+      }
       if (shardName === 'cover-providers-1') childEnv.ALBUM_HAVEN_COVER_REPAIR_MIN_EDGE = '2000';
       for (const key of OWNER_RUNTIME_ENV_KEYS) childEnv[key] = '';
       delete childEnv.ALBUM_HAVEN_E2E_LASTFM_TIMEZONE_MODE;

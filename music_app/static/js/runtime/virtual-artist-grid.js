@@ -14,6 +14,8 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
+  const displayName = album?.display_name || album?.name || '';
+  const displayYear = album?.display_year || album?.year || '';
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
   const rating = getAlbumCardRating(album);
@@ -25,16 +27,23 @@ function albumCardHtml(album, options = {}) {
   const albumKey = getAlbumRequestKey(album);
   const albumVersionKey = getAlbumCardVersionKey(album);
   const albumFallback = JSON.stringify({
+    album_id: album?.album_id || album?.id || null,
     key: getAlbumRequestKey(album),
     name: String(album?.name || ''),
     album_artist: String(album?.album_artist || ''),
     year: album?.year ?? '',
     edition: String(album?.edition || ''),
+    identity_revision: album?.identity_revision !== null
+      && album?.identity_revision !== undefined
+      && Number.isSafeInteger(Number(album.identity_revision))
+      ? Number(album.identity_revision)
+      : null,
     preview_only: Boolean(album?.preview_only),
     track_count_preview: Number(album?.track_count_preview || 0),
     total_duration_seconds: Number(album?.total_duration_seconds || 0),
     total_duration_display: String(album?.total_duration_display || ''),
     cover_path: String(album?.cover_path || ''),
+    cover_preview_url: String(album?.cover_preview_url || ''),
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),
@@ -64,8 +73,8 @@ function albumCardHtml(album, options = {}) {
   const artboxHtml = buildAlbumArtboxHtml({
     state: albumMissing ? 'missing' : (albumHasDisplayCover(album) ? 'ready' : 'empty'),
     label: albumMissing
-      ? `${album.name} artwork unavailable. Album not found.`
-      : `Album cover for ${album.name}`,
+      ? `${displayName} artwork unavailable. Album not found.`
+      : `Album cover for ${displayName}`,
     coverHtml,
     actionHtml,
   });
@@ -75,10 +84,10 @@ function albumCardHtml(album, options = {}) {
     albumKey,
     albumVersionKey,
     albumFallback,
-    openLabel: `Open ${album.name} tracklist${albumMissing ? '. Album not found' : ''}`,
-    title: album.name,
+    openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
+    title: displayName,
     artist: album.album_artist,
-    year: album.year,
+    year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
@@ -110,8 +119,10 @@ function getAlbumCardRenderKey(album) {
     getAlbumCardNodeIdentity(album),
     getAlbumCardVersionKey(album),
     String(album?.name || ''),
+    String(album?.display_name || ''),
     String(album?.album_artist || ''),
     String(album?.year || ''),
+    String(album?.display_year || ''),
     getAlbumCardRating(album),
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
@@ -171,7 +182,9 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   if (!albumHasDisplayCover(album)) {
     return '<div class="cover-placeholder">No cover art</div>';
   }
-  const coverPriority = options.coverPriority === 'visible' ? 'visible' : 'near';
+  const coverPriority = ['visible', 'background'].includes(options.coverPriority)
+    ? options.coverPriority
+    : 'near';
   const loadingAttribute = coverPriority === 'visible' ? 'eager' : 'lazy';
   const fetchPriorityAttribute = coverPriority === 'visible' ? 'high' : 'low';
   const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -181,7 +194,7 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   const remoteCoverUrl = typeof options.remoteCoverUrl === 'string'
     ? options.remoteCoverUrl
     : escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
-  const coverAlt = escapeHtml(`Album cover for ${album.name}`);
+  const coverAlt = escapeHtml(`Album cover for ${album.display_name || album.name}`);
   return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-path="${localCoverPath}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
 }
 
@@ -227,7 +240,7 @@ function refreshRenderedAlbumCoverOnly(updatedAlbum) {
 }
 
 function getAlbumRequestKey(album) {
-  return String(album?.key || album?.album_ref || '').trim() || getAlbumPathSignature(album);
+  return String(album?.album_ref || album?.key || '').trim() || getAlbumPathSignature(album);
 }
 
 function getAlbumIdentity(album) {
@@ -321,6 +334,7 @@ class VirtualArtistGrid {
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
     this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmTimeout = 0;
     this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
@@ -492,9 +506,14 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
-    if (!this._albumDetailPrewarmRaf) return;
-    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
-    this._albumDetailPrewarmRaf = 0;
+    if (this._albumDetailPrewarmRaf) {
+      cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+      this._albumDetailPrewarmRaf = 0;
+    }
+    if (this._albumDetailPrewarmTimeout) {
+      clearBrowserTimeout(this._albumDetailPrewarmTimeout);
+      this._albumDetailPrewarmTimeout = 0;
+    }
   }
 
   scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
@@ -513,15 +532,19 @@ class VirtualArtistGrid {
       this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
         if (generation !== this._albumDetailPrewarmGeneration) return;
         this._albumDetailPrewarmRaf = 0;
-        if (
-          renderGeneration !== this._renderGeneration
-          || !this.isScrollSettled
-          || this.lastKey !== rangeKey
-          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
-        ) {
-          return;
-        }
-        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        this._albumDetailPrewarmTimeout = scheduleBrowserTimeout(() => {
+          this._albumDetailPrewarmTimeout = 0;
+          if (
+            generation !== this._albumDetailPrewarmGeneration
+            || renderGeneration !== this._renderGeneration
+            || !this.isScrollSettled
+            || this.lastKey !== rangeKey
+            || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+          ) {
+            return;
+          }
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        }, 250);
       });
     });
   }
@@ -591,6 +614,12 @@ class VirtualArtistGrid {
     const normalizedToken = Number(token);
     if (!force && (!normalizedToken || !this._activeCoverLoadUserActionTokens.has(normalizedToken))) {
       return false;
+    }
+    if (!force && (this._raf || this._measureRaf || this._measureTimeout || this._stabilizeRaf)) {
+      scheduleBrowserAnimationFrame(() => {
+        this.resumeSelectedArtistCoverLoadsAfterUserAction(normalizedToken);
+      });
+      return true;
     }
     if (!this._activeCoverLoadUserActionTokens.size) return false;
     if (force) {
@@ -1147,6 +1176,7 @@ class VirtualArtistGrid {
         restoreScroll();
         if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
         if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+        if (this._raf) return;
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration
@@ -1803,9 +1833,6 @@ class VirtualArtistGrid {
 
   primeVisibleCoverImages() {
     if (!(this.scrollEl instanceof HTMLElement) || !(this.containerEl instanceof HTMLElement)) {
-      return;
-    }
-    if (String(state?.view?.selected_artist || '').trim()) {
       return;
     }
     const scrollRect = this.scrollEl.getBoundingClientRect();
@@ -2479,14 +2506,17 @@ class VirtualArtistGrid {
       if (block.kind === 'subheading') {
                 const count = Math.max(0, Number(block.count || 0));
                 const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
-                return `<div class="artist-subsection-label"><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-separator" aria-hidden="true">•</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
+                return `<div class="artist-subsection-label"><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
-      const coverPriority = blockBottom >= Number(options.viewportTop || 0)
-        && blockTop <= Number(options.viewportBottom || 0)
+      const visible = blockBottom >= Number(options.viewportTop || 0)
+        && blockTop <= Number(options.viewportBottom || 0);
+      const coverPriority = visible
         ? 'visible'
-        : 'near';
+        : section.sectionType === 'primary' && String(state?.view?.selected_artist || '').trim()
+          ? 'background'
+          : 'near';
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
@@ -2498,7 +2528,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -2544,7 +2574,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;

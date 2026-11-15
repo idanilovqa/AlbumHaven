@@ -644,3 +644,90 @@ def test_problematic_albums_payload_skips_unreadable_cover_paths_without_crashin
     assert payload["items"][0]["problem_reasons"] == ["Missing year"]
     assert payload["items"][0]["cover_width"] == 0
     assert payload["items"][0]["cover_height"] == 0
+
+
+@pytest.mark.parametrize(
+    ("actual_dimensions", "expected_poor_quality"),
+    [
+        ((1200, 1200), False),
+        ((1199, 1200), True),
+        ((1200, 1199), True),
+    ],
+)
+def test_problematic_albums_payload_uses_current_cover_dimensions_for_quality(
+    config,
+    actual_dimensions,
+    expected_poor_quality,
+):
+    cover_path = "current-cover.jpg"
+    album = SimpleNamespace(
+        key="album-1",
+        name="Album",
+        album_artist="Artist",
+        artists=["Artist"],
+        cover_path=cover_path,
+        year=None,
+        edition="",
+        album_rating=0,
+        total_duration_seconds=0,
+        tracks=[],
+        is_compilation=False,
+        local_cover_width=600,
+        local_cover_height=600,
+    )
+
+    payload = build_problematic_albums_read_payload(
+        **_problematic_read_payload_kwargs(
+            config=config,
+            state_getter=lambda: {
+                "albums": [album],
+                "file_cache": {},
+                "relation_views": {},
+            },
+            year_problem_reason=lambda value: "Missing year" if value is None else None,
+            image_dimensions=lambda path: actual_dimensions if path == cover_path else (0, 0),
+            poor_art_min_edge=1200,
+        )
+    )
+
+    item = payload["items"][0]
+    assert item["cover_width"] == actual_dimensions[0]
+    assert item["cover_height"] == actual_dimensions[1]
+    assert ("Poor art quality" in item["problem_reasons"]) is expected_poor_quality
+
+
+def test_problematic_albums_payload_keeps_acceptable_cached_dimensions_on_fast_path(config):
+    album = SimpleNamespace(
+        key="album-1",
+        name="Album",
+        album_artist="Artist",
+        artists=["Artist"],
+        cover_path="current-cover.jpg",
+        year=None,
+        edition="",
+        album_rating=0,
+        total_duration_seconds=0,
+        tracks=[],
+        is_compilation=False,
+        local_cover_width=1200,
+        local_cover_height=1200,
+    )
+
+    payload = build_problematic_albums_read_payload(
+        **_problematic_read_payload_kwargs(
+            config=config,
+            state_getter=lambda: {
+                "albums": [album],
+                "file_cache": {},
+                "relation_views": {},
+            },
+            year_problem_reason=lambda value: "Missing year" if value is None else None,
+            image_dimensions=lambda _path: pytest.fail("acceptable cached artwork must stay on the fast path"),
+            poor_art_min_edge=1200,
+        )
+    )
+
+    item = payload["items"][0]
+    assert item["cover_width"] == 1200
+    assert item["cover_height"] == 1200
+    assert "Poor art quality" not in item["problem_reasons"]

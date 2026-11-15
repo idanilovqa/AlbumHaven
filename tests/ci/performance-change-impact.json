@@ -2,7 +2,11 @@
   "schemaVersion": 1,
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
+    "music_app/services/app_copy.py",
+    "music_app/static/js/app-copy.js",
+    "music_app/static/js/app-copy-worker.js",
     "music_app/services/scan_cache_persistence.py",
+    "music_app/services/empty_local_album_retirement.py",
     "music_app/services/relation_projection_postgres.py",
     "music_app/services/gallery_projection_postgres.py",
     "music_app/jobs/scan_handlers.py",
@@ -23,7 +27,7 @@
     "music_app/services/problematic_projection_postgres.py",
     "music_app/services/problematic_projection_integrity.py",
     "music_app/jobs/problematic_projection_handlers.py",
-    "migrations/postgres/0128_create_problematic_files_projection.sql",
+    "migrations/postgres/0249_create_problematic_files_projection.sql",
     "music_app/services/non_album_view_payloads.py",
     "music_app/services/selected_artist_membership.py",
     "music_app/services/view_payloads.py",
@@ -55,7 +59,9 @@
     "music_app/static/css/runtime/album-details-components.css",
     "music_app/static/css/mobile-layout.css",
     "music_app/services/problematic_albums.py",
+    "migrations/postgres/0112_add_problematic_file_path_projection.sql",
     "music_app/routes/api_problematic_albums.py",
+    "music_app/routes/musicbrainz_enrichment_asgi.py",
     "music_app/services/scan_state.py",
     "music_app/services/edit_workflows.py",
     "music_app/services/cover_state.py",
@@ -79,6 +85,8 @@
     "tests/e2e/actions/utilityProblematicFilesActions.js",
     "tests/e2e/poms/utilityProblematicFilesTab.js",
     "music_app/services/album_local_membership.py",
+    "music_app/services/cover_provider_outcomes_postgres.py",
+    "music_app/services/album_ratings_postgres.py",
     "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
   ],
   "rules": [
@@ -87,8 +95,13 @@
       "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
     },
     {
+      "paths": ["music_app/services/app_copy.py", "music_app/static/js/app-copy.js", "music_app/static/js/app-copy-worker.js"],
+      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
+    },
+    {
       "paths": [
         "music_app/services/scan_cache_persistence.py",
+        "music_app/services/empty_local_album_retirement.py",
         "music_app/services/relation_projection_postgres.py",
         "music_app/services/gallery_projection_postgres.py"
       ],
@@ -147,15 +160,30 @@
     },
     {
       "paths": [
+        "music_app/routes/playback_stream_asgi.py",
+        "music_app/services/mp3_stream_map.py",
+        "music_app/services/playback_encoded.py",
+        "music_app/static/js/runtime/player-streaming-decoders.js",
+        "music_app/static/vendor/wasm-audio-decoders/flac-decoder.min.js",
+        "music_app/static/vendor/wasm-audio-decoders/mpg123-decoder.min.js",
         "music_app/static/js/runtime/album-details-components.js",
         "music_app/static/js/runtime/modal-and-overlay-helpers.js",
-        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
         "music_app/static/css/runtime/album-details-components.css"
       ],
       "targets": [
         "selected-artist",
         "all-artists",
         "gapless-playback"
+      ]
+    },
+    {
+      "paths": ["music_app/static/js/runtime/track-modal-lightbox-helpers.js"],
+      "targets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback",
+        "utility-problematic-files",
+        "problematic-files-focused"
       ]
     },
     {
@@ -213,10 +241,12 @@
         "music_app/services/problematic_projection_postgres.py",
         "music_app/services/problematic_projection_integrity.py",
         "music_app/jobs/problematic_projection_handlers.py",
-        "migrations/postgres/0128_create_problematic_files_projection.sql",
+        "migrations/postgres/0249_create_problematic_files_projection.sql",
         "music_app/services/problematic_albums.py",
+        "migrations/postgres/0112_add_problematic_file_path_projection.sql",
         "music_app/routes/api_problematic_albums.py",
         "music_app/routes/api_read_asgi_routes.py",
+        "music_app/routes/musicbrainz_enrichment_asgi.py",
         "music_app/services/scan_state.py",
         "music_app/services/edit_workflows.py",
         "music_app/services/cover_state.py",
@@ -242,7 +272,9 @@
         "tests/e2e/actions/utilityProblematicFilesActions.js",
         "tests/e2e/poms/utilityProblematicFilesTab.js",
         "tests/e2e/utilityProblematicFiles/**",
-        "music_app/services/album_local_membership.py"
+        "music_app/services/album_local_membership.py",
+        "music_app/services/cover_provider_outcomes_postgres.py",
+        "music_app/services/album_ratings_postgres.py"
       ],
       "targets": [
         "utility-problematic-files",

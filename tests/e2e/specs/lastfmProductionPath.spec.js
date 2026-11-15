@@ -2,13 +2,18 @@ import { expect, test } from '../support/baseFixtures.js';
 import {
   LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
   LASTFM_PLAYBACK_TARGET,
+  LASTFM_SCROBBLE_TRACK,
   readLastfmProviderRequests,
 } from '../helpers/index.js';
 
 const CASE_ID = 'FTC-PLAYBACK-LASTFM-013';
 const LASTFM_USER = 'fixture_listener';
 const LASTFM_PASSWORD = 'fixture-password';
-const SCROBBLE_TRACK = LASTFM_PLAYBACK_TARGET.track;
+const SCROBBLE_TRACK = LASTFM_SCROBBLE_TRACK.title;
+// A 32 s track completes after its scrobble, beyond the default 30 s journey wait.
+const SCROBBLE_JOURNEY_TIMEOUT_MS = 60000;
+// The loop source and three 32 s tracks play back to back, so the last track starts after 60 s.
+const CONSECUTIVE_JOURNEY_TIMEOUT_MS = 180000;
 const FORBIDDEN_HISTORY_VALUES = [
   LASTFM_USER,
   LASTFM_PASSWORD,
@@ -145,7 +150,7 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
   });
 
   let playbackJourney;
-  await stepLogger.step('Play the short fixture track until the production player scrobbles and persists completion', async () => {
+  await stepLogger.step('Play a fixture track longer than 30 s until the production player scrobbles and persists completion', async () => {
     await navigationPanelActions.selectSidebarArtistByName(LASTFM_PLAYBACK_TARGET.artist);
     await navigationPanelActions.waitForSidebarSelection(LASTFM_PLAYBACK_TARGET.artist);
     await galleryActions.waitForAlbumVisibleUnderHeading(
@@ -160,16 +165,17 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     expect(summary.title).toContain(LASTFM_PLAYBACK_TARGET.artist);
     expect(summary.title).toContain(LASTFM_PLAYBACK_TARGET.album);
     expect(summary.title).toContain(String(LASTFM_PLAYBACK_TARGET.year));
-    expect(await trackModalActions.readTrackAt(0)).toMatchObject({
+    expect(await trackModalActions.readTrackAt(LASTFM_SCROBBLE_TRACK.index)).toMatchObject({
       title: SCROBBLE_TRACK,
     });
     const playbackMark = await playbackEvidence.playbackMark();
     const playbackEvidencePromise = playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
-      path: (await trackModalActions.readTrackAt(0)).path,
+      path: (await trackModalActions.readTrackAt(LASTFM_SCROBBLE_TRACK.index)).path,
     });
-    playbackJourney = await trackModalActions.playTrackAtAndWaitForLastfmJourney(0, {
+    playbackJourney = await trackModalActions.playTrackAtAndWaitForLastfmJourney(LASTFM_SCROBBLE_TRACK.index, {
       title: SCROBBLE_TRACK,
+      timeout: SCROBBLE_JOURNEY_TIMEOUT_MS,
     });
     const evidence = await playbackEvidencePromise;
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
@@ -225,12 +231,12 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
       chosen_by_user: '1',
     });
     expect(Number(scrobbleRequests[0].timestamp)).toBeGreaterThan(0);
-    expect(Number(scrobbleRequests[0].duration)).toBeGreaterThan(10);
+    expect(Number(scrobbleRequests[0].duration)).toBeGreaterThan(30);
     expect(playbackJourney.track.title).toBe(SCROBBLE_TRACK);
   });
 });
 
-test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order', { tag: '@area:playback' }, async ({
+test('FTC-PLAYBACK-LASTFM-016 consecutive tracks over 30 s each scrobble exactly once in order and a shorter one never does', { tag: '@area:playback' }, async ({
   galleryActions,
   navigationPanelActions,
   playbackEvidence,
@@ -240,7 +246,11 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
   utilityIntegrationsActions,
   utilityTabBarActions,
 }, testInfo) => {
+  // The 14 s loop source leads three 32 s tracks; Last.fm never scrobbles a track of 30 s or less.
+  const playedTitles = [LASTFM_PLAYBACK_TARGET.track, ...LASTFM_CONSECUTIVE_PLAYBACK_TRACKS];
   let providerRequestBaseline = 0;
+  let statisticsBaseline;
+  let summaryBaseline;
 
   await stepLogger.step('Ensure the isolated Postgres app is connected to the loopback Last.fm provider', async () => {
     await galleryActions.goto();
@@ -252,12 +262,14 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
       username: LASTFM_USER,
       password: LASTFM_PASSWORD,
     });
+    statisticsBaseline = await utilityIntegrationsActions.readPersistedPlaybackStatistics();
+    summaryBaseline = await utilityIntegrationsActions.readLastfmSummary();
     await settingsModalAppBarActions.closeSettings();
     providerRequestBaseline = (await readLastfmProviderRequests(testInfo)).length;
   });
 
   let journeys;
-  await stepLogger.step('Play three consecutive generated tracks through the production queue', async () => {
+  await stepLogger.step('Play the short loop source and three following longer tracks through the production queue', async () => {
     await navigationPanelActions.selectSidebarArtistByName(LASTFM_PLAYBACK_TARGET.artist);
     await navigationPanelActions.waitForSidebarSelection(LASTFM_PLAYBACK_TARGET.artist);
     await galleryActions.waitForAlbumVisibleUnderHeading(
@@ -269,17 +281,18 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
       LASTFM_PLAYBACK_TARGET.album,
     );
     await trackModalActions.waitForInteractiveSummary();
-    const tracks = await Promise.all(LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.map(
+    const tracks = await Promise.all(playedTitles.map(
       (_title, offset) => trackModalActions.readTrackAt(offset),
     ));
     const playbackMark = await playbackEvidence.playbackMark();
     const evidencePromises = tracks.map((track) => playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: track.path,
-    }));
+    }, { timeout: CONSECUTIVE_JOURNEY_TIMEOUT_MS }));
     journeys = await trackModalActions.playTrackAtAndWaitForConsecutiveLastfmJourneys(
       0,
-      LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
+      playedTitles,
+      { scrobbleTitles: LASTFM_CONSECUTIVE_PLAYBACK_TRACKS, timeout: CONSECUTIVE_JOURNEY_TIMEOUT_MS },
     );
     const evidence = await Promise.all(evidencePromises);
     expect(evidence.map((entry) => entry.path)).toEqual(tracks.map((track) => track.path));
@@ -288,10 +301,20 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
     expect(journeys.scrobbles.map((event) => event.request.title)).toEqual(
       LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
     );
-    expect(journeys.completions.map((event) => event.request.title)).toEqual(
-      LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
-    );
-    expect(journeys.completions).toHaveLength(LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.length);
+    expect(journeys.completions.map((event) => event.request.title)).toEqual(playedTitles);
+    expect(journeys.completions).toHaveLength(playedTitles.length);
+    const [shortCompletion, ...longCompletions] = journeys.completions;
+    expect(Number(shortCompletion.request.duration_seconds)).toBeLessThanOrEqual(30);
+    expect(shortCompletion.response.entry).toMatchObject({
+      finalized: true,
+      scrobble_eligible: false,
+      scrobbled: false,
+    });
+    expect(longCompletions.every((event) => (
+      Number(event.request.duration_seconds) > 30
+      && event.response.entry?.scrobble_eligible === true
+      && event.response.entry?.scrobbled === true
+    ))).toBe(true);
     const scrobbleStartedAt = journeys.scrobbles.map(
       (event) => String(event.request.started_at || '').trim(),
     );
@@ -299,11 +322,32 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
       (event) => String(event.request.started_at || '').trim(),
     );
     expect(completionStartedAt.every((startedAt) => startedAt.length > 0)).toBe(true);
-    expect(new Set(completionStartedAt).size).toBe(LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.length);
-    expect(completionStartedAt).toEqual(scrobbleStartedAt);
+    expect(new Set(completionStartedAt).size).toBe(playedTitles.length);
+    expect(completionStartedAt.slice(1)).toEqual(scrobbleStartedAt);
   });
 
-  await stepLogger.step('Verify the provider recorded one signed scrobble for each track in exact order', async () => {
+  await stepLogger.step('Show every listen in playback statistics and only the longer tracks as scrobbled', async () => {
+    // The tracks played from Album Details, which covers the app bar until it is closed.
+    await trackModalActions.close();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('integrations');
+    await utilityIntegrationsActions.waitForReady();
+    await utilityIntegrationsActions.expectPlaybackStatistics(
+      statisticsBaseline.local_playcount + playedTitles.length,
+      statisticsBaseline.total_listening_seconds + journeys.completions.reduce(
+        (total, event) => total + Number(event.response.entry.measured_listened_seconds),
+        0,
+      ),
+    );
+    await utilityIntegrationsActions.waitForLastfmSummary({
+      scrobbled: summaryBaseline.scrobbled + LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.length,
+      pending: summaryBaseline.pending,
+      lastfmTotal: summaryBaseline.lastfmTotal + LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.length,
+    });
+    await settingsModalAppBarActions.closeSettings();
+  });
+
+  await stepLogger.step('Verify the provider recorded one signed scrobble for each longer track in exact order', async () => {
     const requests = (await readLastfmProviderRequests(testInfo)).slice(providerRequestBaseline);
     const scrobbles = requests.filter((request) => request.method === 'track.scrobble');
     expect(scrobbles.map((request) => request.track)).toEqual(
@@ -316,6 +360,7 @@ test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in o
       && request.session_key_valid
       && request.chosen_by_user === '1'
       && Number(request.timestamp) > 0
+      && Number(request.duration) > 30
     ))).toBe(true);
     expect(new Set(scrobbles.map((request) => request.timestamp)).size).toBe(
       LASTFM_CONSECUTIVE_PLAYBACK_TRACKS.length,
@@ -367,8 +412,9 @@ test('FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submi
       LASTFM_PLAYBACK_TARGET.album,
     );
     await trackModalActions.waitForInteractiveSummary();
-    const pendingJourney = await trackModalActions.playTrackAtAndWaitForPendingLastfmJourney(0, {
+    const pendingJourney = await trackModalActions.playTrackAtAndWaitForPendingLastfmJourney(LASTFM_SCROBBLE_TRACK.index, {
       title: SCROBBLE_TRACK,
+      timeout: SCROBBLE_JOURNEY_TIMEOUT_MS,
     });
     expect(pendingJourney.scrobble.scrobbled).toBe(false);
     expect(pendingJourney.scrobble.entry.scrobble_retryable).toBe(true);

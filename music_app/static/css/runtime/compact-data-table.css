@@ -96,6 +96,38 @@
   white-space: nowrap;
 }
 
+/* Single selection: one choice per row with cell dividers and a full-height action cell. */
+.compact-data-table[data-cdt-selection="single"] .compact-data-table-header,
+.compact-data-table[data-cdt-selection="single"] .compact-data-table-row {
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+
+.compact-data-table[data-cdt-selection="single"] [role="columnheader"],
+.compact-data-table[data-cdt-selection="single"] [role="cell"] {
+  display: flex;
+  align-items: center;
+  min-height: var(--cdt-row-min-height);
+  padding: var(--cdt-row-padding);
+}
+
+.compact-data-table[data-cdt-selection="single"] [role="cell"] + [role="cell"],
+.compact-data-table[data-cdt-selection="single"] [role="columnheader"] + [role="columnheader"] {
+  border-left: 1px solid color-mix(in srgb, var(--cdt-divider, rgba(148, 163, 184, 0.18)) 65%, transparent);
+}
+
+.compact-data-table[data-cdt-selection="single"] [data-cdt-action] {
+  justify-content: center;
+  justify-self: stretch;
+  width: auto;
+  padding: 0;
+}
+
+.compact-data-table[data-cdt-selection="single"] .compact-data-table-row[aria-selected="true"] {
+  background: color-mix(in srgb, var(--accent, #4199c3) 12%, transparent);
+}
+
 @media (max-width: 720px) {
   .compact-data-table[data-cdt-mobile="preserve"] .compact-data-table-header,
   .compact-data-table[data-cdt-mobile="preserve"] .compact-data-table-row {

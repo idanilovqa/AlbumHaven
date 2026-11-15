@@ -470,8 +470,93 @@ test('loadProblematicFiles sends structured server filters and retains aggregate
   ]);
 });
 
+test('a bounded continuation preserves selected MusicBrainz detail and manual validation', async () => {
+  const fullResponse = createDeferred();
+  const response = (payload) => ({
+    ok: true,
+    status: 200,
+    async json() { return payload; },
+  });
+  const artist = {
+    key: 'musicbrainz-artist:6',
+    entity_kind: 'artist',
+    local_artist_id: 6,
+    name: 'Functional Balance Artist 03',
+    detail_loaded: false,
+  };
+  const { context } = loadHelper({
+    isMusicBrainzArtistProblem: (item) => item?.entity_kind === 'artist',
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return response({ next_cursor: 'page-2', total: 2, items: [{ ...artist }] });
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  await context.loadProblematicFiles(true);
+  context.state.utility.selectedProblematicKey = artist.key;
+  const selected = context.state.utility.problematicFiles[0];
+  selected.musicbrainz_detail = { problem_reason_code: 'musicbrainz_artist_not_found' };
+  selected.musicbrainz_ui = {
+    manualValue: '0e2e0001-0000-4000-8000-000000000008',
+    validated: { canonical_name: artist.name },
+  };
+
+  const continuation = context.loadNextProblematicFilesPage();
+  fullResponse.resolve(response({ items: [{ ...artist }] }));
+  await continuation;
+
+  assert.equal(context.state.utility.problematicFiles[0], selected);
+  assert.equal(context.state.utility.problematicFiles[0].musicbrainz_ui.validated.canonical_name, artist.name);
+});
+
+test('a render-suppressed bounded refresh paints the refreshed detail that replaced a clicked album request', async () => {
+  const fullResponse = createDeferred();
+  const clickedDetail = createDeferred();
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const detailBody = (name) => ({
+    key: 'clicked',
+    name,
+    detail_loaded: true,
+    tracks: [],
+    repair_preview_rows: [],
+    track_problem_rows: [],
+    problematic_track_paths: [],
+  });
+  let detailRequests = 0;
+  let summaryRequests = 0;
+  const { context, calls } = loadHelper({
+    async fetch(url) {
+      const target = String(url);
+      if (target.endsWith('?limit=50') && summaryRequests++ === 0) {
+        return json({ items: [{ key: 'clicked', name: 'Clicked', issue_count: 1, detail_loaded: false }] });
+      }
+      if (target.includes('/detail?')) {
+        detailRequests += 1;
+        return detailRequests === 1 ? clickedDetail.promise : json(detailBody('Clicked refreshed detail'));
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  await context.loadProblematicFiles(true, { render: false });
+  context.state.utility.selectedProblematicKey = 'clicked';
+  void context.loadProblematicAlbumDetail('clicked');
+  const load = context.loadProblematicFiles(true, { render: false, preserveSelectedDetail: true });
+  fullResponse.resolve(json({ items: [{ key: 'clicked', name: 'Clicked', issue_count: 2, detail_loaded: false }] }));
+  await load;
+  clickedDetail.resolve(json(detailBody('Clicked stale detail')));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(detailRequests, 2);
+  assert.equal(context.state.utility.problematicFiles[0].name, 'Clicked refreshed detail');
+  assert.ok(calls.renders >= 1, 'the refreshed detail replaced the clicked request, so it must paint');
+});
+
 test('loadProblematicFiles reuses one bounded request for a concurrent forced load', async () => {
   const pageResponse = createDeferred();
+
   const requestedUrls = [];
   const detail = {
     key: 'first',
@@ -3493,4 +3578,35 @@ test('targeted identity commits the canonical off-page detail', async () => {
   await navigation;
   assert.equal(h.context.state.utility.selectedProblematicDetail?.name,
     'Canonical targeted detail');
+});
+
+test('a forced refresh keeps the complete list on screen instead of painting its bounded page', async () => {
+  const fullResponse = createDeferred();
+  const renderedLengths = [];
+  const item = (key) => ({ key, name: key, detail_loaded: false });
+  const response = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
+  const { context } = loadHelper({
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return response({ complete: false, items: [item('first')] });
+      }
+      return fullResponse.promise;
+    },
+    renderUtilityModalContent() {
+      renderedLengths.push(context.state.utility.problematicFiles.length);
+    },
+  });
+  Object.assign(context.state.utility, {
+    loaded: true,
+    problematicFilesComplete: true,
+    problematicFiles: [item('first'), item('second'), item('third')],
+  });
+
+  const refresh = context.loadProblematicFiles(true, { preserveSelectedDetail: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  fullResponse.resolve(response({ items: [item('first'), item('third')] }));
+  await refresh;
+
+  assert.deepEqual(renderedLengths, [3, 2], 'only the replaced and the complete list paint');
 });

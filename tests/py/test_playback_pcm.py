@@ -9,16 +9,27 @@ import wave
 
 import pytest
 
+from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
 from music_app.services.playback_pcm import (
     PcmDecoderProcess,
     PcmOpenCommand,
     PcmStreamMetadata,
     pack_pcm_frame,
+    read_native_sample_rate,
 )
 
 
 SAMPLE_RATE = 48_000
 BYTES_PER_STEREO_FRAME = 8
+
+
+@pytest.fixture(autouse=True)
+def fixture_native_sample_rate(request, monkeypatch):
+    if request.function.__name__ != "test_native_sample_rate_is_read_from_the_file":
+        monkeypatch.setattr(
+            "music_app.services.playback_pcm.read_native_sample_rate",
+            lambda *_args, **_kwargs: SAMPLE_RATE,
+        )
 
 
 def open_command(path: Path = Path("fixture.wav"), **changes) -> PcmOpenCommand:
@@ -154,7 +165,7 @@ def test_decoder_builds_path_independent_accurate_seek_and_f32le_stereo_command(
         assert args[args.index("-f") + 1] == "f32le"
         assert args[args.index("-acodec") + 1] == "pcm_f32le"
         assert args[args.index("-ac") + 1] == "2"
-        assert args[args.index("-ar") + 1] == str(SAMPLE_RATE)
+        assert "-ar" not in args
         assert args[-1] == "pipe:1"
         assert kwargs["stdout"] is asyncio.subprocess.PIPE
         assert kwargs["stderr"] is asyncio.subprocess.PIPE
@@ -554,3 +565,33 @@ def test_vbr_seek_is_codec_tolerant_around_requested_sentinel(tmp_path):
 
     assert len(samples) == 512
     assert average == pytest.approx(12_000 / 32_768, abs=0.08)
+
+
+@pytest.mark.parametrize("sample_rate", [22_050, 44_100, 48_000, 96_000])
+def test_native_sample_rate_is_read_from_the_file(tmp_path, sample_rate):
+    executable = resolve_ffmpeg_executable()
+    if not executable:
+        pytest.skip("ffmpeg is required")
+    source = tmp_path / f"{sample_rate}.wav"
+    with wave.open(str(source), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(b"\0" * 4 * sample_rate)
+
+    assert read_native_sample_rate(source, ffmpeg_executable=executable) == sample_rate
+
+
+def test_decoder_refuses_to_declare_a_rate_other_than_the_files_own():
+    async def scenario() -> None:
+        async def unexpected_process(*_args, **_kwargs):
+            raise AssertionError("ffmpeg must not start for a mismatched rate")
+
+        with pytest.raises(ValueError, match="native rate"):
+            await PcmDecoderProcess.start(
+                open_command(sample_rate=44_100),
+                ffmpeg_executable="ffmpeg-test",
+                process_factory=unexpected_process,
+            )
+
+    asyncio.run(scenario())

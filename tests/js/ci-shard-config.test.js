@@ -6,12 +6,12 @@ const resolverPath = path.resolve(__dirname, '..', '..', 'scripts', 'ci', 'resol
 
 test('functional shard resolver preserves the existing port and artifact mapping', () => {
   const { resolveFunctionalShard } = require(resolverPath);
-  assert.deepEqual(resolveFunctionalShard('gallery-search-visual'), {
-    shard: 'gallery-search-visual',
-    displayName: 'Gallery, Search & Visual',
+  assert.deepEqual(resolveFunctionalShard('gallery-search-visual-1'), {
+    shard: 'gallery-search-visual-1',
+    displayName: 'Gallery, Search & Visual 1',
     portBase: 5200,
-    outputDir: 'functional-output-gallery-search-visual',
-    blobName: 'functional-blob-gallery-search-visual',
+    outputDir: 'functional-output-gallery-search-visual-1',
+    blobName: 'functional-blob-gallery-search-visual-1',
   });
   assert.equal(resolveFunctionalShard('cover-providers-2').portBase, 5350);
   assert.equal(resolveFunctionalShard('playback-utilities-3').portBase, 5600);

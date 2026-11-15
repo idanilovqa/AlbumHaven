@@ -308,6 +308,41 @@ def _rebase_committed_structural_entry_changes(
     return rebased_file_cache
 
 
+def _mark_structurally_inherited_cover_entries(
+    *,
+    file_cache: dict[str, JsonDict],
+    previous_file_entries: dict[str, JsonDict],
+    updated_file_entries: dict[str, JsonDict],
+    changed_paths: set[str],
+) -> dict[str, JsonDict]:
+    def cover_identity(entry: object) -> tuple[str, str, str] | None:
+        if not isinstance(entry, dict):
+            return None
+        cover_path = str(entry.get("cover_path") or "").strip()
+        if not cover_path:
+            return None
+        return (
+            " ".join(str(entry.get("album_artist") or "").casefold().split()),
+            " ".join(str(entry.get("album") or "").casefold().split()),
+            os.path.normcase(str(Path(cover_path).resolve(strict=False))),
+        )
+
+    inherited_identities = {
+        identity
+        for path in changed_paths
+        for entries in (previous_file_entries, updated_file_entries)
+        if (identity := cover_identity(entries.get(path))) is not None
+    }
+    marked_cache = dict(file_cache)
+    for path, entry in file_cache.items():
+        if cover_identity(entry) not in inherited_identities:
+            continue
+        marked_entry = dict(entry)
+        marked_entry["cover_inherited_from_structural_edit"] = True
+        marked_cache[path] = marked_entry
+    return marked_cache
+
+
 def _normalize_empty_exception_rebase_entries(
     file_cache: dict[str, JsonDict],
     *,
@@ -940,6 +975,13 @@ def finalize_structural_tag_edit_save_task(
                 changed_entries=changed_entries,
                 latest_file_cache=current_file_cache,
             )
+            if persistence_result.get("cover_inherited_from_structural_edit") is True:
+                current_file_cache = _mark_structurally_inherited_cover_entries(
+                    file_cache=current_file_cache,
+                    previous_file_entries=previous_file_cache,
+                    updated_file_entries=updated_file_cache,
+                    changed_paths=changed_paths,
+                )
             st["file_cache"] = current_file_cache
             required_relation_fields = (
                 structural_edit_fields | {"artist"}

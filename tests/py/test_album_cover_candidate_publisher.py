@@ -323,6 +323,61 @@ def test_publish_deduplicates_normalized_urls_and_ranks_best_candidate_first():
     assert repository.snapshot["best_candidate_id"] == stored[0]["id"]
 
 
+def test_incremental_publish_keeps_existing_candidate_order_when_a_better_candidate_arrives():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    first = raw_candidate(
+        "https://images.example/first.jpg",
+        source="direct_url",
+        score=0.70,
+        width=800,
+        height=800,
+    )
+    second = raw_candidate(
+        "https://images.example/second.jpg",
+        source="discogs",
+        score=0.65,
+        width=700,
+        height=700,
+    )
+    later_best = raw_candidate(
+        "https://images.example/later-best.jpg",
+        source="cover_art_archive",
+        score=0.99,
+        width=1400,
+        height=1400,
+    )
+
+    assert publisher.publish_candidates([first, second]) is True
+    original_ids = [item["id"] for item in repository.snapshot["candidates"]]
+
+    assert publisher.publish_candidates([later_best]) is True
+
+    stored = repository.snapshot["candidates"]
+    assert [item["id"] for item in stored[:2]] == original_ids
+    assert stored[2]["url"] == "https://images.example/later-best.jpg"
+    assert repository.snapshot["best_candidate_id"] == stored[2]["id"]
+
+
+def test_display_order_follows_the_snapshot_when_a_later_merge_reorders_providers():
+    repository = FakeSnapshotRepository()
+    publisher = publisher_for(repository)
+    service = raw_candidate("https://images.example/service.jpg", source="apple", score=0.9)
+    archive = raw_candidate("https://images.example/archive.jpg", source="cover_art_archive", score=0.6)
+    discogs = raw_candidate("https://images.example/discogs.jpg", source="discogs", score=0.7)
+    unpublished = {"url": "http://127.0.0.1/private.jpg", "source": "direct_url"}
+
+    # Cover Art Archive answers first; the final merge lists Discogs before it.
+    publisher.publish_candidates([service, archive])
+    merged = [service, discogs, archive, unpublished]
+    publisher.publish_candidates(merged)
+
+    assert publisher.display_ordered(merged) == [service, archive, discogs, unpublished]
+    assert [item["url"] for item in repository.snapshot["candidates"]] == [
+        candidate["url"] for candidate in (service, archive, discogs)
+    ]
+
+
 def test_publish_caps_the_ranked_snapshot_at_24_candidates():
     repository = FakeSnapshotRepository()
     publisher = publisher_for(repository)

@@ -1360,7 +1360,10 @@ def test_build_view_payload_merges_case_only_variants_for_shared_artist_groups(a
         "Exit in Darkness",
         "Live Session",
     ]
-    assert [item["artist"] for item in payload["artists_sidebar"]] == ["Mono / A.A. Williams"]
+    assert [item["artist"] for item in payload["artists_sidebar"]] == [
+        "A.A. Williams",
+        "Mono",
+    ]
 
 
 def test_build_view_payload_merges_case_only_solo_artist_variants_even_when_relation_views_are_stale(app):
@@ -7556,6 +7559,7 @@ def test_public_safe_album_payload_strips_private_app_rating_but_preserves_share
         "to_listen": False,
         "is_relisten": False,
         "can_toggle_to_listen": False,
+        "disc_ratings": [{"disc_key": "bonus disc", "rating": 8}],
     }
     private_payload = {
         "key": "rated-album",
@@ -7575,6 +7579,7 @@ def test_public_safe_album_payload_strips_private_app_rating_but_preserves_share
 
     assert public_payload["album_preference"]["rating"] is None
     assert public_payload["album_preference"]["can_edit"] is False
+    assert "disc_ratings" not in public_payload["album_preference"]
     assert public_payload["gallery_list_block"]["summary"]["album_preference"] == public_payload[
         "album_preference"
     ]

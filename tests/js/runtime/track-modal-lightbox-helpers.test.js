@@ -341,6 +341,13 @@ function loadHelper(options = {}) {
     showToast(message, tone, duration) {
       context.showToastCalls.push({ message, tone, duration });
     },
+    cancelActiveLightboxPreloader() {
+      const activePreloader = context.state.lightbox.activePreloader;
+      if (!activePreloader) return;
+      activePreloader.onload = null;
+      activePreloader.onerror = null;
+      context.state.lightbox.activePreloader = null;
+    },
     escapeHtml(value) {
       return String(value);
     },
@@ -530,6 +537,294 @@ test('preview hydration completes before full-size artwork preload', async () =>
   );
 });
 
+test('stale album hydration sends its id and renders current split choices', async () => {
+  const choices = [
+    { album_id: 92, key: 'artist::left', name: 'Left Album', track_count: 4 },
+    { album_id: 93, key: 'artist::right', name: 'Right Album', track_count: 5 },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: ({ url }) => ({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        error: 'This album was split—choose the current release',
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    }),
+  });
+
+  context.openTrackModal({
+    album_id: 17,
+    key: 'artist::old',
+    name: 'Old Album',
+    preview_only: true,
+    track_count: 9,
+  });
+  await flushMicrotasks();
+
+  assert.equal(
+    context.fetchCalls[0].url,
+    '/album-details?album_key=artist%3A%3Aold&album_id=17',
+  );
+  assert.match(
+    context.getTrackModalElements().list.innerHTML,
+    /data-track-modal-current-release="92"[\s\S]*Left Album[\s\S]*data-track-modal-current-release="93"[\s\S]*Right Album/,
+  );
+  assert.equal(context.showToastCalls.length, 0);
+
+  assert.equal(context.selectTrackModalCurrentRelease('92'), true);
+  await flushMicrotasks();
+  assert.equal(
+    context.fetchCalls[1].url,
+    '/album-details?album_key=artist%3A%3Aleft&album_id=92',
+  );
+});
+
+test('this session keeps its recovered split release rendered during inventory refresh', async () => {
+  const choices = [
+    { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
+    { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
+  ];
+  const selected = {
+    album_id: 93,
+    key: 'artist::album::year::2004',
+    request_key: 'artist::album::year::2004',
+    name: 'Album',
+    year: 2004,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Recovered track' }],
+  };
+  let resolveRefresh = null;
+  const responses = [
+    {
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    },
+    {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true, album: selected }),
+    },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => responses.shift() || new Promise((resolve) => {
+      resolveRefresh = resolve;
+    }),
+  });
+
+  const card = {
+    album_id: 17,
+    key: 'artist::album',
+    name: 'Album',
+    year: 2004,
+    preview_only: true,
+  };
+  context.rememberLocallyEditedAlbum(card);
+  context.openTrackModal(card);
+  await flushMicrotasks();
+
+  assert.equal(
+    context.fetchCalls[1].url,
+    '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
+  );
+
+  const elements = context.getTrackModalElements();
+  const renderedRows = elements.list.innerHTML;
+  context.refreshOpenTrackModalVersionState = () => {};
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+  assert.equal(elements.list.innerHTML, renderedRows);
+  assert.doesNotMatch(context.fetchCalls[2].url, /resolve_lineage=1/);
+  resolveRefresh({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: selected }),
+  });
+  assert.equal(await refresh, true);
+});
+
+test('a card rendered before an inventory mutation resolves lineage before current identity', () => {
+  const staleRenderedAlbum = {
+    album_id: 17,
+    key: 'artist::original',
+    name: 'Original Album',
+    album_artist: 'Artist',
+    preview_only: true,
+    track_count_preview: 9,
+    identity_revision: 7,
+  };
+  const currentIndexedAlbum = {
+    ...staleRenderedAlbum,
+    track_count_preview: 4,
+    identity_revision: 8,
+  };
+  const { context } = loadHelper({
+    initialAlbums: [currentIndexedAlbum],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => ({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        ok: false,
+        error: 'This album was split—choose the current release',
+        resolution_kind: 'album_split',
+        current_releases: [],
+      }),
+    }),
+  });
+  const staleButton = new context.HTMLElement('stale-card');
+  staleButton.setAttribute('data-album-key', staleRenderedAlbum.key);
+  staleButton.setAttribute('data-album', JSON.stringify(staleRenderedAlbum));
+
+  assert.equal(context.openTrackModalForButton(staleButton), true);
+  assert.equal(
+    context.fetchCalls[0].url,
+    '/album-details?album_key=artist%3A%3Aoriginal&album_id=17&resolve_lineage=1',
+  );
+});
+
+test('an unstamped preview card does not claim stale lineage', () => {
+  const album = {
+    album_id: 17,
+    key: 'artist::current',
+    name: 'Current Album',
+    album_artist: 'Artist',
+    preview_only: true,
+    identity_revision: null,
+  };
+  const { context } = loadHelper({
+    initialAlbums: [album],
+    inventoryMutationRevision: 8,
+  });
+  const button = new context.HTMLElement('unstamped-card');
+  button.setAttribute('data-album-key', album.key);
+  button.setAttribute('data-album', JSON.stringify(album));
+
+  assert.equal(context.openTrackModalForButton(button), true);
+  assert.equal(
+    context.fetchCalls[0].url,
+    '/album-details?album_key=artist%3A%3Acurrent&album_id=17',
+  );
+});
+
+test('a stale card bypasses current hydrated details before resolving lineage', () => {
+  const staleRenderedAlbum = {
+    album_id: 17,
+    key: 'artist::original',
+    name: 'Original Album',
+    album_artist: 'Artist',
+    preview_only: true,
+    identity_revision: 7,
+  };
+  const currentHydratedAlbum = {
+    ...staleRenderedAlbum,
+    preview_only: false,
+    identity_revision: 8,
+    tracks: [{ path: 'C:\\Music\\Artist\\Original Album\\01 Current.flac' }],
+  };
+  const { context } = loadHelper({
+    initialAlbums: [staleRenderedAlbum],
+    inventoryMutationRevision: 8,
+  });
+  context.cacheHydratedTrackModalAlbum(staleRenderedAlbum.key, currentHydratedAlbum);
+  const button = new context.HTMLElement('stale-cached-card');
+  button.setAttribute('data-album-key', staleRenderedAlbum.key);
+  button.setAttribute('data-album', JSON.stringify(staleRenderedAlbum));
+
+  assert.equal(context.openTrackModalForButton(button), true);
+  assert.equal(context.fetchCalls.length, 1);
+  assert.match(context.fetchCalls[0].url, /resolve_lineage=1$/);
+});
+
+test('Album Details retries by key when an older server rejects album_id', async () => {
+  const album = {
+    album_id: 419232,
+    key: 'начало века и хелависа::чартова дюжина',
+    name: 'Чартова Дюжина',
+    tracks: [{ path: 'N:/Music/Начало Века/Чартова Дюжина.mp3' }],
+  };
+  const { context } = loadHelper({
+    onFetchAlbumDetails: ({ url }) => url.includes('album_id=')
+      ? {
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({
+          ok: false,
+          error: 'Unsupported album-details query parameter',
+          unsupported_parameters: ['album_id'],
+        }),
+      }
+      : {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true, album }),
+      },
+  });
+
+  context.openTrackModal({ ...album, preview_only: true, tracks: [] });
+  await flushMicrotasks();
+
+  assert.deepEqual(
+    context.fetchCalls.map((call) => call.url),
+    [
+      '/album-details?album_key=%D0%BD%D0%B0%D1%87%D0%B0%D0%BB%D0%BE%20%D0%B2%D0%B5%D0%BA%D0%B0%20%D0%B8%20%D1%85%D0%B5%D0%BB%D0%B0%D0%B2%D0%B8%D1%81%D0%B0%3A%3A%D1%87%D0%B0%D1%80%D1%82%D0%BE%D0%B2%D0%B0%20%D0%B4%D1%8E%D0%B6%D0%B8%D0%BD%D0%B0&album_id=419232',
+      '/album-details?album_key=%D0%BD%D0%B0%D1%87%D0%B0%D0%BB%D0%BE%20%D0%B2%D0%B5%D0%BA%D0%B0%20%D0%B8%20%D1%85%D0%B5%D0%BB%D0%B0%D0%B2%D0%B8%D1%81%D0%B0%3A%3A%D1%87%D0%B0%D1%80%D1%82%D0%BE%D0%B2%D0%B0%20%D0%B4%D1%8E%D0%B6%D0%B8%D0%BD%D0%B0',
+    ],
+  );
+  assert.equal(context.renderTrackModalReleaseCalls.at(-1), album.key);
+  assert.equal(context.showToastCalls.length, 0);
+});
+
+test('a superseded Album Details response cannot replace the newer album', async () => {
+  const responses = new Map();
+  const previews = [
+    { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] },
+    { key: 'beta', name: 'Album Beta', preview_only: true, tracks: [] },
+  ];
+  const { context } = loadHelper({
+    initialAlbums: previews,
+    onFetchAlbumDetails: ({ url }) => new Promise((resolve) => {
+      responses.set(decodeURIComponent(url).includes('beta') ? 'beta' : 'alpha', resolve);
+    }),
+  });
+
+  context.openTrackModal(previews[0]);
+  context.openTrackModal(previews[1]);
+
+  responses.get('beta')({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      album: { key: 'beta', name: 'Album Beta', tracks: [{ path: 'beta.flac' }] },
+    }),
+  });
+  await flushMicrotasks();
+  const betaRenderCount = context.renderTrackModalReleaseCalls.length;
+  const betaReleaseKeys = context.state.modalReleases.map((album) => album.key);
+
+  responses.get('alpha')({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      album: { key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'alpha.flac' }] },
+    }),
+  });
+  await flushMicrotasks();
+
+  assert.equal(context.getTrackModalElements().title.textContent, 'Album Beta');
+  assert.deepEqual(context.state.modalReleases.map((album) => album.key), betaReleaseKeys);
+  assert.equal(context.renderTrackModalReleaseCalls.length, betaRenderCount);
+  assert.equal(context.renderTrackModalReleaseCalls.at(-1), 'beta');
+});
+
 test('player Album Details takes foreground without closing Settings or its draft', () => {
   const { context, trackModal, utilityModal, documentListeners } = loadHelper({ utilityLoaded: true });
   const draft = { title: 'Unsaved appearance' };
@@ -678,11 +973,82 @@ test('S05 lightbox wraps Tab and Shift+Tab inside its enabled controls', () => {
 });
 
 test('S05 closing artwork never restores focus to a detached trigger', () => {
-  const { context, trigger } = lightboxFocusHarness();
+  const { context, close, trigger } = lightboxFocusHarness();
   context.openImageLightbox('/cover.png', 'Test artwork');
   trigger.isConnected = false;
   trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
   assert.doesNotThrow(() => context.closeImageLightbox());
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S04 closing artwork restores focus to one equivalent replacement trigger', () => {
+  const { context, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('replacement-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.hidden = false;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, replacement);
+});
+
+test('S04 closing artwork does not restore focus to a hidden replacement trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('hidden-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S04 closing artwork does not restore focus to a visually hidden replacement trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('visually-hidden-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.hidden = false;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+  const getComputedStyle = context.getComputedStyle;
+  context.getComputedStyle = (element) => (
+    element === replacement ? { visibility: 'hidden' } : getComputedStyle(element)
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, close);
 });
 
 for (const activation of ['pointer', 'keyboard']) {
@@ -837,6 +1203,233 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
+test('inventory mutation refresh hides stale rows while canonical details load', async () => {
+  const stale = {
+    key: 'watcher-album',
+    request_key: 'watcher-album',
+    name: 'Watcher Album',
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Old title' }],
+  };
+  const fresh = {
+    ...stale,
+    tracks: [{ path: 'one', title: 'Fresh title' }],
+  };
+  let resolveResponse = null;
+  const { context } = loadHelper({
+    initialAlbums: [stale],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }),
+  });
+  context.state.modalReleases = [stale];
+  context.state.modalReleaseIndex = 0;
+  const elements = context.getTrackModalElements();
+  elements.overlay.hidden = false;
+  elements.list.innerHTML = '<li>Old title</li>';
+  context.refreshOpenTrackModalVersionState = () => {};
+
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+
+  assert.match(elements.list.innerHTML, /track-modal-loading-row/);
+  assert.doesNotMatch(elements.list.innerHTML, /Old title/);
+  resolveResponse({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: fresh }),
+  });
+  assert.equal(await refresh, true);
+});
+
+test('inventory mutation refresh keeps rows and title of an album this session edited', async () => {
+  const edited = {
+    key: 'edited-album',
+    request_key: 'edited-album',
+    name: 'Edited Album',
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Optimistic title' }],
+  };
+  let resolveResponse = null;
+  const { context } = loadHelper({
+    initialAlbums: [edited],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: () => new Promise((resolve) => {
+      resolveResponse = resolve;
+    }),
+  });
+  context.state.modalReleases = [edited];
+  context.state.modalReleaseIndex = 0;
+  const elements = context.getTrackModalElements();
+  elements.overlay.hidden = false;
+  elements.title.textContent = 'Artist - Edited Album';
+  elements.subtitle.textContent = '1 track';
+  elements.list.innerHTML = '<li>Optimistic title</li>';
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+  context.rememberLocallyEditedAlbum(edited);
+
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+
+  assert.equal(elements.list.innerHTML, '<li>Optimistic title</li>');
+  assert.equal(elements.title.textContent, 'Artist - Edited Album');
+  assert.equal(elements.subtitle.textContent, '1 track');
+  resolveResponse({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: edited }),
+  });
+  assert.equal(await refresh, true);
+  assert.deepEqual(refreshed, [{ albumKey: 'edited-album', album: edited }]);
+});
+
+test('inventory mutation refresh follows a cached stale child to its merged release', async () => {
+  const staleChild = {
+    album_id: 17,
+    key: 'artist::current-release-a',
+    request_key: 'artist::current-release-a',
+    name: 'Current Release A',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const mergedRelease = {
+    album_id: 9,
+    key: 'artist::two-track-rarity-fixture',
+    request_key: 'artist::two-track-rarity-fixture',
+    name: 'Two Track Rarity Fixture',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const { context } = loadHelper({
+    initialAlbums: [staleChild],
+    inventoryMutationRevision: 13,
+    onFetchAlbumDetails: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, album: mergedRelease }),
+    }),
+  });
+  context.cacheHydratedTrackModalAlbum(staleChild.key, staleChild);
+  context.state.modalReleases = [staleChild];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  assert.equal(context.fetchCalls.length, 1, 'canonical refresh must bypass stale hydrated details');
+  assert.match(
+    context.fetchCalls[0].url,
+    /album_key=artist%3A%3Acurrent-release-a&album_id=17/,
+  );
+  assert.deepEqual(refreshed, [{ albumKey: staleChild.key, album: mergedRelease }]);
+});
+
+test('inventory mutation refresh does not reuse an in-flight stale child after merge', async () => {
+  const staleChild = {
+    album_id: 17,
+    key: 'artist::current-release-a',
+    request_key: 'artist::current-release-a',
+    name: 'Current Release A',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const mergedRelease = {
+    album_id: 9,
+    key: 'artist::two-track-rarity-fixture',
+    request_key: 'artist::two-track-rarity-fixture',
+    name: 'Two Track Rarity Fixture',
+    album_artist: 'Artist',
+    year: 2026,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Track One' }],
+  };
+  const responseResolvers = [];
+  const { context } = loadHelper({
+    initialAlbums: [staleChild],
+    inventoryMutationRevision: 12,
+    onFetchAlbumDetails: async () => new Promise((resolve) => responseResolvers.push(resolve)),
+  });
+  context.state.modalReleases = [staleChild];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+  const refreshed = [];
+  context.refreshOpenTrackModalVersionState = (albumKey, album) => {
+    refreshed.push({ albumKey, album });
+  };
+
+  const staleLoad = context.loadTrackModalAlbumDetails(staleChild.key, { albumId: 17 });
+  context.state.status.inventory_mutation_revision = 13;
+  const canonicalRefresh = context.refreshOpenTrackModalAfterInventoryMutation();
+  responseResolvers[0]({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: staleChild }),
+  });
+  await flushAlbumDetailsHydration();
+  if (responseResolvers[1]) {
+    responseResolvers[1]({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, album: mergedRelease }),
+    });
+  }
+
+  assert.equal(await staleLoad, mergedRelease);
+  assert.equal(await canonicalRefresh, true);
+  assert.equal(context.fetchCalls.length, 2);
+  assert.deepEqual(refreshed, [{ albumKey: staleChild.key, album: mergedRelease }]);
+});
+
+test('inventory mutation refresh renders current releases when the open album split', async () => {
+  const stale = {
+    album_id: 17,
+    key: 'artist::old',
+    request_key: 'artist::old',
+    name: 'Old Album',
+    preview_only: false,
+    tracks: [{ path: 'one' }, { path: 'two' }],
+  };
+  const choices = [
+    { album_id: 92, album_key: 'artist::left', name: 'Left Album', track_count: 1 },
+    { album_id: 93, album_key: 'artist::right', name: 'Right Album', track_count: 1 },
+  ];
+  const { context } = loadHelper({
+    initialAlbums: [stale],
+    inventoryMutationRevision: 8,
+    onFetchAlbumDetails: async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        ok: false,
+        error: 'This album was split—choose the current release',
+        resolution_kind: 'album_split',
+        current_releases: choices,
+      }),
+    }),
+  });
+  context.cacheHydratedTrackModalAlbum(stale.key, stale);
+  context.state.modalReleases = [stale];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  assert.match(
+    context.getTrackModalElements().list.innerHTML,
+    /data-track-modal-current-release="92"[\s\S]*Left Album[\s\S]*data-track-modal-current-release="93"[\s\S]*Right Album/,
+  );
+});
+
 test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
   const preview = { key: 'owned-album', name: 'Owned Album', preview_only: true, tracks: [] };
   const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
@@ -931,6 +1524,24 @@ test('revision reload preserves a speculative detail request promoted to foregro
   assert.equal(responses[1].requestOptions.signal.aborted, false);
   responses[1].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
   assert.equal(await foreground, album);
+});
+
+test('an open right after prewarms are cancelled never joins the aborted request', async () => {
+  const preview = { key: 'late-abort-album', name: 'Late Abort Album', preview_only: true, tracks: [] };
+  const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };
+  const { context } = loadHelper({ initialAlbums: [preview],
+    // An abort that lands while the body is read rejects in a later task, not at once.
+    onFetchAlbumDetails: ({ requestOptions }) => (requestOptions.signal
+      ? new Promise((_resolve, reject) => requestOptions.signal.addEventListener('abort', () => {
+        setTimeout(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), 0);
+      }, { once: true }))
+      : Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) })),
+  });
+  context.queueTrackModalAlbumDetailsPrewarm(preview.key);
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  const foreground = context.loadTrackModalAlbumDetails(preview.key);
+  assert.equal(await foreground, album);
+  assert.equal(context.fetchCalls.length, 2, 'the open starts its own request');
 });
 
 test('opening a preview album renders all known edition tabs before details resolve', () => {
@@ -2452,6 +3063,35 @@ async function run() {
     );
   }
 
+  test('speculative Album Details prewarm includes the projected album id', async () => {
+    const album = {
+      album_id: 401,
+      key: 'jordsjø / breidablik::watcher joint credit release',
+      name: 'Watcher Joint Credit Release',
+      preview_only: true,
+      tracks: [],
+    };
+    const { context } = loadHelper({
+      initialAlbums: [album],
+      onFetchAlbumDetails() {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            ok: true,
+            album: { ...album, preview_only: false, tracks: [{ path: 'C:\\Music\\track.flac' }] },
+          }),
+        };
+      },
+    });
+
+    context.queueTrackModalAlbumDetailsPrewarm(album.key);
+    await flushMicrotasks();
+
+    const requestUrl = new URL(`http://localhost${context.fetchCalls[0].url}`);
+    assert.equal(requestUrl.searchParams.get('album_id'), '401');
+  });
+
   test('openTrackModalForButton must not bypass the current-album identity resolver', () => {
     const originalTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Original\\01 Stay.mp3';
     const movedTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Destination\\02 Move.mp3';
@@ -2745,8 +3385,14 @@ async function run() {
       name: 'Album Alpha',
       tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
       duplicate_sources: [
-        { tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }] },
-        { tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac' }] },
+        {
+          folder_path: 'C:\\Music\\Album Alpha',
+          tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
+        },
+        {
+          folder_path: 'D:\\Mirror\\Album Alpha',
+          tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac' }],
+        },
       ],
     };
     const { context } = loadHelper({
@@ -2766,6 +3412,10 @@ async function run() {
     assert.deepEqual(
       resolvedAlbum.tracks.map((track) => track.path),
       ['D:\\Mirror\\Album Alpha\\01 Track.flac'],
+    );
+    assert.deepEqual(
+      Array.from(resolvedAlbum.open_directory_paths),
+      ['D:\\Mirror\\Album Alpha'],
     );
   }
 }

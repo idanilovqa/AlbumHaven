@@ -51,6 +51,20 @@ test('denied dynamic controls reject activation without interfering with permitt
   assert.equal(stopped, 1);
 });
 
+test('only the object the Android shell injects reveals the Android tab', (t) => {
+  t.after(() => { delete globalThis.AlbumHavenBridge; });
+  const payload = { allowed_actions: {}, available_tabs: ['appearance'], denied_selectors: [], denied_tabs: [] };
+  // Named access exposes an element, or a frame's window, under the same global name.
+  const frame = { postMessage() {} };
+  frame.window = frame;
+  for (const named of [undefined, frame, { tagName: 'IFRAME' }]) {
+    globalThis.AlbumHavenBridge = named;
+    assert.equal(install(documentFor(payload)).allowsUtilityTab('android'), false);
+  }
+  globalThis.AlbumHavenBridge = { postMessage() {} };
+  assert.equal(install(documentFor(payload)).allowsUtilityTab('android'), true);
+});
+
 test('full-access desktop installs no click interception', () => {
   const document = documentFor({ allowed_actions: { 'library.media.read': true }, denied_selectors: [], denied_tabs: [] });
   install(document);
@@ -77,4 +91,38 @@ test('desktop cover selection keeps existing local and manual candidates', () =>
   const ui = install(documentFor({ allowed_actions: {}, client_surface: 'private_web', denied_selectors: [] }));
   assert.equal(ui.allowsCoverCandidate({ lookup_group: 'manual_links' }), true);
   assert.equal(ui.allowsCoverCandidate({ lookup_group: 'local' }), true);
+});
+
+test('offline read-only mode hides permitted writes until the server answers, and guards their activation', () => {
+  const appended = [];
+  const document = documentFor({
+    allowed_actions: {}, denied_selectors: [], denied_tabs: [], read_only_selectors: ['[data-open-tag-editor]', '#scan-indicator'],
+  });
+  Object.assign(document, {
+    createElement: () => ({ remove() { this.removed = true; } }),
+    head: { append: element => appended.push(element) },
+  });
+  const ui = install(document);
+  let prevented = 0;
+  const event = {
+    target: { closest: selector => (selector.includes('[data-open-tag-editor]') ? {} : null) },
+    preventDefault: () => { prevented += 1; },
+    stopImmediatePropagation() {},
+  };
+  document.handlers.get('click')(event);
+  assert.equal(prevented, 0);
+
+  ui.setReadOnly(true);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].id, 'capability-read-only');
+  assert.equal(appended[0].textContent, '[data-open-tag-editor],\n#scan-indicator { display: none !important; }');
+  document.handlers.get('click')(event);
+  assert.equal(prevented, 1);
+
+  ui.setReadOnly(false);
+  assert.equal(appended[0].removed, true);
+  document.handlers.get('click')(event);
+  assert.equal(prevented, 1);
+  ui.setReadOnly(true);
+  assert.equal(appended.length, 2);
 });

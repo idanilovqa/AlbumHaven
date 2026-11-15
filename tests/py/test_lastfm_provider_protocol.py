@@ -30,9 +30,11 @@ def fixture_owned_lastfm_provider():
         def do_POST(self):  # noqa: N802 - stdlib handler API
             body = self.rfile.read(int(self.headers.get("content-length") or 0))
             requests.append(parse_qs(body.decode("utf-8")))
-            status, response = responses.pop(0)
+            status, response, *headers = responses.pop(0)
             self.send_response(status)
             self.send_header("Content-Type", "application/xml")
+            for name, value in (headers[0] if headers else {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(response)
 
@@ -202,6 +204,52 @@ def test_http_error_preserves_well_formed_provider_code_classification(
     assert caught.value.code == 4
     assert caught.value.retryable is False
     assert caught.value.error_kind == "invalid_credentials"
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "headers", "retry_after"),
+    [
+        (200, b'<lfm status="failed"><error code="29">Rate limit exceeded</error></lfm>', {}, 60),
+        (429, b"", {"Retry-After": "17"}, 17),
+        (429, b"", {}, 60),
+        (200, b'<lfm status="failed"><error code="16">Temporary error</error></lfm>', {}, None),
+    ],
+    ids=["code-29", "http-429-retry-after", "http-429", "code-16"],
+)
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_rate_limited_provider_errors_name_how_long_to_wait(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport, status, body, headers, retry_after
+):
+    fixture_owned_lastfm_provider["responses"].append((status, body, headers))
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.update_now_playing(_config(allow_lastfm_loopback_transport), _payload(),
+                                  session=LastfmSession("listener", "fake-session", "now"))
+
+    assert caught.value.retryable is True
+    assert caught.value.retry_after_seconds == retry_after
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_a_read_timeout_is_a_retryable_network_error(monkeypatch, allow_lastfm_loopback_transport):
+    class TimingOut:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(lastfm, "urlopen", lambda *_args, **_kwargs: TimingOut())
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.update_now_playing(_config(allow_lastfm_loopback_transport), _payload(),
+                                  session=LastfmSession("listener", "fake-session", "now"))
+
+    assert caught.value.retryable is True
+    assert caught.value.error_kind == "network_error"
 
 
 def test_disconnected_scrobble_is_an_explicit_no_send(monkeypatch):

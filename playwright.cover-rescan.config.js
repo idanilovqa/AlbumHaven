@@ -7,7 +7,7 @@ module.exports = {
     {
       name: 'cover-rescan',
       testMatch: /coverLookup\.spec\.js$/,
-      grep: /FTC-COVERS-011/,
+      grep: /FTC-COVERS-011|FTC-COVERS-035/,
       use: baseConfig.projects[0].use,
     },
   ],

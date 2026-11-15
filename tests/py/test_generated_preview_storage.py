@@ -184,3 +184,30 @@ def test_custom_root_validation_accepts_an_absolute_root_through_injected_probe(
         [tmp_path / "Music"],
         probe=lambda path: path == requested.resolve(strict=False),
     ) == requested.resolve(strict=False)
+
+
+@pytest.mark.parametrize(
+    ("active_mode", "active_root", "requested_mode", "requested_root", "state", "expected"),
+    [
+        ("custom", "D:/previews", "album_folders", None, "running", Path("D:/previews/v1")),
+        ("album_folders", None, "custom", "D:/previews", "queued", "album"),
+        ("custom", "D:/previews", None, None, "completed", None),
+        ("album_folders", None, "custom", "D:/previews", "canceled", None),
+    ],
+)
+def test_relocation_source_root_is_the_previous_root_only_while_a_move_runs(
+    tmp_path, active_mode, active_root, requested_mode, requested_root, state, expected
+):
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    policy = PreviewStoragePolicy(
+        snapshot(
+            mode=active_mode,
+            active_root=active_root,
+            requested_mode=requested_mode,
+            requested_root=requested_root,
+            operation_state=state,
+        )
+    )
+
+    root = policy.relocation_source_root(source)
+    assert root == (source.parent / ".album-haven" if expected == "album" else expected)

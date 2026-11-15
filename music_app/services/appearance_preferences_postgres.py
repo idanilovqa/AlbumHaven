@@ -23,7 +23,7 @@ _DOCKED_COMPACT_FIELDS = (*_COMPACT_FIELDS, "docked_compact_player_behavior")
 _LEGACY_COMPACT_FIELDS = (*_FIELDS, "compact_player_style")
 _ALBUM_PAGE_FIELDS = ("album_details_layout", "album_playing_row_animation")
 _ALERT_FIELDS = ("alert_family",)
-_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": False, "icons": True}
+_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": True, "icons": True}
 _PLAYER_FIELDS = ("background", "fill", "edge")
 _PLAYER_COLUMNS = (
     "player_background_color", "player_waveform_fill_color", "player_waveform_edge_color"
@@ -539,9 +539,39 @@ def _device_profile_preferences(row: object) -> dict[str, object]:
     return {
         **base,
         "device_profiles": normalize_appearance_device_profiles(
-            values.get("device_section_profiles"), base_preferences=base,
+            _known_device_profile_values(values.get("device_section_profiles")), base_preferences=base,
         ),
     }
+
+
+def _known_device_profile_values(payload: object) -> object:
+    """Stored profiles without values a newer build added.
+
+    Saving stays strict, but a stored profile is read by every deployed build:
+    sandbox3 saved Album "album_art_quality_alert", and builds without that
+    field rejected the whole appearance, so every page fell back instead of
+    retaining the known settings.
+    """
+    if not isinstance(payload, Mapping):
+        return payload
+    known: dict[str, object] = {}
+    for profile, profile_value in payload.items():
+        wrapped = isinstance(profile_value, Mapping) and set(profile_value) == {"sections"}
+        sections = profile_value["sections"] if wrapped else profile_value
+        if not isinstance(sections, Mapping):
+            known[profile] = profile_value
+            continue
+        filtered = {}
+        for section, candidate in sections.items():
+            allowed = _DEVICE_SECTION_FIELDS.get(section)
+            if allowed is None:
+                continue
+            if isinstance(candidate, Mapping) and isinstance(candidate.get("values"), Mapping):
+                keep = allowed | ({"loop_control_style"} if section == "player" else set())
+                candidate = {**candidate, "values": {k: v for k, v in candidate["values"].items() if k in keep}}
+            filtered[section] = candidate
+        known[profile] = {"sections": filtered} if wrapped else filtered
+    return known
 
 class PostgresAppearancePreferencesRepository:
     def __init__(
@@ -685,7 +715,7 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb), album_details_layout, album_playing_row_animation,
                           alert_family, player_background, player_fill, player_edge,
                           coalesce(loop_control_style, 'capsule'), outlines, profiles,
-                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb)
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":true,"icons":true}}'::jsonb)
                      from incoming where expected_revision = 0
                        and (loop_control_style is null or loop_control_style = 'capsule' or allow_loop_control_style)
                        and (allow_loop_control_style or (
@@ -822,7 +852,7 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb),
                           album_details_layout, album_playing_row_animation, alert_family,
                           player_background, player_fill, player_edge, coalesce(loop_control_style, 'capsule'),
-                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb)
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":true,"icons":true}}'::jsonb)
                      from incoming where expected_revision = 0
                        and (loop_control_style is null or loop_control_style = 'capsule'
                             or allow_loop_control_style)
@@ -925,7 +955,7 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(docked_compact_player_regular_style, false),
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb), coalesce(album_details_layout, 'classic_bar'),
                           coalesce(album_playing_row_animation, 'enabled'), coalesce(alert_family, 'ember'),
-                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb), 1
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":true,"icons":true}}'::jsonb), 1
                      from incoming where true
                    on conflict (account_id, client_profile) do update
                      set main_surface_color = excluded.main_surface_color,

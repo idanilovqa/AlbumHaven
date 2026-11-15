@@ -12,6 +12,18 @@ _MANAGED_MARKERS = (
     (".album-haven", "v1", "cover_variants"),
     ("display-cover-cache", "cover_variants"),
 )
+_GENERATED_COVER_PREVIEW_STEM = "album-haven-preview"
+_APP_ARTIFACT_DIRECTORY = ".album-haven"
+
+
+def is_generated_cover_artifact(path: Path, album_root: Path) -> bool:
+    stem = path.stem.casefold()
+    relative_parts = path.relative_to(album_root).parts
+    return (
+        _APP_ARTIFACT_DIRECTORY in (part.casefold() for part in relative_parts)
+        or stem == _GENERATED_COVER_PREVIEW_STEM
+        or stem.startswith(f"{_GENERATED_COVER_PREVIEW_STEM}-")
+    )
 
 
 @dataclass(frozen=True)
@@ -39,6 +51,17 @@ class PreviewStoragePolicy:
             else self.snapshot.active_root
         )
         return _cache_root(source_path, mode=mode, root=root)
+
+    def relocation_source_root(self, source_path: Path) -> Path | None:
+        """The root a running move is emptying, where previews may still wait to move.
+
+        Writers must reuse a preview found there: generating it again at the
+        destination repoints its inventory row and strands the source copy.
+        """
+        if self.snapshot.requested_mode is None or self.snapshot.operation_state == "canceled":
+            return None
+        source_root = _cache_root(source_path, mode=self.snapshot.mode, root=self.snapshot.active_root)
+        return None if source_root == self.write_cache_root(source_path) else source_root
 
     def read_cache_roots(self, source_path: Path) -> tuple[Path, ...]:
         roots = []

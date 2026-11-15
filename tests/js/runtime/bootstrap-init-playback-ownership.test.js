@@ -21,6 +21,9 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     loopExpiryReconciles: 0,
     persistPlayerStateForUnload: [],
     resetPlayerUnloadPersistence: 0,
+    restorePlaybackOwnershipFromPageCache: 0,
+    restorePlaybackOwnershipSnapshots: [],
+    resumePlayerPlaybackFromPageCache: [],
     reconcileBrowserPlaybackOnForeground: 0,
     setLoopActive: [],
     stopStreamingPlayback: [],
@@ -29,6 +32,8 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   const documentListeners = {};
   const preparationFailure = new Error('worklet preparation rejected');
   const observedErrors = [];
+  let resolveOwnershipRestore;
+  let ownershipRestore = new Promise((resolve) => { resolveOwnershipRestore = resolve; });
   let idleWarmup;
   let initialLoaderState = null;
   let initialStatus = null;
@@ -68,7 +73,11 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     },
     appBootstrap: {
       getBootstrap() {
-        return { scanInProgress: true, scanPhase: 'discovering' };
+        return {
+          scanInProgress: true,
+          scanPhase: 'discovering',
+          ...(unloadBeforeIdle ? {} : { inventoryMutationRevision: 7 }),
+        };
       },
       releasePayloadViewState() {},
     },
@@ -124,6 +133,16 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     },
     resetPlayerUnloadPersistence() {
       calls.resetPlayerUnloadPersistence += 1;
+      return { currentTime: 37.25, paused: false };
+    },
+    restorePlaybackOwnershipFromPageCache(snapshot) {
+      calls.restorePlaybackOwnershipFromPageCache += 1;
+      calls.restorePlaybackOwnershipSnapshots.push(snapshot);
+      return ownershipRestore;
+    },
+    resumePlayerPlaybackFromPageCache(snapshot) {
+      calls.resumePlayerPlaybackFromPageCache.push(snapshot);
+      return Promise.resolve(true);
     },
     loopEditSessionExpiryController: {
       reconcile() {
@@ -197,6 +216,12 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   );
   assert.ok(documentListeners.contextmenu);
   assert.equal(initialLoaderState.scan_phase, 'discovering');
+  // Without the rendered revision the first status poll cannot tell that the page is behind.
+  assert.equal(
+    Object.hasOwn(initialStatus, 'inventory_mutation_revision'),
+    !unloadBeforeIdle,
+  );
+  if (!unloadBeforeIdle) assert.equal(initialStatus.inventory_mutation_revision, 7);
   assert.equal(context.buildLoaderStatusLines(initialLoaderState)[0].title, 'Discovering music files');
 
   assert.ok(windowListeners.pageshow);
@@ -211,19 +236,36 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.prepareStreamingPlaybackEngine, unloadBeforeIdle ? 0 : 1, 'queued warmup must not reopen playback after unload');
   windowListeners.pageshow({ persisted: true });
-  windowListeners.beforeunload();
+  assert.deepEqual(calls.resumePlayerPlaybackFromPageCache, [], 'resume waits for handoff consumption');
+  resolveOwnershipRestore(true);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls.persistPlayerStateForUnload, ['pagehide', 'beforeunload']);
-  assert.equal(calls.resetPlayerUnloadPersistence, 1);
+  assert.deepEqual(calls.resumePlayerPlaybackFromPageCache, [{ currentTime: 37.25, paused: false }]);
+
+  ownershipRestore = new Promise((resolve) => { resolveOwnershipRestore = resolve; });
+  windowListeners.pagehide();
+  windowListeners.pageshow({ persisted: true });
+  resolveOwnershipRestore(false);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(windowListeners.beforeunload, undefined, 'cancelable navigation has no teardown listener');
+  assert.deepEqual(calls.persistPlayerStateForUnload, ['pagehide', 'pagehide']);
+  assert.equal(calls.resetPlayerUnloadPersistence, 2);
+  assert.equal(calls.restorePlaybackOwnershipFromPageCache, 2);
+  assert.deepEqual(calls.restorePlaybackOwnershipSnapshots, [
+    { currentTime: 37.25, paused: false },
+    { currentTime: 37.25, paused: false },
+  ]);
+  assert.deepEqual(calls.resumePlayerPlaybackFromPageCache, [{ currentTime: 37.25, paused: false }],
+    'a copied-envelope loser remains silent');
   assert.deepEqual(
     calls.stopStreamingPlayback,
     ['unload', 'unload'],
-    'a BFCache restore re-arms streaming cleanup for the next real unload',
+    'each BFCache restore re-arms streaming cleanup for the next pagehide',
   );
   assert.deepEqual(
     unloadOrder,
-    ['persist:pagehide', 'stop:unload', 'persist:beforeunload', 'stop:unload'],
-    'each restored page lifecycle persists before its streaming cleanup',
+    ['persist:pagehide', 'stop:unload', 'persist:pagehide', 'stop:unload'],
+    'pagehide captures state before each streaming cleanup',
   );
 });
 

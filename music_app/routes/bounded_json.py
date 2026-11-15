@@ -1,4 +1,4 @@
-"""Shared bounded JSON request parsing for authenticated mutation routes."""
+"""Shared bounded request-body reading for authenticated mutation routes."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ MAX_JSON_OBJECT_BODY_BYTES = 16_384
 
 
 class JSONBodyTooLarge(ValueError):
-    """Raised before JSON decoding when a request exceeds the accepted bound."""
+    """Raised before buffering more than the accepted bound of a request body."""
 
 
-async def read_bounded_json_object(
-    request: Request,
-    *,
-    max_bytes: int = MAX_JSON_OBJECT_BODY_BYTES,
-) -> dict[str, object] | None:
-    """Read one JSON object without buffering more than ``max_bytes`` bytes."""
+async def read_bounded_body(request: Request, *, max_bytes: int) -> bytes | None:
+    """The request body, never buffering more than ``max_bytes`` bytes.
+
+    Raises [JSONBodyTooLarge] when the declared or streamed length exceeds the bound, and
+    returns None when the body does not match a malformed or inconsistent ``Content-Length``.
+    """
 
     raw_length = str(request.headers.get("content-length") or "").strip()
     declared_length: int | None = None
@@ -39,6 +39,19 @@ async def read_bounded_json_object(
             raise JSONBodyTooLarge
         body.extend(chunk)
     if declared_length is not None and len(body) != declared_length:
+        return None
+    return bytes(body)
+
+
+async def read_bounded_json_object(
+    request: Request,
+    *,
+    max_bytes: int = MAX_JSON_OBJECT_BODY_BYTES,
+) -> dict[str, object] | None:
+    """Read one JSON object without buffering more than ``max_bytes`` bytes."""
+
+    body = await read_bounded_body(request, max_bytes=max_bytes)
+    if body is None:
         return None
     try:
         payload = json.loads(body)

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from music_app.services.library import shared_album_display_artist
-from music_app.services.utils import repair_display_text
+from music_app.services.utils import artist_collation_key, repair_display_text
 from music_app.services.view_search import normalize_search_text
 
 
@@ -54,8 +53,7 @@ def album_sidebar_artists(
 ) -> list[str]:
     alias_to_canonical = alias_to_canonical or {}
     if is_shared_artist_album(album) and not is_various_album(album):
-        combined_artist = shared_album_display_artist(album, alias_to_canonical)
-        return [combined_artist] if combined_artist else []
+        return album_member_artists(album, alias_to_canonical)
     album_artist = str(getattr(album, "album_artist", "") or "").strip()
     members = list(getattr(album, "artists", []) or [])
     if album_artist and not is_various_album(album) and len(members) >= 2:
@@ -105,7 +103,10 @@ def build_artists_sidebar(
         if dedupe_key in counts and dedupe_key not in seen:
             ordered_artists.append(dedupe_key)
             seen.add(dedupe_key)
-    for dedupe_key in sorted(counts, key=lambda value: display_values.get(value, value).casefold()):
+    for dedupe_key in sorted(
+        counts,
+        key=lambda value: artist_collation_key(display_values.get(value, value)),
+    ):
         if dedupe_key not in seen:
             ordered_artists.append(dedupe_key)
 

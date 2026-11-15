@@ -102,6 +102,16 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
+  if (!items.length && state.utility.problematicLoadError) {
+    replaceListContents('<div class="utility-empty-state compact">Unable to load problematic albums.</div>');
+    els.detail.innerHTML = buildOnPageAlertHtml({
+      severity: 'error',
+      title: 'Problematic Files unavailable',
+      message: 'Unable to load problematic albums. Try again.',
+    });
+    return;
+  }
+
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
@@ -159,6 +169,19 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
       ? state.utility.selectedProblematicDetail : null);
   renderTree(state.utility.selectedProblematicKey);
+  if (state.utility.focusedTrackPath
+      && selectedAlbum?.detail_loading_deferred
+      && !selectedAlbum?.detail_loaded) {
+    els.list.querySelector?.('.utility-list-item.is-active')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
+  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzArtistProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_detail && !selectedAlbum.musicbrainz_detail_failed) {
+      void loadMusicBrainzArtistProblemDetail(selectedAlbum);
+    }
+    return;
+  }
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
@@ -857,6 +880,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityIntegrations();
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
+  } else if (activeTab === 'android') {
+    renderUtilityAndroid();
   } else {
     renderProblematicFiles(options);
   }

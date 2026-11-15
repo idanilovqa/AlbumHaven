@@ -21,6 +21,9 @@ export class UtilityIntegrationsTab extends BasePage {
     this.lastfmScrobbled = page.locator('[data-lastfm-scrobbled]');
     this.lastfmTotal = page.locator('[data-lastfm-total]');
     this.lastfmPending = page.locator('[data-lastfm-pending]');
+    this.playbackStatistics = page.locator('.settings-playback-statistics');
+    this.localPlaycount = this.playbackStatistics.locator('div').filter({ has: page.getByText('Local playcount', { exact: true }) }).locator('dd');
+    this.totalListeningTime = this.playbackStatistics.locator('div').filter({ has: page.getByText('Total listening time', { exact: true }) }).locator('dd');
     this.lastfmSubmitButton = page.locator('[data-submit-lastfm-scrobbles="1"]');
     this.lastfmSubmitAlert = page.locator('#repair-alert');
     this.lastfmSubmitAlertMessage = page.locator('#repair-alert-message');
@@ -37,6 +40,13 @@ export class UtilityIntegrationsTab extends BasePage {
     if (!response.ok()) throw new Error(`Integration read returned HTTP ${response.status()}.`);
     const payload = await response.json();
     return payload.integrations.find(item => item.key === 'lastfm')?.user_timezone || '';
+  }
+
+  async readPersistedPlaybackStatistics() {
+    const response = await authenticatedPageGet(this.page, '/utilities/integrations');
+    if (!response.ok()) throw new Error(`Integration read returned HTTP ${response.status()}.`);
+    const payload = await response.json();
+    return payload.integrations.find(item => item.key === 'lastfm').playback_statistics;
   }
 
   get lastfmFormSelector() {

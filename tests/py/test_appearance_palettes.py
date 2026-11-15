@@ -20,7 +20,7 @@ DEFAULTS = {
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
 }
-SOURCE_INDICATORS = {"card_colors": False, "hover_outline_colors": False, "icons": True}
+SOURCE_INDICATORS = {"card_colors": False, "hover_outline_colors": True, "icons": True}
 PLAYER = {"background": "#142E22", "fill": "#8BBFA0", "edge": "#D5EFDE"}
 
 

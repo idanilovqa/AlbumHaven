@@ -19,5 +19,5 @@
 #utility-modal[data-active-tab="{{ tab }}"] .capability-section-denied { display: block; }
 {% endfor %}
 </style>
-<script src="/static/js/capability-ui.js?v=1{% if runtime_asset_version is defined %}-{{ runtime_asset_version }}{% endif %}"></script>
+<script src="/static/js/capability-ui.js?v={{ runtime_asset_version if runtime_asset_version is defined else '1' }}"></script>
 {% endif %}

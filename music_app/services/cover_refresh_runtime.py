@@ -324,6 +324,7 @@ def execute_cover_refresh_request(
     include_job_results_when_empty: bool = False,
     empty_log_result: dict[str, object] | None = None,
     prepared_get_state: StateGetter | None = None,
+    run_get_state: StateGetter | None = None,
 ) -> dict[str, object]:
     if prepared_get_state is not None:
         with cache_lock:
@@ -380,7 +381,7 @@ def execute_cover_refresh_request(
     result = None
     try:
         result = run_cover_jobs(
-            get_state=lambda: context.library_state,
+            get_state=run_get_state or (lambda: context.library_state),
             config=config,
             logger=logger,
             cache_lock=cache_lock,
@@ -841,6 +842,7 @@ def refresh_cover_artwork_request(
         allow_apple_web_fallback_when_has_cover=False,
         negative_cache_ttl_seconds=bulk_negative_cache_ttl_seconds,
         job_workers=job_workers,
+        run_get_state=get_state,
     )
 
 

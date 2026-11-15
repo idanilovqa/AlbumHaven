@@ -1,0 +1,424 @@
+name: Android Promote
+run-name: Android ${{ inputs.channel }} promotion of ${{ inputs.commit }}
+
+# Promotes one exact commit to an Android channel: stable needs its complete PR Gates pipeline and
+# release, sandbox only a branch of this repository (test builds; see android-test-build.yml,
+# which dispatches this workflow for `test_build` pull requests). It builds the release APK
+# once, signs it with the channel key held by the protected environment, and records the result
+# as a data-only workflow artifact: promotion.json (provenance and the Update Manifest v1) plus
+# the APK encrypted to the deployment synchronizer's key. No APK, signed or unsigned, is ever
+# uploaded unencrypted. Nothing here deploys or publishes; the outbound-only synchronizer in
+# album-haven-deployments verifies and publishes the artifact. Every action is pinned to a commit.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact 40-character commit SHA (stable needs its passed PR Gates pipeline, sandbox a branch here)
+        required: true
+        type: string
+      channel:
+        description: Android channel
+        required: true
+        type: choice
+        options:
+          - sandbox
+          - stable
+
+permissions:
+  contents: read
+
+# One promotion per channel at a time: version codes are allocated and recorded under this lock.
+concurrency:
+  group: android-promote-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify Commit And Allocate Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      version_code: ${{ steps.plan.outputs.version_code }}
+      version_name: ${{ steps.plan.outputs.version_name }}
+      flavor: ${{ steps.plan.outputs.flavor }}
+      certificate: ${{ steps.plan.outputs.certificate }}
+    steps:
+      - name: Require the default branch workflow and an exact commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main || { echo "::error::Promote only from the main branch workflow"; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be 40 lowercase hexadecimal characters"; exit 1; }
+
+      - name: Checkout promotion tooling
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          path: tooling
+          persist-credentials: false
+
+      - name: Fetch the promoted commit
+        working-directory: tooling
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$COMMIT"
+          git cat-file -e "$COMMIT^{commit}"
+
+      # Stable's complete pipeline already proves a same-repository head. Sandbox has no such proof,
+      # and a fork's pull request head is fetchable from this repository too, so a branch of this
+      # repository must contain the commit (history only: no trees or blobs are fetched).
+      - name: Require a branch of this repository to contain a sandbox commit
+        if: ${{ inputs.channel == 'sandbox' }}
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          branches="$RUNNER_TEMP/branches"
+          git init --quiet --bare "$branches"
+          git -C "$branches" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          git -C "$branches" fetch --quiet --no-tags --filter=tree:0 origin '+refs/heads/*:refs/heads/*'
+          # Only what the branches hold: without a promisor, no git version fetches the commit on demand.
+          git -C "$branches" remote remove origin
+          git -C "$branches" config --unset extensions.partialClone || test $? -eq 5
+          refuse() { echo "::error::No branch of $GITHUB_REPOSITORY contains $COMMIT"; exit 1; }
+          git -C "$branches" cat-file -e "$COMMIT^{commit}" 2>/dev/null || refuse
+          branch="$(git -C "$branches" for-each-ref --contains "$COMMIT" --count=1 --format='%(refname:short)' refs/heads)"
+          test -n "$branch" || refuse
+          echo "Branch $branch contains $COMMIT"
+
+      - name: Apply the CI gate, verify the release and allocate the version code
+        id: plan
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          COMMIT: ${{ inputs.commit }}
+          CERTIFICATE: ${{ vars[inputs.channel == 'stable' && 'ANDROID_STABLE_SIGNING_CERT_SHA256' || 'ANDROID_SANDBOX_SIGNING_CERT_SHA256'] }}
+          VERSION_CODE_FLOOR: ${{ vars.ANDROID_VERSION_CODE_FLOOR }}
+        with:
+          script: |
+            const path = require('node:path');
+            const { execFileSync } = require('node:child_process');
+            const tooling = path.join(process.env.GITHUB_WORKSPACE, 'tooling');
+            const promotion = require(path.join(tooling, 'scripts', 'ci', 'android-promotion.cjs'));
+            const git = (...args) => execFileSync('git', args, { cwd: tooling, encoding: 'utf8' });
+            const channel = promotion.requireChannel(process.env.CHANNEL);
+            const commit = promotion.requireCommit(process.env.COMMIT);
+            const certificate = process.env.CERTIFICATE;
+            if (!/^[0-9a-f]{64}$/.test(certificate)) throw new Error(`The ${channel} signing certificate variable is not configured`);
+            const { owner, repo } = context.repo;
+            const repository = `${owner}/${repo}`;
+
+            await github.rest.repos.getCommit({ owner, repo, ref: commit });
+            const pipeline = promotion.CHANNELS[channel].ciGate === 'not-required' ? null : await promotion.findCompletePipelineRun({
+              repository,
+              commit,
+              listRuns: () => github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner, repo, workflow_id: 'pr-gates.yml', head_sha: commit, event: 'pull_request', status: 'success', per_page: 100,
+              }),
+              listJobs: (run) => github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+                owner, repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
+              }),
+            });
+            const gate = promotion.ciGateFor(channel, pipeline);
+
+            const releaseVersion = promotion.readReleaseVersion(git('show', `${commit}:version.py`));
+            const versionName = promotion.versionNameFor(channel, releaseVersion, commit);
+            const bridge = promotion.readBridgeRange(git('show', `${commit}:apps/android-shell/app/src/main/java/org/albumhaven/shell/BridgeController.kt`));
+            let releaseNotesUrl = `https://github.com/${repository}/commit/${commit}`;
+            if (channel === 'stable') {
+              const tag = `v${releaseVersion}`;
+              let release = null;
+              try {
+                release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+              let releaseTree = '';
+              if (release) {
+                git('fetch', '--no-tags', '--depth=1', 'origin', `+refs/tags/${tag}:refs/tags/${tag}`);
+                releaseTree = git('rev-parse', `${tag}^{tree}`).trim();
+              }
+              const check = promotion.checkStableRelease({
+                release,
+                releaseVersion,
+                owner,
+                sourceTree: git('rev-parse', `${commit}^{tree}`).trim(),
+                releaseTree,
+                changelog: git('show', `${commit}:CHANGELOG.md`),
+              });
+              if (check.errors.length) throw new Error(check.errors.join('\n'));
+              releaseNotesUrl = check.releaseNotesUrl;
+            }
+
+            const tags = await github.paginate(github.rest.git.listMatchingRefs, {
+              owner, repo, ref: `tags/android/${channel}/`, per_page: 100,
+            });
+            const floor = process.env.VERSION_CODE_FLOOR ? Number(process.env.VERSION_CODE_FLOOR) : 0;
+            const versionCode = promotion.nextVersionCode(tags.map((tag) => tag.ref.replace(/^refs\/tags\//, '')), channel, floor);
+            const plan = {
+              repository,
+              channel,
+              commit,
+              versionCode,
+              versionName,
+              certificate,
+              bridgeProtocolMin: bridge.min,
+              bridgeProtocolMax: bridge.max,
+              releaseNotesUrl,
+              runId: Number(process.env.GITHUB_RUN_ID),
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              ...gate,
+            };
+            core.setOutput('plan', JSON.stringify(plan));
+            core.setOutput('version_code', String(versionCode));
+            core.setOutput('version_name', versionName);
+            core.setOutput('flavor', promotion.CHANNELS[channel].flavor);
+            core.setOutput('certificate', certificate);
+            await core.summary.addHeading(`Android ${channel} promotion plan`)
+              .addList([
+                `Commit ${commit}`,
+                `CI gate ${gate.ciGate}${pipeline ? `, complete pipeline run ${pipeline.url}` : ''}`,
+                `Version code ${versionCode}, version name ${versionName}`,
+                `Release notes ${releaseNotesUrl}`,
+              ]).write();
+
+  # The promoted source is untrusted (sandbox builds any branch), so it runs only inside a pinned
+  # container that sees nothing but its checkout: no runner token or environment, no host sudo
+  # (unprivileged user, no capabilities), no Docker socket and no Actions cache or artifact
+  # access. Steps on the runner itself never execute the source.
+  build:
+    name: Build Unsigned Release APK
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      # Plain git, not actions/checkout: its post-job step would run git on the runner inside the
+      # checkout the container can rewrite. No runner step touches source/ with git again.
+      - name: Fetch exactly the promoted commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          git init --quiet source
+          git -C source fetch --quiet --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$COMMIT"
+          git -C source -c advice.detachedHead=false checkout --quiet FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$COMMIT"
+
+      # ghcr.io/cirruslabs/android-sdk:36-ndk (Ubuntu 24.04, OpenJDK 21, platforms;android-36,
+      # build-tools 36.0.0 and NDK 27.3.13750724 for the native audio decoders, built with the
+      # NDK's own ndk-build), pinned by digest. Gradle writes only inside the checkout and the
+      # container's own /tmp, so nothing outlives the container except build outputs.
+      - name: Assemble the release APK in an isolated container
+        env:
+          FLAVOR: ${{ needs.verify.outputs.flavor }}
+          VERSION_CODE: ${{ needs.verify.outputs.version_code }}
+          VERSION_NAME: ${{ needs.verify.outputs.version_name }}
+          CERTIFICATE: ${{ needs.verify.outputs.certificate }}
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges
+          --env HOME=/tmp --env GRADLE_USER_HOME=/tmp/gradle
+          --volume "$GITHUB_WORKSPACE/source:/source" --workdir /source/apps/android-shell
+          ghcr.io/cirruslabs/android-sdk@sha256:dea0b3ff418657460823682cdc0e1b8af63596645f13f816be2838f7ba41b3cd
+          ./gradlew --no-daemon --console=plain "assemble${FLAVOR}Release"
+          "-PalbumHavenVersionCode=$VERSION_CODE"
+          "-PalbumHavenVersionName=$VERSION_NAME"
+          "-PalbumHaven${FLAVOR}CertificateSha256=$CERTIFICATE"
+
+      # Tooling from main, as in every job: the promoted commit may predate the encrypt command.
+      - name: Checkout promotion tooling
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          path: tooling
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      # Any signed-in GitHub user can download this public repository's workflow artifacts, so the
+      # unsigned APK leaves this job only encrypted to the signing environment's key.
+      - name: Encrypt the unsigned APK to the signing environment
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY: ${{ vars.ANDROID_SIGNER_RECIPIENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          apk="$GITHUB_WORKSPACE/source/apps/android-shell/app/build/outputs/apk/$CHANNEL/release/app-$CHANNEL-release-unsigned.apk"
+          # The container wrote this path: read only a regular file in the checkout, never through a link.
+          test "$(realpath -e "$apk")" = "$apk" && test -f "$apk" \
+            || { echo "::error::The build left no regular unsigned APK in the checkout"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          node tooling/scripts/ci/android-promotion.cjs encrypt "--in=$apk" "--out=$RUNNER_TEMP/unsigned/unsigned.apk.enc"
+          rm -f "$apk"
+
+      - name: Keep the encrypted unsigned APK for signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/unsigned/unsigned.apk.enc
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  # Signing runs in the channel's protected environment with read-only repository access. It never
+  # executes the promoted source and installs no SDK: zipalign, apksigner and aapt2 come from the
+  # runner image's preinstalled Android SDK.
+  sign:
+    name: Sign Release APK
+    needs:
+      - verify
+      - build
+    # Pinned: signing uses the image's preinstalled build-tools 36.0.0 and never downloads tools
+    # beside the keystore; ubuntu-24.04 lists them in actions/runner-images.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: android-${{ inputs.channel }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout promotion tooling
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          path: tooling
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      - name: Download the encrypted unsigned APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/unsigned
+
+      - name: Decrypt the unsigned APK
+        env:
+          ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY: ${{ secrets.ANDROID_SIGNER_RECIPIENT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node tooling/scripts/ci/android-promotion.cjs decrypt "--in=$RUNNER_TEMP/unsigned/unsigned.apk.enc" \
+            "--out=$RUNNER_TEMP/unsigned.apk"
+
+      - name: Sign with the channel key
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          for tool in zipalign apksigner aapt2; do
+            test -x "$tools/$tool" || { echo "::error::The runner image has no preinstalled build-tools 36.0.0 $tool"; exit 1; }
+          done
+          test -n "$KEYSTORE_BASE64" && test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::The channel signing secrets are not configured"; exit 1; }
+          "$tools/zipalign" -P 16 -f 4 "$RUNNER_TEMP/unsigned.apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$RUNNER_TEMP/unsigned.apk"
+          # The keystore exists on disk only while apksigner signs; the APK is parsed after it is gone.
+          keystore="$RUNNER_TEMP/release.p12"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          "$tools/apksigner" sign --ks "$keystore" --ks-type PKCS12 --ks-key-alias "album-haven-$CHANNEL" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --out "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$keystore"
+          "$tools/apksigner" verify --print-certs --min-sdk-version 29 "$RUNNER_TEMP/signed.apk" > "$RUNNER_TEMP/certs.txt"
+          "$tools/aapt2" dump badging "$RUNNER_TEMP/signed.apk" > "$RUNNER_TEMP/badging.txt"
+
+      - name: Write the manifest and the encrypted APK
+        env:
+          PLAN: ${{ needs.verify.outputs.plan }}
+          ANDROID_ARTIFACT_RECIPIENT_PUBLIC_KEY: ${{ vars.ANDROID_ARTIFACT_RECIPIENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          node tooling/scripts/ci/android-promotion.cjs finalize "--plan=$RUNNER_TEMP/plan.json" \
+            "--apk=$RUNNER_TEMP/signed.apk" "--badging=$RUNNER_TEMP/badging.txt" \
+            "--certs=$RUNNER_TEMP/certs.txt" "--out=$RUNNER_TEMP/promotion"
+          rm -f "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
+
+      # Data only: promotion.json and the APK encrypted to the synchronizer. The record job publishes
+      # it under its final name once the version tag exists.
+      - name: Keep the signed promotion for recording
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-signed-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/promotion/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  # The only job that writes to the repository. It holds no secret and runs no promoted code.
+  record:
+    name: Record Promotion
+    needs:
+      - verify
+      - sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the signed promotion
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-signed-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/promotion
+
+      # The tag is the durable record of allocated version codes; creating an existing tag fails,
+      # so no promotion artifact is published for a code that was already recorded.
+      - name: Record the version tag
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          PLAN: ${{ needs.verify.outputs.plan }}
+        with:
+          script: |
+            const plan = JSON.parse(process.env.PLAN);
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/android/${plan.channel}/${plan.versionCode}`,
+              sha: plan.commit,
+            });
+
+      - name: Upload the promotion artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-promotion-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}
+          path: ${{ runner.temp }}/promotion/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  # Intermediate artifacts are encrypted, but none outlives the run that needed it.
+  cleanup:
+    name: Delete Intermediate Artifacts
+    needs:
+      - verify
+      - build
+      - sign
+      - record
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the intermediate artifacts
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          INTERMEDIATE: >-
+            ["android-unsigned-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}",
+            "android-signed-${{ inputs.channel }}-${{ needs.verify.outputs.version_code }}"]
+        with:
+          script: |
+            const names = new Set(JSON.parse(process.env.INTERMEDIATE));
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner, repo, run_id: context.runId, per_page: 100,
+            });
+            for (const artifact of artifacts.filter((candidate) => names.has(candidate.name))) {
+              await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: artifact.id });
+            }

@@ -48,6 +48,11 @@ test('custom collection name is hidden at the form boundary unless selected', ()
   assert.match(css, /\.tag-editor-form\s+label\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(css, /label\[data-custom-collection-name-field\]\[hidden\]\s*\{[^}]*display:\s*flex[^}]*visibility:\s*hidden/s);
   assert.match(css, /\.tag-editor-exception-menu\s*\{[^}]*position:\s*fixed/s);
+  assert.match(
+    css,
+    /\.tag-editor-exception-field::after\s*\{[^}]*border-right:\s*2px solid var\(--appearance-interaction-outline, #93c5fd\)[^}]*border-bottom:\s*2px solid var\(--appearance-interaction-outline, #93c5fd\)[^}]*transform:\s*rotate\(45deg\)[^}]*pointer-events:\s*none/s,
+  );
+  assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input[^}]*padding-right:\s*34px/s);
   assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input:focus\s*\{[^}]*transition:\s*none/s);
   assert.match(css, /\.tag-editor-exception-menu\s+\[role="option"\]\[aria-selected="true"\]\s*\{[^}]*color:\s*var\(--text\)/s);
   assert.doesNotMatch(css, /\.tag-editor-exception-menu\s+\[role="option"\]\[aria-selected="true"\]\s*\{[^}]*--accent/s);
@@ -82,6 +87,41 @@ test('exception menu flips above the fixed footer without changing form flow', (
   assert.equal(layout.left, 865);
   assert.equal(layout.width, 274);
   assert.equal(layout.maxHeight, 115);
+  assert.equal(layout.scrolling, false);
+});
+
+test('exception menu reports scrolling only when the full list cannot fit', () => {
+  const context = loadHelpers();
+  const fullFit = context.getTagEditorExceptionMenuLayout(
+    { top: 120, bottom: 158, left: 40, width: 274 },
+    115,
+    { top: 20, bottom: 640 },
+    1024,
+    720,
+  );
+  const constrained = context.getTagEditorExceptionMenuLayout(
+    { top: 270, bottom: 308, left: 40, width: 274 },
+    300,
+    { top: 200, bottom: 380 },
+    1024,
+    720,
+  );
+
+  assert.equal(fullFit.placement, 'below');
+  assert.equal(fullFit.maxHeight, 115);
+  assert.equal(fullFit.scrolling, false);
+  assert.equal(constrained.maxHeight < 300, true);
+  assert.equal(constrained.scrolling, true);
+});
+
+test('exception menu measurement includes its border box when it is taller than scroll height', () => {
+  const context = loadHelpers();
+  const menu = {
+    scrollHeight: 115,
+    getBoundingClientRect() { return { height: 117 }; },
+  };
+
+  assert.equal(context.getTagEditorExceptionMenuHeight(menu), 117);
 });
 
 test('missing tag artwork reuses the shared missing-album mark instead of text', () => {

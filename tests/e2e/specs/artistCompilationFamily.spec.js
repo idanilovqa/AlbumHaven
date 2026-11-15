@@ -20,6 +20,40 @@ const SOUNDTRACK_GUEST = 'Soundtrack Signal Guest';
 const SOUNDTRACK_OWNER = 'Sia / Soundtrack Signal Guest';
 const SOUNDTRACK_LEAD_SOLO = 'Sia Soundtrack Solo';
 
+test('FTC-TAGS-027 loads every disc when expanding an indexed album folder', { tag: '@area:tag-edit' }, async ({
+  galleryActions,
+  page,
+  searchToolbarActions,
+  stepLogger,
+  tagEditorActions,
+}) => {
+  await stepLogger.step('Open the indexed two-disc release in Edit Tags', async () => {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await searchToolbarActions.search(CONTROL_SHARED_ALBUM, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(CONTROL_SHARED_ALBUM);
+    await galleryActions.waitForAlbumVisible(CONTROL_SHARED_ALBUM);
+    await galleryActions.openAlbumTagEditorFromContextMenu(CONTROL_SHARED_ALBUM);
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
+  });
+
+  await stepLogger.step('Resolve the album root and retain files from both discs', async () => {
+    const responsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && response.url().endsWith('/utilities/tag-editor/folder-files')
+    ));
+    await tagEditorActions.loadAllFilesFromFolder({ expectedTrackCount: 18 });
+    const payload = await (await responsePromise).json();
+
+    const paths = await tagEditorActions.readTrackPaths();
+    expect(paths.some((path) => /[\\/]Disc 1[\\/]/u.test(path))).toBe(true);
+    expect(paths.some((path) => /[\\/]Disc 2[\\/]/u.test(path))).toBe(true);
+    expect(payload.folder_path).toMatch(
+      /[\\/]Non-Compilation Cross-Credits$/u,
+    );
+  });
+});
+
 test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions, artistPageSettingsActions, galleryActions, navigationPanelActions, page,
   searchToolbarActions, stepLogger, tagEditorActions, trackModalActions,
@@ -181,6 +215,8 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
+  page,
+  searchToolbarActions,
   startupRelationProjectionReadiness,
   stepLogger,
 }) => {
@@ -281,6 +317,21 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
       const visibleAlbums = await galleryActions.readAlbumNamesByHeading(familyArtist);
       expect(visibleAlbums.length, `${familyArtist} must own an album in the selected family payload`).toBeGreaterThan(0);
     }
+  });
+
+  await stepLogger.step('Keep an album-title search visible under its selected featured performer', async () => {
+    await searchToolbarActions.search(CONTROL_SHARED_ALBUM, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(CONTROL_SHARED_ALBUM);
+    await navigationPanelActions.selectSidebarArtistByName(CONTROL_PARTNER);
+    await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
+    await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, CONTROL_SHARED_ALBUM);
+
+    const subsectionTitle = await galleryActions.readAlbumSubsectionTitle(
+      CONTROL_PARTNER,
+      CONTROL_SHARED_ALBUM,
+    );
+    expect(subsectionTitle).toBe('Featured On');
+    expect(await galleryActions.readAlbumNamesByHeading(CONTROL_PARTNER)).toEqual([CONTROL_SHARED_ALBUM]);
   });
 });
 

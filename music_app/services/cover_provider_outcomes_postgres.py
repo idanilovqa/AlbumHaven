@@ -38,6 +38,7 @@ def persist_cover_provider_outcomes(
     if not url or not outcomes:
         return
     connector = connect or _connect
+    quota_changed = False
     with connector(url) as connection:
         with connection.transaction():
             for provider, outcome in outcomes.items():
@@ -49,6 +50,20 @@ def persist_cover_provider_outcomes(
                     "http_status": outcome.get("http_status"),
                     "retry_at": outcome.get("retry_at"),
                 }
+                status = "failed" if safe["category"] not in {"no_candidate", "recovered"} else "completed"
+                if provider_name == "search_spotify":
+                    # Problematic Files lists only a failed quota outcome; other
+                    # outcomes keep its cached list.
+                    previous = connection.execute(
+                        """
+                        select coalesce(bool_or(status = 'failed' and metadata ->> 'category' = 'rate_limit_quota'), false) as quota
+                        from ops.cover_lookup_tasks
+                        where task_key = %s and metadata ->> 'source_family' = %s
+                        """,
+                        (task_key, SOURCE_FAMILY),
+                    ).fetchone()
+                    was_quota = previous["quota"] if isinstance(previous, Mapping) else previous[0]
+                    quota_changed = was_quota != (status == "failed" and safe["category"] == "rate_limit_quota")
                 connection.execute(
                     """
                     with bootstrap_context as (
@@ -78,14 +93,14 @@ def persist_cover_provider_outcomes(
                     """,
                     (
                         task_key,
-                        "failed" if safe["category"] not in {"no_candidate", "recovered"} else "completed",
+                        status,
                         str(album_key or ""),
                         json.dumps(safe),
                         f"{safe['category']} ({provider_name})",
                         json.dumps({"source_family": SOURCE_FAMILY, **safe}),
                     ),
                 )
-    if "search_spotify" in outcomes:
+    if quota_changed:
         from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
 
         invalidate_postgres_utility_projection_cache(database_url=url, kinds=("problematic-files",))

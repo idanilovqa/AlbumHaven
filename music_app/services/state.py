@@ -34,6 +34,9 @@ from music_app.services.library_hydration import (
 )
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.gallery_projection_postgres import (
+    schedule_gallery_projection_refresh,
+)
 from music_app.services.library_browse_postgres import (
     invalidate_postgres_utility_projection_cache,
 )
@@ -73,6 +76,7 @@ _RELATION_REBUILD_LOCK = threading.Lock()
 _RELATION_REBUILD_PENDING = False
 _RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
+_WATCHER_COVER_REFRESH_MAX_ATTEMPTS = 3
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
 
 
@@ -101,12 +105,300 @@ def invalidate_targeted_library_projections(
             int(library_state.get("inventory_mutation_revision") or 0),
         )
         library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
+    if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
+        schedule_gallery_projection_refresh(config)
     invalidate_problematic_albums_payload_cache(library_state)
     invalidate_utility_rules_payload_cache(library_state)
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
         kinds=("problematic-files", "rules"),
     )
+    if config.get("ALBUM_HAVEN_APP_DATABASE_URL") and library_browse_postgres_is_effective(config):
+        # As after a scan: rebuild the dropped projections in the background
+        # (when prewarm is enabled) so the next Problematic Files open is warm.
+        PostgresLibraryBrowseRepository(config).queue_settings_projection_prewarm()
+
+
+def queue_watcher_cover_refresh_for_track_paths_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger: object,
+    track_paths: set[str],
+    *,
+    affected_album_keys: tuple[str, ...] = (),
+) -> None:
+    normalized_paths = {str(path) for path in track_paths if str(path)}
+    if not normalized_paths:
+        return
+
+    with _CACHE_LOCK:
+        pending = library_state.setdefault(
+            "_watcher_cover_refresh_pending_track_paths",
+            set(),
+        )
+        pending.update(normalized_paths)
+        attempts_by_path = library_state.setdefault(
+            "_watcher_cover_refresh_attempts_by_track_path",
+            {},
+        )
+        enqueue_token = int(
+            library_state.get("_watcher_cover_refresh_enqueue_token") or 0
+        ) + 1
+        library_state["_watcher_cover_refresh_enqueue_token"] = enqueue_token
+        tokens_by_path = library_state.setdefault(
+            "_watcher_cover_refresh_token_by_track_path",
+            {},
+        )
+        for path in normalized_paths:
+            attempts_by_path[path] = 0
+            tokens_by_path[path] = enqueue_token
+        normalized_album_keys = {
+            str(key) for key in affected_album_keys if str(key)
+        }
+        album_keys_by_path = library_state.setdefault(
+            "_watcher_cover_refresh_album_keys_by_track_path",
+            {},
+        )
+        for path in normalized_paths:
+            if normalized_album_keys:
+                album_keys_by_path[path] = set(normalized_album_keys)
+            else:
+                album_keys_by_path.pop(path, None)
+        if library_state.get("_watcher_cover_refresh_scheduled"):
+            return
+        library_state["_watcher_cover_refresh_attempts"] = 0
+
+    _submit_watcher_cover_refresh(library_state, config, logger)
+
+
+def _submit_watcher_cover_refresh(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger: object,
+) -> None:
+    while True:
+        with _CACHE_LOCK:
+            pending = library_state.get("_watcher_cover_refresh_pending_track_paths")
+            if not pending or library_state.get("_watcher_cover_refresh_scheduled"):
+                return
+            attempts_by_path = library_state.setdefault(
+                "_watcher_cover_refresh_attempts_by_track_path",
+                {},
+            )
+            if not any(
+                int(attempts_by_path.get(path) or 0)
+                < _WATCHER_COVER_REFRESH_MAX_ATTEMPTS
+                for path in pending
+            ):
+                return
+            if int(library_state.get("_watcher_cover_refresh_attempts") or 0) >= _WATCHER_COVER_REFRESH_MAX_ATTEMPTS:
+                return
+            library_state["_watcher_cover_refresh_scheduled"] = True
+
+        try:
+            _COVER_EXECUTOR.submit(
+                lambda: _drain_watcher_cover_refresh_queue(
+                    library_state,
+                    config,
+                    logger,
+                )
+            )
+            return
+        except Exception:
+            with _CACHE_LOCK:
+                library_state["_watcher_cover_refresh_scheduled"] = False
+                library_state["_watcher_cover_refresh_attempts"] = (
+                    int(library_state.get("_watcher_cover_refresh_attempts") or 0) + 1
+                )
+            logger.exception("Unable to queue cover artwork refresh for watcher additions.")
+
+
+def _drain_watcher_cover_refresh_queue(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger: object,
+) -> None:
+    while True:
+        with _CACHE_LOCK:
+            pending = library_state.setdefault(
+                "_watcher_cover_refresh_pending_track_paths",
+                set(),
+            )
+            attempts_by_path = library_state.setdefault(
+                "_watcher_cover_refresh_attempts_by_track_path",
+                {},
+            )
+            track_paths = {
+                path
+                for path in pending
+                if int(attempts_by_path.get(path) or 0)
+                < _WATCHER_COVER_REFRESH_MAX_ATTEMPTS
+            }
+            pending.difference_update(track_paths)
+            tokens_by_path = library_state.setdefault(
+                "_watcher_cover_refresh_token_by_track_path",
+                {},
+            )
+            batch_tokens_by_path = {
+                path: tokens_by_path.get(path) for path in track_paths
+            }
+            album_keys_by_path = library_state.setdefault(
+                "_watcher_cover_refresh_album_keys_by_track_path",
+                {},
+            )
+            affected_album_keys = tuple(sorted(
+                {
+                    album_key
+                    for path in track_paths
+                    for album_key in album_keys_by_path.get(path, set())
+                },
+                key=str.casefold,
+            ))
+            if not track_paths:
+                library_state["_watcher_cover_refresh_scheduled"] = False
+                library_state["_watcher_cover_refresh_attempts"] = 0
+                return
+            targeted_state = {
+                "scan_generation": int(library_state.get("scan_generation") or 0),
+                "cover_generation": int(library_state.get("cover_generation") or 0),
+                "inventory_mutation_revision": int(
+                    library_state.get("inventory_mutation_revision") or 0
+                ),
+                "separate_release_keys": set(
+                    library_state.get("separate_release_keys") or set()
+                ),
+            }
+
+        try:
+            repository = PostgresLibraryBrowseRepository(config)
+            targeted_state["albums"] = repository.build_album_payloads_by_track_paths(
+                track_paths
+            )
+            album_track_paths = {
+                str(track.get("path"))
+                for album in targeted_state["albums"]
+                if isinstance(album, Mapping)
+                for track in album.get("tracks") or []
+                if isinstance(track, Mapping) and str(track.get("path") or "")
+            }
+            targeted_state["file_cache"] = repository.build_track_file_entries_by_paths(
+                track_paths | album_track_paths
+            )
+
+            def targeted_state_while_current() -> dict[str, object]:
+                if (
+                    library_state.get("scan_in_progress")
+                    or int(library_state.get("scan_generation") or 0)
+                    != targeted_state["scan_generation"]
+                    or int(library_state.get("cover_generation") or 0)
+                    != targeted_state["cover_generation"]
+                    or int(library_state.get("inventory_mutation_revision") or 0)
+                    != targeted_state["inventory_mutation_revision"]
+                ):
+                    return {
+                        "scan_in_progress": True,
+                        "scan_generation": -1,
+                        "cover_generation": -1,
+                    }
+                return targeted_state
+
+            def preserve_refresh_after_active_scan() -> None:
+                with _CACHE_LOCK:
+                    if library_state.get("scan_in_progress"):
+                        library_state["pending_cover_refresh_after_scan"] = True
+                        library_state["pending_cover_refresh_force_search"] = False
+
+            if targeted_state_while_current() is not targeted_state:
+                preserve_refresh_after_active_scan()
+                raise RuntimeError("Watcher cover refresh projection became stale.")
+
+            result = refresh_cover_artwork_request(
+                get_state=targeted_state_while_current,
+                cache_lock=_CACHE_LOCK,
+                config=config,
+                logger=logger,
+                log_app_event=log_app_event,
+                select_background_cover_refresh_jobs=lambda **kwargs: (
+                    select_background_cover_refresh_jobs(**kwargs)
+                ),
+                build_cover_jobs=build_cover_refresh_jobs,
+                run_cover_jobs=lambda **kwargs: run_cover_jobs(
+                    **kwargs,
+                    allow_full_snapshot_persistence=False,
+                    expected_inventory_mutation_revision=int(
+                        targeted_state["inventory_mutation_revision"]
+                    ),
+                ),
+                log_cover_refresh_completion=log_cover_refresh_completion,
+                bulk_negative_cache_ttl_seconds=config.get(
+                    "BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS",
+                    _BULK_NEGATIVE_CACHE_TTL_SECONDS,
+                ),
+                job_workers=config.get(
+                    "BULK_COVER_JOB_WORKERS",
+                    _BULK_COVER_JOB_WORKERS,
+                ),
+            )
+            if targeted_state_while_current() is not targeted_state:
+                preserve_refresh_after_active_scan()
+                raise RuntimeError("Watcher cover refresh projection became stale.")
+            with _CACHE_LOCK:
+                revision = int(library_state.get("inventory_mutation_revision") or 0)
+            if (
+                isinstance(result, Mapping)
+                and result.get("changed")
+                and affected_album_keys
+            ):
+                invalidate_targeted_library_projections(
+                    library_state,
+                    config,
+                    revision=revision,
+                    affected_album_keys=affected_album_keys,
+                )
+            if isinstance(result, Mapping) and int(result.get("failed") or 0) > 0:
+                raise RuntimeError("Watcher cover refresh provider work failed.")
+            with _CACHE_LOCK:
+                library_state["_watcher_cover_refresh_attempts"] = 0
+                attempts_by_path = library_state.setdefault(
+                    "_watcher_cover_refresh_attempts_by_track_path",
+                    {},
+                )
+                for path in track_paths:
+                    if tokens_by_path.get(path) != batch_tokens_by_path.get(path):
+                        continue
+                    attempts_by_path.pop(path, None)
+                    album_keys_by_path.pop(path, None)
+                    tokens_by_path.pop(path, None)
+        except Exception:
+            with _CACHE_LOCK:
+                pending = library_state.setdefault(
+                    "_watcher_cover_refresh_pending_track_paths",
+                    set(),
+                )
+                attempts_by_path = library_state.setdefault(
+                    "_watcher_cover_refresh_attempts_by_track_path",
+                    {},
+                )
+                album_keys_by_path = library_state.setdefault(
+                    "_watcher_cover_refresh_album_keys_by_track_path",
+                    {},
+                )
+                for path in track_paths:
+                    if tokens_by_path.get(path) != batch_tokens_by_path.get(path):
+                        continue
+                    attempts = int(attempts_by_path.get(path) or 0) + 1
+                    if attempts < _WATCHER_COVER_REFRESH_MAX_ATTEMPTS:
+                        attempts_by_path[path] = attempts
+                        pending.add(path)
+                    else:
+                        attempts_by_path.pop(path, None)
+                        album_keys_by_path.pop(path, None)
+                        tokens_by_path.pop(path, None)
+                library_state["_watcher_cover_refresh_scheduled"] = False
+                library_state["_watcher_cover_refresh_attempts"] = 0
+            logger.exception("Unable to refresh cover artwork for watcher additions.")
+            _submit_watcher_cover_refresh(library_state, config, logger)
+            return
 
 
 def sync_durable_inventory_revision(
@@ -607,7 +899,7 @@ def refresh_relation_views_for_state(
     library_state: dict[str, object],
     config: dict[str, object],
     *,
-    seed_missing_album_ratings: bool = False,
+    final_scan_publication: bool = False,
     expected_scan_generation: int | None = None,
     expected_cover_mutation_revision: int | None = None,
     expected_inventory_mutation_revision: int | None = None,
@@ -622,7 +914,7 @@ def refresh_relation_views_for_state(
     pure_relation_refresh = (
         postgres_relation_projection
         and publication_state is None
-        and not seed_missing_album_ratings
+        and not final_scan_publication
     )
     if pure_relation_refresh and expected_scan_generation is None:
         with _CACHE_LOCK:
@@ -630,7 +922,7 @@ def refresh_relation_views_for_state(
     guarded_live_repair = (
         expected_scan_generation is not None
         and publication_state is None
-        and not seed_missing_album_ratings
+        and not final_scan_publication
     )
     target_state = (
         dict(library_state)
@@ -668,17 +960,16 @@ def refresh_relation_views_for_state(
         )
     if before_commit is not None:
         snapshot_options["before_commit"] = before_commit
-    if seed_missing_album_ratings:
+    if final_scan_publication:
         if expected_scan_generation is None:
             raise ValueError(
-                "expected_scan_generation is required when seeding album ratings"
+                "expected_scan_generation is required for the final scan publication"
             )
-        snapshot_options["seed_missing_album_ratings"] = True
-        snapshot_options["album_rating_seed_guard"] = (
-            lambda seed_action: _run_album_rating_seed_for_current_generation(
+        snapshot_options["publication_commit_guard"] = (
+            lambda commit_action: _run_scan_publication_commit_for_current_generation(
                 library_state,
                 expected_scan_generation,
-                seed_action,
+                commit_action,
             )
         )
     elif guarded_live_repair:
@@ -797,15 +1088,15 @@ def _run_snapshot_commit_for_current_generation(
         return commit_action()
 
 
-def _run_album_rating_seed_for_current_generation(
+def _run_scan_publication_commit_for_current_generation(
     library_state: dict[str, object],
     expected_scan_generation: int,
-    seed_action: Callable[[], object],
+    commit_action: Callable[[], object],
 ) -> object:
     with _CACHE_LOCK:
         if int(library_state.get("scan_generation") or 0) != expected_scan_generation:
             raise ScanCancelled()
-        result = seed_action()
+        result = commit_action()
         library_state["scan_committed_generation"] = expected_scan_generation
         return result
 
@@ -1051,7 +1342,7 @@ def refresh_library_for_state(
 ) -> None:
     def refresh_relation_views(
         *,
-        seed_missing_album_ratings: bool = False,
+        final_scan_publication: bool = False,
         expected_scan_generation: int | None = None,
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
@@ -1059,8 +1350,8 @@ def refresh_library_for_state(
         publication_state: dict[str, object] | None = None,
     ) -> None:
         options: dict[str, object] = {}
-        if seed_missing_album_ratings:
-            options["seed_missing_album_ratings"] = True
+        if final_scan_publication:
+            options["final_scan_publication"] = True
         if expected_scan_generation is not None:
             options["expected_scan_generation"] = expected_scan_generation
         if expected_cover_mutation_revision is not None:
@@ -1161,6 +1452,12 @@ def refresh_library_for_state(
         ),
         expected_inventory_mutation_revision=expected_inventory_mutation_revision,
         before_commit=before_commit,
+        queue_musicbrainz_enrichment=config.get(
+            "_MUSICBRAINZ_ENRICHMENT_SCHEDULER"
+        ),
+        recover_library_watch_health=config.get(
+            "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"
+        ),
     )
 
 

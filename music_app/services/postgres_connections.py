@@ -50,6 +50,7 @@ def pooled_connection(
     *,
     workload: str = "default",
     lease_observer: Callable[[Mapping[str, object]], None] | None = None,
+    checkout_timeout_seconds: float | None = None,
 ):
     if not isinstance(database_url, str) or not database_url.strip():
         raise RuntimeError("Postgres configuration is required.")
@@ -72,7 +73,11 @@ def pooled_connection(
             _pools[pool_key] = pool
     checkout_started = perf_counter()
     try:
-        checkout = pool.connection()
+        checkout = (
+            pool.connection(timeout=max(0.001, float(checkout_timeout_seconds)))
+            if checkout_timeout_seconds is not None
+            else pool.connection()
+        )
     except PoolTimeout:
         _observe_pool_lease(
             lease_observer,

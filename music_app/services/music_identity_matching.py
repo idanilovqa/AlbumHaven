@@ -41,6 +41,33 @@ def _as_text(value: object) -> str:
     return str(value)
 
 
+def same_artist_credit_spelling(left: object, right: object) -> bool:
+    """Match spelling variants without transliterating or dropping letters."""
+
+    def spelling_key(value: object) -> str:
+        decomposed = unicodedata.normalize("NFD", _as_text(value).lower())
+        key: list[str] = []
+        latin_base = False
+        for character in decomposed:
+            category = unicodedata.category(character)
+            if character.isalnum():
+                key.append(character)
+                latin_base = category.startswith("L") and "LATIN" in unicodedata.name(character, "")
+            elif category.startswith("M"):
+                if not latin_base:
+                    key.append(character)
+            elif category.startswith("P") or category.startswith("Z") or character.isspace():
+                latin_base = False
+            else:
+                key.append(character)
+                latin_base = False
+        return "".join(key)
+
+    left_key = spelling_key(left)
+    right_key = spelling_key(right)
+    return bool(left_key and right_key and left_key == right_key)
+
+
 def contains_cyrillic(value: object) -> bool:
     return any("\u0400" <= char <= "\u04ff" for char in _as_text(value))
 

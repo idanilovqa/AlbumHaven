@@ -49,6 +49,17 @@ test('FTC-PERMISSIONS-003 reconciles Rendref and signs in through a token-free s
 
 test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async ({ page, freshBrowserSession }) => {
   const unknown = await loginResponse(page, 'unknown.user', 'Wrong private passphrase 2026!');
+  const login = new LoginPage(page);
+  await expect(page).toHaveURL(/\/login\?return_to=%2Faccount$/);
+  await expect(page.getByRole('alert')).toHaveText(
+    'Sign-in failed. Check your credentials and try again.',
+  );
+  await expect(login.username).toHaveValue('unknown.user');
+  await expect(login.password).toHaveValue('');
+  await expect(login.password).toBeFocused();
+  await expect(login.submit).toBeEnabled();
+  // Rejected credentials are reported on the sign-in form, never behind the loading overlay.
+  await expect(login.startupProgress).toBeHidden();
   const wrong = await loginResponse(page, OWNER.username, 'Wrong private passphrase 2026!');
   await databaseAction('disable-owner');
   const disabled = await loginResponse(page, OWNER.username, OWNER.password);
@@ -128,7 +139,8 @@ test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes p
     await expect(revokedSession.page.getByText('Authentication required.')).toBeVisible();
   }
   expect((await loginResponse(page, OWNER.username, OWNER.password)).status()).toBe(401);
-  expect((await loginResponse(page, OWNER.username, newPassword)).status()).toBe(303);
+  expect((await loginResponse(page, OWNER.username, newPassword)).status()).toBe(200);
+  await expect(page).toHaveURL(/\/account$/);
 
   const replay = await page.goto(resetPath);
   expect(replay.status()).toBe(400);

@@ -36,3 +36,46 @@ for (const layout of ['stacked_bar', 'editorial_canvas']) test(`${layout} stacks
   expect(Math.abs((markers.x + markers.width / 2) - (back.x + back.width / 2))).toBeLessThanOrEqual(1);
   expect(second.y).toBeGreaterThanOrEqual(first.y + first.height + 2);
 });
+
+test('Album Details keeps the Gallery header offset and tightens its identity lines', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setContent(`<!doctype html>
+    <html><body>
+      <div class="shell-layout">
+        <main class="shell-main-surface" data-gallery-surface>
+          <header class="gallery-bar" data-gallery-bar-instance="gallery"></header>
+        </main>
+        <main class="shell-main-surface has-mobile-page" data-album-surface>
+          <header id="mobile-page-header" class="mobile-page-header">
+            <button data-mobile-back></button>
+            <div class="gallery-bar__context">
+              <h1 id="mobile-page-title" class="gallery-bar__title">Album</h1>
+              <p id="mobile-page-summary" class="gallery-bar__summary">Artist</p>
+            </div>
+          </header>
+          <div id="mobile-page-outlet" data-mobile-page-kind="album"></div>
+          <div class="mobile-album-identity">
+            <div class="album-details-header">
+              <h3 class="album-details-header__primary">Album</h3>
+              <div class="album-details-header__secondary">Artist</div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </body></html>`);
+  await page.addStyleTag({ path: path.join(staticRoot, 'css/runtime/album-details-components.css') });
+  await page.addStyleTag({ path: path.join(staticRoot, 'css/mobile-layout.css') });
+
+  const styles = await page.evaluate(() => ({
+    galleryTop: getComputedStyle(document.querySelector('[data-gallery-surface]')).paddingTop,
+    albumTop: getComputedStyle(document.querySelector('[data-album-surface]')).paddingTop,
+    headerTitleMinHeight: getComputedStyle(document.querySelector('#mobile-page-title')).minHeight,
+    headerIdentityGap: getComputedStyle(document.querySelector('#mobile-page-summary')).marginTop,
+    identityGap: getComputedStyle(document.querySelector('.album-details-header__secondary')).marginTop,
+  }));
+
+  expect(styles.albumTop).toBe(styles.galleryTop);
+  expect(styles.headerTitleMinHeight).toBe('0px');
+  expect(Number.parseFloat(styles.headerIdentityGap)).toBeLessThanOrEqual(3);
+  expect(Number.parseFloat(styles.identityGap)).toBeLessThanOrEqual(3);
+});

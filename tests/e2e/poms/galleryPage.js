@@ -32,8 +32,9 @@ export function readAppliedGalleryProjectionSnapshot(target = {}) {
   const view = state.view || {};
   const expectedArtist = String(target.artist || '').trim();
   const expectedAlbum = String(target.album || '').trim();
+  const compactTarget = Boolean(expectedArtist || expectedAlbum);
   const compactGroups = (groups) => {
-    if (!expectedArtist && !expectedAlbum) return groups;
+    if (!compactTarget) return groups;
     return (Array.isArray(groups) ? groups : []).flatMap((group) => {
       const artist = String(group?.artist || group?.artist_display || '').trim();
       if (expectedArtist && artist !== expectedArtist) return [];
@@ -260,7 +261,23 @@ export class GalleryPage extends BasePage {
     this.artistHeadings = page.locator(this.artistHeadingSelector);
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
+    this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
+    this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
+    this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');
+    this.galleryContextInlineTotal = this.galleryContext.locator('[data-gallery-context-inline-total]');
+    this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country');
+    this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
+    this.artistInfoTrigger = this.galleryContext.locator('[data-artist-info-trigger]');
+    this.artistInfoPanel = page.locator('[data-artist-info-overlay]');
+    this.artistInfoHeading = this.artistInfoPanel.locator('h2');
+    this.artistInfoCredit = this.artistInfoPanel.locator('[data-artist-info-credit]');
+    this.artistInfoCountryPills = this.artistInfoPanel.locator('.ui-metadata-pill--country');
+    this.artistInfoGenrePills = this.artistInfoPanel.locator('.ui-metadata-pill--genre');
+    this.artistInfoIdentities = this.artistInfoPanel.locator('[data-artist-info-identities]');
+    this.artistInfoIdentityRows = this.artistInfoIdentities.locator('li');
+    this.artistInfoLinks = this.artistInfoPanel.locator('a[href]');
+    this.gallerySurface = page.locator('.shell-main-surface:has(> [data-gallery-bar-instance="gallery"])');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
@@ -381,6 +398,30 @@ export class GalleryPage extends BasePage {
   albumRowsByArtistName(artistName) {
     return this.sectionByArtistHeading(artistName)
       .locator(this.albumRowWithinSectionSelector);
+  }
+
+  familyArtistInfoTrigger(artistName) {
+    return this.page.locator('.family-artist-header')
+      .getByRole('button', { name: `Information about ${artistName}`, exact: true })
+      .first();
+  }
+
+  albumRowsByArtistAndAlbumName(artistName, albumName) {
+    return this.albumRowsByArtistName(artistName).filter({
+      has: this.page.locator(this.albumTitleButtonWithinSectionSelector).filter({
+        hasText: exactNormalizedText(albumName),
+      }),
+    });
+  }
+
+  async readAlbumSubsectionTitle(artistName, albumName) {
+    const row = this.albumRowsByArtistAndAlbumName(artistName, albumName).first();
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read the production subsection preceding one owned album row
+    return row.evaluate((element) => {
+      let sibling = element.previousElementSibling;
+      while (sibling?.classList.contains('artist-rows-spacer')) sibling = sibling.previousElementSibling;
+      return sibling?.querySelector('.artist-subsection-title')?.textContent?.trim() || null;
+    });
   }
 
   async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
@@ -529,7 +570,8 @@ export class GalleryPage extends BasePage {
         && document.querySelectorAll(selectors.artistSectionSelector).length === 1
         && String(context?.querySelector('[data-gallery-context-name]')?.textContent || '').trim() === selectors.artistName;
       const artistMetaText = String(sectionCount?.textContent
-        || (ownsSingleArtist ? context.querySelector('[data-gallery-context-summary]')?.textContent : '') || '').trim();
+        // A single-artist header reads "Name (i) • N albums": the count follows the name.
+        || (ownsSingleArtist ? context.querySelector('[data-gallery-context-inline-total]')?.textContent : '') || '').trim();
       const expectedAlbums = new Set(selectors.expectedAlbumNames);
       const renderedIdentities = [...element.querySelectorAll(selectors.albumCardSelector)]
         .map((card) => ({
@@ -886,7 +928,7 @@ export class GalleryPage extends BasePage {
     const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
     const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
       && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
- if (idle && observation.bootstrapPresenceEligible === false && !rootContinuation) return null;
+    if (idle && observation.bootstrapPresenceEligible === false && !rootContinuation) return null;
     if (idle || rootContinuation) {
       const bootstrap = await this.readProductionBootstrapPayload();
       const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
@@ -906,7 +948,7 @@ export class GalleryPage extends BasePage {
     }
     const initiallyBusy = initialObservation.activeRequestCount > 0
       || initialObservation.pendingPayloadReadCount > 0;
- let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
+    let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
       && !initialObservation.latestFullPayload && !initiallyBusy
       ? await this.readProductionBootstrapPayload()
       : null;
@@ -922,24 +964,11 @@ export class GalleryPage extends BasePage {
       || bootstrapPayload?.startup_payload?.first_paint_view
       || bootstrapPayload?.initial_view
       || null;
-    const input = this.page.locator('#search-input');
-    const inputQuery = await input.count() ? await input.inputValue() : '';
-    const expectedQuery = expected.query === undefined
-      ? String(inputQuery || '').trim()
-      : String(expected.query || '').trim();
     const expectedArtist = String(expected.artist || '').trim();
     const expectedAlbum = String(expected.album || '').trim();
     const canReadAppliedProjection = typeof this.page.evaluate === 'function'
       || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
-    const readAppliedProjection = () => (
-      expectedQuery && typeof this.page.evaluate === 'function'
-        ? this.readAppliedAlbumTargetProjection({
-          artist: expectedArtist,
-          album: expectedAlbum,
-        })
-        : this.readAppliedGalleryProjection()
-    );
-    const readDomState = async () => {
+    const readLocatorDomState = async () => {
       const [attachedMatch, loaderVisible, attachedArtists] = await Promise.all([
         this.albumCard.detailsButtonByArtistAndAlbum(expectedArtist, expectedAlbum).count().then(count => count > 0),
         this.libraryLoader.isVisible(),
@@ -964,6 +993,20 @@ export class GalleryPage extends BasePage {
         spinnerVisible,
       };
     };
+    const input = this.page.locator('#search-input');
+    const inputQuery = await input.count() ? await input.inputValue() : '';
+    const expectedQuery = expected.query === undefined
+      ? String(inputQuery || '').trim()
+      : String(expected.query || '').trim();
+    const readAppliedProjection = () => (
+      expectedQuery && typeof this.page.evaluate === 'function'
+        ? this.readAppliedAlbumTargetProjection({
+          artist: expectedArtist,
+          album: expectedAlbum,
+          query: expectedQuery,
+        })
+        : this.readAppliedGalleryProjection()
+    );
     const [projection, initialDom] = await Promise.all([
       canReadAppliedProjection ? readAppliedProjection() : Promise.resolve({
         ...(payload || {}),
@@ -973,7 +1016,7 @@ export class GalleryPage extends BasePage {
         locationQuery: new URL(this.page.url()).searchParams.get('q') || '',
         locationArtist: new URL(this.page.url()).searchParams.get('artist') || '',
       }),
-      readDomState(),
+      readLocatorDomState(),
     ]);
     const targetLocation = new URL(this.page.url());
     const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
@@ -1003,7 +1046,7 @@ export class GalleryPage extends BasePage {
     );
     const [finalProjection, finalDom] = await Promise.all([
       canReadAppliedProjection ? readAppliedProjection() : Promise.resolve(projection),
-      readDomState(),
+      readLocatorDomState(),
     ]);
     const finalAttachedMatch = finalDom.attachedMatch;
     const finalAttachedArtists = finalDom.attachedArtists;
@@ -1279,13 +1322,18 @@ export class GalleryPage extends BasePage {
     return this.page.evaluate(async (url) => {
       const diagnostics = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
       const cache = await globalThis.caches.open(String(diagnostics?.cacheName || ''));
-      const cacheKey = new URL(url);
-      cacheKey.searchParams.delete('v');
-      const response = await cache.match(cacheKey.href);
-      const cachedProductionUrl = String(
-        response?.headers?.get?.('X-Album-Haven-Cover-Production-Url') || '',
-      );
-      const exactResponse = cachedProductionUrl === url ? response : null;
+      // Stored covers name no file path: the key is the SHA-256 of the unversioned URL, and the
+      // version they answer is the URL's `v` (gallery-cover-preview-cache.js storedCoverKey, coverVersionTag).
+      const sha256Hex = async (text) => Array.from(
+        new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new globalThis.TextEncoder().encode(text))),
+        (byte) => byte.toString(16).padStart(2, '0'),
+      ).join('');
+      const unversioned = new URL(url);
+      unversioned.searchParams.delete('v');
+      const source = `${unversioned.pathname}${unversioned.search}`;
+      const response = await cache.match(`${unversioned.origin}/__album-haven-cover/${await sha256Hex(source)}`);
+      const cachedVersion = String(response?.headers?.get?.('X-Album-Haven-Cover-Version') || '');
+      const exactResponse = cachedVersion === (new URL(url).searchParams.get('v') || '') ? response : null;
       return {
         active: Array.isArray(diagnostics?.activeProductionUrls)
           && diagnostics.activeProductionUrls.includes(url),

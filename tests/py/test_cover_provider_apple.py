@@ -12,6 +12,35 @@ def _logger():
     return type("Logger", (), {"verbose": lambda self, *args, **kwargs: None})()
 
 
+def test_album_query_part_variants_expand_book_marker():
+    from music_app.services import cover_provider_apple as apple
+
+    assert apple.album_query_part_variants("Chronicles of Father Robin Book III") == [
+        "Chronicles of Father Robin Book III",
+        "Chronicles of Father Robin Pt. 3",
+        "Chronicles of Father Robin Part 3",
+        "Chronicles of Father Robin Pt. III",
+        "Chronicles of Father Robin Part III",
+        "Chronicles of Father Robin Part Three",
+    ]
+
+
+def test_search_queries_fall_back_to_album_title_when_full_collaboration_credit_is_too_strict():
+    from music_app.services import cover_provider_apple as apple
+
+    queries = apple._build_search_queries(
+        "Skruk, Mahsa Vahdat & Ellen Bødtker",
+        "Braids Of Innocence",
+        None,
+        2022,
+        native_artist="Skruk, Mahsa Vahdat & Ellen Bødtker",
+        native_album="Braids Of Innocence",
+    )
+
+    assert ("Braids Of Innocence 2022", "album+year:native", True) in queries
+    assert ("Braids Of Innocence", "album:native", False) in queries
+
+
 def test_artist_page_urls_prefer_shared_identity_and_reject_marker_mismatch():
     from music_app.services import cover_provider_apple as apple
 
@@ -458,7 +487,7 @@ def test_search_apple_fallback_order_and_web_fallback_gate(monkeypatch):
     )
 
     assert result_without_web is None
-    assert calls == ["api", "miss", "artist"]
+    assert calls == ["api", "miss", "artist", "api", "miss"]
 
     calls.clear()
     result_with_web = apple.search_apple(
@@ -651,6 +680,8 @@ def test_search_apple_candidates_uses_looser_query_when_strict_query_has_no_cand
     assert collected_queries == [
         "Metallica Kill 'Em All 1983",
         "Metallica Kill 'Em All",
+        "Kill 'Em All 1983",
+        "Kill 'Em All",
     ]
     assert [candidate.url for candidate in candidates] == [
         "https://images.example/base.jpg"
@@ -702,6 +733,8 @@ def test_search_apple_candidates_defers_one_web_sweep_until_native_queries_are_e
         "artist:True",
         "api:Test Artist Test Album",
         "artist:False",
+        "api:Test Album 2001",
+        "api:Test Album",
         "web:False",
     ]
 
@@ -750,7 +783,7 @@ def test_search_apple_candidates_reuses_identical_artist_search_response_across_
     ]
     assert candidates == []
     assert len(artist_search_urls) == 1
-    assert len(album_search_urls) == 2
+    assert len(album_search_urls) == 4
 
 
 def test_search_apple_candidates_uses_looser_query_when_strict_candidate_is_too_small():

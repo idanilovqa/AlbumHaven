@@ -1,11 +1,92 @@
 const GALLERY_COVER_PREVIEW_CACHE_PREFIX = 'album-haven-gallery-previews-';
-const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v2';
+const GALLERY_COVER_PREVIEW_CACHE_VERSION = 'v3';
 const GALLERY_COVER_PREVIEW_CACHE_NAME = `${GALLERY_COVER_PREVIEW_CACHE_PREFIX}${GALLERY_COVER_PREVIEW_CACHE_VERSION}`;
 const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
-const GALLERY_COVER_PRODUCTION_URL_HEADER = 'X-Album-Haven-Cover-Production-Url';
+// Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
+// SHA-256 of the cover URL without its version), and the version it answers is the URL's `v`.
+const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
+const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
+const MAX_REMEMBERED_COVER_KEYS = 4096;
+const GALLERY_COVER_SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+// SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs; the app-copy worker computes
+// the same digest with crypto.subtle.
+// Resolves in a new task (not a microtask), so work after it does not join the current task.
+function galleryCoverYield() {
+  if (typeof globalThis.MessageChannel !== 'function') return new Promise(resolve => globalThis.setTimeout(resolve, 0));
+  return new Promise((resolve) => {
+    const channel = new globalThis.MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+// Reused across calls: no allocation per cover beyond growing the byte buffer for a longer URL.
+const GALLERY_COVER_SHA256_W = new Int32Array(64);
+const GALLERY_COVER_SHA256_ENCODER = new TextEncoder();
+let galleryCoverSha256Bytes = new Uint8Array(1024);
+
+function galleryCoverSha256Hex(text) {
+  const source = String(text);
+  if (galleryCoverSha256Bytes.length < source.length * 3 + 72) {
+    galleryCoverSha256Bytes = new Uint8Array(source.length * 3 + 72);
+  }
+  const bytes = galleryCoverSha256Bytes;
+  const byteLength = GALLERY_COVER_SHA256_ENCODER.encodeInto(source, bytes).written;
+  const length = ((byteLength + 9 + 63) >> 6) << 6;
+  bytes.fill(0, byteLength, length);
+  bytes[byteLength] = 0x80;
+  const bitLength = byteLength * 8;
+  bytes[length - 5] = Math.floor(bitLength / 0x100000000) & 0xff;
+  bytes[length - 4] = bitLength >>> 24;
+  bytes[length - 3] = (bitLength >>> 16) & 0xff;
+  bytes[length - 2] = (bitLength >>> 8) & 0xff;
+  bytes[length - 1] = bitLength & 0xff;
+  const w = GALLERY_COVER_SHA256_W;
+  const k = GALLERY_COVER_SHA256_K;
+  let h0 = 0x6a09e667 | 0; let h1 = 0xbb67ae85 | 0; let h2 = 0x3c6ef372 | 0; let h3 = 0xa54ff53a | 0;
+  let h4 = 0x510e527f | 0; let h5 = 0x9b05688c | 0; let h6 = 0x1f83d9ab | 0; let h7 = 0x5be0cd19 | 0;
+  for (let offset = 0; offset < length; offset += 64) {
+    for (let i = 0; i < 16; i += 1) {
+      const at = offset + i * 4;
+      w[i] = (bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3];
+    }
+    for (let i = 16; i < 64; i += 1) {
+      const x = w[i - 15];
+      const y = w[i - 2];
+      const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+      const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let a = h0; let b = h1; let c = h2; let d = h3; let e = h4; let f = h5; let g = h6; let h = h7;
+    for (let i = 0; i < 64; i += 1) {
+      const t1 = (h + (((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7)))
+        + ((e & f) ^ (~e & g)) + k[i] + w[i]) | 0;
+      const t2 = ((((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10)))
+        + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + h) | 0;
+  }
+  const hex = word => (word >>> 0).toString(16).padStart(8, '0');
+  return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4) + hex(h5) + hex(h6) + hex(h7);
+}
 
 class GalleryCoverPreviewCache {
   constructor(options = {}) {
@@ -24,6 +105,9 @@ class GalleryCoverPreviewCache {
     this.liveFetches = new Map();
     this.keyGenerations = new Map();
     this.latestRequestedProductionUrls = new Map();
+    // Each production URL's stored key and version, and each cover's key whatever its version.
+    this.coverKeys = new Map();
+    this.unversionedCoverKeys = new Map();
     this.openPromise = null;
     this.generation = 0;
     this.requestSequence = 0;
@@ -170,7 +254,51 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  createCacheableResponse(response, blob, productionUrl) {
+  // [productionUrl]'s stored key, the same key as app-copy-worker.js coverKey (the SHA-256 of the
+  // URL without its version; one per cover and size), and the version it answers, the URL's `v`
+  // (a revision, never a file). Each cover is hashed once: a new version of a cover (a save, a
+  // revision bump across the gallery) reuses its key without hashing again.
+  coverKeysFor(productionUrl) {
+    let keys = this.coverKeys.get(productionUrl);
+    if (!keys) {
+      const url = new URL(productionUrl);
+      const version = url.searchParams.get('v') || '';
+      url.searchParams.delete('v');
+      const unversioned = `${url.origin}${url.pathname}${url.search}`;
+      let key = this.unversionedCoverKeys.get(unversioned);
+      if (!key) {
+        key = `${url.origin}${GALLERY_COVER_KEY_PREFIX}${galleryCoverSha256Hex(`${url.pathname}${url.search}`)}`;
+        if (this.unversionedCoverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.unversionedCoverKeys.clear();
+        this.unversionedCoverKeys.set(unversioned, key);
+      }
+      keys = { key, version };
+      if (this.coverKeys.size >= MAX_REMEMBERED_COVER_KEYS) this.coverKeys.clear();
+      this.coverKeys.set(productionUrl, keys);
+    }
+    return keys;
+  }
+
+  // As coverKeysFor, for a cover load: a cover not hashed yet first yields one task, so a burst of
+  // new covers (a gallery page, a save that re-renders many cards) hashes across many short tasks
+  // instead of one long one.
+  async coverKeysForLoad(productionUrl) {
+    if (!this.coverKeys.has(productionUrl)) {
+      const url = new URL(productionUrl);
+      url.searchParams.delete('v');
+      if (!this.unversionedCoverKeys.has(`${url.origin}${url.pathname}${url.search}`)) await galleryCoverYield();
+    }
+    return this.coverKeysFor(productionUrl);
+  }
+
+  storedCoverKey(productionUrl) {
+    return this.coverKeysFor(productionUrl).key;
+  }
+
+  coverVersionTag(productionUrl) {
+    return this.coverKeysFor(productionUrl).version;
+  }
+
+  createCacheableResponse(response, blob, versionTag) {
     if (typeof globalThis.Response !== 'function') return null;
     const contentType = String(blob?.type || this.responseContentType(response) || '').trim();
     return new globalThis.Response(blob, {
@@ -178,7 +306,7 @@ class GalleryCoverPreviewCache {
       statusText: String(response?.statusText || ''),
       headers: {
         ...(contentType ? { 'Content-Type': contentType } : {}),
-        [GALLERY_COVER_PRODUCTION_URL_HEADER]: productionUrl,
+        [GALLERY_COVER_VERSION_HEADER]: versionTag,
       },
     });
   }
@@ -303,14 +431,15 @@ class GalleryCoverPreviewCache {
           && !signal?.aborted
           && this.isLatestRequestedProductionUrl(productionUrl)
         );
+        const storedKey = this.storedCoverKey(productionUrl);
         await this.deferCacheWrite(async () => {
           if (!shouldContinue()) return;
-          await cache.put(baseKey, cacheCandidate);
+          await cache.put(storedKey, cacheCandidate);
           wroteCacheEntry = true;
         });
         if (!shouldContinue()) {
           if (wroteCacheEntry || !this.isLatestRequestedProductionUrl(productionUrl)) {
-            await cache.delete(baseKey);
+            await cache.delete(storedKey);
           }
           return {
             blob,
@@ -338,10 +467,11 @@ class GalleryCoverPreviewCache {
   async loadBlob(productionUrl, snapshot, signal = null, abortController = null, priorityOwner = null) {
     this.throwIfAborted(signal);
     const cache = await this.openCache();
-    const cacheKey = this.baseCacheKey(productionUrl);
+    const { key: cacheKey, version: versionTag } = await this.coverKeysForLoad(productionUrl);
+    this.throwIfAborted(signal);
     const cachedResponse = await cache.match(cacheKey);
     this.throwIfAborted(signal);
-    if (cachedResponse?.headers?.get?.(GALLERY_COVER_PRODUCTION_URL_HEADER) === productionUrl) {
+    if (cachedResponse?.headers?.get?.(GALLERY_COVER_VERSION_HEADER) === versionTag) {
       try {
         const blob = await this.validatedBlob(cachedResponse);
         this.throwIfAborted(signal);
@@ -395,7 +525,7 @@ class GalleryCoverPreviewCache {
         });
         this.throwIfAborted(signal);
         blob = await this.validatedBlob(response);
-        cacheCandidate = this.createCacheableResponse(response, blob, productionUrl);
+        cacheCandidate = this.createCacheableResponse(response, blob, versionTag);
         this.throwIfAborted(signal);
       } catch (error) {
         promotionRetry = Boolean(
@@ -679,7 +809,7 @@ class GalleryCoverPreviewCache {
     }
     try {
       const cache = await this.openCache();
-      return Boolean(await cache.delete(this.baseCacheKey(normalizedUrl)));
+      return Boolean(await cache.delete(this.storedCoverKey(normalizedUrl)));
     } catch (error) {
       this.recordDiagnostic('fallback', normalizedUrl, error);
       return false;

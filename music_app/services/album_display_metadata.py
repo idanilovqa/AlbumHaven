@@ -1,6 +1,33 @@
 from __future__ import annotations
 
+import re
+
 from music_app.services.source_helpers import field_from_source
+
+
+_SEASON_SOUNDTRACK_TITLE = re.compile(
+    r"^(?P<name>.+?)\s*[:,\-]\s*"
+    r"(?P<season>(?:the\s+)?(?:season\s+(?:\d+|[a-z]+)|[a-z]+\s+season))\s*"
+    r"(?:(?::|-)\s*|\(\s*)"
+    r"(?P<kind>ost|(?:(?:original|official)\s+)?(?:(?:television|tv|motion\s+picture)\s+)?soundtrack)"
+    r"\s*\)?$",
+    re.IGNORECASE,
+)
+
+
+def album_display_title(value: object) -> str:
+    title = str(value or "").strip()
+    match = _SEASON_SOUNDTRACK_TITLE.fullmatch(title)
+    if not match:
+        return title
+    return f"{match.group('name').strip()}: {match.group('season').strip()} ({match.group('kind').strip()})"
+
+
+def album_display_year(source: object) -> str:
+    value = field_from_source(source, "release_date", None) or field_from_source(source, "year", None)
+    text = str(value or "").strip()
+    match = re.search(r"(?<!\d)(\d{4})(?!\d)", text)
+    return match.group(1) if match else text
 
 
 def _normalize_text(value: object) -> str | None:

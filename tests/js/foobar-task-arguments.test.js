@@ -42,8 +42,10 @@ test('scheduled backup quoting preserves native drive roots and trailing separat
     '}',
   ].join('\n'));
   try {
+    // Only a hang guard over four powershell.exe starts, not a timing assertion:
+    // a stalled CI runner once took 59 s to start one (normally under 1 s).
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', launcher],
-      { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      { encoding: 'utf8', windowsHide: true, timeout: 120000 });
     assert.ifError(result.error);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   } finally {

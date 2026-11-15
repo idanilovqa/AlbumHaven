@@ -1234,14 +1234,49 @@
         "js:music_app/static/js/runtime/bootstrap-init.js#<top-level>:timer:requestAnimationFrame"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-init.js"
+        "music_app/static/js/runtime/bootstrap-init.js",
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/notification-ui-helpers.js",
+        "music_app/static/js/appearance-backgrounds.js",
+        "music_app/static/js/appearance-palettes.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/mobile-navigation.js",
+        "music_app/static/js/runtime/browser-dialog-helpers.js",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js",
+        "music_app/static/js/selection-accent.js",
+        "music_app/static/js/runtime/alert-components.js",
+        "music_app/static/js/runtime/response-state-helpers.js",
+        "music_app/static/js/runtime/mobile-home.js",
+        "music_app/static/js/appearance-device-profiles.js"
       ],
       "rules": [
         "BI-01",
         "BI-03"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 80,
+        "production": 1000
+      },
+      "budgets": {
+        "itemsVisited": 60,
+        "renderCommits": 1,
+        "markupBytes": 91400,
+        "domQueries": 4
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-modal-and-drawer.test.js",
+      "testIdentity": "bounded interaction: notification drawer scroll renders one task window among 1,000 loaded notifications",
+      "performanceTargets": [],
+      "rollback": "Revert the window-only drawer scroll render and rendered-window anchor lookup; scrolls then recount, re-sign, and search every loaded notification again. No data or API change."
     },
     {
       "id": "js:runtime/bootstrap-init.js#runHydration",

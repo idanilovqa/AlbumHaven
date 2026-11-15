@@ -1300,24 +1300,106 @@ def test_request_library_hydration_retries_after_a_failed_background_attempt(con
     assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
     assert len(executor.queued) == 1
 
-def test_hydrate_library_state_for_config_returns_false_when_runtime_persistence_adapter_is_unavailable(monkeypatch):
-    library_state = {"albums": [], "last_error": None}
 
-    monkeypatch.setattr(
-        state_module,
-        "hydrate_library_state_from_disk",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            ValueError("Postgres runtime persistence adapter is unavailable for exception_overrides.")
-        ),
+def test_request_library_hydration_retries_after_persistence_adapter_was_unavailable(config, logger, monkeypatch):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    outcomes = [
+        ValueError("Postgres runtime persistence adapter is unavailable for library_browse."),
+        False,
+    ]
+
+    def fake_hydrate_from_disk(*_args, **_kwargs):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(state_module, "_call_hydrate_library_state_from_disk", fake_hydrate_from_disk)
+    library_state = {"albums": [], "hydrate_in_progress": False, "hydration_settled": False, "last_error": None}
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    function, args, kwargs = executor.queued.pop()
+    function(*args, **kwargs)
+
+    assert library_state["hydration_settled"] is False
+    assert library_state["hydrate_in_progress"] is False
+    assert "adapter is unavailable" in library_state["last_error"]
+    assert logger.exception_messages == []
+    assert [message for message, _args in logger.warning_messages] == [
+        "Background library hydration deferred: %s",
+    ]
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is False
+    function, args, kwargs = executor.queued.pop()
+    function(*args, **kwargs)
+
+    assert library_state["hydration_settled"] is True
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is True
+    assert executor.queued == []
+
+
+class _RecordingRequestLock:
+    def __init__(self, on_enter=lambda: None):
+        self.on_enter = on_enter
+        self.held = False
+
+    def __enter__(self):
+        self.on_enter()
+        self.held = True
+        return self
+
+    def __exit__(self, *_exc):
+        self.held = False
+        return False
+
+
+def test_request_library_hydration_rechecks_publication_inside_the_request_lock(config, logger, monkeypatch):
+    executor = _RecordingHydrateExecutor()
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", executor)
+    library_state = {"albums": [], "hydrate_in_progress": False, "hydration_settled": False}
+    # The background owner publishes while this reader waits for the lock.
+    publish = lambda: library_state.__setitem__("hydration_settled", True)
+    monkeypatch.setattr(state_module, "_HYDRATION_REQUEST_LOCK", _RecordingRequestLock(publish))
+
+    assert state_module.request_library_hydration_for_state(library_state, config, logger) is True
+    assert executor.queued == []
+    assert library_state["hydrate_in_progress"] is False
+
+
+def test_hydrate_worker_settles_and_clears_in_progress_under_the_request_lock(config, logger, monkeypatch):
+    request_lock = _RecordingRequestLock()
+    observed = []
+
+    def fake_hydrate(*_args, **_kwargs):
+        observed.append(request_lock.held)
+        return False
+
+    class _ObservedState(dict):
+        def __setitem__(self, key, value):
+            if key in {"hydration_settled", "hydrate_in_progress"}:
+                observed.append((key, value, request_lock.held))
+            super().__setitem__(key, value)
+
+    library_state = _ObservedState(
+        albums=[], hydrate_in_progress=True, hydration_settled=False, last_error=None,
     )
+    monkeypatch.setattr(state_module, "_HYDRATION_REQUEST_LOCK", request_lock)
+    monkeypatch.setattr(state_module, "hydrate_library_state_for_config", fake_hydrate)
 
-    hydrated = state_module.hydrate_library_state_for_config(
+    state_module._hydrate_library_state_worker(
         library_state,
-        {"MUSIC_DIR": "."},
+        config,
+        logger,
+        ensure_relations=False,
+        validate_cache=False,
     )
 
-    assert hydrated is False
-    assert library_state["last_error"] == "Postgres runtime persistence adapter is unavailable for exception_overrides."
+    assert observed == [
+        False,
+        ("hydration_settled", True, True),
+        ("hydrate_in_progress", False, True),
+    ]
 
 
 def test_startup_hydration_selects_strict_scan_cache_adapter_and_passes_it_explicitly(

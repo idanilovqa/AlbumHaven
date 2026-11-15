@@ -1044,6 +1044,66 @@
       "rollback": "Revert the hovered-track guard and changed-row selection sync; tag editor drag selection then re-renders every row on each mousemove again. No data or API change."
     },
     {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#align",
+      "action": "scheduleBrowserAnimationFrame timers installed by align",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#align:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#armArtistTreeLongPressClickGuard",
+      "action": "scheduleBrowserTimeout timers installed by armArtistTreeLongPressClickGuard",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#armArtistTreeLongPressClickGuard:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#beginAlbumCardLongPress",
+      "action": "scheduleBrowserTimeout timers installed by beginAlbumCardLongPress",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#beginAlbumCardLongPress:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#beginArtistTreeLongPress",
+      "action": "scheduleBrowserTimeout timers installed by beginArtistTreeLongPress",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#beginArtistTreeLongPress:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery",
       "action": "fetchAndRender requests installed by commitGallerySearchQuery",
       "entrypoints": [
@@ -1116,6 +1176,21 @@
         "gallery-artwork-diversity"
       ],
       "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick#2",
+      "action": "scheduleBrowserAnimationFrame timers installed by handleGalleryBootstrapClick",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState",
@@ -1194,7 +1269,8 @@
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#reconcile",
       "action": "fetchAndRender requests installed by reconcile",
       "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:request:fetchAndRender"
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:request:fetchAndRender",
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#reconcile:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
@@ -1212,6 +1288,66 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#resume",
+      "action": "scheduleBrowserTimeout timers installed by resume",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#resume:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads",
+      "action": "scheduleBrowserTimeout timers installed by resumeCoverLoads",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#resumeCoverLoads:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#scheduleCachedSelectedArtistReconcile",
+      "action": "scheduleBrowserTimeout timers installed by scheduleCachedSelectedArtistReconcile",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#scheduleCachedSelectedArtistReconcile:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#scheduleGallerySearchCommit",
+      "action": "scheduleBrowserTimeout timers installed by scheduleGallerySearchCommit",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#scheduleGallerySearchCommit:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#scrollRootGalleryToArtist",
@@ -1235,6 +1371,36 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered",
+      "action": "scheduleBrowserAnimationFrame timers installed by scrollWhenRendered",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#scrollWhenRendered:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-gallery-event-handlers.js#stabilizeRootGalleryArtistAlignment",
+      "action": "scheduleBrowserAnimationFrame timers installed by stabilizeRootGalleryArtistAlignment",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#stabilizeRootGalleryArtistAlignment:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#tryRenderOptimisticSidebarArtistSelection",
@@ -1347,6 +1513,22 @@
       "rollback": "Revert the window-only drawer scroll render and rendered-window anchor lookup; scrolls then recount, re-sign, and search every loaded notification again. No data or API change."
     },
     {
+      "id": "js:runtime/bootstrap-init.js#<top-level>#2",
+      "action": "scheduleBrowserAnimationFrame/scheduleBrowserTimeout timers installed by <top-level>",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-init.js#<top-level>:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/bootstrap-init.js#<top-level>:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-init.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/bootstrap-init.js#runHydration",
       "action": "Hydrate the startup view for Home, the root gallery, and a selected artist",
       "entrypoints": [
@@ -1398,6 +1580,21 @@
       "rollback": "Test-only request-capture contract (plus a harness hook); startup hydration is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:runtime/bootstrap-init.js#scheduleHydration",
+      "action": "scheduleBrowserTimeout timers installed by scheduleHydration",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-init.js#scheduleHydration:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-init.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/bootstrap-utility-event-handlers.js#bindCoverLookupFileInput",
       "action": "change listeners installed by bindCoverLookupFileInput",
       "entrypoints": [
@@ -1438,7 +1635,23 @@
       "id": "js:runtime/bootstrap-utility-event-handlers.js#handleUtilityBootstrapMouseUp",
       "action": "setTimeout timers installed by handleUtilityBootstrapMouseUp",
       "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-utility-event-handlers.js#handleUtilityBootstrapMouseUp:timer:scheduleBrowserTimeout",
         "js:music_app/static/js/runtime/bootstrap-utility-event-handlers.js#handleUtilityBootstrapMouseUp:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-utility-event-handlers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/bootstrap-utility-event-handlers.js#waitForUtilityTabPaint",
+      "action": "scheduleBrowserAnimationFrame timers installed by waitForUtilityTabPaint",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-utility-event-handlers.js#waitForUtilityTabPaint:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/runtime/bootstrap-utility-event-handlers.js"
@@ -1538,6 +1751,21 @@
       "action": "setTimeout timers installed by scheduleBrowserTimeout",
       "entrypoints": [
         "js:music_app/static/js/runtime/browser-scheduling-helpers.js#scheduleBrowserTimeout:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/browser-scheduling-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/browser-scheduling-helpers.js#waitForBrowserTimeout",
+      "action": "scheduleBrowserTimeout timers installed by waitForBrowserTimeout",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/browser-scheduling-helpers.js#waitForBrowserTimeout:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/browser-scheduling-helpers.js"
@@ -1652,6 +1880,36 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Revert the per-list sidebar artist-signature cache; window scrolls then rescan every artist again, with no data or API change."
+    },
+    {
+      "id": "js:runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners#2",
+      "action": "scheduleBrowserAnimationFrame timers installed by ensureSidebarVirtualScrollListeners",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/core-state-and-helpers.js#ensureSidebarVirtualScrollListeners:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/core-state-and-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/core-state-and-helpers.js#renderSidebar",
+      "action": "scheduleBrowserAnimationFrame timers installed by renderSidebar",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/core-state-and-helpers.js#renderSidebar:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/core-state-and-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#<top-level>",
@@ -2410,7 +2668,8 @@
       "id": "js:runtime/gallery-main-components.js#refreshGalleryArtistMusicBrainzStatus",
       "action": "fetch requests installed by refreshGalleryArtistMusicBrainzStatus",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-main-components.js#refreshGalleryArtistMusicBrainzStatus:request:fetch"
+        "js:music_app/static/js/runtime/gallery-main-components.js#refreshGalleryArtistMusicBrainzStatus:request:fetch",
+        "js:music_app/static/js/runtime/gallery-main-components.js#refreshGalleryArtistMusicBrainzStatus:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/runtime/gallery-main-components.js"
@@ -2554,7 +2813,8 @@
       "id": "js:runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot",
       "action": "fetchAndRender requests installed by browseScannedLibrarySnapshot",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot:request:fetchAndRender"
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot:request:fetchAndRender",
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/gallery-refresh-and-status.js"
@@ -2594,6 +2854,21 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup",
+      "action": "scheduleBrowserTimeout timers installed by dispatchStartupHydrationFollowup",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
@@ -2780,6 +3055,21 @@
       "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage#2",
+      "action": "scheduleBrowserAnimationFrame timers installed by loadNextRootGalleryPage",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage",
       "action": "Scroll toward the start of an anchored root gallery, with repeated scroll checks while the page loads",
       "entrypoints": [
@@ -2825,10 +3115,41 @@
       "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:runtime/gallery-refresh-and-status.js#performPendingCoverCompletionViewRefresh",
+      "action": "scheduleBrowserTimeout timers installed by performPendingCoverCompletionViewRefresh",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#performPendingCoverCompletionViewRefresh:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#performPendingScanCompletionViewRefresh",
+      "action": "scheduleBrowserTimeout timers installed by performPendingScanCompletionViewRefresh",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#performPendingScanCompletionViewRefresh:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/gallery-refresh-and-status.js#pollStatus",
       "action": "fetch requests installed by pollStatus",
       "entrypoints": [
-        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#pollStatus:request:fetch"
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#pollStatus:request:fetch",
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#pollStatus:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/gallery-refresh-and-status.js"
@@ -2868,6 +3189,21 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#renderView",
+      "action": "scheduleBrowserAnimationFrame timers installed by renderView",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#renderView:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch",
@@ -2913,6 +3249,52 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Test-only request-capture contract; gallery requests are unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#runDispatch#2",
+      "action": "scheduleBrowserTimeout timers installed by runDispatch",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#runDispatch:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#scheduleSidebarRender",
+      "action": "scheduleBrowserAnimationFrame timers installed by scheduleSidebarRender",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#scheduleSidebarRender:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#scheduleStatusPoll",
+      "action": "Reschedule the self-rescheduling library status poll",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#scheduleStatusPoll:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-12"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",
@@ -3317,12 +3699,28 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/mobile-navigation.js#showMobileGalleryPinchHint",
+      "action": "scheduleBrowserTimeout timers installed by showMobileGalleryPinchHint",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/mobile-navigation.js#showMobileGalleryPinchHint:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/mobile-navigation.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/modal-and-overlay-helpers.js#bindOverlayPointerOrigin",
       "action": "click/pointercancel/pointerdown listeners installed by bindOverlayPointerOrigin",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#bindOverlayPointerOrigin:event:click",
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#bindOverlayPointerOrigin:event:pointercancel",
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#bindOverlayPointerOrigin:event:pointerdown"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#bindOverlayPointerOrigin:event:pointerdown",
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#bindOverlayPointerOrigin:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -3354,7 +3752,23 @@
       "action": "error/load listeners installed by continueToNextSource",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#continueToNextSource:event:error",
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#continueToNextSource:event:load"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#continueToNextSource:event:load",
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#continueToNextSource:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/modal-and-overlay-helpers.js#hideGalleryFocusGlow",
+      "action": "scheduleBrowserTimeout timers installed by hideGalleryFocusGlow",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hideGalleryFocusGlow:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -3447,11 +3861,27 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/modal-and-overlay-helpers.js#scheduleGalleryFocusGlow",
+      "action": "scheduleBrowserAnimationFrame timers installed by scheduleGalleryFocusGlow",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#scheduleGalleryFocusGlow:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/modal-and-overlay-helpers.js#startLightboxSourcePreload",
       "action": "error/load listeners installed by startLightboxSourcePreload",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#startLightboxSourcePreload:event:error",
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#startLightboxSourcePreload:event:load"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#startLightboxSourcePreload:event:load",
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#startLightboxSourcePreload:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -3485,6 +3915,21 @@
       }
     },
     {
+      "id": "js:runtime/notification-ui-helpers.js#hideRepairAlert",
+      "action": "scheduleBrowserTimeout timers installed by hideRepairAlert",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#hideRepairAlert:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/notification-ui-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/notification-ui-helpers.js#registerFloatingNotification",
       "action": "MutationObserver/ResizeObserver observers installed by registerFloatingNotification",
       "entrypoints": [
@@ -3505,6 +3950,38 @@
       "action": "requestAnimationFrame timers installed by scheduleFloatingNotificationPlacement",
       "entrypoints": [
         "js:music_app/static/js/runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement:timer:requestAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/notification-ui-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/notification-ui-helpers.js#showRepairAlert",
+      "action": "scheduleBrowserAnimationFrame/scheduleBrowserTimeout timers installed by showRepairAlert",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#showRepairAlert:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#showRepairAlert:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/notification-ui-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/notification-ui-helpers.js#showToast",
+      "action": "scheduleBrowserAnimationFrame/scheduleBrowserTimeout timers installed by showToast",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#showToast:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/notification-ui-helpers.js#showToast:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/notification-ui-helpers.js"
@@ -4619,10 +5096,43 @@
       }
     },
     {
+      "id": "js:runtime/tag-editor-and-optimistic-updates.js#scheduleTagEditSaveTaskWatch",
+      "action": "scheduleBrowserAnimationFrame/scheduleBrowserTimeout timers installed by scheduleTagEditSaveTaskWatch",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleTagEditSaveTaskWatch:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleTagEditSaveTaskWatch:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/tag-editor-and-optimistic-updates.js#scheduleTagEditorRenderAfterPaint",
+      "action": "scheduleBrowserAnimationFrame timers installed by scheduleTagEditorRenderAfterPaint",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleTagEditorRenderAfterPaint:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh",
       "action": "fetchAndRender requests installed by scheduleVersionGalleryRefresh",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:request:fetchAndRender"
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:request:fetchAndRender",
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
@@ -4903,6 +5413,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/track-modal-lightbox-helpers.js#scheduleTrackModalCleanupAfterPaint",
+      "action": "scheduleBrowserAnimationFrame timers installed by scheduleTrackModalCleanupAfterPaint",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/track-modal-lightbox-helpers.js#scheduleTrackModalCleanupAfterPaint:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/track-modal-lightbox-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/trigger-anchor.js#<top-level>",
       "action": "album-haven-appearance-change/album-haven:surface-opening/resize/scroll listeners installed by <top-level>",
       "entrypoints": [
@@ -5026,6 +5551,21 @@
       }
     },
     {
+      "id": "js:runtime/utility-list-builders.js#preserveDocumentScrollPosition",
+      "action": "scheduleBrowserAnimationFrame timers installed by preserveDocumentScrollPosition",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-list-builders.js#preserveDocumentScrollPosition:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-list-builders.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/utility-list-builders.js#reconcileCommittedTagEditDestination",
       "action": "fetchAndRender requests installed by reconcileCommittedTagEditDestination",
       "entrypoints": [
@@ -5091,7 +5631,8 @@
       "entrypoints": [
         "js:music_app/static/js/runtime/utility-list-builders.js#settleProblematicSaveTaskMutation:event:keydown",
         "js:music_app/static/js/runtime/utility-list-builders.js#settleProblematicSaveTaskMutation:event:pointerdown",
-        "js:music_app/static/js/runtime/utility-list-builders.js#settleProblematicSaveTaskMutation:event:wheel"
+        "js:music_app/static/js/runtime/utility-list-builders.js#settleProblematicSaveTaskMutation:event:wheel",
+        "js:music_app/static/js/runtime/utility-list-builders.js#settleProblematicSaveTaskMutation:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/runtime/utility-list-builders.js"
@@ -5608,6 +6149,36 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#scheduleUtilityModalOpenWorkAfterPaint",
+      "action": "scheduleBrowserAnimationFrame timers installed by scheduleUtilityModalOpenWorkAfterPaint",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#scheduleUtilityModalOpenWorkAfterPaint:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#scheduleUtilityOpenLoad",
+      "action": "scheduleBrowserTimeout timers installed by scheduleUtilityOpenLoad",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#scheduleUtilityOpenLoad:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#submitPendingLastfmScrobbles",
       "action": "fetch requests installed by submitPendingLastfmScrobbles",
       "entrypoints": [
@@ -5628,6 +6199,21 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#waitForProblematicUtilityRenderFrame",
+      "action": "scheduleBrowserAnimationFrame timers installed by waitForProblematicUtilityRenderFrame",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#waitForProblematicUtilityRenderFrame:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/utility-log-history-ui.js#getUtilityLogHistoryController",
@@ -5882,6 +6468,36 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/utility-renderers-and-actions.js#finishFocusedNavigation",
+      "action": "scheduleBrowserAnimationFrame timers installed by finishFocusedNavigation",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-renderers-and-actions.js#finishFocusedNavigation:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-renderers-and-actions.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/utility-renderers-and-actions.js#renderProblematicFiles",
+      "action": "scheduleBrowserAnimationFrame timers installed by renderProblematicFiles",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-renderers-and-actions.js#renderProblematicFiles:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-renderers-and-actions.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/utility-renderers-and-actions.js#syncUtilityTabAlignment",
       "action": "scroll listeners, ResizeObserver observers installed by syncUtilityTabAlignment",
       "entrypoints": [
@@ -5974,11 +6590,148 @@
       "rollback": "Revert the binary visible-window search in VirtualArtistGrid.render; retain this contract."
     },
     {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.onAlbumCardPointerGestureEnd",
+      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.onAlbumCardPointerGestureEnd",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.onAlbumCardPointerGestureEnd:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.onScroll",
+      "action": "scheduleBrowserAnimationFrame/scheduleBrowserTimeout timers installed by VirtualArtistGrid.onScroll",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.onScroll:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.onScroll:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.onUserScrollIntent",
       "action": "touchcancel/touchend listeners installed by VirtualArtistGrid.onUserScrollIntent",
       "entrypoints": [
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.onUserScrollIntent:event:touchcancel",
         "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.onUserScrollIntent:event:touchend"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.restoreOwnedAbsoluteScrollPosition",
+      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.restoreOwnedAbsoluteScrollPosition",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.restoreOwnedAbsoluteScrollPosition:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction",
+      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.resumeSelectedArtistCoverLoadsAfterUserAction:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows",
+      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.scheduleMeasureRows",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleMeasureRows:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleSettledMeasurement",
+      "action": "scheduleBrowserTimeout timers installed by VirtualArtistGrid.scheduleSettledMeasurement",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleSettledMeasurement:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleVisibleAlbumDetailPrewarm",
+      "action": "scheduleBrowserAnimationFrame/scheduleBrowserTimeout timers installed by VirtualArtistGrid.scheduleVisibleAlbumDetailPrewarm",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleVisibleAlbumDetailPrewarm:timer:scheduleBrowserAnimationFrame",
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.scheduleVisibleAlbumDetailPrewarm:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#VirtualArtistGrid.stabilizeScrollAfterMeasurement",
+      "action": "scheduleBrowserAnimationFrame timers installed by VirtualArtistGrid.stabilizeScrollAfterMeasurement",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#VirtualArtistGrid.stabilizeScrollAfterMeasurement:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/virtual-artist-grid.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/virtual-artist-grid.js#scheduleSettledScrollRestore",
+      "action": "scheduleBrowserAnimationFrame timers installed by scheduleSettledScrollRestore",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/virtual-artist-grid.js#scheduleSettledScrollRestore:timer:scheduleBrowserAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/runtime/virtual-artist-grid.js"

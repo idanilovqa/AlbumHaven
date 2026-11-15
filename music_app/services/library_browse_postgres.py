@@ -10574,12 +10574,6 @@ def _problematic_files_sql(
           from library.local_track_files
           cross join lateral (
             select
-              library.local_path_style(library.local_track_files.private_path) as path_style,
-              library.local_path_key(library.local_track_files.private_path) as path_key
-            offset 0
-          ) normalized_path
-          cross join lateral (
-            select
               scan_track_raw.raw_value,
               case
                 when scan_track_normalized.normalized_value ~ '^[0-9]{1,2}$'

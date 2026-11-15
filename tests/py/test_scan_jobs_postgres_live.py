@@ -73,7 +73,7 @@ def _drop_schemas(setup_url: str) -> None:
         connection.execute("drop schema if exists app, integration, library, ops cascade")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def live_scan_database():
     setup_url, runtime_url, worker_url = _database_urls_or_skip()
     try:
@@ -3125,6 +3125,8 @@ def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
     assert result == {
         "publication_won": True,
         "inventory_mutation_revision": intent.inventory_mutation_revision + 1,
+        "cover_publication_stale": False,
+        "cover_mutation_revision": 0,
     }
     with isolatedPostgres._connect(setup_url) as connection:
         follow_ups = connection.execute(

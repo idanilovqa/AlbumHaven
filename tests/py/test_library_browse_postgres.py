@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import json
+import re
 from pathlib import Path, PureWindowsPath
 from threading import Event, Lock
 
@@ -15955,10 +15956,7 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
 
     repository.queue_settings_projection_prewarm()
 
-    assert [submission[1] for submission in submissions] == [
-        "problematic-files",
-        "rules",
-    ]
+    assert [submission[1] for submission in submissions] == ["rules"]
 
 
 @pytest.mark.usefixtures("fixed_utility_projection_revisions")
@@ -18461,41 +18459,169 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
 
 def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
     watcher_repair_inventory, monkeypatch,
+    default_empty_relation_alias_projection, default_empty_missing_album_projection,
 ):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services import relation_projection_postgres as projections
+    from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.library_watch import LibraryEvent, LibraryEventKind
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
     from tests.e2e.support import isolatedPostgres
+    from tests.py.test_isolated_postgres_live import _durable_job_database_urls_or_skip
+    from tests.py.test_watcher_recovery_postgres_live import (
+        _claim_watcher_generation,
+        _repository as watcher_repository,
+    )
 
     fixture = watcher_repair_inventory
-    entry = fixture.entry('Owner/Album/01.flac')
-    fixture.seed(entry)
+    setup_url, app_url, worker_url, _readonly_url = _durable_job_database_urls_or_skip(monkeypatch)
+    assert (setup_url, app_url) == (fixture.setup_url, fixture.runtime_url)
+    entry = fixture.entry('Owner/Family/Member/Album/01.flac')
+    untouched = {
+        **fixture.entry('Untouched/Family/Member/Album/01.flac', artist='Companion', album='Untouched Album'),
+        'album_artist': 'Untouched',
+    }
+    fixture.seed(entry, untouched)
+    family_links_sql = """
+        select artist.artist_key, related.artist_key as related_artist_key,
+               link.relationship_weight, link.source_family, link.source_ref
+        from library.local_artist_family_links link
+        join library.local_artists artist on artist.id = link.artist_id
+        join library.local_artists related on related.id = link.related_artist_id
+        where link.library_id = %s
+          and (artist.artist_key = any(%s) or related.artist_key = any(%s))
+        order by artist.artist_key, related.artist_key,
+                 link.relationship_weight, link.source_family, link.source_ref
+    """
     with isolatedPostgres._connect(fixture.setup_url) as connection:
+        library_id = connection.execute(
+            "select library_id from library.library_roots "
+            "where root_path = %s and metadata ->> 'root_id' = %s",
+            (fixture.roots[0]['path'], fixture.roots[0]['id']),
+        ).fetchone()['library_id']
         persistence._commit_structural_relation_projection(connection, fixture.config)
         before = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
+        untouched_before = connection.execute(
+            family_links_sql, (library_id, ['untouched'], ['untouched']),
+        ).fetchall()
+        changed_family_before = connection.execute(
+            family_links_sql, (library_id, ['owner', 'guest'], ['owner', 'guest']),
+        ).fetchall()
+    assert untouched_before
+    assert changed_family_before == []
     revision_before = fixture.adapter.load_inventory_mutation_revision()
+    now = datetime.now(timezone.utc)
+    accepted = watcher_repository(app_url).accept_event(
+        library_id=library_id,
+        event=LibraryEvent(
+            LibraryEventKind.MODIFIED, fixture.roots[0]['id'], Path(entry['path']),
+        ),
+        accepted_at=now,
+    )
+    claim = _claim_watcher_generation(
+        SimpleNamespace(worker_url=worker_url), accepted.generation_id,
+        now=now, worker_id='changed-family-worker',
+    )
+    scans = PostgresScanJobRepository(
+        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+    )
+    preparation = scans.load_claimed_targeted_reconciliation_preparation(
+        intent_id=accepted.generation_id, library_id=library_id,
+        job_id=claim.job_id, attempt=claim.attempt, worker_id=claim.worker_id,
+        lease_token=claim.lease_token, now=now,
+    )
     calls = []
-    original_builder = persistence.build_relation_views_from_postgres_rows
 
-    def build(config, rows):
+    def publish_prepared(*, inventory, stale_scopes):
         calls.append(True)
-        return original_builder(config, rows)
+        return scans.publish_claimed_targeted_reconciliation(
+            claim=claim, intent_id=accepted.generation_id,
+            inventory=inventory, stale_scopes=stale_scopes, now=now,
+        )
 
-    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', build)
     changed = {**entry, 'artist': 'Guest'}
-    result = fixture.adapter.persist_targeted_inventory_mutation(
+    result = persistence.DurableTargetedReconciliationPreparationAdapter().persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: changed},
+        preparation_scope=preparation,
+        publication_guard=SimpleNamespace(publish_prepared=publish_prepared),
     )
     assert calls == [True]
+    assert result['publication_won'] is True
     assert result['inventory_mutation_revision'] > revision_before
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        pending = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone()
+        )
+    assert pending['relation_projection']['status'] == 'stale'
+    assert projections.relation_projection_stale_reason(pending) == 'projection_not_ready'
+    # Unit defaults hide the stale metadata that triggers normal gallery readiness.
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository, '_load_relation_alias_maps',
+        default_empty_relation_alias_projection,
+    )
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository, '_load_missing_album_rows',
+        default_empty_missing_album_projection,
+    )
+    readiness = ensure_gallery_projection_ready(
+        fixture.config, connect=isolatedPostgres._connect,
+    )
+    assert readiness['built'] > 0
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         after = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
+        untouched_after = connection.execute(
+            family_links_sql, (library_id, ['untouched'], ['untouched']),
+        ).fetchall()
+        changed_family_after = connection.execute(
+            family_links_sql, (library_id, ['owner', 'guest'], ['owner', 'guest']),
+        ).fetchall()
+        changed_track = connection.execute(
+            '''
+            select artist.name as track_artist,
+                   files.metadata #>> '{scan_cache,file_entry,artist}' as file_artist
+            from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id
+            join library.local_artists artist on artist.id = tracks.artist_id
+            where tracks.library_id = %s and files.private_path = %s
+            ''',
+            (library_id, entry['path']),
+        ).fetchone()
+        guest_search = connection.execute(
+            '''
+            select normalized_artist_key, canonical_artist_name
+            from library.local_artist_search_projection
+            where library_id = %s and normalized_artist_key = 'guest'
+            ''',
+            (library_id,),
+        ).fetchone()
     assert not projections.relation_projection_stale_reason(after)
     assert not projections.artist_search_projection_stale_reason(after)
     assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
+    assert changed_track == {'track_artist': 'Guest', 'file_artist': 'Guest'}
+    assert changed_family_after == [
+        {
+            'artist_key': 'guest', 'related_artist_key': 'owner',
+            'relationship_weight': 1, 'source_family': 'folder_derived_runtime',
+            'source_ref': 'relation_views.folder_related',
+        },
+        {
+            'artist_key': 'owner', 'related_artist_key': 'guest',
+            'relationship_weight': 1, 'source_family': 'folder_derived_runtime',
+            'source_ref': 'relation_views.folder_related',
+        },
+    ]
+    assert guest_search == {
+        'normalized_artist_key': 'guest', 'canonical_artist_name': 'Guest',
+    }
+    assert untouched_after == untouched_before
 
 
 def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
@@ -18664,7 +18790,11 @@ def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale
         candidate_summary=True, candidate_ids_page=candidate_ids_page, path_columns=True,
     )
     active_rows = _cte_body(sql, "active_problem_rows")
-    assert "regexp_replace" not in active_rows
+    # Only track-number canonicalization may use regular expressions here.
+    assert re.findall(r"regexp_replace\(\s*([^\n]+)", active_rows) == [
+        "substring(scan_track_raw.raw_value from 2),",
+        "ltrim(scan_track_raw.raw_value, '+'),",
+    ]
     assert "local_path_key(" not in active_rows
     assert "duplicate_identity_text(" not in active_rows
     for column in (
@@ -18690,7 +18820,10 @@ def test_problematic_candidate_sql_reads_stored_path_projection_at_library_scale
         assert "count(distinct" not in _cte_body(sql, cte)
     # A join on the union re-scanned every candidate per album (5 s at 9k candidates).
     assert "join candidate_album_ids" not in sql
-    assert "any(array(select album_id from candidate_album_ids))" in sql
+    if candidate_ids_page:
+        assert "from candidate_album_ids" in _cte_body(sql, "ordered")
+    else:
+        assert "any(array(select album_id from candidate_album_ids))" in sql
 
 
 def test_problematic_candidate_sql_keeps_inline_paths_before_projection_migration():

@@ -27034,6 +27034,8 @@ function renderProblemFilterControls(els) {
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
   const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
+  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
+  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
   const items = query.length >= 2 && serverQuery === query
     ? getAllProblematicItems()
     : getProblematicBaseItems();

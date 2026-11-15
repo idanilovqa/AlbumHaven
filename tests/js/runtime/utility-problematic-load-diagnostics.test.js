@@ -479,6 +479,23 @@ test('repeating a settled server search reuses its warm result without another r
   assert.equal(context.state.utility.problematicServerSearchSettledQuery, 'art zoyd');
 });
 
+test('a pending server search does not present matching first-page rows as the complete result', () => {
+  const { context } = loadSearchHelper({ items: [] });
+  const filterSource = listBuilderSource.slice(
+    listBuilderSource.indexOf('function normalizeProblemFilterReason('),
+    listBuilderSource.indexOf('function getProblematicAlbumIssueLabel('),
+  );
+  vm.runInContext(filterSource, context, { filename: listBuilderPath });
+  context.state.utility.problematicFiles = [
+    { key: 'partial-art-zoyd', name: 'Art Zoyd' },
+    { key: 'unrelated', name: 'Unrelated' },
+  ];
+  context.state.utility.searchQuery = 'art zoyd';
+  context.scheduleProblematicServerSearch();
+
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
+});
+
 test('server search page two appends in stable order without duplicates', async () => {
   const { context, requested, runTimers } = loadSearchHelper({
     complete: false,

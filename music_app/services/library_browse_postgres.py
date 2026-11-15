@@ -3401,6 +3401,8 @@ class PostgresLibraryBrowseRepository:
             complete, status = False, "stale"
             cached_payload = self._get_stale_utility_projection("problematic-files")
         if cached_payload is None:
+            cached_payload = self._load_problematic_files_snapshot(allow_outdated=True)
+        if cached_payload is None:
             # Search is its own bounded query. Never queue it behind a complete
             # projection rebuild; that would make typing wait for the slow path
             # the search endpoint exists to avoid.
@@ -4581,8 +4583,8 @@ class PostgresLibraryBrowseRepository:
         }
 
         def load_rows(active_connection: Any) -> list[object]:
-            if normalized_album_key:
-                # The physical-parent expression index beats six full file scans for one album.
+            if normalized_album_key or use_selected_album_ids:
+                # The physical-parent expression index beats six full file scans for selected albums.
                 active_connection.execute("SET LOCAL enable_seqscan = off")
 
             def execute(build_sql: Callable[[bool], str], params: Mapping[str, object]) -> Any:

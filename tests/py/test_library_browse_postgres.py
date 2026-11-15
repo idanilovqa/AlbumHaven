@@ -16739,6 +16739,31 @@ def _numbered_problematic_rows(count):
     return rows
 
 
+def test_problematic_search_hydrates_selected_albums_with_index_scans():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    class EmptyCursor:
+        def fetchall(self):
+            return []
+
+    class RecordingConnection:
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, sql, params=None):
+            self.commands.append((str(sql), params))
+            return EmptyCursor()
+
+    repository = PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+    connection = RecordingConnection()
+
+    repository._load_problematic_file_rows(connection=connection, album_ids=[101, 102])
+
+    assert connection.commands[0] == ("SET LOCAL enable_seqscan = off", None)
+
+
 def test_problematic_files_search_reaches_albums_beyond_the_first_page_without_the_full_list():
     rows = _numbered_problematic_rows(120)
     rows[96]["album_title"] = "Needle In The Haystack"
@@ -16850,6 +16875,28 @@ def test_problematic_files_search_answers_from_the_last_list_while_a_fresh_one_r
     repository._get_stale_utility_projection = lambda kind: {
         "items": [{"key": "a", "name": "Alpha"}, {"key": "b", "name": "Beta"}],
     } if kind == "problematic-files" else None
+
+    payload = repository.build_problematic_files_search("beta")
+
+    assert [item["key"] for item in payload["items"]] == ["b"]
+    assert payload["complete"] is False
+    assert payload["projection_cache_status"] == "stale"
+
+
+def test_problematic_files_search_answers_from_the_stored_last_list_after_restart():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("the stored last list must answer without rebuilding candidates")
+        ),
+    )
+    repository._get_cached_utility_projection = lambda _kind: None
+    repository._get_stale_utility_projection = lambda _kind: None
+    repository._load_problematic_files_snapshot = lambda **_options: {
+        "items": [{"key": "a", "name": "Alpha"}, {"key": "b", "name": "Beta"}],
+    }
 
     payload = repository.build_problematic_files_search("beta")
 

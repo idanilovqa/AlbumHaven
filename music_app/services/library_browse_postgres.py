@@ -475,6 +475,8 @@ class PostgresLibraryBrowseRepository:
                     if defer_source_payloads
                     else _duplicate_sources_from_rows(duplicate_rows)
                 )
+            for key in pending:
+                duplicates.setdefault(key, {"duplicate_sources": []})
             if fingerprint:
                 absent = dict(absent)
                 # Only requested albums have every matching identity loaded.

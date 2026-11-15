@@ -242,6 +242,7 @@ class _EmptyMissingAlbumConnection:
             "requested_identities as materialized",
             "candidate_containers as materialized",
             "library.local_album_artist_identities",
+            "library.local_album_musicbrainz_releases",
         )):
             return _InventoryCursor()
         assert _is_missing_album_query(sql)

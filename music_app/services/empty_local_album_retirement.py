@@ -26,6 +26,9 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
         "library.local_tracks",
         "library.local_album_featured_artists",
         "library.local_album_cover_candidate_snapshots",
+        # Automatic MusicBrainz release decisions and Discogs fallback releases (Delivery 2);
+        # an owner's manual release choice is guarded below.
+        "library.local_album_discogs_releases",
     }
 )
 # Tables whose foreign key to library.local_albums may hold a user decision;
@@ -36,6 +39,8 @@ GUARDED_ALBUM_CHILD_TABLES = frozenset(
         "app.album_disc_ratings",
         "library.local_album_artist_identities",
         "library.local_mbid_assertions",
+        "library.local_album_musicbrainz_releases",
+        "library.musicbrainz_contribution_flags",
     }
 )
 
@@ -69,6 +74,18 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
       select 1 from library.local_album_artist_identities as identity
       where identity.library_id = album.library_id
         and identity.album_key = album.album_key)"""),
+    # Automatic release decisions go with the row; an owner's choice keeps it.
+    ("musicbrainz_release_decision", """not exists (
+      select 1 from library.local_album_musicbrainz_releases as release_decision
+      where release_decision.library_id = album.library_id
+        and release_decision.album_key = album.album_key
+        and release_decision.decision_source = 'manual')"""),
+    # An album the owner marked "MBID: Remote info update needed" keeps its row.
+    ("contribution_flag", """not exists (
+      select 1 from library.musicbrainz_contribution_flags as flag
+      where flag.library_id = album.library_id
+        and flag.album_key = album.album_key
+        and flag.source = 'manual')"""),
     ("version_decision", """not exists (
       select 1 from library.manual_versions as version
       where version.library_id = album.library_id

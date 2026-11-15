@@ -2918,7 +2918,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup",
-      "action": "scheduleBrowserTimeout timers installed by dispatchStartupHydrationFollowup",
+      "action": "Dispatch a delayed startup hydration follow-up, deferring it again while a foreground view is busy",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup:timer:scheduleBrowserTimeout"
       ],
@@ -2929,7 +2929,25 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI busy startup hydration retry is constant at production scale (delayed dispatch)",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; startup hydration is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#fetchAndRender",
@@ -3177,7 +3195,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#performPendingCoverCompletionViewRefresh",
-      "action": "scheduleBrowserTimeout timers installed by performPendingCoverCompletionViewRefresh",
+      "action": "Retry a failed post-cover gallery refresh at most twice, one current-view request per retry",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#performPendingCoverCompletionViewRefresh:timer:scheduleBrowserTimeout"
       ],
@@ -3187,12 +3205,30 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI cover completion refresh retry requests the current view once at production scale",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; post-cover refresh is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#performPendingScanCompletionViewRefresh",
-      "action": "scheduleBrowserTimeout timers installed by performPendingScanCompletionViewRefresh",
+      "action": "Retry a failed post-scan gallery refresh at most twice, one current-view request per retry",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#performPendingScanCompletionViewRefresh:timer:scheduleBrowserTimeout"
       ],
@@ -3202,8 +3238,26 @@
       "rules": [
         "BI-03"
       ],
-      "workClass": "constant",
-      "proof": "static"
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI scan completion refresh retry requests the current view once at production scale",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; post-scan refresh is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#pollStatus",
@@ -3313,7 +3367,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#runDispatch#2",
-      "action": "scheduleBrowserTimeout timers installed by runDispatch",
+      "action": "Retry a startup hydration follow-up every 100 ms while a foreground view is busy, then request it once",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#runDispatch:timer:scheduleBrowserTimeout"
       ],
@@ -3324,7 +3378,25 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 0,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI busy startup hydration retry is constant at production scale (busy retry)",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; startup hydration is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#scheduleSidebarRender",
@@ -3343,19 +3415,40 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#scheduleStatusPoll",
-      "action": "Reschedule the self-rescheduling library status poll",
+      "action": "Reschedule the self-rescheduling library status poll; an unchanged status does no presentation or library work",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#scheduleStatusPoll:timer:scheduleBrowserTimeout"
       ],
       "owners": [
-        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+        "music_app/static/js/runtime/gallery-refresh-and-status.js",
+        "music_app/static/js/runtime/status-ui-helpers.js",
+        "music_app/static/js/runtime/gallery-main-components.js"
       ],
       "rules": [
         "BI-03",
         "BI-12"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "requests": 1,
+        "itemsVisited": 0,
+        "renderCommits": 0,
+        "domMutations": 0,
+        "timers": 1
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "BI an unchanged status poll does no presentation or library work at production scale",
+      "performanceTargets": [],
+      "rollback": "Revert the stored MusicBrainz pending flag; every status poll then walks every owner-only artist repair state again, with no data or API change."
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#triggerLibraryRefresh",

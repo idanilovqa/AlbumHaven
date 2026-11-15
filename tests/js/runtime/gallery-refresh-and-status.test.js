@@ -7329,3 +7329,157 @@ test('request capture: catalog-change recovery requests one window at any scroll
   assert.deepEqual([midsize.requests, midsize.responseRows], [3, 100]);
   await measureInteractionContract(id, recover);
 });
+
+const { countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');
+
+// A loaded root gallery of `artistCount` counted artist groups whose timers run
+// only when the test fires them.
+function timedGallery(artistCount, respond) {
+  const gallery = capturedGallery(respond);
+  const { context } = gallery;
+  const { counter } = gallery.capture;
+  const groups = Array.from({ length: artistCount }, (_, index) => ({ artist: viewportArtist(index), albums: [{ key: `album-${index}` }] }));
+  context.state.view = { ...context.state.view, query: '', selected_artist: '', artist_groups: countedCollection(groups, counter) };
+  const scheduled = [];
+  context.scheduleBrowserTimeout = (callback) => { counter.count('timers'); scheduled.push(callback); return scheduled.length; };
+  context.renderView = () => counter.count('renderCommits');
+  context.renderLibraryLoader = () => counter.count('renderCommits');
+  const fireNext = async () => {
+    const result = scheduled.shift()();
+    await settleRequests();
+    return result;
+  };
+  return { ...gallery, counter, fireNext, scheduled };
+}
+
+const idleStatus = {
+  scan_in_progress: false,
+  relations_in_progress: false,
+  covers_in_progress: false,
+  inventory_mutation_revision: 7,
+  scan_generation: 3,
+  allowed_actions: { 'catalogue.enrichment.request': true },
+  watcher_health: { state: 'ok', problems: [] },
+};
+
+// The status poller with the real status indicator and owner-only MusicBrainz
+// repair state for every library artist.
+function statusPollGallery(artistCount) {
+  const gallery = timedGallery(artistCount, () => jsonResponse(idleStatus));
+  const { context, counter } = gallery;
+  for (const name of ['gallery-main-components.js', 'status-ui-helpers.js']) {
+    const sourcePath = path.join(path.dirname(helperPath), name);
+    vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  }
+  context.applyStatusPayload = payload => (context.state.status = { ...payload });
+  // The indicator's menu and hover snapshot need a real document; count their presentation instead.
+  context.syncStatusContextMenu = () => counter.count('domMutations');
+  context.ensureStatusIndicatorHoverSnapshotBehavior = () => {};
+  const musicBrainz = vm.runInContext('galleryArtistMusicBrainzStatus', context);
+  musicBrainz.byArtist = new Map(Array.from({ length: artistCount }, (_, index) => [viewportArtist(index).toLowerCase(), {
+    problem: { occurrence_id: String(index), label: 'Artist match needs review' },
+    get state() { counter.count('itemsVisited'); return ''; },
+  }]));
+  musicBrainz.loadedAt = Date.now();
+  return gallery;
+}
+
+test('BI an unchanged status poll does no presentation or library work at production scale', async () => {
+  const unchangedPoll = async (artistCount) => {
+    const { capture, context, counter, fireNext, scheduled } = statusPollGallery(artistCount);
+    context.scheduleStatusPoll(0);
+    await fireNext();
+    assert.equal(context.state.status.inventory_mutation_revision, 7, 'the first poll applies the status');
+    const counts = await counter.measure(fireNext);
+    assert.deepEqual(capture.urls(), ['/status', '/status']);
+    assert.equal(scheduled.length, 1, 'the poll schedules its next read');
+    return counts;
+  };
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/gallery-refresh-and-status.js#scheduleStatusPoll',
+    small: 20,
+    large: 14000,
+    run: unchangedPoll,
+    budgets: { requests: 1, itemsVisited: 0, renderCommits: 0, domMutations: 0, timers: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+});
+
+// Startup hydration waits for a busy foreground view by retrying its follow-up.
+async function busyStartupFollowupTick(artistCount, { delayed }) {
+  const { capture, context, counter, fireNext, scheduled } = timedGallery(artistCount, () => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+  context.state.awaitingInitialDataRefresh = true;
+  context.queueStartupHydrationFollowup('/view-data?surface=albums');
+  context.state.busy = true;
+  context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup, delayed ? 350 : 0);
+  await settleRequests();
+  if (!delayed) await fireNext();
+  assert.equal(scheduled.length, 1);
+  const counts = await counter.measure(fireNext);
+  assert.equal(scheduled.length, 1, 'a busy foreground view defers the follow-up again');
+  context.state.busy = false;
+  await fireNext();
+  assert.deepEqual(capture.urls(), ['/view-data?surface=albums'], 'the settled follow-up requests once');
+  return counts;
+}
+
+async function measureBusyStartupFollowup(id, delayed) {
+  const { small, large } = await measureScalePair({
+    id,
+    small: 20,
+    large: 14000,
+    run: artistCount => busyStartupFollowupTick(artistCount, { delayed }),
+    budgets: { requests: 0, itemsVisited: 0, renderCommits: 0, timers: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+}
+
+test('BI busy startup hydration retry is constant at production scale (delayed dispatch)', () => (
+  measureBusyStartupFollowup('js:runtime/gallery-refresh-and-status.js#dispatchStartupHydrationFollowup', true)
+));
+
+test('BI busy startup hydration retry is constant at production scale (busy retry)', () => (
+  measureBusyStartupFollowup('js:runtime/gallery-refresh-and-status.js#runDispatch#2', false)
+));
+
+// A failed post-scan or post-cover refresh retries one view request at a time.
+async function completionRefreshRetryTick(artistCount, kind) {
+  let fail = true;
+  const { capture, context, counter, fireNext, scheduled } = timedGallery(artistCount, () => (fail
+    ? Promise.reject(new Error('offline'))
+    : jsonResponse({ artist_groups: [], payload_tier: 'full', view_data_source: 'projection' })));
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Broadcast';
+  context.state.view = { ...context.state.view, selected_artist: 'Broadcast' };
+  context.state.ui[`pending${kind}CompletionViewRefresh`] = true;
+  await context[`performPending${kind}CompletionViewRefresh`]();
+  assert.equal(scheduled.length, 1, 'the failed refresh schedules one retry');
+  const counts = await counter.measure(fireNext);
+  assert.equal(scheduled.length, 1, 'the second failure schedules the last retry');
+  fail = false;
+  await fireNext();
+  assert.equal(capture.urls().length, 3);
+  assert.equal(context.state.ui[`pending${kind}CompletionViewRefresh`], false, 'the retry that applies settles the refresh');
+  return counts;
+}
+
+async function measureCompletionRefreshRetry(kind) {
+  const { small, large } = await measureScalePair({
+    id: `js:runtime/gallery-refresh-and-status.js#performPending${kind}CompletionViewRefresh`,
+    small: 20,
+    large: 14000,
+    run: artistCount => completionRefreshRetryTick(artistCount, kind),
+    budgets: { requests: 1, itemsVisited: 0, renderCommits: 0, timers: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+}
+
+test('BI scan completion refresh retry requests the current view once at production scale', () => (
+  measureCompletionRefreshRetry('Scan')
+));
+
+test('BI cover completion refresh retry requests the current view once at production scale', () => (
+  measureCompletionRefreshRetry('Cover')
+));

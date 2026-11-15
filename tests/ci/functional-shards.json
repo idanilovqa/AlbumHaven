@@ -535,6 +535,34 @@
               "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W01 a browser loads the library from the server and keeps a copy without file paths",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W05 offline, the saved library appears at once, read-only, and recovers without a reload",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+              "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+              "case": "FTC-IAR-W03 a tab that leaves the library after another tab signed out keeps no copy",
+              "area": "gallery-search"
             }
           ]
         }

@@ -10175,5 +10175,83 @@
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W01 a browser loads the library from the server and keeps a copy without file paths",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-server-first",
+      "copy-stores-no-file-paths"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W05 offline, the saved library appears at once, read-only, and recovers without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-offline-read-only",
+      "offline-recovery-without-reload"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+    "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "auth:instant-return-sign-out-w02"
+    ],
+    "executionWave": 2,
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "sign-out-deletes-browser-copy"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:instant-return-sign-out-w02",
+      "filesystemCopy": "media/cases/instant-return-sign-out-w02"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
+    "case": "FTC-IAR-W03 a tab that leaves the library after another tab signed out keeps no copy",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "auth:instant-return-sign-out-w03"
+    ],
+    "executionWave": 2,
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "late-save-after-sign-out-keeps-no-copy"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:instant-return-sign-out-w03",
+      "filesystemCopy": "media/cases/instant-return-sign-out-w03"
+    },
+    "ownerApproval": "approved"
   }
 ]

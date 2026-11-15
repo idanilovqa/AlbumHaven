@@ -1,7 +1,10 @@
-// The page side of the Android app's copy (instant return; the worker is app-copy-worker.js).
+// The page side of the copy kept on the device (instant return; the worker is app-copy-worker.js).
 // Deferred on the app page, so it runs after the document and capability-ui.js, before app.js.
-// Only inside an Android shell that offers `app.copy.v1` does it register the worker; the
-// runtime's bridge client calls adoptShell after its handshake.
+// Inside the Android app it registers the worker only when the shell offers `app.copy.v1` (the
+// runtime's bridge client calls adoptShell after its handshake), and saves the view whenever the app
+// leaves the screen. In a browser over HTTPS or localhost it registers the server-first worker once
+// the page has loaded, and saves the view when a tab is hidden only if it changed or ten minutes
+// passed, since every save makes the server render the page.
 //
 // A page the worker answered from its copy is marked `content="cache"`. It asks the server which
 // account is signed in: another account, or none, deletes the copy and loads the page again; no
@@ -12,10 +15,13 @@
 
   const WORKER_URL = '/app-copy-worker.js';
   const ACCOUNT_URL = '/app-copy/account';
+  const WEB_WORKER_URL = `${WORKER_URL}?mode=web`;
   const RETRY_DELAYS_MS = [3000, 10000, 30000];
+  const WEB_SAVE_INTERVAL_MS = 10 * 60 * 1000;
 
   function createAppCopyClient({
     document, window, navigator, location, fetch, setTimeout, clearTimeout, capabilities, MessageChannel,
+    now = Date.now,
   }) {
     const marker = document.querySelector('meta[name="album-haven-app-copy"]');
     const startedFromCopy = marker?.getAttribute('content') === 'cache';
@@ -26,6 +32,9 @@
     let answered = false;
     let retries = 0;
     let retryTimer = 0;
+    // A browser's last save; a page the worker loaded from the server is already kept.
+    let lastSave = marker?.getAttribute('content') === 'network' && navigator.serviceWorker?.controller
+      ? { url: location.href, at: now() } : null;
 
     // The worker's answer to [message], or no copy when no worker runs.
     async function ask(message) {
@@ -126,9 +135,27 @@
       if (startedFromCopy && answered) listener();
     }
 
+    function startInBrowser() {
+      if (capabilities()?.isAndroidShell?.() || !window.isSecureContext || !navigator.serviceWorker) return false;
+      window.addEventListener('load', () => {
+        void navigator.serviceWorker.register(WEB_WORKER_URL, { scope: '/', updateViaCache: 'none' }).catch(() => {});
+      });
+      return true;
+    }
+    const inBrowser = startInBrowser();
+
+    function saveInBrowser() {
+      if (readOnly || (lastSave?.url === location.href && now() - lastSave.at < WEB_SAVE_INTERVAL_MS)) return;
+      lastSave = { url: location.href, at: now() };
+      void ask({ type: 'save', url: location.href });
+    }
+
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && shell && !readOnly) void tell({ type: 'save', url: location.href });
+      if (document.visibilityState !== 'hidden') return;
+      if (inBrowser) saveInBrowser();
+      else if (shell && !readOnly) void tell({ type: 'save', url: location.href });
     });
+    if (inBrowser) window.addEventListener('pagehide', saveInBrowser);
     window.addEventListener('online', () => { if (readOnly) void confirmAccount(); });
     if (startedFromCopy) void confirmAccount();
 

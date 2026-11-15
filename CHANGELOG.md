@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.11 - 2026-11-15
+
+- Instant return in ordinary browsers (HTTPS or localhost): the library loads from the server as before, and a copy of the last view kept in the browser appears instead when the server cannot be reached, fails at its gateway, or has not answered within 1.5 seconds. That view is read-only with the existing Offline notice and updates in place once the server answers. Private windows and plain-HTTP addresses other than localhost behave as before.
+- The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
+- `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
+
 ## 0.11.10 - 2026-11-15
 
 - Covers are addressed by opaque references (`/cover/<reference>`): no page or payload carries a local cover file path or the music folder any more. Migration 0200 stores the references and 0201 names every stored cover without changing any cover choice.

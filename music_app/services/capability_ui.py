@@ -101,7 +101,7 @@ def build_capability_ui(allowed: dict[str, bool], client_surface: str) -> dict[s
         f'[data-required-action="{action}"]' for action in UI_ACTIONS
         if not allowed.get(action, False)
     )
-    # The Android app's offline copy (app-copy.js) hides these while the server is unreachable:
+    # The device copy (app-copy.js) hides these while the server is unreachable:
     # every permitted action that is not a read.
     read_only_selectors = [
         selector

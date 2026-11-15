@@ -5,8 +5,8 @@ const MAX_ACTIVE_GALLERY_COVER_OBJECT_URLS = 48;
 const MAX_GALLERY_COVER_PREEMPTION_DIAGNOSTICS = 64;
 const GALLERY_COVER_REQUEST_ID_HEADER = 'X-Album-Haven-Cover-Request-Id';
 const GALLERY_COVER_PRIORITY_HEADER = 'X-Album-Haven-Cover-Priority';
-// Stored covers carry no file path: the key is the opaque key the app-copy worker uses (the
-// SHA-256 of the cover URL without its version), and the version it answers is the URL's `v`.
+// Stored covers carry no file path: the key is an opaque key (the SHA-256 of the cover URL without
+// its version), and the version it answers is the URL's `v`.
 const GALLERY_COVER_VERSION_HEADER = 'X-Album-Haven-Cover-Version';
 const GALLERY_COVER_KEY_PREFIX = '/__album-haven-cover/';
 const MAX_REMEMBERED_COVER_KEYS = 4096;
@@ -21,8 +21,7 @@ const GALLERY_COVER_SHA256_K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
-// SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs; the app-copy worker computes
-// the same digest with crypto.subtle.
+// SHA-256 of [text] as UTF-8, hex. Synchronous, for short cover URLs.
 // Resolves in a new task (not a microtask), so work after it does not join the current task.
 function galleryCoverYield() {
   if (typeof globalThis.MessageChannel !== 'function') return new Promise(resolve => globalThis.setTimeout(resolve, 0));
@@ -255,8 +254,8 @@ class GalleryCoverPreviewCache {
     return blob;
   }
 
-  // [productionUrl]'s stored key, the same key as app-copy-worker.js coverKey (the SHA-256 of the
-  // URL without its version; one per cover and size), and the version it answers, the URL's `v`
+  // [productionUrl]'s stored key (the SHA-256 of the URL without its version; one per cover and
+  // size), and the version it answers, the URL's `v`
   // (a revision, never a file). Each cover is hashed once: a new version of a cover (a save, a
   // revision bump across the gallery) reuses its key without hashing again.
   coverKeysFor(productionUrl) {

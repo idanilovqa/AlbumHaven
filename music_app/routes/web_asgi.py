@@ -8,7 +8,7 @@ import hashlib
 import logging
 import os
 import time
-from datetime import timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -52,7 +52,14 @@ from music_app.services.capability_artwork import render_browse_artwork
 from music_app.services.cover_references import CANDIDATE as CANDIDATE_COVER, cover_library_id, legacy_cover_path_is_named
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
-from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
+from music_app.services.app_copy import (
+    RETIRED_WORKER,
+    app_copy_account,
+    app_copy_enabled,
+    app_copy_expires,
+    app_copy_requested,
+    mark_app_copy,
+)
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -1085,11 +1092,21 @@ async def index(request: Request) -> Response:
             "bootstrap_payload": bootstrap_payload,
             "startup_preview": startup_preview,
             "app_copy_account": copy_account,
+            "app_copy_enabled": app_copy_enabled(),
         },
     )
     template_elapsed_ms = round((time.perf_counter() - template_started_at) * 1000, 2)
     if copy_account:
-        mark_app_copy(response, copy_account, request.app.state.runtime_asset_version)
+        mark_app_copy(
+            response,
+            copy_account,
+            request.app.state.runtime_asset_version,
+            app_copy_expires(
+                request.state.current_actor,
+                request.app.state.auth_policy_config.get("session") or {},
+                datetime.now(timezone.utc),
+            ),
+        )
     else:
         response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
@@ -1220,7 +1237,7 @@ async def bootstrap_data(request: Request) -> JSONResponse:
 
 @router.get("/app-copy/account")
 async def app_copy_account_route(request: Request) -> JSONResponse:
-    """The account the Android app's copy must belong to; answered only while signed in."""
+    """The account the device copy must belong to; answered only while signed in."""
     return JSONResponse(
         {"account": app_copy_account(request.state.current_actor)},
         headers={"Cache-Control": "no-store, max-age=0"},
@@ -1233,6 +1250,8 @@ _APP_COPY_WORKER = Path(__file__).resolve().parent.parent / "static" / "js" / "a
 @router.get("/app-copy-worker.js")
 async def app_copy_worker() -> Response:
     # Served from the origin root, so its scope covers the app page; always revalidated.
+    if not app_copy_enabled():
+        return Response(RETIRED_WORKER, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
     return FileResponse(
         _APP_COPY_WORKER,
         media_type="text/javascript",

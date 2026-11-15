@@ -6,7 +6,10 @@ const test = require('node:test');
 
 const { createAppCopyClient } = require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy.js'));
 
-function setup({ marker = null, account = 'acct-a', answer = async () => ({ ok: true, status: 200, type: 'basic', json: async () => ({ account }) }) } = {}) {
+function setup({
+  marker = null, account = 'acct-a', answer = async () => ({ ok: true, status: 200, type: 'basic', json: async () => ({ account }) }),
+  androidShell = true, secure = true, workers = true, controlled = false,
+} = {}) {
   const listeners = new Map();
   const notice = { hidden: true };
   const timers = [];
@@ -29,7 +32,9 @@ function setup({ marker = null, account = 'acct-a', answer = async () => ({ ok: 
     registered: [],
     reloads: 0,
     probes: 0,
+    clock: 5_000_000,
   };
+  const location = { href: 'https://sandbox9.albumhaven.org/?artist=Broadcast', reload: () => { env.reloads += 1; } };
   const document = {
     visibilityState: 'visible',
     querySelector: selector => (selector === 'meta[name="album-haven-app-copy"]' && marker
@@ -39,23 +44,26 @@ function setup({ marker = null, account = 'acct-a', answer = async () => ({ ok: 
   };
   const client = createAppCopyClient({
     document,
-    window: { addEventListener: (name, listener) => listeners.set(`window:${name}`, listener) },
-    navigator: {
+    window: { isSecureContext: secure, addEventListener: (name, listener) => listeners.set(`window:${name}`, listener) },
+    navigator: workers ? {
       serviceWorker: {
+        controller: controlled ? {} : null,
         async register(url, options) { env.registered.push({ url, options }); return registration; },
         async getRegistration() { return env.registered.length || env.hadRegistration ? registration : undefined; },
       },
-    },
-    location: { href: 'https://sandbox9.albumhaven.org/?artist=Broadcast', reload: () => { env.reloads += 1; } },
+    } : {},
+    location,
     fetch: async (url, options) => { env.probes += 1; env.lastProbe = { url, options }; return answer(); },
     setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
     clearTimeout() {},
-    capabilities: () => ({ setReadOnly: on => env.readOnlyCalls.push(on) }),
+    capabilities: () => ({ setReadOnly: on => env.readOnlyCalls.push(on), isAndroidShell: () => androidShell }),
     MessageChannel,
+    now: () => env.clock,
   });
   const shell = { report: async stored => { reported.push(stored); } };
   const settle = () => new Promise(resolve => setTimeout(resolve, 5));
-  return { client, env, listeners, notice, timers, posted, reported, registration, shell, document, settle };
+  const hide = () => { document.visibilityState = 'hidden'; listeners.get('document:visibilitychange')(); };
+  return { client, env, listeners, notice, timers, posted, reported, registration, shell, document, location, settle, hide };
 }
 
 test('a page loaded from the network is not a copy and asks nothing of the server', async () => {
@@ -189,4 +197,71 @@ test('nothing is saved while the copy is read-only', async () => {
   listeners.get('document:visibilitychange')();
   await settle();
   assert.ok(!posted.some(message => message.type === 'save'));
+});
+
+// ---- Ordinary browsers (IAR-W01, IAR-W07) ----
+
+test('in a browser over HTTPS the worker is registered for the server-first mode once the page has loaded', async () => {
+  const { env, listeners, settle } = setup({ androidShell: false, marker: 'network' });
+  await settle();
+  assert.deepEqual(env.registered, []);
+
+  listeners.get('window:load')();
+  await settle();
+
+  assert.deepEqual(env.registered, [{ url: '/app-copy-worker.js?mode=web', options: { scope: '/', updateViaCache: 'none' } }]);
+});
+
+test('IAR-W07: without a secure context or service workers, a browser behaves as today', async () => {
+  for (const options of [{ secure: false }, { workers: false }]) {
+    const { env, listeners, settle } = setup({ androidShell: false, ...options });
+    listeners.get('window:load')?.();
+    await settle();
+    assert.deepEqual(env.registered, [], JSON.stringify(options));
+  }
+});
+
+test('the Android app never registers the browser worker; its shell decides', async () => {
+  const { env, listeners, settle } = setup({ androidShell: true });
+  listeners.get('window:load')?.();
+  await settle();
+  assert.deepEqual(env.registered, []);
+});
+
+test('in a browser, switching tabs saves the view only when it changed or ten minutes passed', async () => {
+  const { env, listeners, posted, location, document, settle, hide } = setup({ androidShell: false, marker: 'network', controlled: true });
+  listeners.get('window:load')();
+  await settle();
+  const saves = () => posted.filter(message => message.type === 'save').length;
+
+  // The worker already kept this page when it loaded.
+  hide();
+  await settle();
+  assert.equal(saves(), 0);
+
+  location.href = 'https://sandbox9.albumhaven.org/?artist=Mono';
+  document.visibilityState = 'visible';
+  hide();
+  await settle();
+  assert.equal(saves(), 1);
+
+  hide();
+  await settle();
+  assert.equal(saves(), 1);
+
+  env.clock += 10 * 60 * 1000;
+  listeners.get('window:pagehide')();
+  await settle();
+  assert.equal(saves(), 2);
+});
+
+test('in a browser, a page the worker did not load is saved the first time it is hidden', async () => {
+  const { listeners, posted, settle, hide } = setup({ androidShell: false, marker: null });
+  listeners.get('window:load')();
+  await settle();
+
+  hide();
+  await settle();
+
+  assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
 });

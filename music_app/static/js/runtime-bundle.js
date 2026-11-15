@@ -46804,7 +46804,9 @@ function attachUtilityModalEvents() {
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
   let searchRenderTimer = null;
-  const scheduleSearchRender = () => {
+  // Typing only stores the query; one render runs after the keystrokes pause,
+  // so per-keystroke work never scales with the searched list.
+  const scheduleSearchRender = (render = renderUtilityModalContent) => {
     clearTimeout(searchRenderTimer);
     const owner = state.utility;
     const tab = owner.activeTab;
@@ -46812,7 +46814,7 @@ function attachUtilityModalEvents() {
       searchRenderTimer = null;
       if (tab === 'problematic-files' && owner.problematicFilesComplete === false
           && !(await waitForProblematicFilesComplete())) return;
-      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
+      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) render();
     }, 80);
   };
   els.search?.addEventListener('input', () => {
@@ -46828,7 +46830,7 @@ function attachUtilityModalEvents() {
     }
     if (state.utility.activeTab === 'loops') {
       state.utility.loopsSearchQuery = els.search.value || '';
-      filterUtilityLoopViews();
+      scheduleSearchRender(filterUtilityLoopViews);
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';

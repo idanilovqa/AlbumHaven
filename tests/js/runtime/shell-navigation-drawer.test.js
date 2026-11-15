@@ -225,78 +225,89 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   };
 }
 
-test('custom collections mode hydrates the library scope and reuses NavigationTree rows', async () => {
-  const { context, artistList, navigationHeading } = loadHelper();
-  artistList.dataset.sidebarStructureSignature = 'cached-artists';
-  context.renderSidebar = () => { throw new Error('Artists must not render in collection mode'); };
-  let hydrationOptions = null;
-  context.hydrateDeferredNonAlbumTracks = async (options) => {
-    hydrationOptions = options;
-    const { libraryWide } = options;
-    assert.equal(libraryWide, true);
-    context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
-  };
-  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
+function stubCollectionTree(context) {
   const renderedOptions = [];
   context.window.NavigationTree = {
     renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
+    renderSkeleton: ({ count }) => `<div data-navigation-tree-skeleton="${count}"></div>`,
     renderItem: (options) => {
       renderedOptions.push(options);
-      const { label, count, attributes } = options;
-      const collection = attributes['data-open-custom-collection'];
+      const collection = options.attributes['data-open-custom-collection'];
       return collection
-        ? `<button data-open-custom-collection="${collection}">${label}:${count}</button>`
-        : `<button data-open-loose-tracks="1">${label}:${count}</button>`;
+        ? `<button data-open-custom-collection="${collection}">${options.label}:${options.count}</button>`
+        : '<button data-open-loose-tracks="1">All Loose Tracks</button>';
     },
   };
-
-  await context.setLibraryNavigationMode('custom-collections');
-
-  assert.equal(hydrationOptions.resolveLibrary, true, 'Custom Collections must resolve beyond a completed search probe');
-  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
-  assert.equal(navigationHeading.textContent, 'Custom Collections');
-  assert.match(artistList.innerHTML, /^<button data-open-loose-tracks="1">All Loose Tracks:/);
-  assert.match(artistList.innerHTML, /role="separator"/);
-  assert.match(artistList.innerHTML, /<button data-open-custom-collection="Night">Night:2<\/button>$/);
-  assert.equal(renderedOptions.length, 4);
-  assert.equal(renderedOptions[0].variant, 'panel');
-  assert.equal(renderedOptions[0].key, 'all-loose-tracks');
-  assert.equal(renderedOptions[0].selected, false);
-  assert.equal(renderedOptions[1].key, 'Night');
-  assert.equal(renderedOptions[1].selected, false);
-  assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
-});
-
-test('custom collections opens immediately from cached state while library hydration finishes', async () => {
-  const { context, artistList } = loadHelper();
-  artistList.innerHTML = '<button>Existing artist</button>';
-  context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Cached' }];
-  let finishHydration;
-  context.hydrateDeferredNonAlbumTracks = () => new Promise((resolve) => {
-    finishHydration = () => {
-      context.state.view.library_non_album_tracks = [{ custom_collection_name: 'Night' }];
-      resolve();
-    };
-  });
-  context.buildCustomCollectionIndex = items => [{
-    name: items[0]?.custom_collection_name || 'Night', count: 2,
-  }];
-  context.window.NavigationTree = {
-    renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
-    renderItem: options => options.key === 'all-loose-tracks'
-      ? '<button data-open-loose-tracks="1">All Loose Tracks</button>'
-      : `<button data-open-custom-collection="${options.key}">${options.key}:2</button>`,
+  context.hydrateDeferredNonAlbumTracks = () => {
+    throw new Error('the Custom Collections tree must not load Loose Tracks');
   };
+  return renderedOptions;
+}
+
+function stubCatalogFetch(context) {
+  const requests = [];
+  context.URL = URL;
+  context.fetch = (path) => new Promise((resolve) => {
+    requests.push({ path, respond: (collections, status = 200) => resolve({
+      ok: status < 400, status, json: async () => (status < 400 ? { custom_collections: collections } : { ok: false, error: 'boom' }),
+    }) });
+  });
+  return requests;
+}
+
+test('custom collections tree loads its bounded catalog, not Loose Tracks, and ignores the selected artist', async () => {
+  const { context, artistList, navigationHeading } = loadHelper();
+  artistList.dataset.sidebarStructureSignature = 'cached-artists';
+  context.renderSidebar = () => { throw new Error('Artists must not render in collection mode'); };
+  context.state.view.selected_artist = '3 Mice';
+  context.state.view.visible_library_categories = ['main_library', 'hoard'];
+  const renderedOptions = stubCollectionTree(context);
+  const requests = stubCatalogFetch(context);
 
   const pending = context.setLibraryNavigationMode('custom-collections');
 
-  assert.match(artistList.innerHTML, /data-open-loose-tracks="1"/);
-  assert.match(artistList.innerHTML, /data-open-custom-collection="Cached"/);
-  assert.doesNotMatch(artistList.innerHTML, /Existing artist/);
-  assert.doesNotMatch(artistList.innerHTML, /Loading Custom Collections/);
-  finishHydration();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/library/custom-collections?category=main_library&category=hoard');
+  assert.equal(navigationHeading.textContent, 'Custom Collections');
+  assert.match(artistList.innerHTML, /^<button data-open-loose-tracks="1">All Loose Tracks<\/button><div class="navigation-tree-separator"[^>]*><\/div><div data-navigation-tree-skeleton="3"><\/div>$/);
+  requests[0].respond([{ name: 'Night', count: 2 }, { name: 'Женя машина', count: 85 }]);
   await pending;
-  assert.equal(artistList.innerHTML, '<button data-open-loose-tracks="1">All Loose Tracks</button><div class="navigation-tree-separator" role="separator" aria-label="Custom Collections"></div><button data-open-custom-collection="Night">Night:2</button>');
+
+  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
+  assert.match(artistList.innerHTML, /<button data-open-custom-collection="Night">Night:2<\/button><button data-open-custom-collection="Женя машина">Женя машина:85<\/button>$/);
+  assert.doesNotMatch(artistList.innerHTML, /skeleton/);
+  assert.deepEqual(renderedOptions.filter(({ key }) => key !== 'all-loose-tracks').map(({ selected }) => selected), [false, false]);
+  assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
+});
+
+test('reopening custom collections paints the cached catalog at once and refreshes it in place', async () => {
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  const requests = stubCatalogFetch(context);
+  const first = context.setLibraryNavigationMode('custom-collections');
+  requests[0].respond([{ name: 'Cached', count: 1 }]);
+  await first;
+  await context.setLibraryNavigationMode('artists').catch?.(() => {});
+
+  const second = context.setLibraryNavigationMode('custom-collections');
+
+  assert.match(artistList.innerHTML, /data-open-custom-collection="Cached"/);
+  assert.doesNotMatch(artistList.innerHTML, /skeleton/);
+  requests[1].respond([{ name: 'Cached', count: 1 }, { name: 'New', count: 4 }]);
+  await second;
+  assert.match(artistList.innerHTML, /data-open-custom-collection="New">New:4/);
+});
+
+test('a failed catalog request keeps a cached tree and explains an empty one', async () => {
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  const requests = stubCatalogFetch(context);
+  context.escapeHtml = value => String(value);
+  const failing = context.setLibraryNavigationMode('custom-collections');
+  requests[0].respond([], 502);
+  await failing;
+  assert.match(artistList.innerHTML, /Unable to load Custom Collections|boom/);
+  assert.match(artistList.innerHTML, /data-open-loose-tracks="1"/, 'All Loose Tracks stays usable without the catalog');
 });
 
 test('desktop library mode rail hides after 30 seconds idle, then reveals at the left edge', () => {
@@ -362,15 +373,17 @@ test('folded desktop navigation keeps the library mode rail visible', () => {
 test('custom collections mode ignores a stale prior collection when its page is closed', async () => {
   const { context } = loadHelper();
   context.state.ui.nonAlbumCollectionName = 'Night';
-  context.hydrateDeferredNonAlbumTracks = async () => {};
-  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 2 }];
+  const requests = stubCatalogFetch(context);
   let renderedOptions = null;
   context.window.NavigationTree = {
     renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
+    renderSkeleton: () => '',
     renderItem(options) { renderedOptions = options; return '<button>Night</button>'; },
   };
 
-  await context.setLibraryNavigationMode('custom-collections');
+  const pending = context.setLibraryNavigationMode('custom-collections');
+  requests[0].respond([{ name: 'Night', count: 2 }]);
+  await pending;
 
   assert.equal(renderedOptions.selected, false);
 });
@@ -379,8 +392,7 @@ test('custom collections mode selects the collection whose page is open', async 
   const { context } = loadHelper();
   context.state.ui.nonAlbumCollectionName = 'Night';
   context.state.ui.nonAlbumLibraryWide = true;
-  context.hydrateDeferredNonAlbumTracks = async () => {};
-  context.buildCustomCollectionIndex = () => [{ name: 'Night', count: 119 }];
+  const requests = stubCatalogFetch(context);
   const originalQuerySelector = context.document.querySelector.bind(context.document);
   context.document.querySelector = selector => (
     selector === '#non-album-modal:not([hidden])'
@@ -390,10 +402,13 @@ test('custom collections mode selects the collection whose page is open', async 
   const renderedOptions = [];
   context.window.NavigationTree = {
     renderSeparator: ({ label }) => `<div role="separator" aria-label="${label}"></div>`,
+    renderSkeleton: () => '',
     renderItem(options) { renderedOptions.push(options); return '<button></button>'; },
   };
 
-  await context.setLibraryNavigationMode('custom-collections');
+  const pending = context.setLibraryNavigationMode('custom-collections');
+  requests[0].respond([{ name: 'Night', count: 119 }]);
+  await pending;
 
   assert.equal(renderedOptions.find(option => option.key === 'all-loose-tracks').selected, false);
   assert.equal(renderedOptions.find(option => option.key === 'Night').selected, true);

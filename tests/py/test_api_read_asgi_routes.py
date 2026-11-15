@@ -784,6 +784,36 @@ def test_asgi_loose_track_availability_forwards_artist_scope(
     }
 
 
+def test_asgi_custom_collection_catalog_returns_names_and_counts_only(asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    calls = []
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_custom_collection_catalog_payload(self, *, query_params):
+            calls.append(dict(query_params))
+            return {"custom_collections": [{"name": "Женя машина", "count": 85}]}
+
+        def build_library_loose_tracks_payload(self, **_kwargs):
+            raise AssertionError("the tree catalog must not build Loose Tracks")
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "is_library_browse_postgres_available", lambda _config: True)
+
+    status, headers, body = _run_asgi_request(
+        asgi_app, "GET", "/library/custom-collections", query={"category": "hoard"},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {"custom_collections": [{"name": "Женя машина", "count": 85}]}
+    assert calls == [{"category": "hoard"}]
+    assert dict(headers).get(b"cache-control", dict(headers).get("cache-control")) in (
+        b"private, no-store", "private, no-store")
+
+
 def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
     app,
     asgi_app,

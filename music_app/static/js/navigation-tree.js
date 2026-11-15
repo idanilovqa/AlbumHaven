@@ -34,6 +34,12 @@
   function renderSeparator({ label } = {}) {
     return '<div class="navigation-tree-separator" role="separator" aria-label="' + escape(label) + '"></div>';
   }
+  // Placeholder rows where items will appear while a tree's catalog is still loading.
+  function renderSkeleton({ count = 4 } = {}) {
+    const row = '<div class="navigation-tree-skeleton" data-navigation-tree-skeleton aria-hidden="true">'
+      + '<span class="navigation-tree-skeleton__label"></span><span class="navigation-tree-skeleton__count"></span></div>';
+    return '<div class="navigation-tree-skeletons" role="status" aria-label="Loading">' + row.repeat(Math.max(1, count)) + '</div>';
+  }
   function setItemSelected(item, selected) {
     if (!item?.classList) return;
     const settings = item.getAttribute('data-navigation-tree-item') === 'settings' || item.classList.contains('settings-nav-item');
@@ -89,5 +95,5 @@
       if (item.classList.contains('is-selected') !== selected) setItemSelected(item, selected);
     });
   }
-  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), renderSeparator, updateItem, setItemSelected, setSelection };
+  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), renderSeparator, renderSkeleton, updateItem, setItemSelected, setSelection };
 })();

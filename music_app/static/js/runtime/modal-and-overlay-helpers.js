@@ -252,33 +252,6 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
-const customCollectionIndexCache = new WeakMap();
-
-function buildCustomCollectionIndex(items = []) {
-  if (!Array.isArray(items)) return [];
-  const cached = customCollectionIndexCache.get(items);
-  if (cached) return cached;
-  const collections = new Map();
-  items.forEach((item) => {
-    if (String(item?.exception_type || '').trim() !== 'Custom Collection') return;
-    const name = String(item?.custom_collection_name || '').trim();
-    if (!name) return;
-    if (!collections.has(name)) collections.set(name, []);
-    collections.get(name).push(item);
-  });
-  const index = [...collections]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, tracks]) => ({
-      name,
-      count: tracks.length,
-      tracks: tracks.slice().sort((left, right) => (
-        String(left?.path || '').localeCompare(String(right?.path || ''))
-      )),
-    }));
-  customCollectionIndexCache.set(items, index);
-  return index;
-}
-
 // The library-wide request is the current browse scope without the open
 // artist or family selection, so every artist page shares one library result.
 // A search keeps its own view request: its loose tracks are query-scoped.

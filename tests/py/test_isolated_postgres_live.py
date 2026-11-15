@@ -710,6 +710,54 @@ def test_live_library_loose_tracks_come_without_the_gallery(watcher_repair_inven
     assert payload["non_album_tracks_deferred"] is False
 
 
+def test_live_custom_collection_catalog_matches_loose_tracks_without_building_them(watcher_repair_inventory):
+    # Owner FIX-COL-03 / COL-01: the Custom Collections tree must not wait for, or depend on,
+    # the library-wide Loose Tracks payload or the Artist tree selection.
+    from psycopg.types.json import Jsonb
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    named = [{**fixture.entry(f"Loose/Car/{n}.flac", album=""), "exception_type": "Custom Collection"} for n in range(3)]
+    tagged = {**fixture.entry("Loose/Tagged/01.flac", album="", root=1), "exception_type": "Custom Collection",
+              "custom_collection_name": "Tagged Hoard"}
+    reclassified = {**fixture.entry("Loose/Car/interview.flac", album=""), "exception_type": "Custom Collection"}
+    removed = {**fixture.entry("Loose/Car/removed.flac", album=""), "exception_type": "Custom Collection"}
+    fixture.seed(*named, tagged, reclassified, removed, fixture.entry("Owner/Album/01.flac", album="Album"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        for item in (*named, removed):
+            connection.execute(
+                """insert into library.exception_overrides(library_id, track_key, override_payload)
+                   select library_id, %s, %s from library.local_tracks where track_key = %s""",
+                (item["path"], Jsonb({"exception_type": "Custom Collection", "custom_collection_name": "Женя машина"}),
+                 item["path"]))
+        # An override that carries a type wins over the file's stored Custom Collection type.
+        connection.execute(
+            """insert into library.exception_overrides(library_id, track_key, override_payload)
+               select library_id, %s, %s from library.local_tracks where track_key = %s""",
+            (reclassified["path"], Jsonb({"exception_type": "Interview"}), reclassified["path"]))
+    Path(removed["path"]).unlink()
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"], active_file_entries={}, deleted_paths=(removed["path"],))
+
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    everything = {"category": ["main_library", "new_arrivals", "hoard"]}
+    catalog = repository.build_custom_collection_catalog_payload(query_params=everything)
+    page = repository.build_library_loose_tracks_payload(
+        query_params=everything, rebuild_missing_snapshot=True)["library_non_album_tracks"]
+    from_page = {}
+    for track in page:
+        if track.get("exception_type") == "Custom Collection" and track.get("custom_collection_name"):
+            from_page[track["custom_collection_name"]] = from_page.get(track["custom_collection_name"], 0) + 1
+
+    assert sorted((row["name"], row["count"]) for row in catalog["custom_collections"]) == sorted(from_page.items())
+    assert sorted((row["name"], row["count"]) for row in catalog["custom_collections"]) == [
+        ("Tagged Hoard", 1), ("Женя машина", 3)]
+    assert repository.build_custom_collection_catalog_payload(
+        query_params={**everything, "artist": "Owner"}) == catalog
+    main_only = repository.build_custom_collection_catalog_payload(query_params={"category": ["main_library"]})
+    assert [(row["name"], row["count"]) for row in main_only["custom_collections"]] == [("Женя машина", 3)]
+
+
 def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
 

@@ -758,6 +758,19 @@ def library_loose_tracks(request: Request) -> JSONResponse:
     return JSONResponse(_project_non_album_tracks_for_request(request, payload))
 
 
+@router.get("/library/custom-collections")
+def library_custom_collections(request: Request) -> JSONResponse:
+    """Custom Collection names and counts for the navigation tree; never the tracks."""
+    if not is_library_browse_postgres_available(_app_config(request)):
+        return JSONResponse({"ok": False, "error": "Custom Collections need the Postgres library."}, status_code=409)
+    return JSONResponse(
+        PostgresLibraryBrowseRepository(_app_config(request)).build_custom_collection_catalog_payload(
+            query_params=request.query_params,
+        ),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/view-data")
 async def view_data(request: Request) -> JSONResponse:
     payload = await run_in_threadpool(_build_view_data_payload, request)

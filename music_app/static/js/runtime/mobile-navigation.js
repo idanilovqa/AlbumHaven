@@ -85,7 +85,8 @@ function writeMobilePageHistory(mode = 'push') {
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === 'non-album' && active.libraryWide) {
     url.pathname = '/loose-tracks';
-    url.searchParams.delete('surface');
+    // Library-wide Loose Tracks never belong to the Artist tree selection.
+    ['surface', 'artist', 'family_display'].forEach(key => url.searchParams.delete(key));
   } else if (url.pathname === '/loose-tracks') url.pathname = '/';
   ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail', 'collection'].forEach(key => url.searchParams.delete(key));
   if (active) {
@@ -315,8 +316,12 @@ function presentMobilePage(descriptor) {
     });
   }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
+    // Loose Tracks pages share one surface; each collection is still its own route.
+    const routeChanged = active.kind === 'non-album'
+      && (active.libraryWide !== descriptor.libraryWide || active.collectionName !== descriptor.collectionName);
     Object.assign(active, descriptor);
     syncMobilePageShell();
+    if (routeChanged && !mobilePageState.restoring) writeMobilePageHistory('push');
     return true;
   }
   if (!historyOnly) delete outlet.dataset.pageInteracted;

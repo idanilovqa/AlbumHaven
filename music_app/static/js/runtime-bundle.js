@@ -11514,7 +11514,43 @@ function syncLibraryNavigationModePresentation(mode) {
   });
 }
 
-function renderCustomCollectionNavigation(collections) {
+// The tree lists collection names and counts from their own bounded request. It never
+// waits for the library-wide Loose Tracks payload and never depends on the Artist tree.
+let customCollectionCatalog = { key: null, collections: null, request: null };
+
+function customCollectionCatalogUrl(view = state.view || {}) {
+  const url = new URL('/library/custom-collections', 'http://localhost');
+  (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
+  if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
+  return url;
+}
+
+function loadCustomCollectionCatalog() {
+  const url = customCollectionCatalogUrl();
+  const key = url.search;
+  if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
+  const promise = (async () => {
+    const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.error || `Custom Collections request failed: ${response.status}`);
+    }
+    const collections = (Array.isArray(payload.custom_collections) ? payload.custom_collections : [])
+      .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))
+      .filter(({ name }) => name)
+      .sort((left, right) => left.name.localeCompare(right.name));
+    customCollectionCatalog = { key, collections, request: null };
+    return collections;
+  })();
+  customCollectionCatalog.request = { key, promise };
+  promise.catch(() => {
+    if (customCollectionCatalog.request?.promise === promise) customCollectionCatalog.request = null;
+  });
+  return promise;
+}
+
+// collections === null renders placeholders where the named rows will appear.
+function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
   const list = document.getElementById('sidebar-list');
   if (!list) return;
   const pageOpen = Boolean(document.querySelector?.('#non-album-modal:not([hidden])'));
@@ -11535,15 +11571,19 @@ function renderCustomCollectionNavigation(collections) {
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });
-  const collectionRows = collections.map(({ name, count }) => window.NavigationTree.renderItem({
-      action: true,
-      variant: 'panel',
-      key: name,
-      label: name,
-      count,
-      selected: name === activeCollectionName,
-      attributes: { 'data-open-custom-collection': name },
-    })).join('');
+  const collectionRows = failure
+    ? `<p class="utility-empty-state compact">${escapeHtml(failure)}</p>`
+    : collections === null
+      ? window.NavigationTree.renderSkeleton({ count: 3 })
+      : collections.map(({ name, count }) => window.NavigationTree.renderItem({
+        action: true,
+        variant: 'panel',
+        key: name,
+        label: name,
+        count,
+        selected: name === activeCollectionName,
+        attributes: { 'data-open-custom-collection': name },
+      })).join('');
   list.innerHTML = `${allLooseTracks}${window.NavigationTree.renderSeparator({ label: 'Custom Collections' })}${collectionRows}`;
 }
 
@@ -11559,21 +11599,17 @@ async function setLibraryNavigationMode(mode) {
     renderSidebar();
     return normalized;
   }
-  const list = document.getElementById('sidebar-list');
-  const cachedLibraryTracks = Array.isArray(state.view?.library_non_album_tracks)
-    ? state.view.library_non_album_tracks
-    : [];
-  renderCustomCollectionNavigation(buildCustomCollectionIndex(cachedLibraryTracks));
+  const cached = customCollectionCatalog.key === customCollectionCatalogUrl().search
+    ? customCollectionCatalog.collections
+    : null;
+  renderCustomCollectionNavigation(cached);
   setDesktopLibraryModeRailVisible(true);
   try {
-    await hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
-    if (state.ui.libraryNavigationMode !== normalized) return normalized;
-    renderCustomCollectionNavigation(buildCustomCollectionIndex(
-      state.view?.library_non_album_tracks || state.view?.non_album_tracks || [],
-    ));
+    const collections = await loadCustomCollectionCatalog();
+    if (state.ui.libraryNavigationMode === normalized) renderCustomCollectionNavigation(collections);
   } catch (error) {
-    if (state.ui.libraryNavigationMode === normalized && list) {
-      list.innerHTML = `<p class="utility-empty-state compact">${escapeHtml(error?.message || 'Unable to load Custom Collections.')}</p>`;
+    if (state.ui.libraryNavigationMode === normalized && cached === null) {
+      renderCustomCollectionNavigation(null, { failure: error?.message || 'Unable to load Custom Collections.' });
     }
   }
   return normalized;
@@ -14740,33 +14776,6 @@ function getVisibleNonAlbumTracks(options = {}) {
 
 function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
-}
-
-const customCollectionIndexCache = new WeakMap();
-
-function buildCustomCollectionIndex(items = []) {
-  if (!Array.isArray(items)) return [];
-  const cached = customCollectionIndexCache.get(items);
-  if (cached) return cached;
-  const collections = new Map();
-  items.forEach((item) => {
-    if (String(item?.exception_type || '').trim() !== 'Custom Collection') return;
-    const name = String(item?.custom_collection_name || '').trim();
-    if (!name) return;
-    if (!collections.has(name)) collections.set(name, []);
-    collections.get(name).push(item);
-  });
-  const index = [...collections]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, tracks]) => ({
-      name,
-      count: tracks.length,
-      tracks: tracks.slice().sort((left, right) => (
-        String(left?.path || '').localeCompare(String(right?.path || ''))
-      )),
-    }));
-  customCollectionIndexCache.set(items, index);
-  return index;
 }
 
 // The library-wide request is the current browse scope without the open
@@ -54163,7 +54172,8 @@ function writeMobilePageHistory(mode = 'push') {
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === 'non-album' && active.libraryWide) {
     url.pathname = '/loose-tracks';
-    url.searchParams.delete('surface');
+    // Library-wide Loose Tracks never belong to the Artist tree selection.
+    ['surface', 'artist', 'family_display'].forEach(key => url.searchParams.delete(key));
   } else if (url.pathname === '/loose-tracks') url.pathname = '/';
   ['mobile_page', 'mobile_album', 'utility_tab', 'loop_song', 'loop_filter', 'utility_detail', 'collection'].forEach(key => url.searchParams.delete(key));
   if (active) {
@@ -54393,8 +54403,12 @@ function presentMobilePage(descriptor) {
     });
   }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
+    // Loose Tracks pages share one surface; each collection is still its own route.
+    const routeChanged = active.kind === 'non-album'
+      && (active.libraryWide !== descriptor.libraryWide || active.collectionName !== descriptor.collectionName);
     Object.assign(active, descriptor);
     syncMobilePageShell();
+    if (routeChanged && !mobilePageState.restoring) writeMobilePageHistory('push');
     return true;
   }
   if (!historyOnly) delete outlet.dataset.pageInteracted;

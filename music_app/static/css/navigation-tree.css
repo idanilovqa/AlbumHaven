@@ -8,6 +8,18 @@
   background: var(--navigation-tree-separator-background) center / 100% 1px no-repeat;
 }
 .navigation-tree-item { min-width: 0; position: relative; }
+/* Loading placeholders occupy the same row height as items, then are replaced in place. */
+.navigation-tree-skeleton { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 13px; }
+.navigation-tree-skeleton > span {
+  display: block; height: 11px; border-radius: 999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, transparent) 25%, color-mix(in srgb, var(--appearance-ink, var(--text)) 16%, transparent) 50%, color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, transparent) 75%);
+  background-size: 200% 100%; animation: navigation-tree-skeleton 1.2s ease-in-out infinite;
+}
+.navigation-tree-skeleton__label { flex: 1 1 auto; max-width: 62%; }
+.navigation-tree-skeleton:nth-child(2n) .navigation-tree-skeleton__label { max-width: 46%; }
+.navigation-tree-skeleton__count { flex: 0 0 22px; margin-left: auto; }
+@keyframes navigation-tree-skeleton { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .navigation-tree-skeleton > span { animation: none; } }
 /* Pointer hover uses a neutral filled surface; outlines indicate keyboard focus. */
 :root .navigation-tree-item:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: transparent !important;

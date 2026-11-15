@@ -1328,3 +1328,27 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /overflow:\s*hidden/);
   assert.match(rule, /text-overflow:\s*ellipsis/);
 });
+
+test('library-wide Loose Tracks history names the collection and drops the Artist tree selection', () => {
+  const pushed = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: {
+      innerWidth: 1600,
+      location: { href: 'https://example.test/?artist=3+Mice&family_display=flat&category=hoard&gallery_scope=all' },
+      history: { state: null, pushState: (_state, _title, url) => pushed.push(String(url)) },
+    },
+  });
+  vm.runInContext('mobilePageState', context).pages.push({
+    kind: 'non-album', albumKey: '', libraryWide: true, collectionName: 'Женя машина',
+  });
+
+  context.writeMobilePageHistory('push');
+
+  const url = new URL(pushed[0]);
+  assert.equal(url.pathname, '/loose-tracks');
+  assert.equal(url.searchParams.get('collection'), 'Женя машина');
+  assert.equal(url.searchParams.has('artist'), false);
+  assert.equal(url.searchParams.has('family_display'), false);
+  assert.deepEqual(url.searchParams.getAll('category'), ['hoard']);
+});

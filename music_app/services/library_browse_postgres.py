@@ -501,6 +501,34 @@ class PostgresLibraryBrowseRepository:
                     ensure_gallery_summary=ensure_gallery_summary,
                 )
 
+    def build_custom_collection_catalog_payload(
+        self,
+        *,
+        query_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Custom Collection names and track counts for the navigation tree.
+
+        One grouped query over the effective exception of each active file. It never
+        waits for the Loose Tracks snapshot and ignores the Artist tree selection.
+        """
+        categories = list(_root_sidebar_view_state(query_params).get("visible_library_categories") or [])
+        with self._connect_to_database() as connection:
+            # A few hundred rows: parallel worker startup would cost more than the query.
+            connection.execute("set local max_parallel_workers_per_gather = 0")
+            rows = connection.execute(_custom_collection_catalog_sql()).fetchall()
+        counts: dict[str, int] = {}
+        for row in rows:
+            mapping = _row_mapping(row)
+            name = str(mapping.get("collection_name") or "").strip()
+            if (
+                not name
+                or normalize_exception_value(mapping.get("exception_type")) != "Custom Collection"
+                or not entry_visible_in_categories(mapping, categories)
+            ):
+                continue
+            counts[name] = counts.get(name, 0) + int(mapping.get("track_count") or 0)
+        return {"custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())]}
+
     def build_library_loose_tracks_payload(
         self,
         *,
@@ -6696,6 +6724,58 @@ def _non_album_track_snapshot_load_sql() -> str:
         select snapshots.payload
         from library.non_album_track_snapshots snapshots
         where snapshots.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
+    """
+
+
+def _custom_collection_catalog_sql() -> str:
+    # Same effective-exception rule as the Loose Tracks entries: an override that carries
+    # exception_type wins (path match before track match, then lowest id); otherwise the
+    # file's stored exception applies, with the override's name preferred.
+    file_entry = "files.metadata #> '{scan_cache,file_entry}'"
+    return f"""
+        with overrides as (
+          select files.id as file_id, overrides.override_payload,
+                 overrides.track_key = files.private_path as by_path, overrides.id as override_id
+          from library.exception_overrides overrides
+          join library.local_track_files files
+            on files.private_path = overrides.track_key and files.scan_cache_stale is false
+          where overrides.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
+          union all
+          select files.id, overrides.override_payload, false, overrides.id
+          from library.exception_overrides overrides
+          join library.local_track_files files
+            on files.track_id = overrides.track_id and files.scan_cache_stale is false
+          where overrides.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
+        ), effective_override as (
+          select distinct on (file_id) file_id, override_payload
+          from overrides
+          order by file_id, by_path desc, override_id
+        ), candidate_ids as (
+          select file_id from effective_override
+          union
+          select files.id
+          from library.local_track_files files
+          where files.scan_cache_stale is false
+            and coalesce(files.metadata #>> '{{scan_cache,file_entry,custom_collection_name}}', '') <> ''
+        )
+        select
+          case when effective_override.override_payload ? 'exception_type'
+            then effective_override.override_payload ->> 'custom_collection_name'
+            else coalesce(nullif(effective_override.override_payload ->> 'custom_collection_name', ''),
+                          {file_entry} ->> 'custom_collection_name')
+          end as collection_name,
+          case when effective_override.override_payload ? 'exception_type'
+            then effective_override.override_payload ->> 'exception_type'
+            else {file_entry} ->> 'exception_type'
+          end as exception_type,
+          coalesce(files.metadata ->> 'library_root_category', {file_entry} ->> 'library_root_category')
+            as library_root_category,
+          count(distinct files.track_id) as track_count
+        from library.local_track_files files
+        left join effective_override on effective_override.file_id = files.id
+        -- An id array keeps this a primary-key lookup of the few candidates.
+        where files.id = any(array(select file_id from candidate_ids))
+        group by 1, 2, 3
     """
 
 

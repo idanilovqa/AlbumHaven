@@ -470,31 +470,6 @@ test('Loose Tracks indexes problematic paths and snapshots playback once per ren
   assert.equal(playbackSnapshots, 1);
 });
 
-test('custom collection index derives only named custom assignments in stable order', () => {
-  const { context } = loadHelper();
-  const items = [
-    { exception_type: 'Custom Collection', custom_collection_name: 'Road', path: '4' },
-    { exception_type: 'Custom Collection', custom_collection_name: 'Night', path: '2' },
-    { exception_type: 'Interview', custom_collection_name: 'Ignore', path: '3' },
-    { exception_type: 'Custom Collection', custom_collection_name: 'Night', path: '1' },
-    { exception_type: 'Custom Collection', custom_collection_name: '   ', path: '5' },
-  ];
-  const index = context.buildCustomCollectionIndex(items);
-  assert.deepEqual(Array.from(index, ({ name, count, tracks }) => ({
-    name,
-    count,
-    paths: Array.from(tracks, track => track.path),
-  })), [
-    { name: 'Night', count: 2, paths: ['1', '2'] },
-    { name: 'Road', count: 1, paths: ['4'] },
-  ]);
-  assert.equal(
-    context.buildCustomCollectionIndex(items),
-    index,
-    'opening the unchanged tree again must reuse its index instead of rescanning every loose track',
-  );
-});
-
 test('library-wide Loose Tracks hydrates when only the selected-artist projection is current', () => {
   const { context } = loadHelper();
   context.URL = URL;

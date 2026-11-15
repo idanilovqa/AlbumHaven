@@ -2445,6 +2445,7 @@ def test_postgres_cover_selection_rejects_stale_inventory_revision_after_lock_be
             track_paths={"C:/Generated/Artist/Album/song.mp3"},
             selected_cover_path=Path("C:/Generated/Artist/Album/cover.jpg"),
             cover_revision="prepared-cover-revision",
+            cover_selection_origin="user",
             expected_inventory_mutation_revision=11,
             commit_guard=lambda commit: commit_guard_calls.append(commit),
         )
@@ -6387,6 +6388,8 @@ def test_durable_targeted_preparer_preserves_committed_cover_result():
 def test_durable_targeted_preparer_publishes_only_claim_scoped_prepared_payload():
     from types import SimpleNamespace
 
+    from music_app.services.library import build_albums_from_file_cache
+
     from music_app.services.scan_cache_persistence import (
         DurableTargetedReconciliationPreparationAdapter,
     )
@@ -6396,7 +6399,7 @@ def test_durable_targeted_preparer_publishes_only_claim_scoped_prepared_payload(
     def build_albums(file_cache, separate_release_keys):
         observed["file_cache"] = file_cache
         observed["separate_release_keys"] = separate_release_keys
-        return []
+        return build_albums_from_file_cache(file_cache, separate_release_keys)
 
     class PublicationGuard:
         def publish_prepared(self, *, inventory, stale_scopes):
@@ -6462,8 +6465,9 @@ def test_durable_targeted_preparer_publishes_only_claim_scoped_prepared_payload(
         "tracks",
         "track_files",
     }
-    assert observed["inventory"]["albums"] == []
-    assert observed["inventory"]["track_files"][0]["private_path"] == active_path
+    assert len(observed["inventory"]["albums"]) == 1
+    assert observed["inventory"]["albums"][0]["title"] == "Album"
+    assert [row["private_path"] for row in observed["inventory"]["track_files"]] == [active_path]
     assert observed["stale_scopes"] == [
         {
             "root_id": "root-a",

@@ -43,6 +43,12 @@ _RESTORE_INCOMPLETE_ALBUM_CONTRACT_MIGRATION = (
     / "postgres"
     / "0250_restore_incomplete_album_contract.sql"
 )
+_RECONCILED_COVER_CACHE_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations"
+    / "postgres"
+    / "0252_refresh_reconciled_album_cover_cache.sql"
+)
 
 
 class FakeCursor:
@@ -78,6 +84,10 @@ class StructuralTagEditConnection:
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
         normalized_sql = _normalized_sql(sql)
+        source_has_remaining_files = (
+            self.result_row.get("source_album_track_file_count", 0)
+            > self.result_row.get("input_path_count", 0)
+        )
         if "bootstrap_context_ready" in normalized_sql:
             return FakeCursor([{"bootstrap_context_ready": 1}])
         if (
@@ -107,8 +117,20 @@ class StructuralTagEditConnection:
             }])
         if "source_album_track_file_count" in normalized_sql:
             return FakeCursor([self.result_row])
+        if (
+            normalized_sql == "select id from library.local_albums where library_id = %s and id = %s"
+            and params == (self.result_row.get("source_library_id"), self.result_row.get("source_album_id"))
+            and source_has_remaining_files
+        ):
+            return FakeCursor([{"id": self.result_row["source_album_id"]}])
         if "library.retire_vacated_structural_album(" in normalized_sql:
-            return FakeCursor([{"disposition": "retired"}])
+            return FakeCursor([{
+                "disposition": (
+                    "preserved_track_tombstone"
+                    if source_has_remaining_files
+                    else "retired"
+                ),
+            }])
         if "library.retire_vacated_structural_album_siblings(" in normalized_sql:
             return FakeCursor([{"retired_count": 0}])
         return FakeCursor()
@@ -1565,9 +1587,22 @@ def test_live_postgres_structural_recovery_subset_already_in_destination_is_idem
             assert [row[:3] for row in after_files] == [row[:3] for row in before_files]
             for before, after in zip(before_files, after_files, strict=True):
                 path = after[2]
-                assert after[3]["scan_cache"]["file_entry"] == updated.get(path, previous[path])
+                assert after[3]["scan_cache"]["file_entry"] == {
+                    **updated.get(path, previous[path]),
+                    "cover_inherited_from_structural_edit": True,
+                }
                 if path not in updated:
-                    assert after == before
+                    expected_metadata = {
+                        **before[3],
+                        "scan_cache": {
+                            **before[3]["scan_cache"],
+                            "file_entry": {
+                                **previous[path],
+                                "cover_inherited_from_structural_edit": True,
+                            },
+                        },
+                    }
+                    assert after == (*before[:3], expected_metadata)
             assert connection.execute(
                 "select id from library.local_tracks where album_id=%s order by id",
                 (album_id,),
@@ -1903,7 +1938,8 @@ def test_live_postgres_structural_split_persists_projected_owner_without_rewriti
         isolatedPostgres.reset_application_tables(_ISOLATED_SETUP_DATABASE_URL)
 
 
-def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
+@pytest.mark.parametrize("nullable_authority", [False, True], ids=["populated", "null-and-absent"])
+def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner(nullable_authority):
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
         pytest.skip("Isolated setup required for cover reconciliation contract.")
@@ -1913,6 +1949,7 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
     )
     from music_app.services.scan_cache_persistence import (
         PostgresScanCacheAdapter,
+        _ALBUM_COVER_AUTHORITY_FIELDS,
         _structural_destination_album_projection,
     )
 
@@ -1926,6 +1963,27 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
     ]
     source_cover_path = f"C:/__cover_reconciliation__/{token}/source.jpg"
     canonical_cover_path = f"C:/__cover_reconciliation__/{token}/canonical.jpg"
+    canonical_cover_state = {
+        "cover_revision": "canonical-revision",
+        "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit",
+        "local_cover_width": 1200,
+        "local_cover_height": 1100,
+        "remote_cover_url": "https://canonical.example/cover.jpg",
+        "remote_cover_thumbnail_url": "https://canonical.example/thumbnail.jpg",
+        "remote_cover_source": "canonical-provider",
+        "remote_cover_source_label": "Canonical Provider",
+        "remote_cover_album_url": "https://canonical.example/album",
+        "remote_cover_width": 2400,
+        "remote_cover_height": 2200,
+    }
+    if nullable_authority:
+        canonical_cover_state["local_cover_height"] = None
+        del canonical_cover_state["remote_cover_source_label"]
+    authority_fields = ["cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS]
+    stale_cover_state = {
+        field: f"stale-{field}" for field in authority_fields
+    }
     previous = {
         path: {
             "path": path,
@@ -1954,7 +2012,7 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
         }
     }
 
-    connection = psycopg.connect(database_url)
+    connection = psycopg.connect(_ISOLATED_SETUP_DATABASE_URL)
     try:
         proxy = _CommitSuppressingConnection(connection)
         adapter = PostgresScanCacheAdapter(
@@ -2045,9 +2103,7 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
                     {
                         "album_artist": artist,
                         "release_date": "2026",
-                        "cover_revision": "canonical-revision",
-                        "cover_selection_origin": "user",
-                        "cover_selection_provenance": "explicit",
+                        **canonical_cover_state,
                     }
                 ),
             ),
@@ -2075,7 +2131,57 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
                 ),
             ),
         ).fetchone()[0]
-        for index, (path, entry) in enumerate(previous.items(), start=1):
+        inactive_root_id = connection.execute(
+            """insert into library.library_roots
+                       (library_id, root_path, root_kind, is_active)
+                values (%s, %s, 'main_library', false) returning id""",
+            (library_id, f"C:/__cover_reconciliation__/{token}/inactive"),
+        ).fetchone()[0]
+        foreign_library_id = connection.execute(
+            """insert into library.libraries (name, library_kind)
+                values (%s, 'local') returning id""",
+            (f"Foreign Cover Guard {token}",),
+        ).fetchone()[0]
+        foreign_root_id = connection.execute(
+            """insert into library.library_roots (library_id, root_path, is_active)
+                values (%s, %s, true) returning id""",
+            (foreign_library_id, f"C:/__cover_reconciliation__/{token}/foreign"),
+        ).fetchone()[0]
+        unrelated_album_id = connection.execute(
+            """insert into library.local_albums
+                       (library_id, artist_id, album_key, title, release_year)
+                values (%s, %s, %s, %s, 2026) returning id""",
+            (library_id, artist_id, f"unrelated-{token}", f"Unrelated {token}"),
+        ).fetchone()[0]
+        existing_entry = {**previous[selected_path], **stale_cover_state}
+        additional_files = {
+            "eligible": (canonical_album_id, library_root_id, False, existing_entry),
+            "inactive-root": (canonical_album_id, inactive_root_id, False, existing_entry),
+            "missing-root": (canonical_album_id, None, False, existing_entry),
+            "foreign-root": (canonical_album_id, foreign_root_id, False, existing_entry),
+            "stale": (canonical_album_id, library_root_id, True, existing_entry),
+            "nonobject": (canonical_album_id, library_root_id, False, "malformed"),
+            "null-entry": (canonical_album_id, library_root_id, False, None),
+            "membership-problem": (
+                canonical_album_id, library_root_id, False,
+                {**existing_entry, "local_album_membership_problem": "invalid-owner"},
+            ),
+            "exception": (
+                canonical_album_id, library_root_id, False,
+                {**existing_entry, "exception_type": "other"},
+            ),
+            "unrelated": (unrelated_album_id, library_root_id, False, existing_entry),
+        }
+        seed_files = [
+            (str(index), path, source_album_id, library_root_id, False, entry)
+            for index, (path, entry) in enumerate(previous.items(), start=1)
+        ]
+        seed_files.extend(
+            (label, f"C:/__cover_reconciliation__/{token}/{label}.flac", *values)
+            for label, values in additional_files.items()
+        )
+        for label, path, album_id, root_id, stale, entry in seed_files:
+            file_entry = {**entry, "path": path} if isinstance(entry, dict) else entry
             track_id = connection.execute(
                 """insert into library.local_tracks
                            (library_id, album_id, artist_id, track_key, title,
@@ -2083,12 +2189,10 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
                     values (%s, %s, %s, %s, %s, %s, %s::jsonb)
                     returning id""",
                 (
-                    library_id,
-                    source_album_id,
-                    artist_id,
-                    f"cover-reconciliation-{token}-{index}",
-                    entry["title"],
-                    index,
+                    library_id, album_id, artist_id,
+                    f"cover-reconciliation-{token}-{label}",
+                    previous.get(path, {}).get("title", label),
+                    previous.get(path, {}).get("track_number", 1),
                     json.dumps({"album": source_title, "artist": artist}),
                 ),
             ).fetchone()[0]
@@ -2097,13 +2201,44 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
                            (track_id, library_root_id, private_path, metadata)
                     values (%s, %s, %s, jsonb_build_object(
                         'scan_cache', jsonb_build_object(
-                            'source', 'scan_cache',
-                            'stale', false,
+                            'source', 'scan_cache', 'stale', %s::boolean,
                             'file_entry', %s::jsonb
                         )
                     ))""",
-                (track_id, library_root_id, path, json.dumps(entry)),
+                (track_id, root_id, path, stale, json.dumps(file_entry)),
             )
+        eligible_path = f"C:/__cover_reconciliation__/{token}/eligible.flac"
+        guarded_paths = [
+            f"C:/__cover_reconciliation__/{token}/{label}.flac"
+            for label in additional_files if label != "eligible"
+        ]
+        guarded_before = dict(connection.execute(
+            "select private_path, metadata::text from library.local_track_files where private_path = any(%s)",
+            (guarded_paths,),
+        ).fetchall())
+        expected_cover_state = {
+            "album_id": canonical_album_id,
+            "cover_path": canonical_cover_path,
+            **{field: canonical_cover_state.get(field) for field in authority_fields},
+        }
+        cover_state_sql = """select cover_path,
+                                   (select jsonb_object_agg(item.key, item.value)
+                                      from jsonb_each(albums.metadata) item
+                                     where item.key = any(%s))
+                              from library.local_albums albums where id = %s"""
+        source_cover_before = connection.execute(
+            cover_state_sql, (authority_fields, source_album_id),
+        ).fetchone()
+        canonical_cover_before = connection.execute(
+            cover_state_sql, (authority_fields, canonical_album_id),
+        ).fetchone()
+        cover_revision_before = connection.execute(
+            "select library.read_cover_mutation_revision(%s)", (library_id,),
+        ).fetchone()[0]
+        connection.commit()
+        connection.close()
+        connection = psycopg.connect(database_url)
+        proxy = _CommitSuppressingConnection(connection)
 
         result = adapter.persist_structural_tag_edit(
             changed_paths={selected_path},
@@ -2112,7 +2247,8 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
             changed_field_names={"album"},
         )
 
-        assert result["destination_album_id"] == edited_destination_id
+        assert result["destination_album_id"] == canonical_album_id
+        assert result["destination_album_key"] == canonical_album_key
         assert edited_destination_id != canonical_album_id
         owner_id, owner_cover_path, owner_origin, owner_provenance, file_entry = (
             connection.execute(
@@ -2137,6 +2273,50 @@ def test_live_postgres_partial_album_move_cover_sync_uses_reconciled_owner():
         assert file_entry["cover_selection_origin"] == "user"
         assert file_entry["cover_selection_provenance"] == "explicit"
         assert file_entry["cover_inherited_from_structural_edit"] is True
+        assert {field: file_entry[field] for field in expected_cover_state} == expected_cover_state
+        assert type(file_entry["album_id"]) is int
+        assert connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' from library.local_track_files where private_path = %s",
+            (eligible_path,),
+        ).fetchone()[0] == {
+            **existing_entry, "path": eligible_path, **expected_cover_state,
+        }
+        assert dict(connection.execute(
+            "select private_path, metadata::text from library.local_track_files where private_path = any(%s)",
+            (guarded_paths,),
+        ).fetchall()) == guarded_before
+        remaining_owner, remaining_entry = connection.execute(
+            """select tracks.album_id, files.metadata #> '{scan_cache,file_entry}'
+                 from library.local_track_files files
+                 join library.local_tracks tracks on tracks.id = files.track_id
+                where files.private_path = %s""",
+            (paths[1],),
+        ).fetchone()
+        assert remaining_owner == source_album_id
+        assert remaining_entry == {
+            **previous[paths[1]], "cover_inherited_from_structural_edit": True,
+        }
+        cover_revision_after = connection.execute(
+            "select library.read_cover_mutation_revision(%s)", (library_id,),
+        ).fetchone()[0]
+        assert cover_revision_after == cover_revision_before + 1
+        assert connection.execute(
+            "select * from library.reconcile_targeted_album_noncover(%s,%s,%s,%s)",
+            (library_id, canonical_album_id, result["inventory_mutation_revision"], True),
+        ).fetchone() == (canonical_album_id, canonical_album_key)
+        assert connection.execute(
+            "select library.read_cover_mutation_revision(%s)", (library_id,),
+        ).fetchone()[0] == cover_revision_after
+        assert connection.execute(
+            "select metadata #> '{scan_cache,file_entry}' from library.local_track_files where private_path = %s",
+            (selected_path,),
+        ).fetchone()[0] == file_entry
+        assert connection.execute(
+            cover_state_sql, (authority_fields, source_album_id),
+        ).fetchone() == source_cover_before
+        assert connection.execute(
+            cover_state_sql, (authority_fields, canonical_album_id),
+        ).fetchone() == canonical_cover_before
     finally:
         connection.rollback()
         connection.close()
@@ -2721,51 +2901,70 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
     assert "destination_album_metadata" not in destination_state
 
 
+def test_reconciled_cover_cache_migration_keeps_server_owned_active_membership_scope():
+    from music_app.services.scan_cache_persistence import _ALBUM_COVER_AUTHORITY_FIELDS
+
+    sql = _normalized_sql(_RECONCILED_COVER_CACHE_MIGRATION.read_text(encoding="utf-8"))
+    assert sql.count("create or replace function") == 1
+    assert "function library.reconcile_targeted_album_noncover(" in sql
+    assert "security definer" in sql
+    assert "current_revision <> expected_inventory_revision" in sql
+    assert "roots.id = files.library_root_id and roots.library_id = tracks.library_id" in sql
+    assert "roots.is_active is true" in sql
+    assert "files.scan_cache_stale is false" in sql
+    assert "files.scan_file_entry_is_object is true" in sql
+    assert "coalesce(files.metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') = ''" in sql
+    assert "coalesce(files.metadata #>> '{scan_cache,file_entry,exception_type}', '') = ''" in sql
+    for field in ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS):
+        assert f"'{field}', album.metadata -> '{field}'" in sql
+    assert "files.metadata is distinct from desired.metadata" in sql
+    assert "get diagnostics changed_file_count = row_count" in sql
+    assert "if changed_file_count > 0 then" in sql
+    assert "cover_mutation_revision = library.cover_mutation_state.cover_mutation_revision + 1" in sql
+    assert "update library.local_albums" not in sql
+    assert "grant " not in sql
+    assert "revoke " not in sql
+
+
 def test_postgres_partial_album_move_publishes_source_and_destination_cover_authority(
     monkeypatch,
 ):
     paths, previous, updated = _entries()
     result_row = _successful_result(path_count=1)
     result_row.update(
-        {
-            "source_album_track_file_count": 2,
-            "source_album_id": 17,
-            "source_album_key": "artist::old album",
-        }
+        source_album_track_file_count=2,
+        source_album_id=17,
+        source_album_key="artist::old album",
     )
     connection = StructuralTagEditConnection(result_row)
     adapter = _adapter(monkeypatch, connection)
 
-    adapter.persist_structural_tag_edit(
+    result = adapter.persist_structural_tag_edit(
         changed_paths={paths[0]},
         previous_file_entries=previous,
         updated_file_entries=updated,
         changed_field_names={"album"},
     )
 
-    cover_publications = [
-        (sql, params)
-        for sql, params in connection.executed
-        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
-    ]
-    assert len(cover_publications) == 1
-    publication_sql, publication_params = cover_publications[0]
-    normalized_publication_sql = _normalized_sql(publication_sql)
-    assert publication_params == {
-        "album_ids": [17, 41],
-        "active_paths": [paths[0]],
-        "cover_inherited_from_structural_edit": True,
-    }
-    assert "join repaired_albums album on album.id = tracks.album_id" in (
-        normalized_publication_sql
-    )
-    assert "'cover_path', album.cover_path" in normalized_publication_sql
-    assert "'cover_selection_origin', album.metadata -> 'cover_selection_origin'" in (
-        normalized_publication_sql
-    )
-    assert "'cover_inherited_from_structural_edit'" in normalized_publication_sql
-    assert "'cover_selection_provenance', album.metadata -> 'cover_selection_provenance'" in (
-        normalized_publication_sql
+    structural_sql, parameters = _structural_noncover_call(connection)
+    assert parameters["requested_library_id"] == 7
+    assert parameters["requested_track_paths"] == [paths[0]]
+    assert result["source_album_id"] == 17
+    assert result["destination_album_id"] == 41
+    assert result["cover_inherited_from_structural_edit"] is True
+    assert "track.album_id in (mutation_result.source_album_id, mutation_result.destination_album_id)" in structural_sql
+    assert "'{scan_cache,file_entry,cover_inherited_from_structural_edit}'" in structural_sql
+
+    cache_sql = _normalized_sql(_RECONCILED_COVER_CACHE_MIGRATION.read_text(encoding="utf-8"))
+    assert "album.id = surviving_album_id" in cache_sql
+    assert "tracks.album_id = album.id and tracks.library_id = album.library_id" in cache_sql
+    assert "'album_id', album.id" in cache_sql
+    assert "'cover_path', album.cover_path" in cache_sql
+    for field in ("cover_revision", "cover_selection_origin", "cover_selection_provenance"):
+        assert f"'{field}', album.metadata -> '{field}'" in cache_sql
+    assert not any(
+        "update library.local_track_files" in _normalized_sql(sql)
+        for sql, _parameters in connection.executed
     )
 
 
@@ -2774,30 +2973,41 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
 ):
     paths, previous, updated = _entries()
     result_row = _successful_result(path_count=1)
-    result_row.update(source_album_track_file_count=2, source_album_id=17)
+    result_row.update(
+        source_album_track_file_count=2,
+        source_album_id=17,
+        source_album_key="artist::old album",
+    )
     connection = StructuralTagEditConnection(result_row)
+    connection.reconciled_album = (59, "artist::canonical album")
     adapter = _adapter(monkeypatch, connection)
 
-    adapter.persist_structural_tag_edit(
+    result = adapter.persist_structural_tag_edit(
         changed_paths={paths[0]},
         previous_file_entries=previous,
         updated_file_entries=updated,
         changed_field_names={"album"},
     )
 
-    publication_sql, publication_params = next(
-        (sql, params)
-        for sql, params in connection.executed
-        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+    reconciliation_parameters = next(
+        parameters for sql, parameters in connection.executed
+        if "library.reconcile_targeted_album_noncover(" in _normalized_sql(sql)
     )
-    normalized_publication_sql = _normalized_sql(publication_sql)
-    assert publication_params == {
-        "album_ids": [17, 41],
-        "active_paths": [paths[0]],
-        "cover_inherited_from_structural_edit": True,
-    }
-    assert "selected_files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
-    assert "selected_tracks.album_id = album.id" in normalized_publication_sql
+    assert reconciliation_parameters["library_id"] == 7
+    assert reconciliation_parameters["album_id"] == 41
+    assert result["source_album_id"] == 17
+    assert result["destination_album_id"] == 59
+    assert result["destination_album_key"] == "artist::canonical album"
+    retirements = [
+        parameters for sql, parameters in connection.executed
+        if "library.retire_vacated_structural_album(" in _normalized_sql(sql)
+    ]
+    assert [parameters["destination_album_id"] for parameters in retirements] == [41, 59]
+    assert all(parameters["source_album_id"] == 17 for parameters in retirements)
+    assert all(parameters["source_album_key"] == "artist::old album" for parameters in retirements)
+    cache_sql = _normalized_sql(_RECONCILED_COVER_CACHE_MIGRATION.read_text(encoding="utf-8"))
+    assert cache_sql.index("perform library.reconcile_semantic_album_noncover(") < cache_sql.index("with desired_file_cache as (")
+    assert "album.library_id = requested_library_id and album.id = surviving_album_id" in cache_sql
 
 
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(

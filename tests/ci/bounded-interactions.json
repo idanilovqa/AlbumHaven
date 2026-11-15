@@ -8206,14 +8206,33 @@
         "py:music_app/routes/api_read_asgi_routes.py#home_data:route:GET /home-data"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/view_payloads.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 2,
+        "open_calls": 0,
+        "sql_statements": 2
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_view_payloads.py::test_home_payload_contract_shapes_loose_tracks_without_probing_them_at_production_track_count",
+      "testIdentity": "test_home_payload_contract_shapes_loose_tracks_without_probing_them_at_production_track_count",
+      "rollback": "Reverting restores one root-settings query and two file probes per loose track on a cold /home-data build; the contract then fails."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#people_read_reserved",
@@ -8444,14 +8463,31 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#confirm_missing_album_removal:route:POST /api/library/albums/{album_key:path}/confirm-removal"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/missing_album_removal_postgres.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 13,
+        "open_calls": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_missing_album_removal_contract_probes_only_the_album_files_at_production_library_size",
+      "testIdentity": "test_missing_album_removal_contract_probes_only_the_album_files_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#create_problem_ignores",
@@ -10403,14 +10439,32 @@
         "py:music_app/routes/playback_stream_asgi.py#playback_waveform:route:GET /playback/waveform"
       ],
       "owners": [
-        "music_app/routes/playback_stream_asgi.py"
+        "music_app/routes/playback_stream_asgi.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 9,
+        "open_calls": 0,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_waveform_route_contract_probes_only_the_requested_file_at_production_library_size",
+      "testIdentity": "test_waveform_route_contract_probes_only_the_requested_file_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/web_asgi.py#_cover_response",
@@ -10419,14 +10473,34 @@
         "py:music_app/routes/web_asgi.py#_cover_response:background:executor"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 14,
+        "open_calls": 2,
+        "media_parses": 0,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "testIdentity": "test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/web_asgi.py#app_copy_account_route",
@@ -10529,14 +10603,34 @@
         "py:music_app/routes/web_asgi.py#cover:route:GET /cover"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 14,
+        "open_calls": 2,
+        "media_parses": 0,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "testIdentity": "test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/web_asgi.py#favicon",
@@ -10607,14 +10701,33 @@
         "py:music_app/routes/web_asgi.py#news_center:route:GET /news"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/view_payloads.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 2,
+        "open_calls": 0,
+        "sql_statements": 2
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_view_payloads.py::test_home_payload_contract_shapes_loose_tracks_without_probing_them_at_production_track_count",
+      "testIdentity": "test_home_payload_contract_shapes_loose_tracks_without_probing_them_at_production_track_count",
+      "rollback": "Reverting restores one root-settings query and two file probes per loose track on a cold News build; the contract then fails."
     },
     {
       "id": "py:routes/web_asgi.py#open_album_location",
@@ -10623,14 +10736,32 @@
         "py:music_app/routes/web_asgi.py#open_album_location:route:POST /open-album-location"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 72,
+        "open_calls": 0,
+        "sql_statements": 12
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_open_album_location_contract_probes_only_the_posted_album_at_production_library_size",
+      "testIdentity": "test_open_album_location_contract_probes_only_the_posted_album_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/web_asgi.py#refresh",
@@ -10703,14 +10834,32 @@
         "py:music_app/routes/web_asgi.py#track:route:GET /track"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 1,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_track_route_contract_probes_only_the_requested_file_at_production_library_size",
+      "testIdentity": "test_track_route_contract_probes_only_the_requested_file_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/album_cover_candidate_publisher.py#AlbumCoverCandidatePublisher.publish_candidates",
@@ -10879,14 +11028,32 @@
         "py:music_app/services/cover_lookup_runtime.py#_run_cover_lookup_save_remote_task:background:executor"
       ],
       "owners": [
-        "music_app/services/cover_lookup_runtime.py"
+        "music_app/services/cover_lookup_runtime.py",
+        "music_app/services/cover_workflow.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "selected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 2,
+        "stat_calls": 61,
+        "open_calls": 2,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_lookup_runtime.py::test_remote_save_task_contract_writes_only_the_selected_album_folder_at_production_library_size",
+      "testIdentity": "test_remote_save_task_contract_writes_only_the_selected_album_folder_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/cover_lookup_tasks.py#_reconcile_stale_cover_lookup_tasks",
@@ -10927,14 +11094,32 @@
         "py:music_app/services/cover_preview_backfill.py#CoverPreviewBackfill._run_forever:background:thread"
       ],
       "owners": [
-        "music_app/services/cover_preview_backfill.py"
+        "music_app/services/cover_preview_backfill.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 481,
+        "open_calls": 20,
+        "media_parses": 20
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_cover_preview_backfill_contract_settles_after_one_pass_over_production_cycles",
+      "testIdentity": "test_cover_preview_backfill_contract_settles_after_one_pass_over_production_cycles",
+      "rollback": "Reverting makes every 60-second pass re-probe and re-publish every cover preview (180 extra stats per pass for 20 covers); the plateau assertion then fails."
     },
     {
       "id": "py:services/cover_provider_bandcamp.py#_build_bandcamp_label_catalog_matches.<locals>.probe_direct_account_urls",
@@ -11023,14 +11208,33 @@
         "py:music_app/services/cover_refresh_execution.py#execute_cover_job:background:executor"
       ],
       "owners": [
-        "music_app/services/cover_refresh_execution.py"
+        "music_app/services/cover_refresh_execution.py",
+        "music_app/services/covers.py",
+        "music_app/services/cover_refresh_provider.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "selected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 2
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_cover_job_contract_reads_only_the_job_album_folder_at_production_library_size",
+      "testIdentity": "test_cover_job_contract_reads_only_the_job_album_folder_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/cover_refresh_jobs.py#log_cover_refresh_completion",
@@ -11465,7 +11669,24 @@
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 20,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_background_cover_admission_drain_contract_handles_only_the_capacity_at_production_queue_size",
+      "testIdentity": "test_background_cover_admission_drain_contract_handles_only_the_capacity_at_production_queue_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/covers.py#needs_remote_cover_refresh",
@@ -11545,7 +11766,24 @@
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 140,
+        "open_calls": 40,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "open_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_preview_relocation_contract_moves_each_claimed_batch_with_fixed_work_at_production_inventory_size",
+      "testIdentity": "test_preview_relocation_contract_moves_each_claimed_batch_with_fixed_work_at_production_inventory_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/generated_preview_relocation.py#_copy_publish",
@@ -12278,14 +12516,32 @@
         "py:music_app/services/state.py#_hydrate_library_state_worker:background:executor"
       ],
       "owners": [
-        "music_app/services/state.py"
+        "music_app/services/state.py",
+        "music_app/services/library_hydration.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 3,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_background_hydration_contract_publishes_the_inventory_without_probing_files_at_production_track_count",
+      "testIdentity": "test_background_hydration_contract_publishes_the_inventory_without_probing_files_at_production_track_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/state.py#_refresh_library_worker",
@@ -12542,14 +12798,33 @@
         "py:music_app/services/tag_edit_recovery.py#_reconcile_claimed_tag_edit_intent:reconciler:name"
       ],
       "owners": [
-        "music_app/services/tag_edit_recovery.py"
+        "music_app/services/tag_edit_recovery.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-07",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 60,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 12
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_claimed_tag_edit_recovery_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_claimed_tag_edit_recovery_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/tag_edit_recovery.py#reconcile_tag_edit_intents",
@@ -12574,14 +12849,33 @@
         "py:music_app/services/tag_edit_recovery.py#reconcile_unfinished_tag_edit_intents_on_startup:reconciler:name"
       ],
       "owners": [
-        "music_app/services/tag_edit_recovery.py"
+        "music_app/services/tag_edit_recovery.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-07",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 61,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 13
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_startup_tag_edit_recovery_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "testIdentity": "test_startup_tag_edit_recovery_contract_resolves_only_the_journal_paths_at_production_track_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/targeted_library_reconciliation.py#TargetedLibraryReconciler.reconcile",

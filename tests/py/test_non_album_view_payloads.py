@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from music_app.services import library_roots
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.non_album_view_payloads import (
     build_non_album_album_groups,
@@ -307,12 +308,11 @@ def test_build_non_album_track_list_uses_one_lexical_root_snapshot_without_files
         lambda config: snapshot_calls.append(config) or (Path(r"X:\SyntheticMusic"),),
     )
     monkeypatch.setattr(
-        non_album_view_payloads,
-        "relative_parts_within_roots",
+        library_roots,
+        "resolve_configured_media_path",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("display-only path shaping must not probe the filesystem")
         ),
-        raising=False,
     )
 
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app/library"}

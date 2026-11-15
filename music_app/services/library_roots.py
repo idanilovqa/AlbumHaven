@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from threading import RLock
 
@@ -348,17 +348,31 @@ def resolve_configured_media_path(
     return unique_matches[0]
 
 
-def relative_parts_within_roots(config: dict[str, object], raw_path: str) -> tuple[dict[str, object], tuple[str, ...]] | None:
-    resolved = resolve_configured_media_path(config, raw_path)
-    if resolved is None:
+def relative_parts_within_roots(
+    raw_path: str,
+    configured_root_paths: tuple[Path, ...],
+) -> tuple[str, ...] | None:
+    """A path's parts below the first configured root holding it.
+
+    Lexical only: shaping inventory paths for display or matching never touches
+    the filesystem or reloads root settings.
+    """
+    raw_path = str(raw_path or "").strip()
+    if not raw_path:
         return None
-    for root in get_library_roots(config):
-        root_path = Path(str(root["path"])).resolve(strict=False)
+    path_type = (
+        PureWindowsPath
+        if re.match(r"^[A-Za-z]:[\\/]", raw_path) or "\\" in raw_path
+        else PurePosixPath
+    )
+    candidate = path_type(raw_path)
+    for configured_root in configured_root_paths:
         try:
-            rel_parts = resolved.relative_to(root_path).parts
-        except Exception:
+            relative = candidate.relative_to(path_type(str(configured_root)))
+        except ValueError:
             continue
-        return root, rel_parts
+        if relative.parts and all(part not in {"", ".", ".."} for part in relative.parts):
+            return tuple(relative.parts)
     return None
 
 

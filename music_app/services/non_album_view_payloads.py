@@ -5,7 +5,10 @@ from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from music_app.services.library_roots import configured_library_root_paths_snapshot
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    relative_parts_within_roots,
+)
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.utils import repair_display_text
 
@@ -43,35 +46,11 @@ def _normalized_artist(entry: dict[str, object]) -> str:
     return normalized_artist or str(entry.get("album_artist") or entry.get("artist") or "Unknown Artist")
 
 
-def _lexical_relative_parts(
-    path: str,
-    configured_root_paths: tuple[Path, ...],
-) -> tuple[str, ...] | None:
-    raw_path = str(path or "").strip()
-    if not raw_path:
-        return None
-    path_type = (
-        PureWindowsPath
-        if re.match(r"^[A-Za-z]:[\\/]", raw_path) or "\\" in raw_path
-        else PurePosixPath
-    )
-    candidate = path_type(raw_path)
-    for configured_root in configured_root_paths:
-        root = path_type(str(configured_root))
-        try:
-            relative = candidate.relative_to(root)
-        except ValueError:
-            continue
-        if relative.parts and all(part not in {"", ".", ".."} for part in relative.parts):
-            return tuple(relative.parts)
-    return None
-
-
 def _relative_parent_parts(
     path: str,
     configured_root_paths: tuple[Path, ...],
 ) -> list[str]:
-    rel_parts = _lexical_relative_parts(path, configured_root_paths)
+    rel_parts = relative_parts_within_roots(path, configured_root_paths)
     if rel_parts is not None:
         return list(rel_parts[:-1])
 
@@ -82,7 +61,7 @@ def _relative_parent_parts(
 
 
 def _display_path(path: str, configured_root_paths: tuple[Path, ...]) -> str:
-    rel_parts = _lexical_relative_parts(path, configured_root_paths)
+    rel_parts = relative_parts_within_roots(path, configured_root_paths)
     if rel_parts:
         return str(Path(*rel_parts))
     return path

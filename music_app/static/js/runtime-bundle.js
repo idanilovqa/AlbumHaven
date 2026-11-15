@@ -25760,6 +25760,9 @@ function buildMusicBrainzProviderStatusHtml(detail, view) {
     <p class="utility-detail-meta">${escapeHtml(guidance)}</p>`;
 }
 
+// An artist MusicBrainz lacks (owner decision 2026-11-15, C2); the server adds it to problem_reasons.
+const MUSICBRAINZ_HAS_NO_INFO_LABEL = 'MusicBrainz has no info';
+
 function buildMusicBrainzArtistProblemDetail(item) {
   const detail = item?.musicbrainz_detail;
   if (item?.musicbrainz_detail_failed) {
@@ -25770,6 +25773,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
   const actionsAvailable = detail.actions_available !== false;
   const view = getMusicBrainzArtistProblemView(detail);
   const label = String(detail.unresolved_reason || item.problem_reasons?.[0] || '');
+  const hasNoInfo = Boolean(item.problem_reasons?.includes(MUSICBRAINZ_HAS_NO_INFO_LABEL));
   const albumCount = Number(detail.local_album_count || item.local_album_count || 0);
   const lastChecked = formatMusicBrainzAttemptTime(detail.last_checked_at);
   const artwork = buildAlbumArtboxHtml({ state: 'missing', label: `Artist ${detail.local_artist_name || ''}` });
@@ -25798,7 +25802,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
         <div class="utility-detail-meta">Artist</div>
         <div class="utility-detail-meta">${escapeHtml(`${albumCount} local album${albumCount === 1 ? '' : 's'}`)}</div>
         ${lastChecked ? `<div class="utility-detail-meta">Last checked: ${escapeHtml(lastChecked)}</div>` : ''}
-        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}</div>
+        <div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: view === 'pending' ? 'info' : 'warning', message: label })}${pendingDots}${hasNoInfo ? buildAlertLabelHtml({ severity: 'info', message: MUSICBRAINZ_HAS_NO_INFO_LABEL }) : ''}</div>
       </div>
     </div>
     ${body}

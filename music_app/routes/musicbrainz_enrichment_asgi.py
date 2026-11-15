@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.musicbrainz_enrichment_postgres import (
     APP_PROBLEM_LABELS,
+    MUSICBRAINZ_HAS_NO_INFO_LABEL,
     MusicBrainzEnrichmentPostgresRepository,
 )
 
@@ -283,7 +284,8 @@ def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:
         "musicbrainz_occurrence_id": str(row["problem_occurrence_id"]),
         "name": name,
         "album_artist": name,
-        "problem_reasons": [str(row["unresolved_reason"])],
+        "problem_reasons": [str(row["unresolved_reason"]),
+                            *([MUSICBRAINZ_HAS_NO_INFO_LABEL] if row.get("musicbrainz_has_no_info") else [])],
         "local_album_count": row.get("local_album_count"),
         # A summary row like every other; its detail comes from the MusicBrainz API.
         "detail_loaded": False,

@@ -15,9 +15,12 @@ from music_app.services.library_hydration import find_cover_for_track_folder
 from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_roots import library_category_slug, root_definition_for_path
+from music_app.services.storage_devices import physical_disk_key
 from music_app.services.metadata import (
     file_metadata_schema_is_current,
     read_metadata_for_file,
+    schema_upgrade_requires_file_read,
+    upgrade_stored_file_entry,
 )
 
 
@@ -43,7 +46,6 @@ _SCAN_ESTIMATE_MIN_FILES = 12
 _SCAN_ESTIMATE_EMA_BLEND = 0.28
 _SCAN_FIRST_PARTIAL_ALBUM_PUBLISH_FILES = 250
 _SCAN_PARTIAL_ALBUM_PUBLISH_INTERVAL_FILES = 1000
-_SCAN_METADATA_READ_WORKERS = 4
 _SCAN_METADATA_PREFETCH_ITEMS = 8
 _SCAN_COOPERATIVE_YIELD_INTERVAL_FILES = 5
 _SCAN_COOPERATIVE_YIELD_SECONDS = 0.001
@@ -315,6 +317,14 @@ class ScanCancelled(RuntimeError):
     pass
 
 
+def _file_is_unchanged(existing: dict[str, object] | None, stat: os.stat_result) -> bool:
+    return (
+        existing is not None
+        and existing.get("mtime") == stat.st_mtime
+        and existing.get("size") == stat.st_size
+    )
+
+
 def _ordered_scan_metadata_entries(
     library_state: dict[str, object],
     all_file_stats: list[tuple[Path, os.stat_result]],
@@ -322,15 +332,25 @@ def _ordered_scan_metadata_entries(
     *,
     expected_scan_generation: int | None,
     record_file_error: Callable[..., None] | None = None,
+    disk_key_for: Callable[[Path], str] = lambda _path: "",
 ) -> Iterator[
     tuple[Path, os.stat_result, dict[str, object] | None, dict[str, object], bool]
 ]:
-    """Read metadata concurrently while publishing scan results in discovery order."""
+    """Read metadata with one sequential reader per disk, yielding in the given order.
 
-    executor = ThreadPoolExecutor(
-        max_workers=_SCAN_METADATA_READ_WORKERS,
-        thread_name_prefix="albumhaven-scan-metadata",
-    )
+    Several readers on one spinning disk thrash its head between files; distinct
+    disks are read in parallel instead.
+    """
+
+    executors: dict[str, ThreadPoolExecutor] = {}
+
+    def executor_for(path: Path) -> ThreadPoolExecutor:
+        key = disk_key_for(path)
+        if key not in executors:
+            executors[key] = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="albumhaven-scan-metadata",
+            )
+        return executors[key]
     pending: deque[
         tuple[
             Path,
@@ -356,7 +376,7 @@ def _ordered_scan_metadata_entries(
         nonlocal next_item_index
         ensure_scan_is_current()
         while (
-            len(pending) < _SCAN_METADATA_PREFETCH_ITEMS
+            len(pending) < _SCAN_METADATA_PREFETCH_ITEMS * max(1, len(executors))
             and next_item_index < len(all_file_stats)
         ):
             path, stat = all_file_stats[next_item_index]
@@ -364,13 +384,9 @@ def _ordered_scan_metadata_entries(
             path_str = str(path)
             cached = previous.get(path_str)
             existing = dict(cached) if isinstance(cached, dict) else None
-            if (
-                existing is not None
-                and existing.get("mtime") == stat.st_mtime
-                and existing.get("size") == stat.st_size
-                and file_metadata_schema_is_current(existing)
-            ):
-                pending.append((path, stat, existing, dict(existing), None))
+            if _file_is_unchanged(existing, stat) and not schema_upgrade_requires_file_read(existing):
+                current = existing if file_metadata_schema_is_current(existing) else upgrade_stored_file_entry(existing)
+                pending.append((path, stat, existing, dict(current), None))
             else:
                 pending.append(
                     (
@@ -378,7 +394,7 @@ def _ordered_scan_metadata_entries(
                         stat,
                         existing,
                         None,
-                        executor.submit(read_metadata_for_file, path),
+                        executor_for(path).submit(read_metadata_for_file, path),
                     )
                 )
 
@@ -393,6 +409,9 @@ def _ordered_scan_metadata_entries(
             else:
                 try:
                     entry = dict(metadata_future.result())
+                    if _file_is_unchanged(existing, stat):
+                        # Only the fields newer reader versions added change.
+                        entry = upgrade_stored_file_entry(existing, entry)
                 except Exception as error:
                     _record_scan_file_error(
                         record_file_error,
@@ -409,10 +428,29 @@ def _ordered_scan_metadata_entries(
             for _path, _stat, _existing, _entry, future in pending:
                 if future is not None:
                     future.cancel()
-        executor.shutdown(
-            wait=True,
-            cancel_futures=not completed_normally,
-        )
+        for executor in executors.values():
+            executor.shutdown(wait=True, cancel_futures=not completed_normally)
+
+
+# A USB or network disk that resets mid-scan fails reads for a few seconds.
+# Retrying keeps one reset from dropping a whole subtree from publication;
+# permission and missing-path errors are permanent and are not retried.
+_TRANSIENT_DIRECTORY_RETRY_DELAYS_SECONDS = (1.0, 5.0, 15.0)
+_PERMANENT_DIRECTORY_ERRORS = (PermissionError, FileNotFoundError, NotADirectoryError)
+
+
+def _read_directory_entries(current: Path) -> list[os.DirEntry]:
+    for delay in (*_TRANSIENT_DIRECTORY_RETRY_DELAYS_SECONDS, None):
+        try:
+            with os.scandir(current) as iterator:
+                return sorted(list(iterator), key=lambda entry: entry.name.casefold())
+        except _PERMANENT_DIRECTORY_ERRORS:
+            raise
+        except OSError:
+            if delay is None:
+                raise
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _iter_scandir_entries(
@@ -424,8 +462,7 @@ def _iter_scandir_entries(
     while stack:
         current = stack.pop()
         try:
-            with os.scandir(current) as iterator:
-                entries = sorted(list(iterator), key=lambda entry: entry.name.casefold())
+            entries = _read_directory_entries(current)
         except OSError as error:
             _record_scan_file_error(
                 record_file_error,
@@ -505,6 +542,96 @@ def _discover_music_files_with_stats(
             library_state["scan_album_folders_total"] = len(discovered_album_folders)
 
     return discovered_files, len(discovered_album_folders), total_bytes
+
+
+EntriesReady = Callable[[str, dict[str, dict[str, dict[str, object]]], bool, frozenset[str]], None]
+
+
+class _AlbumFolderCompletion:
+    """Report each album folder once all of its files are read or reused.
+
+    Files of one album may sit in disc subfolders (Album/CD1, Album/CD2); they
+    share the album folder of _album_folder_for_track_path, so a multi-disc
+    album is reported once, whole. Each report carries every entry of the
+    folder plus the paths whose metadata was read or whose file changed, and a
+    root is reported complete exactly once, after its last folder.
+    """
+
+    def __init__(self, file_stats, root_id_for_folder: Callable[[Path], str], root_ids, on_ready: EntriesReady):
+        self._on_ready = on_ready
+        self._root_id_for_folder = root_id_for_folder
+        self._remaining_by_folder: dict[Path, int] = {}
+        self._remaining_by_root: dict[str, int] = {root_id: 0 for root_id in root_ids}
+        self._root_by_folder: dict[Path, str] = {}
+        for path, _stat in file_stats:
+            folder = _album_folder_for_track_path(path)
+            if folder not in self._root_by_folder:
+                root_id = root_id_for_folder(folder)
+                self._root_by_folder[folder] = root_id
+                # Roots count folders: one completes per finished folder.
+                self._remaining_by_root[root_id] = self._remaining_by_root.get(root_id, 0) + 1
+            self._remaining_by_folder[folder] = self._remaining_by_folder.get(folder, 0) + 1
+        self._entries_by_folder: dict[Path, dict[str, dict[str, object]]] = {}
+        self._changed_by_folder: dict[Path, set[str]] = {}
+
+    def record(self, path: Path, entry: dict[str, object], changed: bool) -> None:
+        folder = _album_folder_for_track_path(path)
+        self._entries_by_folder.setdefault(folder, {})[str(path)] = entry
+        if changed:
+            self._changed_by_folder.setdefault(folder, set()).add(str(path))
+        self._remaining_by_folder[folder] -= 1
+        if self._remaining_by_folder[folder]:
+            return
+        root_id = self._root_by_folder[folder]
+        self._remaining_by_root[root_id] -= 1
+        self._on_ready(
+            root_id,
+            {str(folder): self._entries_by_folder.pop(folder)},
+            self._remaining_by_root[root_id] == 0,
+            frozenset(self._changed_by_folder.pop(folder, ())),
+        )
+
+    def finish(self) -> None:
+        # Roots that yielded no files still complete, so their absences publish.
+        roots_with_files = set(self._root_by_folder.values())
+        for root_id in self._remaining_by_root:
+            if root_id not in roots_with_files:
+                self._on_ready(root_id, {}, True, frozenset())
+
+
+def _root_disk_key_lookup(roots: list[Path]) -> Callable[[Path], str]:
+    """Map each file to the physical disk of its library root."""
+    prefixes = sorted(
+        ((os.path.normcase(str(root)).rstrip("\\/") + os.sep, physical_disk_key(root)) for root in roots),
+        key=lambda item: len(item[0]), reverse=True,
+    )
+
+    def disk_key_for(path: Path) -> str:
+        normalized = os.path.normcase(str(path))
+        for prefix, disk_key in prefixes:
+            if normalized.startswith(prefix):
+                return disk_key
+        return ""
+
+    return disk_key_for
+
+
+def _interleave_by_disk(
+    file_stats: list[tuple[Path, os.stat_result]], disk_key_for: Callable[[Path], str],
+) -> list[tuple[Path, os.stat_result]]:
+    """Alternate disks so each disk's reader has work; keep each disk's order."""
+    by_disk: dict[str, deque[tuple[Path, os.stat_result]]] = {}
+    for item in file_stats:
+        by_disk.setdefault(disk_key_for(item[0]), deque()).append(item)
+    if len(by_disk) < 2:
+        return file_stats
+    queues = list(by_disk.values())
+    interleaved: list[tuple[Path, os.stat_result]] = []
+    while queues:
+        queues = [queue for queue in queues if queue]
+        for queue in queues:
+            interleaved.append(queue.popleft())
+    return interleaved
 
 
 def _album_folder_for_track_path(path: Path) -> Path:
@@ -678,7 +805,16 @@ def scan_library_file_cache(
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
     record_file_error: Callable[..., None] | None = None,
+    on_entries_ready: EntriesReady | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
+    """Read every root's files; optionally report each completed album folder.
+
+    ``on_entries_ready(root_id, {album_folder: {path: entry}}, root_complete,
+    changed_paths)`` fires once per album folder after all of its files are
+    read or reused, and with ``root_complete`` once per root. The returned
+    cache stays authoritative: finalization still applies cross-folder cover
+    rules to it.
+    """
     publication_target = publication_state if publication_state is not None else library_state
     start_scan_stage(library_state, "discover")
     all_file_stats, album_folders_total, total_bytes = _discover_music_files_with_stats(
@@ -736,12 +872,26 @@ def scan_library_file_cache(
     )]
     configured_root_definitions = list(root_definitions or [])
 
+    def root_id_for(path: Path) -> str:
+        root = root_definition_for_path(configured_root_definitions, path)
+        return str((root or {}).get("id") or "")
+
+    folder_completion = (
+        _AlbumFolderCompletion(
+            all_file_stats, root_id_for,
+            {root_id for root_id in map(root_id_for, roots) if root_id},
+            on_entries_ready,
+        )
+        if on_entries_ready is not None else None
+    )
+    disk_key_for = _root_disk_key_lookup(roots)
     ordered_metadata_entries = _ordered_scan_metadata_entries(
         library_state,
-        all_file_stats,
+        _interleave_by_disk(all_file_stats, disk_key_for),
         previous,
         expected_scan_generation=expected_scan_generation,
         record_file_error=record_file_error,
+        disk_key_for=disk_key_for,
     )
     for index, (path, stat, existing, entry, metadata_was_read) in enumerate(
         ordered_metadata_entries,
@@ -807,6 +957,11 @@ def scan_library_file_cache(
             for key in _LOCAL_COVER_SELECTION_KEYS:
                 entry[key] = cover_authority.get(key)
         updated_file_cache[path_str] = entry
+        if folder_completion is not None:
+            folder_completion.record(
+                path, entry,
+                changed=metadata_was_read or not _file_is_unchanged(existing, stat),
+            )
         library_state["scan_processed"] = index
         bytes_processed += int(stat.st_size or 0)
         _record_scan_progress_metrics(
@@ -834,6 +989,8 @@ def scan_library_file_cache(
             if publish_partial_snapshot is not None:
                 publish_partial_snapshot()
 
+    if folder_completion is not None:
+        folder_completion.finish()
     last_scan = time.time()
     library_state["scan_current_path"] = ""
     library_state["scan_elapsed_seconds"] = max(0.0, last_scan - started_at)

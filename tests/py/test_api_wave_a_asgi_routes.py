@@ -377,6 +377,7 @@ def test_asgi_library_settings_read_uses_asgi_config_without_flask_bridge(app, a
             "library.settings.manage": True,
             "library.filesystem.browse": True,
             "library.paths.read": True,
+            "library.files.edit_tags": True,
         },
         "settings": {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],
@@ -1278,6 +1279,10 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     monkeypatch.setattr(state_service, "state", fail_flask_global_lookup, raising=False)
     monkeypatch.setattr(asgi_routes, "load_manual_version_links", fake_load_manual_version_links)
     monkeypatch.setattr(asgi_routes, "save_manual_version_links", fake_save_manual_version_links)
+    ignored_versions = {"child", "unrelated-album"}
+    saved_ignored: list[list[str]] = []
+    monkeypatch.setattr(asgi_routes, "load_ignored_version_keys", lambda config: set(ignored_versions))
+    monkeypatch.setattr(asgi_routes, "save_ignored_version_keys", lambda config, keys: saved_ignored.append(sorted(keys)))
     monkeypatch.setattr(asgi_routes, "log_app_event", fake_log_app_event)
 
     status, _headers, body = _run_asgi_request(
@@ -1288,7 +1293,11 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     )
 
     assert status == 200
-    assert _decode_json(body) == {"ok": True, "manual_version_links": {"child": "parent"}}
+    assert _decode_json(body) == {
+        "ok": True, "manual_version_links": {"child": "parent"}, "ignored_version_keys": ["unrelated-album"],
+    }
+    # Owner (11-09): marking an album as a version removes its Separate release exception from Settings > Rules.
+    assert saved_ignored == [["unrelated-album"]]
     assert saved_links == [{"child": "parent"}]
     assert log_calls == [
         {
@@ -1373,6 +1382,10 @@ def test_asgi_mark_album_version_hydrates_cold_start_asgi_state_without_flask_gl
     )
     monkeypatch.setattr(asgi_routes, "load_manual_version_links", fake_load_manual_version_links)
     monkeypatch.setattr(asgi_routes, "save_manual_version_links", fake_save_manual_version_links)
+    ignored_versions = {"child", "unrelated-album"}
+    saved_ignored: list[list[str]] = []
+    monkeypatch.setattr(asgi_routes, "load_ignored_version_keys", lambda config: set(ignored_versions))
+    monkeypatch.setattr(asgi_routes, "save_ignored_version_keys", lambda config, keys: saved_ignored.append(sorted(keys)))
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
 
     status, _headers, body = _run_asgi_request(
@@ -1383,7 +1396,11 @@ def test_asgi_mark_album_version_hydrates_cold_start_asgi_state_without_flask_gl
     )
 
     assert status == 200
-    assert _decode_json(body) == {"ok": True, "manual_version_links": {"child": "parent"}}
+    assert _decode_json(body) == {
+        "ok": True, "manual_version_links": {"child": "parent"}, "ignored_version_keys": ["unrelated-album"],
+    }
+    # Owner (11-09): marking an album as a version removes its Separate release exception from Settings > Rules.
+    assert saved_ignored == [["unrelated-album"]]
     assert hydrate_calls == [
         {
             "library_state": asgi_library_state,
@@ -1526,6 +1543,10 @@ def test_asgi_mark_album_version_uses_selected_postgres_manual_versions_without_
     monkeypatch.setattr("music_app.services.rule_state_postgres.psycopg", FakeRuleStatePsycopg())
     monkeypatch.setattr(manual_versions_module, "RuleStatePostgresAdapter", FakeManualVersionsAdapter)
     assert not hasattr(asgi_routes, "_flask_app")
+    ignored_versions = {"child", "unrelated-album"}
+    saved_ignored: list[list[str]] = []
+    monkeypatch.setattr(asgi_routes, "load_ignored_version_keys", lambda config: set(ignored_versions))
+    monkeypatch.setattr(asgi_routes, "save_ignored_version_keys", lambda config, keys: saved_ignored.append(sorted(keys)))
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
 
     status, _headers, body = _run_asgi_request(
@@ -1542,7 +1563,9 @@ def test_asgi_mark_album_version_uses_selected_postgres_manual_versions_without_
             "child": "parent",
             "postgres-existing": "postgres-parent",
         },
+        "ignored_version_keys": ["unrelated-album"],
     }
+    assert saved_ignored == [["unrelated-album"]]
     assert manual_links == {"child": "parent", "postgres-existing": "postgres-parent"}
     assert json.loads(manual_versions_json_path.read_text(encoding="utf-8")) == {
         "manual_version_links": {"file-era-child": "file-era-parent"}
@@ -4733,7 +4756,7 @@ def test_selected_postgres_media_compensation_is_path_scoped_and_restores_except
     monkeypatch.setattr(
         asgi_routes,
         "_apply_repairs_worker",
-        lambda path, repairs: applied_repairs.append((path, dict(repairs))),
+        lambda path, repairs: applied_repairs.append((path, dict(repairs))) or (path, True, list(repairs)),
     )
     monkeypatch.setattr(
         asgi_routes,

@@ -91,6 +91,13 @@ def test_picker_rejects_every_mode_except_literal_self_hosted(monkeypatch,tmp_pa
     assert invoke(picker(),request,path=str(tmp_path))[0] in (403,404,409)
 
 
+def test_server_folder_picker_is_offered_only_with_configured_browse_bases(monkeypatch,tmp_path):
+    request,_effects,_actor=context(monkeypatch,tmp_path)
+    assert policy_asgi.can_browse_server_folders(request) is True
+    request.app.state.config['ALBUM_HAVEN_LIBRARY_BROWSE_BASES']=[]
+    assert policy_asgi.can_browse_server_folders(request) is False
+
+
 @pytest.mark.parametrize('grants',[[],['library.filesystem.browse'],['library.paths.read']])
 def test_picker_requires_both_browse_and_path_disclosure_grants(monkeypatch,tmp_path,grants):
     request,_effects,_actor=context(monkeypatch,tmp_path,grants=grants)

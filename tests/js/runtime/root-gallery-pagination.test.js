@@ -545,3 +545,38 @@ for (const coverageRefresh of [false, true]) {
     }
   });
 }
+
+test('reverse prefetch stops when a prepend fails to move the viewport, until the user scrolls', async () => {
+  // Owner regression (TO/DIE/FOR, empty search, Home): every prepend left the
+  // viewport at the top, so earlier artists streamed in one page after another.
+  const f = fixture();
+  let userScrollGeneration = 7;
+  f.context.virtualGrid.getUserScrollIntentGeneration = () => userScrollGeneration;
+  f.scroll.clientHeight = 754;
+  f.scroll.scrollHeight = 20000;
+  f.scroll.scrollTop = 0;
+  f.state.view.gallery_page = { ...f.state.view.gallery_page, previous_cursor: 'p1', has_previous: true };
+  const prepend = async (cursor, nextCursor) => {
+    const loading = f.context.loadPreviousRootGalleryPage();
+    assert.equal(f.pending.length, 1, `previous page ${cursor} must be requested`);
+    f.pending.shift().resolve(page([{ artist: `Earlier ${cursor}`, albums: [{ key: cursor }] }], {
+      gallery_page: { revision: 'r1', previous_cursor: nextCursor, has_previous: true },
+    }));
+    assert.equal(await loading, true);
+  };
+
+  await prepend('p1', 'p2');
+  f.scroll.scrollHeight += 2500; // rendered above the viewport...
+  f.scroll.scrollTop += 2500; // ...and the anchor kept the same cards in view
+  await prepend('p2', 'p3');
+  f.scroll.scrollHeight += 2500; // rendered, but the viewport stayed at the top
+  assert.equal(await f.context.loadPreviousRootGalleryPage(), false, 'a stalled prepend must not chain');
+  assert.equal(f.pending.length, 0);
+
+  userScrollGeneration += 1; // a real user scroll near the top resumes loading
+  f.scroll.scrollTop = 10;
+  const resumed = f.context.loadPreviousRootGalleryPage();
+  assert.equal(f.pending.length, 1);
+  f.pending.shift().resolve(page([], { gallery_page: { revision: 'r1', previous_cursor: null, has_previous: false } }));
+  await resumed;
+});

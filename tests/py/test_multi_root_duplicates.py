@@ -1,4 +1,4 @@
-"""Album identity, not equivalent encodes, defines multi-root duplicates."""
+"""Album identity and overlapping tracks define multi-root duplicates across encodes."""
 
 from dataclasses import asdict
 from pathlib import Path
@@ -41,18 +41,18 @@ def _sources(*tracks):
     )
 
 
-@pytest.mark.parametrize("change", [
-    {"duration_seconds": 240},
-    {"title": "A different tagged title"},
-    {"edition": "Deluxe"},
-    {"artist": "Guest Performer"},
-    {"path": Path("hoard/copy/01.mp3")},
-])
-def test_duplicate_identity_ignores_track_and_encoding_differences(change):
+@pytest.mark.parametrize("change,expected_count", [
+    ({"duration_seconds": 240}, 2),
+    ({"title": "A different tagged title"}, 0),
+    ({"edition": "Deluxe"}, 2),
+    ({"artist": "Guest Performer"}, 2),
+    ({"path": Path("hoard/copy/01.mp3")}, 2),
+], ids=["change0", "change1", "change2", "change3", "change4"])
+def test_duplicate_identity_ignores_track_and_encoding_differences(change, expected_count):
     sources = _sources(_track("main/original"), _track("hoard/copy", **change))
 
-    assert len(sources) == 2
-    assert {source["track_count"] for source in sources} == {1}
+    assert len(sources) == expected_count
+    assert {source["track_count"] for source in sources} == ({1} if expected_count else set())
 
 
 def test_bonus_tracks_do_not_hide_duplicates_or_concatenate_source_queues():
@@ -196,6 +196,61 @@ def test_separate_tagged_releases_in_sibling_disc_folders_are_not_mixed_metadata
     assert rejected_local_album_paths(entries) == {}
 
 
+@pytest.mark.parametrize("copy_title,expected_sources", [("Track 1", 3), ("Extra", 2)])
+def test_separated_year_projection_includes_only_overlapping_track_sources(copy_title, expected_sources):
+    from music_app.services.library_browse_postgres import (
+        _duplicate_sources_from_rows, _duplicate_sources_for_projected_album,
+    )
+
+    rows = [
+        {
+            "album_key": key, "file_private_path": str(track.path),
+            "file_entry": asdict(track), "duration_seconds": track.duration_seconds,
+        }
+        for key, track in [
+            ("main", _track("main/original", edition="main")),
+            ("main", _track("main/copy-a", title=copy_title, year=2002)),
+            ("main", _track("main/copy-b", title=copy_title, year=2002)),
+            ("reissue", _track("arrivals/reissue", year=2002, edition="reissue")),
+        ]
+    ]
+    result = _duplicate_sources_from_rows(rows)["main"]
+    sources = _duplicate_sources_for_projected_album(
+        {"key": "main::year::2002", "_persisted_album_key": "main", "year": 2002}, result,
+    )
+    assert len(sources) == expected_sources
+    assert all(track["year"] == 2002 for source in sources for track in source["tracks"])
+
+
+@pytest.mark.parametrize("copy_title", ["Track 1", "Extra"])
+def test_catalogue_year_projection_links_matching_track_copies_symmetrically(copy_title):
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    copy = _track("arrivals/reissue-2001", title=copy_title)
+    tracks = [
+        ("main", _track("main/original", edition="main")),
+        ("deluxe", _track("hoard/deluxe", edition="deluxe")),
+        ("deluxe", _track("hoard/deluxe", 2, edition="deluxe")),
+        ("reissue", _track("arrivals/reissue", year=2002, edition="reissue")),
+        ("reissue", copy),
+    ]
+    results = _duplicate_sources_from_rows([
+        {
+            "album_key": key, "file_private_path": str(track.path),
+            "file_entry": asdict(track), "duration_seconds": track.duration_seconds,
+        }
+        for key, track in tracks
+    ])
+    for key in ("main", "reissue"):
+        found = {
+            track["path"] for source in results[key]["duplicate_sources"] for track in source["tracks"]
+        }
+        if copy_title == "Track 1":
+            assert {str(track.path) for _, track in tracks if track.year == 2001} <= found
+        else:
+            assert str(copy.path) not in found
+
+
 def test_multidisc_folders_remain_one_source_when_compared_with_flat_copy():
     entries = [
         {**asdict(_track("main/release/CD1", 1)), "library_root_id": 1},
@@ -313,6 +368,68 @@ def test_punctuation_and_diacritic_variants_do_not_create_a_second_card():
     assert len(albums) == 1
     assert albums[0].name == "Kivenpyörittäjä — Tales and Travels"
     assert len(get_album_duplicate_sources(albums[0])) == 2
+
+
+def test_case_and_diacritic_duplicate_keeps_both_nine_track_source_tags(tmp_path):
+    original_tag = "Non Al Denaro Non all'amore Nè Al Cielo"
+    variant_tag = "Non al denaro non all'amore né al cielo"
+    tracks = [
+        _track(
+            tmp_path / folder,
+            number,
+            album=album_tag,
+            title=f"Track {number}",
+        )
+        for folder, album_tag in (
+            ("original", original_tag),
+            ("tag-variant", variant_tag),
+        )
+        for number in range(1, 10)
+    ]
+    for track in tracks:
+        track.path.parent.mkdir(parents=True, exist_ok=True)
+        track.path.write_bytes(f"sentinel:{track.path.name}".encode())
+    original_file_state = {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in tmp_path.rglob("*.flac")
+    }
+    file_cache = {str(track.path): asdict(track) for track in tracks}
+    original_cache_tags = {
+        path: entry["album"]
+        for path, entry in file_cache.items()
+    }
+
+    albums = build_albums_from_file_cache(file_cache)
+
+    assert len(albums) == 1
+    sources = get_album_duplicate_sources(albums[0])
+    assert len(sources) == 2
+    assert [source["track_count"] for source in sources] == [9, 9]
+    assert [len(source["tracks"]) for source in sources] == [9, 9]
+    assert {
+        Path(source["folder_path"]): (
+            frozenset(Path(track["path"]) for track in source["tracks"]),
+            frozenset(track["album"] for track in source["tracks"]),
+        )
+        for source in sources
+    } == {
+        tmp_path / "original": (
+            frozenset((tmp_path / "original").glob("*.flac")),
+            frozenset({original_tag}),
+        ),
+        tmp_path / "tag-variant": (
+            frozenset((tmp_path / "tag-variant").glob("*.flac")),
+            frozenset({variant_tag}),
+        ),
+    }
+    assert {
+        path: entry["album"]
+        for path, entry in file_cache.items()
+    } == original_cache_tags
+    assert {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in tmp_path.rglob("*.flac")
+    } == original_file_state
 
 
 def test_incomplete_copy_uses_complete_source_for_card_and_keeps_both_sources():
@@ -573,6 +690,22 @@ def test_duplicate_source_paths_require_explicit_path_read_permission(monkeypatc
     assert payload["duplicate_sources"] == ([source] if can_read_paths else [])
     if not can_read_paths:
         assert payload["duplicate_source_count"] == 1
+
+
+@pytest.mark.parametrize("can_read_paths", [False, True])
+def test_loose_track_display_paths_require_path_read_permission(monkeypatch, can_read_paths):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    monkeypatch.setattr(routes, "allowed_actions_for_request", lambda *args: SimpleNamespace(as_payload=lambda: {"library.paths.read": can_read_paths}))
+    payload = {
+        "non_album_tracks": [{"path": "D:/Music/A/one.flac", "display_path": "A/one.flac", "title": "One"}],
+        "library_non_album_tracks": [{"path": "D:/Music/B/two.flac", "display_path": "B/two.flac", "title": "Two"}],
+    }
+    routes._project_missing_album_actions_for_request(SimpleNamespace(), payload)
+    for key in ("non_album_tracks", "library_non_album_tracks"):
+        track = payload[key][0]
+        assert ("display_path" in track) is can_read_paths
+        assert track["title"] and track["path"], "playback identity and title stay intact"
 
 
 def test_partial_duplicate_group_preserves_all_own_source_categories():

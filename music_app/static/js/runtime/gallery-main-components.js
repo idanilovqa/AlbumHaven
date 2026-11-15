@@ -25,7 +25,7 @@ function galleryCountryName(country) {
   try { return galleryCountryNames.of(value.toUpperCase()) || value; } catch { return value; }
 }
 
-// Country and genre pills only; the album count follows the artist name.
+// The first item is the highest-voted genre; the server projection is ranked.
 // An artist matched under another name shows its MusicBrainz name. Display only: the
 // tag changes only through an approved tag edit.
 function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
@@ -35,23 +35,26 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
 }
 
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
-  const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
-    ? artistMusicBrainz
-    : {};
-  const country = galleryCountryName(projection.country);
-  const genres = (Array.isArray(projection.genres) ? projection.genres : [])
-    .map((genre) => String(genre || '').trim())
-    .filter(Boolean)
-    .slice(0, 3);
-  const countryHtml = country
-    ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
+  const country = galleryCountryName(artistMusicBrainz?.country);
+  return country
+    ? `<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span></span>`
     : '';
+}
+
+function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
+  const genres = (Array.isArray(artistMusicBrainz?.genres) ? artistMusicBrainz.genres : [])
+    .map((genre) => String(genre || '').trim())
+    .filter(Boolean);
   const genreHtml = genres.map((genre) => (
     genre === 'Genre unavailable'
-      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
-      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
+      ? '<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span></span>'
+      : `<span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span></span>`
   )).join('');
-  return `${countryHtml}${genreHtml}`;
+  return `<span class="gallery-bar__summary-count">${escapeHtml(galleryMainPlural(albumCount, 'album'))}</span><span class="gallery-bar__artist-genres">${genreHtml}</span>`;
+}
+
+function buildGalleryArtistMobileSummaryHtml(albumCount, artistMusicBrainz = null) {
+  return `${escapeHtml(galleryMainPlural(albumCount, 'album'))}${buildGalleryArtistMetadataHtml(artistMusicBrainz)}`;
 }
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
@@ -170,11 +173,11 @@ function buildGalleryArtistStatusHtml(config = {}) {
 const LIBRARY_SOURCE_MARKERS = Object.freeze({
   hoard: Object.freeze({
     label: 'Hoard',
-    drawing: '<path d="M5 22v-7A10 10 0 0 1 15 5h18a10 10 0 0 1 10 10v7H5Zm1 0v19h36V22M5 18h38M13 6v12m22-12v12M13 23v17m22-17v17M8 41v3m32-3v3"/><rect x="19" y="21" width="10" height="13" rx="2"/><path d="M21 21v-3a3 3 0 0 1 6 0v3M24 26v3"/><path d="M9 12h.1M39 12h.1M9 28h.1M39 28h.1M9 35h.1M39 35h.1"/>',
+    drawing: '<path d="M6 23v-7A10 10 0 0 1 16 6h16a10 10 0 0 1 10 10v7M6 23v18h36V23M6 23h15m6 0h15"/><rect x="21" y="19" width="6" height="11" rx="1"/>',
   }),
   new_arrivals: Object.freeze({
     label: 'New Arrivals',
-    drawing: '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>',
+    drawing: '<path d="M8 30V18A10 10 0 0 1 18 8h16a10 10 0 0 1 10 10v12H8ZM18 8a10 10 0 0 1 10 10v12M8 30 3 40h20l5-10M34 30v14M36 18V3h8v8h-8"/>',
   }),
 });
 
@@ -204,11 +207,21 @@ function buildLibrarySourceGlyphHtml(category) {
 }
 
 function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  // INT-040: on mobile the sources are colorful icon badges on the album art, never printed names.
+  const presentation = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout() ? 'badge' : '';
   return normalizeLibrarySourceCategories(categories)
     .filter((category) => LIBRARY_SOURCE_MARKERS[category])
     .map((category) => {
       const marker = LIBRARY_SOURCE_MARKERS[category];
-      return `<span class="album-details-source-marker album-details-source-marker--${category}" role="img" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}</span>`;
+      return buildSmallAlertHtml({
+        severity: 'info',
+        tone: category,
+        message: marker.label,
+        iconHtml: buildLibrarySourceGlyphHtml(category),
+        className: `album-details-source-marker album-details-source-marker--${category}`,
+        focusable: true,
+        presentation,
+      });
     })
     .join('');
 }
@@ -247,9 +260,13 @@ function buildGalleryBarHtml(config = {}) {
   const summary = isArtist
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
-  const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
+  const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
+  const summaryHtml = isArtist ? buildGalleryArtistSummaryHtml(config.albumCount, config.artist_musicbrainz) : escapeHtml(summary);
+  const mobileSummaryHtml = isArtist
+    ? buildGalleryArtistMobileSummaryHtml(config.albumCount, config.artist_musicbrainz)
+    : '';
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__artist-mobile-summary" data-gallery-context-mobile-summary${isArtist ? '' : ' hidden'}>${mobileSummaryHtml}</span><span class="gallery-bar__summary" data-gallery-context-summary>${summaryHtml}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -266,8 +283,8 @@ function buildArtistFamilyPanelHtml(config = {}) {
   return `<aside class="artist-family-panel" data-artist-family-panel aria-label="${escapeHtml(config.title || 'Artist Family')}" aria-hidden="true" hidden><header><div class="artist-family-panel__heading"><div class="artist-family-panel__title-row"><h2 data-gallery-family-panel-title title="${escapeHtml(config.title || 'Artist Family')}">${escapeHtml(config.title || 'Artist Family')}</h2><span aria-hidden="true">•</span><span data-gallery-family-panel-total>${escapeHtml(config.albumTotal || '')}</span></div><p>Select or unselect an artist to update Gallery.</p></div></header><div class="artist-family-panel__combine-row">${combineSwitch}</div><div class="artist-family-panel__body gallery-scrollbar">${String(config.bodyHtml || '')}</div></aside>`;
 }
 
-function buildGalleryEmptySelectionHtml() {
-  return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
+function buildGalleryEmptySelectionHtml(message = 'Select at least one artist in Artist Family.') {
+  return `<div class="gallery-empty-selection" data-gallery-empty-selection role="status">${escapeHtml(message)}</div>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {
@@ -292,10 +309,12 @@ function buildGalleryRatingHtml(config = {}) {
 
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
-  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  const artist = String(config.artist ?? '').trim();
+  const year = String(config.year ?? '').trim();
+  const metadata = `${artist ? `<span class="gallery-card__artist"><span data-gallery-metadata-text>${escapeHtml(artist)}</span></span>` : ''}${year ? `<span class="gallery-card__year">${artist ? '· ' : ''}${escapeHtml(year)}</span>` : ''}`;
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle gallery-card__metadata">${metadata}</div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }

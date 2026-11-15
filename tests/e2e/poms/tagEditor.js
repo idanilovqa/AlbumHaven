@@ -89,11 +89,11 @@ export class TagEditor extends BasePage {
     this.artwork = this.overlay.locator('#tag-editor-artwork');
     this.artworkVisual = this.artwork.locator('img, .tag-editor-artwork-placeholder').first();
     this.folderPath = this.overlay.locator('.tag-editor-folder-path');
-    this.folderLoadButton = this.overlay.getByRole('button', {
-      name: 'Load all files from this folder',
+    this.folderOpenButton = this.overlay.locator('.tag-editor-open-folder');
+    this.folderLoadButton = this.artwork.getByRole('button', {
+      name: 'Load all tracks from the folder',
       exact: true,
     });
-    this.folderLoadButtonIcon = this.folderLoadButton.locator('svg');
     this.reorderCueRows = this.trackList.locator(
       '[data-tag-editor-track].is-reorder-before, [data-tag-editor-track].is-reorder-dragged',
     );
@@ -110,6 +110,7 @@ export class TagEditor extends BasePage {
     this.trackNumberInput = this.overlay.locator('input[data-tag-field="track_number"]');
     this.discNumberInput = this.overlay.locator('input[data-tag-field="disc_number"]');
     this.exceptionSelect = this.overlay.locator('input[data-tag-field="exception_type"]');
+    this.exceptionMenu = this.page.locator('#tag-editor-exception-menu');
     this.exceptionNoneOption = page.locator(
       '#tag-editor-exception-menu [data-tag-editor-exception-option=""]',
     );

@@ -31,6 +31,12 @@ _CATEGORY_BADGE_LABELS = {
     _HOARD_ROOTS_KEY: "Hoard",
     _NEW_ARRIVALS_ROOTS_KEY: "New",
 }
+# Library Data Corrections: "display_only" (default) shows readable text
+# without touching media; "write_tags" also writes the corrections into tags.
+METADATA_CORRECTIONS_KEY = "metadata_corrections"
+METADATA_CORRECTIONS_DISPLAY_ONLY = "display_only"
+METADATA_CORRECTIONS_WRITE_TAGS = "write_tags"
+_METADATA_CORRECTIONS_MODES = (METADATA_CORRECTIONS_DISPLAY_ONLY, METADATA_CORRECTIONS_WRITE_TAGS)
 _CONFIGURED_ROOT_PATHS_SNAPSHOT_KEY = "_library_root_paths_snapshot"
 _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK = RLock()
 
@@ -137,6 +143,7 @@ def empty_library_root_settings() -> dict[str, object]:
         _HOARD_ROOTS_KEY: [],
         _NEW_ARRIVALS_ROOTS_KEY: [],
         "move_policy": {},
+        METADATA_CORRECTIONS_KEY: METADATA_CORRECTIONS_DISPLAY_ONLY,
     }
 
 
@@ -172,7 +179,15 @@ def _normalize_library_root_settings_payload(
         _HOARD_ROOTS_KEY: hoard_roots,
         _NEW_ARRIVALS_ROOTS_KEY: new_arrivals_roots,
         "move_policy": move_policy,
+        METADATA_CORRECTIONS_KEY: _normalize_metadata_corrections(payload.get(METADATA_CORRECTIONS_KEY)),
     }
+
+
+def _normalize_metadata_corrections(value: object) -> str:
+    mode = str(value or METADATA_CORRECTIONS_DISPLAY_ONLY).strip()
+    if mode not in _METADATA_CORRECTIONS_MODES:
+        raise ValueError(f"Library Data Corrections must be one of: {', '.join(_METADATA_CORRECTIONS_MODES)}.")
+    return mode
 
 
 def get_primary_music_root(config: dict[str, object]) -> Path:
@@ -278,9 +293,27 @@ def summarize_root_provenance_payloads(payloads: list[dict[str, object]] | tuple
 
 
 def library_root_cache_identity(config: dict[str, object]) -> str:
-    payload = load_library_root_settings(config)
+    """Hash of the settings a scan's stored entries depend on.
+
+    A stored snapshot is reused only while this matches, so settings that do not
+    change what a scan reads stay out: changing them must not force every file
+    to be re-read. Excluding a key keeps the hash snapshots already carry.
+    """
+    payload = dict(load_library_root_settings(config))
+    payload.pop(METADATA_CORRECTIONS_KEY, None)
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def library_root_cache_identities(config: dict[str, object]) -> frozenset[str]:
+    """Every identity a snapshot of these same roots may carry.
+
+    Builds before Library Data Corrections left the hash also included the
+    corrections setting; a slot still on such a build publishes that form, and
+    a browse slot that accepted only the new form found no snapshot at all.
+    """
+    legacy = json.dumps(dict(load_library_root_settings(config)), sort_keys=True, separators=(",", ":"))
+    return frozenset({library_root_cache_identity(config), hashlib.sha256(legacy.encode("utf-8")).hexdigest()})
 
 
 def resolve_configured_media_path(

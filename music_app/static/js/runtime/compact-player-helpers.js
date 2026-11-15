@@ -53,16 +53,6 @@ function buildCompactPlayerMetadataSummary(track) {
   return song && album ? `${song} / ${album}` : song || album;
 }
 
-function resolveCompactPlayerMetadataRowMotion({ scrollWidth, clientWidth } = {}) {
-  const distance = Math.max(0, Math.ceil((Number(scrollWidth) || 0) - (Number(clientWidth) || 0)));
-  if (distance <= 1) return { overflowing: false, distance: 0, durationMs: 0 };
-  return {
-    overflowing: true,
-    distance,
-    durationMs: Math.max(3200, Math.round(distance * 24 + 1800)),
-  };
-}
-
 function useCompactPlayerRailMode({ style, behavior, artistTreeFolded } = {}) {
   return normalizeCompactPlayerStyle(style) === 'docked'
     && normalizeDockedCompactPlayerBehavior(behavior) === 'follow_sidebar'
@@ -134,7 +124,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactPlayerMotion,
   resolveCompactPlayerMetadataRevealDelay,
   buildCompactPlayerMetadataSummary,
-  resolveCompactPlayerMetadataRowMotion,
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
@@ -142,3 +131,20 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   resolveCompactQueueControls,
   shouldOpenCompactPlayerAlbum,
 };
+
+// The player's album art and album link return to where the current track
+// lives: its album, or the Loose Tracks collection it was played from.
+function openCurrentPlayerTrackSource(openOptions) {
+  const track = state.player.current;
+  const album = resolveAlbumForPlayerTrack(track);
+  if (album) {
+    if (openOptions) openTrackModal(album, openOptions);
+    else openTrackModal(album);
+    return true;
+  }
+  if (track?.looseTracksOrigin && typeof openNonAlbumModal === 'function') {
+    openNonAlbumModal({ libraryWide: track.looseTracksOrigin.libraryWide === true });
+    return true;
+  }
+  return false;
+}

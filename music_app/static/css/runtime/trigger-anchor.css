@@ -61,9 +61,8 @@
   position: relative;
   /* Joined controls paint above the shared menu layer (105), including its shadow. */
   z-index: 106;
-  border: 2px solid transparent !important;
+  border-color: transparent !important;
   --trigger-anchor-direction: to bottom;
-  border-bottom: 0 !important;
   border-radius: 8px 8px 0 0 !important;
   outline: none !important;
   box-shadow: none !important;
@@ -94,7 +93,6 @@
     var(--trigger-anchor-line-right) right top / calc(var(--trigger-anchor-right) + 2px) var(--trigger-top-line-width, 2px) no-repeat;
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"] {
-  border-top: 0 !important; border-bottom: 2px solid transparent !important;
   --trigger-anchor-direction: to top;
   border-radius: 0 0 8px 8px !important;
 }
@@ -110,7 +108,7 @@
 :root .trigger-anchor-open::after {
   content: ''; position: absolute; left: -2px; right: -2px; top: -2px;
   bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px);
-  border: 0; border-radius: inherit; z-index: -2; pointer-events: none;
+  border: 0; border-radius: inherit; z-index: 0; pointer-events: none;
   background: var(--trigger-anchor-border-fill);
 }
 :root .trigger-anchor-open::before {
@@ -118,9 +116,10 @@
      clips at the same fractional pixel would otherwise leave a colored seam. */
   content: ''; position: absolute; left: 0; right: 0; top: 0;
   bottom: calc(-1 * var(--trigger-anchor-gap, 0px) - 4px);
-  border: 0; border-radius: 6px 6px 0 0; z-index: -1; pointer-events: none;
+  border: 0; border-radius: 6px 6px 0 0; z-index: 1; pointer-events: none;
   background: var(--trigger-anchor-background);
 }
+:root .trigger-anchor-open > * { position: relative; z-index: 2; }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after {
   top: calc(-1 * var(--trigger-anchor-gap, 0px) - 2px); bottom: -2px;
 }
@@ -129,14 +128,22 @@
   border-radius: 0 0 6px 6px;
 }
 :root .trigger-anchor-surface { border-color: var(--border); }
+.trigger-anchor-scroll {
+  max-height: var(--trigger-anchor-scroll-max-height, min(320px, 60vh));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 /* A popup's shadow must not darken the connected button or their shared join.
    Keep room for the side/bottom shadow without clipping the menu contents. */
-:root .trigger-anchor-surface:not(.artist-family-panel) {
+:root .trigger-anchor-surface:not(.artist-family-panel):not(.artist-info-overlay) {
   clip-path: inset(0 -80px -80px -80px);
 }
-:root .trigger-anchor-surface:not(.artist-family-panel)[data-trigger-anchor-edge="bottom"] {
+:root .trigger-anchor-surface:not(.artist-family-panel):not(.artist-info-overlay)[data-trigger-anchor-edge="bottom"] {
   clip-path: inset(-80px -80px 0 -80px);
+}
+:root .artist-info-overlay.trigger-anchor-surface {
+  clip-path: inset(0 -80px -80px -80px);
 }
 /* Nested popups must escape the parent's shadow/anchor clipping boundary. */
 :root .trigger-anchor-surface:not(.artist-family-panel):has(.trigger-anchor-surface:not([hidden])) {

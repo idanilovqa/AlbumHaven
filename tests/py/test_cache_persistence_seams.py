@@ -296,6 +296,7 @@ def test_runtime_cache_update_merges_postgres_snapshot_and_propagates_write_cont
             relation_views=None,
             relations_last_built=None,
             expected_cover_mutation_revision=None,
+            publish_paths=None,
         ):
             saved_snapshots.append(
                 {
@@ -306,6 +307,7 @@ def test_runtime_cache_update_merges_postgres_snapshot_and_propagates_write_cont
                     "relation_views": relation_views,
                     "relations_last_built": relations_last_built,
                     "expected_cover_mutation_revision": expected_cover_mutation_revision,
+                    "publish_paths": publish_paths,
                 }
             )
 
@@ -345,6 +347,8 @@ def test_runtime_cache_update_merges_postgres_snapshot_and_propagates_write_cont
             "relation_views": {"artists": ["Artist"]},
             "relations_last_built": 456.0,
             "expected_cover_mutation_revision": 17,
+            # The merged snapshot builds albums; only the changed file's publish.
+            "publish_paths": {str(changed_track)},
         }
     ]
     assert not cache_path.exists()

@@ -135,7 +135,7 @@ test('applying a problem filter preserves the selected album when it still match
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, 'album-1');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.state.utility.problemDropdownOpen, true);
   assert.equal(context.state.utility.showRepairedDisplay, true);
   assert.equal(calls.renders, 1);
 });
@@ -159,7 +159,7 @@ test('applying a problem filter clears the selected album when it no longer matc
   assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
   assert.equal(context.state.utility.deferProblematicAutoSelection, true);
   assert.equal(context.state.utility.selectedProblematicKey, '');
-  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.state.utility.problemDropdownOpen, true);
 });
 
 test('removing a problem filter preserves the selected album when it still matches the remaining filters', () => {

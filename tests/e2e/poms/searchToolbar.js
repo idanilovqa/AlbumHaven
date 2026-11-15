@@ -86,6 +86,7 @@ export class SearchToolbar extends BasePage {
     this.form = page.locator(this.formSelector);
     this.control = page.locator(this.formSelector + ' .search-field-control');
     this.input = page.locator(this.inputSelector);
+    this.galleryHeader = page.getByLabel('Gallery controls', { exact: true });
     this.applyButton = page.locator(this.applyButtonSelector);
     this.clearButton = this.form.getByRole('button', { name: 'Clear search', exact: true });
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });

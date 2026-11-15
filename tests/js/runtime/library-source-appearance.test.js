@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createController, applyTheme } = require('../../../music_app/static/js/appearance-backgrounds.js');
 
-const defaults = { card_colors: false, hover_outline_colors: true, icons: true };
+const defaults = { card_colors: false, hover_outline_colors: false, icons: true };
 const initial = () => ({ main_surface_color: null, panel_background_color: null, palette_id: null, panel_index: 0, player_override: null });
 
 test('source choices are staged, cancelable, and saved together', async () => {

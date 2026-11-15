@@ -14,6 +14,18 @@ test('artist navigation requests summaries while explicit full and sidebar tiers
 });
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 
+test('selected artist gallery requests its scoped loose tracks in the first response', () => {
+  const { buildApiUrl } = loadHelpers();
+  const view = { selected_artist: '3', gallery_scope: 'all' };
+  const params = options => new URL(buildApiUrl(view, options), 'http://localhost').searchParams;
+  assert.equal(params({ omitSidebar: true }).get('include_non_album'), '1');
+  assert.equal(params({ omitSidebar: true }).has('include_library_wide_non_album'), false);
+  assert.equal(params({ omitSidebar: true }).get('payload_tier'), 'gallery_summary');
+  assert.equal(params({ rootSidebar: true }).has('include_non_album'), false);
+  assert.equal(params({ payloadTier: 'sidebar' }).has('include_non_album'), false);
+  assert.equal(new URL(buildApiUrl({ gallery_scope: 'all' }), 'http://localhost').searchParams.has('include_non_album'), false);
+});
+
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
   path.join(__dirname, '../../../music_app/static/js/navigation-tree.js'),
@@ -204,7 +216,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/?surface=albums&q=dream+pop&artist=Beach+House&all_artists=1&gallery_scope=all&category=main_library&category=new_arrivals&related_artist=Victoria+Legrand&related_artist=Alex+Scally&primary_filter=1&genre=Dream+Pop&genre=Shoegaze&mood=Nocturnal&style=Lush&duration_min=180&duration_max=420',
+    '/albums?q=dream+pop&artist=Beach+House&all_artists=1&gallery_scope=all&category=main_library&category=new_arrivals&related_artist=Victoria+Legrand&related_artist=Alex+Scally&primary_filter=1&genre=Dream+Pop&genre=Shoegaze&mood=Nocturnal&style=Lush&duration_min=180&duration_max=420',
   );
 }
 
@@ -222,7 +234,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/?surface=albums&q=dream+pop&artist=Beach+House&gallery_scope=all&gallery_display=covers&gallery_scale_percent=135&category=main_library',
+    '/albums?q=dream+pop&artist=Beach+House&gallery_scope=all&gallery_display=covers&gallery_scale_percent=135&category=main_library',
   );
 }
 
@@ -265,7 +277,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -282,7 +294,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -321,7 +333,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary',
+    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary&include_non_album=1',
   );
 }
 
@@ -695,6 +707,23 @@ test('rootFullPayload requests full root albums without changing other browse UR
     startupPreview: { mode: 'empty_shell' },
     startupHydration: { required: true },
   }), false);
+  // A pasted q-only search URL during a long repair scan still fetches its results.
+  for (const specificView of [{ query: 'Beardfish' }, { selected_artist: 'Beardfish' }]) {
+    assert.equal(shouldRunImmediateStartupHydration({
+      album_count: 0,
+      artists_sidebar: [],
+      primary_artist_groups: [],
+      family_artist_groups: [],
+      artist_groups: [],
+      ...specificView,
+    }, {
+      partialView: false,
+      scanInProgress: true,
+      relationsInProgress: false,
+      startupPreview: { mode: 'empty_shell' },
+      startupHydration: { required: true },
+    }), true);
+  }
   assert.equal(shouldRunImmediateStartupHydration({
     album_count: 1,
     artists_sidebar: [{ artist: 'Broadcast' }],
@@ -843,6 +872,18 @@ test('rootFullPayload requests full root albums without changing other browse UR
     'Found so far: 57',
     'Current file: C:/Music/Stereolab/Track 01.flac',
   ]);
+}
+
+{
+ const { buildStatusIndicatorTitleParts } = loadHelpers();
+ const parts = JSON.parse(JSON.stringify(buildStatusIndicatorTitleParts({
+ scan_in_progress: true,
+ scan_phase: 'finalizing',
+ scan_processed: 0,
+ scan_total: 0,
+ relations_in_progress: false,
+ })));
+ assert.equal(parts[0], 'Refreshing artist relationships');
 }
 
 {
@@ -1209,7 +1250,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   assert.match(html, /data-sidebar-all-artists="1"/);
   assert.match(html, /data-sidebar-artist="Beach House"/);
   assert.match(html, /artist-link active/);
-  assert.match(html, /\?surface=albums&amp;q=dream\+pop&amp;artist=Beach\+House/);
+  assert.match(html, /\/albums\?q=dream\+pop&amp;artist=Beach\+House/);
 }
 
 {
@@ -1234,8 +1275,8 @@ test('rootFullPayload requests full root albums without changing other browse UR
     selectedArtistOverride: 'Beach House',
     allArtistsActiveOverride: false,
   });
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=dream\+pop&amp;artist=Beach\+House" data-nav="1" data-sidebar-artist="Beach House"/);
-  assert.doesNotMatch(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=dream\+pop&amp;artist=Cocteau\+Twins" data-nav="1" data-sidebar-artist="Cocteau Twins"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=dream\+pop&amp;artist=Beach\+House" data-nav="1" data-sidebar-artist="Beach House"/);
+  assert.doesNotMatch(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=dream\+pop&amp;artist=Cocteau\+Twins" data-nav="1" data-sidebar-artist="Cocteau Twins"/);
 }
 
 {
@@ -1255,7 +1296,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
     allArtistsActiveOverride: true,
     selectedArtistOverride: '',
   });
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums" data-nav="1" data-sidebar-all-artists="1"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums" data-nav="1" data-sidebar-all-artists="1"/);
 }
 
 {
@@ -1287,7 +1328,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
       count: 1,
     },
   ]);
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=Neal\+Morse&amp;artist=Neal\+Morse" data-nav="1" data-sidebar-artist="Neal Morse"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=Neal\+Morse&amp;artist=Neal\+Morse" data-nav="1" data-sidebar-artist="Neal Morse"/);
   assert.match(html, /data-sidebar-all-artists="1"/);
 }
 
@@ -1366,7 +1407,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
     selectedArtistOverride: 'Devin Townsend Project',
   });
   assert.match(html, /data-sidebar-all-artists="1"/);
-  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=devin\+townsend&amp;artist=Devin\+Townsend\+Project" data-nav="1" data-sidebar-artist="Devin Townsend Project"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/albums\?q=devin\+townsend&amp;artist=Devin\+Townsend\+Project" data-nav="1" data-sidebar-artist="Devin Townsend Project"/);
   assert.match(html, /data-sidebar-artist="Devin Townsend"/);
 }
 

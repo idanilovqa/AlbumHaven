@@ -530,3 +530,32 @@ for (const allowed of [true, false]) {
     assert.equal(/\bdisabled(?:\s|=|>)/u.test(selected), !allowed);
   });
 }
+
+test('Problematic Files detail uses the shared cover preview cache', () => {
+  const { context, album } = detailContext();
+  album.cover_path = 'family-preview';
+  context.buildAlbumDisplayCoverUrl = () => '/cover?path=family-preview';
+  context.buildAlbumLightboxCoverUrl = () => '/cover?path=family-full';
+
+  const html = context.buildProblematicAlbumDetail(album);
+
+  assert.match(html, /data-gallery-cover-src="\/cover\?path=family-preview"/);
+  assert.doesNotMatch(html, /<img[^>]+\ssrc=/);
+});
+
+test('Album not found sorts by title, then album artist, then year', () => {
+  const context = loadHelpers();
+  context.state.utility.selectedProblemFilters = ['Album not found'];
+  context.state.utility.problematicFiles = [
+    { key: 'smpte-transatlantic-2001', name: 'SMPTe', album_artist: 'Transatlantic', year: '2001', problem_reasons: ['Album not found'] },
+    { key: 'zeta', name: 'Zeta', album_artist: 'Artist', year: '1999', problem_reasons: ['Album not found'] },
+    { key: 'smpte-roine', name: 'SMPTe', album_artist: 'Roine Stolt', year: '2000', problem_reasons: ['Album not found'] },
+    { key: 'alpha', name: 'Alpha', album_artist: 'Artist', year: '2026', problem_reasons: ['Album not found'] },
+    { key: 'smpte-transatlantic-2000', name: 'SMPTe', album_artist: 'Transatlantic', year: '2000', problem_reasons: ['Album not found'] },
+  ];
+
+  assert.deepEqual(
+    Array.from(context.getFilteredProblematicAlbums(), album => album.key),
+    ['alpha', 'smpte-roine', 'smpte-transatlantic-2000', 'smpte-transatlantic-2001', 'zeta'],
+  );
+});

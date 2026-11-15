@@ -151,6 +151,37 @@ test('nested menu preserves its parent and closing it restores the parent owners
   assert.deepEqual(events,['sibling','parent']);
 });
 
+test('a plain click never marks the selection origin; a drag does (INT-034)', () => {
+  // The marker classes restyle the whole document: on a long Loose Tracks list
+  // each click paid two ~100 ms style passes before a section toggled.
+  const listeners = {};
+  const root = { classList: classList() };
+  const table = { classList: classList() };
+  const sandbox = vm.createContext({
+    globalThis: {},
+    document: {
+      documentElement: root,
+      addEventListener: (type, handler) => { (listeners[type] ||= []).push(handler); },
+      getSelection: () => null,
+    },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/trigger-anchor.js'), 'utf8'), sandbox);
+  sandbox.installPanelSelectionBoundary();
+  const fire = (type, event = {}) => (listeners[type] || []).forEach(handler => handler(event));
+  const target = { closest: selector => (selector.includes('.album-track-table') ? table : null) };
+  fire('pointerdown', { button: 0, pointerType: 'mouse', target });
+  assert.equal(root.classList.contains('panel-text-selection-active'), false);
+  assert.equal(table.classList.contains('panel-selection-origin'), false);
+  fire('pointerup');
+  fire('pointerdown', { button: 0, pointerType: 'mouse', target });
+  fire('pointermove', { buttons: 1 });
+  assert.equal(root.classList.contains('panel-text-selection-active'), true);
+  assert.equal(table.classList.contains('panel-selection-origin'), true);
+  fire('pointerup');
+  assert.equal(root.classList.contains('panel-text-selection-active'), false);
+  assert.equal(table.classList.contains('panel-selection-origin'), false);
+});
+
 test('text selection extending beyond its originating panel is clamped to the panel boundary', () => {
   const inside = {};
   const outside = {};

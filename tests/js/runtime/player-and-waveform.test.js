@@ -39,6 +39,8 @@ const peaksPath = path.join(
 );
 const waveformSource = fs.readFileSync(waveformPath, 'utf8');
 const loopSource = fs.readFileSync(loopPath, 'utf8');
+const compactHelpersPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'compact-player-helpers.js');
+const compactHelpersSource = fs.readFileSync(compactHelpersPath, 'utf8');
 const peaksSource = fs.readFileSync(peaksPath, 'utf8');
 
 test('waveform peak shaping preserves silence and separates hits from quieter material', () => {
@@ -241,6 +243,7 @@ function loadRuntime(overrides = {}) {
   vm.createContext(context);
   vm.runInContext(waveformSource, context, { filename: waveformPath });
   vm.runInContext(loopSource, context, { filename: loopPath });
+  vm.runInContext(compactHelpersSource, context, { filename: compactHelpersPath });
   return { context };
 }
 
@@ -538,6 +541,19 @@ async function run() {
       'the player cover opens a single-cover lightbox modal',
     );
     assert.deepEqual(opened[2], [current, undefined], 'a phone tap on the artist or title opens the playing album');
+
+    const looseTrack = {
+      path: 'C:/Music/Начало Века/2009 - Тебя ждала (single)/loose.mp3',
+      title: 'Тебя ждала',
+      looseTracksOrigin: { libraryWide: true },
+    };
+    context.state.player.current = looseTrack;
+    coverButton.click();
+    albumLink.click();
+    assert.deepEqual(opened.slice(3).map(([track]) => track), [looseTrack, looseTrack],
+      'player art and album link route loose tracks through the shared album opener');
+    assert.deepEqual(JSON.parse(JSON.stringify(opened.slice(3).map(([, options]) => options))),
+      [{ coverLightboxGallery: false, foreground: true }, null]);
   }
 }
 

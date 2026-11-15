@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from music_app.services.album_local_membership import local_album_membership_ctes_sql
+from music_app.services.album_local_membership import physical_album_folder_sql
+
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -79,6 +80,8 @@ class PostgresLibraryInventoryRepository:
         limit: object = DEFAULT_NON_ALBUM_CANDIDATE_LIMIT,
         connection: Any | None = None,
         unassigned_only: bool = False,
+        membership_problems_only: bool = False,
+        membership_group_ids: Iterable[object] | None = None,
     ) -> list[dict[str, object]]:
         """Load bounded raw inventory candidates without shaping browse payloads."""
         normalized_track_ids = sorted(
@@ -109,12 +112,18 @@ class PostgresLibraryInventoryRepository:
                 if str(term or "").strip()
             }
         )
+        normalized_membership_group_ids = sorted({
+            str(group_id or "")
+            for group_id in (membership_group_ids or ())
+            if str(group_id or "")
+        })
         bounded_limit = max(1, min(int(limit), MAX_NON_ALBUM_CANDIDATE_LIMIT))
         params = {
             "track_ids": normalized_track_ids,
             "track_id_count": len(normalized_track_ids),
             "private_paths": normalized_private_paths,
             "private_path_count": len(normalized_private_paths),
+            "membership_group_ids": normalized_membership_group_ids,
             "limit": bounded_limit,
         }
         if normalized_artist_names:
@@ -126,6 +135,8 @@ class PostgresLibraryInventoryRepository:
             params["query_patterns"] = [f"%{term}%" for term in normalized_query_terms]
         sql = _non_album_candidates_sql(
             unassigned_only=unassigned_only,
+            membership_problems_only=membership_problems_only,
+            membership_groups=bool(normalized_membership_group_ids),
             filter_artists=bool(normalized_artist_names),
             filter_query=bool(normalized_query_terms),
         )
@@ -134,6 +145,38 @@ class PostgresLibraryInventoryRepository:
                 cursor = owned_connection.execute(sql, params)
                 return [dict(_row_mapping(row)) for row in cursor.fetchall()]
         cursor = connection.execute(sql, params)
+        return [dict(_row_mapping(row)) for row in cursor.fetchall()]
+
+    def load_membership_problem_group_headers(
+        self,
+        *,
+        limit: int | None,
+        connection: Any,
+        private_paths: Iterable[object] | None = None,
+        after: tuple[str, str, str, str] | None = None,
+    ) -> list[dict[str, object]]:
+        normalized_private_paths = sorted({
+            str(path or "").strip()
+            for path in (private_paths or ())
+            if str(path or "").strip()
+        })
+        cursor = connection.execute(
+            _membership_problem_group_headers_sql(
+                bounded=limit is not None,
+                targeted=bool(normalized_private_paths),
+                after=after is not None,
+            ),
+            {
+                **(
+                    {"limit": max(1, min(int(limit), MAX_NON_ALBUM_CANDIDATE_LIMIT))}
+                    if limit is not None
+                    else {}
+                ),
+                "private_paths": normalized_private_paths,
+                "after_name": (after or ("", "", "", ""))[0],
+                "after_artist": (after or ("", "", "", ""))[1],
+            },
+        )
         return [dict(_row_mapping(row)) for row in cursor.fetchall()]
 
     def _connect_to_database(self) -> Any:
@@ -184,6 +227,120 @@ def _bootstrap_context_sql() -> str:
     """
 
 
+def _membership_problem_folder_sql(path_expression: str) -> str:
+    return physical_album_folder_sql(path_expression)
+
+
+def _membership_problem_group_identity_sql(
+    root_expression: str,
+    path_expression: str,
+) -> str:
+    folder = _membership_problem_folder_sql(path_expression)
+    return f"""btrim({root_expression}::text) || chr(1) || {folder}"""
+
+
+def _membership_problem_group_headers_sql(
+    *,
+    bounded: bool = True,
+    targeted: bool = False,
+    after: bool = False,
+) -> str:
+    folder = _membership_problem_folder_sql("files.private_path")
+    group_identity = _membership_problem_group_identity_sql(
+        "roots.id",
+        "files.private_path",
+    )
+    row_order = """
+      coalesce(nullif(artists.sort_name, ''), artists.name, ''),
+      tracks.title,
+      files.private_path,
+      files.id
+    """
+    targeted_scope = f"""
+            and {group_identity} in (
+              select distinct {_membership_problem_group_identity_sql("seed_roots.id", "seed_files.private_path")}
+              from library.local_track_files seed_files
+              join library.library_roots seed_roots
+                on seed_roots.id = seed_files.library_root_id
+               and seed_roots.is_active is true
+              where seed_files.private_path = any(%(private_paths)s::text[])
+                and seed_files.scan_cache_stale is false
+            )
+    """ if targeted else ""
+    after_scope = "" if not after else """
+        where (
+          lower('Loose Tracks' collate "und-x-icu") collate "C",
+          lower(coalesce(album_artist, '') collate "und-x-icu") collate "C"
+        ) >= (
+          %(after_name)s collate "C", %(after_artist)s collate "C"
+        )
+    """
+    return f"""
+        with bootstrap_context as (
+          {_bootstrap_context_sql()}
+        ), grouped as (
+          select
+            {group_identity} as group_id,
+            min(roots.id::text) as root_id,
+            min({folder}) as folder_path,
+            (array_agg(
+              coalesce(
+                nullif(files.metadata #>> '{{scan_cache,file_entry,album_artist}}', ''),
+                nullif(files.metadata #>> '{{scan_cache,file_entry,artist}}', ''),
+                artists.name,
+                'Unknown Artist'
+              ) order by {row_order}
+            ))[1] as album_artist,
+            (array_agg(
+              files.metadata #>> '{{scan_cache,file_entry,year}}'
+              order by {row_order}
+            ))[1] as year
+          from library.local_track_files files
+          join library.local_tracks tracks on tracks.id = files.track_id
+          join library.library_roots roots
+            on roots.id = files.library_root_id
+           and roots.library_id = tracks.library_id
+           and roots.is_active is true
+          join bootstrap_context on bootstrap_context.library_id = tracks.library_id
+          left join library.local_artists artists
+            on artists.id = tracks.artist_id
+           and artists.library_id = tracks.library_id
+          left join lateral (
+            select overrides.override_payload
+            from library.exception_overrides overrides
+            where overrides.library_id = tracks.library_id
+              and (overrides.track_key = files.private_path or overrides.track_id = tracks.id)
+            order by
+              case when overrides.track_key = files.private_path then 0 else 1 end,
+              overrides.updated_at desc,
+              overrides.id desc
+            limit 1
+          ) exception_override on true
+          where files.scan_cache_stale is false
+            and tracks.album_id is null
+            and nullif(
+              files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}',
+              ''
+            ) is not null
+            and lower(btrim(coalesce(
+              case when exception_override.override_payload ? 'exception_type'
+                then exception_override.override_payload ->> 'exception_type'
+                else files.metadata #>> '{{scan_cache,file_entry,exception_type}}' end,
+              ''
+            ))) = ''
+            {targeted_scope}
+          group by {group_identity}
+        )
+        select group_id, root_id, folder_path, album_artist, year
+        from grouped
+        {after_scope}
+        order by
+          lower(coalesce(album_artist, '') collate "und-x-icu") collate "C",
+          coalesce(year, '') collate "C"
+        {"fetch first %(limit)s rows with ties" if bounded else ""};
+    """
+
+
 def _support_state_sql() -> str:
     return f"""
         with bootstrap_context as (
@@ -220,6 +377,8 @@ def _support_state_sql() -> str:
 def _non_album_candidates_sql(
     *,
     unassigned_only: bool = False,
+    membership_problems_only: bool = False,
+    membership_groups: bool = False,
     filter_artists: bool = False,
     filter_query: bool = False,
 ) -> str:
@@ -258,20 +417,53 @@ def _non_album_candidates_sql(
                 library.local_tracks.metadata ->> 'album',
                 library.local_artists.name,
                 library.local_albums.title,
-                library.local_track_files.relative_path,
-                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}',
-                active_track_files.private_path
+                regexp_replace(
+                    coalesce(library.local_track_files.relative_path, active_track_files.private_path, ''),
+                    '^.*[\\\\/]',
+                    ''
+                ),
+                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}'
             )) not like query_pattern.pattern
         )
     """ if filter_query else ""
-    return f"""
-        with bootstrap_context as (
-          {_bootstrap_context_sql()}
-        ),
-        {local_album_membership_ctes_sql()},
-        eligible_track_file_ids as (
-          select file_id as track_file_id from local_album_membership
-          where problem is not null
+    candidate_scope = (
+        """(
+          nullif(library.local_track_files.metadata #>>
+            '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
+          and lower(btrim(coalesce(
+            case when exception_override.override_payload ? 'exception_type'
+              then exception_override.override_payload ->> 'exception_type'
+              else library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}' end,
+            ''
+          ))) = ''
+        )"""
+        if membership_problems_only
+        else f"""(
+          {effective_non_album_predicate}
+          or nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
+          or exception_override.exception_type is not null
+          or (
+            not coalesce(exception_override.override_payload ? 'exception_type', false)
+            and {scanned_exception_predicate}
+          )
+        )"""
+    )
+    membership_track_join = """
+          join library.local_tracks membership_tracks
+            on membership_tracks.id = files.track_id
+           and membership_tracks.library_id = roots.library_id
+    """ if membership_problems_only and unassigned_only else ""
+    membership_unassigned_scope = (
+        "and membership_tracks.album_id is null"
+        if membership_problems_only and unassigned_only
+        else ""
+    )
+    membership_group_scope = f"""
+            and {_membership_problem_group_identity_sql("roots.id", "files.private_path")}
+              = any(%(membership_group_ids)s::text[])
+    """ if membership_groups else ""
+    limit_clause = "" if membership_groups else "limit %(limit)s"
+    other_eligibility_branches = "" if membership_problems_only else f"""
           union
           select library.local_track_files.id as track_file_id
           from library.local_tracks
@@ -318,6 +510,26 @@ def _non_album_candidates_sql(
            and library.local_tracks.library_id = library.exception_overrides.library_id
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
+    """
+    return f"""
+        with bootstrap_context as (
+          {_bootstrap_context_sql()}
+        ),
+        eligible_track_file_ids as (
+          -- Scan-published membership problems, scoped like the branches below:
+          -- a materialized whole-library CTE read every file's metadata (1.05 s
+          -- at 162k files) even when a search passed the cached track ids.
+          select files.id as track_file_id
+          from library.local_track_files files
+          join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
+          join bootstrap_context on bootstrap_context.library_id = roots.library_id
+          {membership_track_join}
+          where files.scan_cache_stale is false
+            and (%(track_id_count)s = 0 or files.track_id = any(%(track_ids)s::bigint[]))
+            and nullif(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
+            {membership_unassigned_scope}
+            {membership_group_scope}
+          {other_eligibility_branches}
         ),
         active_track_files as (
           select
@@ -412,7 +624,7 @@ def _non_album_candidates_sql(
           library.local_track_files.content_signature,
           library.local_track_files.metadata as track_file_metadata,
           (library.local_track_files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'local_album_membership_problem', (select problem from local_album_membership where file_id = library.local_track_files.id)
+            'local_album_membership_problem', nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '')
           ) as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,
@@ -420,6 +632,8 @@ def _non_album_candidates_sql(
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,title}}' as raw_file_title,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,library_root_category}}' as raw_file_category,
           library.library_roots.id as root_id,
+          {_membership_problem_group_identity_sql("library.library_roots.id", "active_track_files.private_path")} as membership_group_id,
+          {_membership_problem_folder_sql("active_track_files.private_path")} as membership_group_folder,
           library.library_roots.root_path,
           library.library_roots.root_kind,
           coalesce(
@@ -481,19 +695,11 @@ def _non_album_candidates_sql(
         {"and library.local_tracks.album_id is null" if unassigned_only else ""}
         {artist_scope}
         {query_scope}
-        and (
-            {effective_non_album_predicate}
-            or exists (select 1 from local_album_membership where file_id = library.local_track_files.id and problem is not null)
-            or exception_override.exception_type is not null
-            or (
-              not coalesce(exception_override.override_payload ? 'exception_type', false)
-              and {scanned_exception_predicate}
-            )
-          )
+        and ({candidate_scope})
         order by
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name, ''),
           library.local_tracks.title,
           active_track_files.private_path,
           active_track_files.id
-        limit %(limit)s;
+        {limit_clause};
     """

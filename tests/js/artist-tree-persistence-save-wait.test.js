@@ -28,7 +28,7 @@ test('Artist Tree persistence scenario awaits each server save before reloading'
       await new Promise(resolve => { saveGates.push({ folded, release: () => { pending = false; resolve(); } }); });
     },
   });
-  vm.runInNewContext(source, { expect, test: (_name, _options, fn) => { scenario = fn; } });
+  vm.runInNewContext(source, { expect, test: (name, _options, fn) => { if (name.startsWith('FTC-ARTIST-TREE-002')) scenario = fn; } });
   const running = scenario({
     galleryActions: { goto: async () => {}, waitForGalleryReady: async () => {} },
     navigationPanelActions: {

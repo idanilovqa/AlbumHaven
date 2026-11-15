@@ -1,0 +1,110 @@
+const path = require('node:path');
+const { test, expect } = require('@playwright/test');
+
+const staticRoot = path.resolve(__dirname, '../../music_app/static');
+
+async function mountCoverColumn(page, { saved = false, links = false } = {}) {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:#101a29;color:#eef3fa">
+    <div class="track-modal-body" style="display:grid;grid-template-columns:288px 1fr;height:420px;padding:16px">
+      <div class="track-modal-cover" id="track-modal-cover"></div><main></main>
+    </div></body></html>`);
+  for (const file of ['runtime/album-artbox-and-gallery-card.css', 'runtime/track-modal-and-lightbox.css', 'runtime/album-details-components.css']) {
+    await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
+  await page.addScriptTag({ content: 'function escapeHtml(v){return String(v ?? "").replaceAll("\\"","&quot;");} var state={modalReleases:[],modalReleaseIndex:0,coverLookup:{modal:{}}};' });
+  for (const file of ['album-artbox.js', 'album-details-components.js', 'album-additional-artbox.js']) {
+    await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  }
+  await page.evaluate(({ saved, links }) => {
+    const album = { key: 'neal-morse::testimony', name: 'Testimony', cover_path: 'cover.jpg',
+      additional_artworks: saved ? [{ slot: 1, source_kind: 'local', cover_path: 'back.jpg' }] : [] };
+    window.buildAlbumDisplayCoverUrl = () => 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+    window.albumHasDisplayCover = () => true;
+    state.modalReleases = [album];
+    const cover = document.getElementById('track-modal-cover');
+    cover.innerHTML = `<div class="track-modal-cover-shell">${buildAlbumArtboxHtml({ state: 'ready', label: 'Album cover', coverHtml: '<span style="display:block;width:100%;height:100%;background:#345"></span>' })}</div>`;
+    if (!saved) albumAdditionalArtboxState.pendingAlbumKey = album.key;
+    renderAlbumAdditionalArtbox(cover, album);
+    if (links) cover.insertAdjacentHTML('beforeend', buildAlbumServiceLinksHtml([{ provider: 'discogs', url: 'https://www.discogs.com/release/663181' }, { provider: 'musicbrainz', url: 'https://musicbrainz.org/release/x' }]));
+  }, { saved, links });
+}
+
+for (const scenario of [{ saved: false, links: false }, { saved: true, links: true }]) {
+  test(`two artboxes stay square inside the cover column (${scenario.saved ? 'saved art with links' : 'new Add art box'})`, async ({ page }) => {
+    await mountCoverColumn(page, scenario);
+    const column = await page.locator('#track-modal-cover').boundingBox();
+    const shells = page.locator('#track-modal-cover .track-modal-cover-shell');
+    await expect(shells).toHaveCount(2);
+    const [first, second] = await Promise.all([shells.nth(0).boundingBox(), shells.nth(1).boundingBox()]);
+    for (const box of [first, second]) {
+      expect(Math.abs(box.width - box.height)).toBeLessThan(2);
+      expect(box.y + box.height).toBeLessThanOrEqual(column.y + column.height + 1);
+    }
+    expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
+    if (scenario.saved) {
+      const links = page.locator('.album-details-service-links');
+      await expect(links.locator('a')).toHaveText(['Discogs', 'MusicBrainz']);
+      const linkBoxes = await links.locator('a').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().top));
+      expect(Math.abs(linkBoxes[0] - linkBoxes[1])).toBeLessThan(2);
+      const linksBox = await links.boundingBox();
+      expect(linksBox.x).toBeCloseTo(first.x, 0);
+      expect(linksBox.y + linksBox.height).toBeLessThanOrEqual(column.y + column.height + 1);
+      await expect(links.locator('a').first()).toHaveCSS('text-decoration-line', 'none');
+      await links.locator('a').first().hover();
+      await expect(links.locator('.album-details-service-link__label').first()).toHaveCSS('text-decoration-line', 'underline');
+      await expect(links.locator('img').first()).toHaveCSS('text-decoration-line', 'none');
+    } else {
+      const add = page.getByRole('button', { name: 'Add art' });
+      await expect(add).toBeVisible();
+      await expect(add.locator('.album-artbox__add-plus')).toHaveText('+');
+      await expect(add.locator('.album-artbox__add-plus')).toHaveCSS('border-top-width', '0px');
+    }
+  });
+}
+
+test('the second-artbox quick-search spinner stays centered without moving its trigger', async ({ page }) => {
+  await page.setContent(`<!doctype html><html><body style="margin:0">
+    <button class="action-button track-modal-cover-tool is-fast-fetch" style="width:34px;height:34px"
+      data-additional-artbox-quick-search="1" type="button">
+      <span class="action-button__content"><span class="action-button__icon">Q</span></span>
+    </button>
+  </body></html>`);
+  for (const file of [
+    'runtime/base-layout.css',
+    'runtime/track-modal-and-lightbox.css',
+    'button-component.css',
+  ]) {
+    await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
+  const button = page.locator('[data-additional-artbox-quick-search]');
+  const before = await button.boundingBox();
+
+  await button.evaluate((element) => element.setAttribute('aria-busy', 'true'));
+
+  const after = await button.boundingBox();
+  expect(after).toEqual(before);
+  const spinner = await button.evaluate((element) => {
+    const animation = element.getAnimations({ subtree: true })
+      .find((candidate) => candidate.effect?.pseudoElement === '::before');
+    animation.pause();
+    animation.currentTime = 200;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element, '::before');
+    const matrix = new DOMMatrixReadOnly(style.transform);
+    return {
+      left: Number.parseFloat(style.left),
+      top: Number.parseFloat(style.top),
+      transform: style.transform,
+      translateX: matrix.e,
+      translateY: matrix.f,
+      halfWidth: element.clientWidth / 2,
+      halfHeight: element.clientHeight / 2,
+    };
+  });
+  expect(spinner.left).toBeCloseTo(spinner.halfWidth, 1);
+  expect(spinner.top).toBeCloseTo(spinner.halfHeight, 1);
+  expect(spinner.transform).not.toBe('none');
+  expect(spinner.translateX).toBeCloseTo(-7, 1);
+  expect(spinner.translateY).toBeCloseTo(-7, 1);
+});

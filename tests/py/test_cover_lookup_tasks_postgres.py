@@ -48,6 +48,38 @@ def _adapter(connection):
     )
 
 
+def test_reusable_notification_read_is_scoped_and_returns_only_one_payload():
+    connection = _Connection(page_rows=[{
+        "task_key": "existing-task", "status": "completed",
+        "metadata": {"source_payload": {"id": "existing-task"}},
+    }])
+
+    task = _adapter(connection).load_reusable_notification(
+        {"C:/Music/Album/01.flac"}, manual_urls=["https://example.com/new.jpg"],
+        excluded_task_ids={"busy-task"},
+    )
+
+    assert task["id"] == "existing-task"
+    sql, params = connection.operations[-1]
+    assert "bootstrap_context.library_id = ops.cover_lookup_tasks.library_id" in sql
+    assert "ops.cover_lookup_track_path_set" in sql
+    assert "md5(" in sql
+    assert "= ops.cover_lookup_track_path_set(to_jsonb(%s::text[])" in sql
+    assert "ops.cover_lookup_tasks.task_key = any" in sql
+    assert "limit 1" in sql
+    assert ["busy-task"] in params
+    assert "provider_payload" in sql
+
+
+@pytest.mark.parametrize("windows_paths", [False, True])
+def test_reusable_notification_prefilters_with_indexed_set_then_verifies_exact_set(windows_paths):
+    sql = cover_lookup_tasks_postgres._load_reusable_notification_sql(windows_paths=windows_paths)
+    assert f", {str(windows_paths).lower()})" in sql
+    assert "md5(ops.cover_lookup_track_path_set(" in sql
+    assert "= ops.cover_lookup_track_path_set(to_jsonb(%s::text[])" in sql
+    assert "jsonb_array_elements_text" not in sql
+
+
 def test_notification_rows_keep_the_authoritative_album_key():
     row = cover_lookup_tasks_postgres._task_row(
         {
@@ -63,6 +95,37 @@ def test_notification_rows_keep_the_authoritative_album_key():
 
     assert row["album_key"] == "artist::album::year::2026"
     assert row["provider_payload"]["save_generation"] == "save-generation-1"
+
+
+def test_notification_order_survives_new_activity_and_legacy_row_loading():
+    original = "2026-05-17T00:01:00+00:00"
+    row = cover_lookup_tasks_postgres._task_row({
+        "id": "old-card", "status": "pending",
+        "created_at": "2026-11-02T12:00:00+00:00",
+        "notification_order_at": original,
+    }, source_index=0)
+    assert row["metadata"]["notification_order_at"] == original
+    loaded = cover_lookup_tasks_postgres._task_from_row({
+        "task_key": "old-card", "status": "completed",
+        "requested_at": "2026-05-17T00:00:00+00:00", "completed_at": original,
+        "metadata": {"source_payload": {"id": "old-card"}},
+    })
+    assert loaded["notification_order_at"] == original
+
+
+def test_every_notification_read_uses_the_persisted_order_key():
+    sqls = [
+        cover_lookup_tasks_postgres._load_notifications_sql(),
+        cover_lookup_tasks_postgres._load_notification_summaries_sql(),
+        cover_lookup_tasks_postgres._load_notification_summary_page_sql(
+            has_cursor=True, active_only=False, has_task_ids=False,
+        ),
+    ]
+    for sql in sqls:
+        assert "notification_order_at" in sql
+    upsert = cover_lookup_tasks_postgres._upsert_notification_sql()
+    assert "ops.cover_lookup_tasks.metadata ->> 'notification_order_at'" in upsert
+    assert "excluded.metadata || jsonb_build_object" in upsert
 
 
 def test_load_notification_reads_one_full_persisted_task_by_id():

@@ -1,0 +1,48 @@
+/* Shared Dialog primitive (confirm and app-form dialogs). Consumers own only their stacking order. */
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 96;
+}
+.confirm-modal[hidden] {
+  display: none;
+}
+.confirm-modal-dialog {
+  width: min(440px, calc(100vw - 32px));
+  background: var(--panel, var(--appearance-panel-background, #101a29));
+  border: 1px solid var(--border, var(--line));
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.36);
+  padding: 20px;
+}
+.confirm-modal-title {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+.confirm-modal-text {
+  color: var(--muted, var(--appearance-muted));
+  line-height: 1.45;
+}
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+#app-form-modal.app-form-reading .confirm-modal-dialog { width: min(1000px, calc(100vw - 32px)); }
+#app-form-modal.app-form-reading [hidden] { display: none !important; }
+.app-form-anchored { background: transparent; pointer-events: none; }
+.app-form-anchored .confirm-modal-dialog { pointer-events: auto; }
+#app-form-modal .confirm-modal-dialog { box-sizing: border-box; display: flex; flex-direction: column; max-height: 100%; overflow: visible; }
+#app-form-content { min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
+#app-form-modal .confirm-modal-title, #app-form-modal .confirm-modal-actions, #app-form-error { flex: 0 0 auto; }
+#app-form-error:empty { display: none; }
+/* Every app-form dialog closes from the shared X at the end of its title row. */
+#app-form-modal .app-form-header { display: flex; align-items: flex-start; gap: 10px; flex: 0 0 auto; }
+#app-form-modal .app-form-header > .confirm-modal-title { flex: 1 1 auto; min-width: 0; }
+#app-form-modal .app-form-close { flex: 0 0 auto; margin: -6px -6px 0 0; }

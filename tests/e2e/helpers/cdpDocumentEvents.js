@@ -67,7 +67,9 @@ export class CDPDocumentEvents extends EventEmitter {
     const record = { id: event.requestId, loaderId: event.loaderId, url: event.request.url,
       method: event.request.method, events: [], dispatched: false, terminal: false,
       completion, complete, error: null, response: null };
-    record.request = { url: () => record.url, method: () => record.method,
+    const headers = Object.fromEntries(Object.entries(event.request.headers || {})
+      .map(([name, value]) => [name.toLowerCase(), value]));
+    record.request = { url: () => record.url, method: () => record.method, headers: () => headers,
       resourceType: () => 'fetch', isNavigationRequest: () => false };
     this.records.set(event.requestId, record);
     record.events.push(['request', record.request]);

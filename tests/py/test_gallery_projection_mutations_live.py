@@ -372,18 +372,24 @@ def test_gallery_cleanup_removes_only_expired_inactive_revisions(gallery_invento
 
 def test_repeatable_read_observer_sees_complete_old_then_new_publication(gallery_inventory):
     fixture = gallery_inventory
+    occurrence = {
+        "artist_id": "proof-id", "artist_name": "Proof", "artist_sort_name": "proof",
+        "album_id": 42, "album_key": "proof", "album_title": "Proof",
+    }
+    sidebar = [{"artist": "Proof", "artist_display": "Proof", "count": 1}]
     with isolatedPostgres._connect(fixture.runtime_url) as reader:
         reader.execute("set transaction isolation level repeatable read, read only")
         old = gallery.load_gallery_projection_page(reader, fixture.view_state, {})
         with isolatedPostgres._connect(fixture.runtime_url) as publisher:
-            assert publish(publisher, fixture.context, fixture.view_state,
-                           rows=[{"album_key": "proof", "album_title": "Proof"}],
-                           sidebar=[{"artist": "Proof", "artist_display": "Proof", "count": 1}])
+            assert gallery._publish_gallery_projection_on_connection(
+                publisher, fixture.context, fixture.view_state,
+                {"revision": "a" * 64, "ordered": [occurrence], "sidebar": sidebar, "album_count": 1},
+            )
         assert gallery.load_gallery_projection_page(reader, fixture.view_state, {}) == old
     with isolatedPostgres._connect(fixture.runtime_url) as reader:
         new = gallery.load_gallery_projection_page(reader, fixture.view_state, {})
-        assert new[0] == [{"album_key": "proof", "album_title": "Proof"}]
-        assert new[1] == [{"artist": "Proof", "artist_display": "Proof", "count": 1}]
+        assert new[0] == [occurrence]
+        assert new[1] == sidebar
         assert new[2] == 1
         assert new[3]["revision"] == "a" * 64
 
@@ -435,6 +441,7 @@ def test_publisher_accepts_and_round_trips_featured_kind(gallery_inventory):
     occurrence = {
         "artist_id": "guest-id",
         "artist_name": "Guest",
+        "artist_sort_name": "guest",
         "album_id": 42,
         "album_key": "featured-proof",
         "album_title": "Featured Proof",
@@ -443,11 +450,13 @@ def test_publisher_accepts_and_round_trips_featured_kind(gallery_inventory):
     }
 
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert publish(
+        assert gallery._publish_gallery_projection_on_connection(
             connection,
             fixture.context,
             fixture.view_state,
-            rows=[occurrence],
+            {"revision": "a" * 64, "ordered": [occurrence],
+             "sidebar": [{"artist": "Guest", "artist_display": "Guest", "count": 1}],
+             "album_count": 1},
         ) is True
 
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
@@ -472,6 +481,9 @@ def test_publisher_rejects_private_payload_and_preserves_ready_snapshot(gallery_
 @pytest.mark.parametrize("fail_first", [False, True])
 def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inventory, monkeypatch, fail_first):
     fixture = gallery_inventory
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        before = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
+    assert before is not None
     added = fixture.entry("New Artist/Third/three.flac", artist="New Artist", album="Third")
     fixture.seed(fixture.first, fixture.second, added)
     repository = browse.PostgresLibraryBrowseRepository(
@@ -523,14 +535,28 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
         assert not pending, "Failed refresh did not release its single-flight slot"
         repository.build_root_startup_preview_payload()
         assert len(refreshes) == 2
-    assert refreshes[-1].result(timeout=10)["built"] > 0
+    # Journal replay publishes membership atomically; the outer refresh must reuse it.
+    assert refreshes[-1].result(timeout=10) == {"built": 0}
     assert len(attempts) == (2 if fail_first else 1)
     assert not repository._load_relation_alias_maps().get("projection_stale_reason")
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
-        assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is not None
+        page = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
+        assert page is not None
+        assert {(row["artist_name"], row["album_title"]) for row in page[0]} == {
+            ("Owner", "First"), ("Owner", "Second"), ("Guest", "Second"),
+            ("Owner", "Third"), ("New Artist", "Third"),
+        }
+        assert page[2] == 3
+        assert page[3]["revision"] != before[3]["revision"]
+        context = gallery.gallery_projection_context(connection)
+        header = connection.execute(
+            "select source_generation from library.gallery_membership_headers where library_id=%s and scope_key=%s",
+            (context["library_id"], gallery.gallery_projection_scope_key(fixture.view_state)),
+        ).fetchone()
+        assert header["source_generation"] == context["generation"]
 
 
-def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gallery_inventory, monkeypatch):
+def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gallery_inventory):
     from threading import Event
     from music_app.services import relation_projection_postgres as relations
     from music_app.services import scan_cache_persistence as persistence
@@ -539,22 +565,10 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
     added = fixture.entry("Added/Third/three.flac", artist="Added", album="Third")
     fixture.seed(fixture.first, fixture.second, added)
     concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
-    built, publish, revision_locked = Event(), Event(), Event()
-    release_target, target_family_attempt = Event(), Event()
-    build_views = relations.build_relation_views_from_postgres_rows
-    replace_families = relations.replace_artist_family_projection_in_transaction
-
-    def pause_built_sources(*args, **kwargs):
-        result = build_views(*args, **kwargs)
-        built.set()
-        assert publish.wait(10)
-        return result
-
-    def coordinate_family_publication(*args, **kwargs):
-        result = replace_families(*args, **kwargs)
-        release_target.set()
-        assert target_family_attempt.wait(10)
-        return result
+    refresh_locked, target_attempted = Event(), Event()
+    inventory_lock = relations.inventory_publication_advisory_lock_sql()
+    relation_lock = relations.relation_projection_advisory_lock_sql()
+    lock_order = {False: [], True: []}
 
     class Connection:
         def __init__(self, connection, *, targeted):
@@ -573,16 +587,14 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
 
         def execute(self, query, params=None):
             statement = str(query)
-            if not self.targeted and statement == persistence._inventory_publication_advisory_lock_sql():
-                # The fixed publisher waits behind the inventory owner instead of
-                # taking family rows that the owner still needs to replace.
-                release_target.set()
-            if self.targeted and "insert into library.local_artist_family_links" in statement.lower():
-                target_family_attempt.set()
+            if statement in (inventory_lock, relation_lock):
+                lock_order[self.targeted].append(statement)
+            if self.targeted and statement == inventory_lock:
+                target_attempted.set()
             result = self.connection.execute(query, params)
-            if self.targeted and statement == persistence._increment_inventory_mutation_revision_sql():
-                revision_locked.set()
-                assert release_target.wait(10)
+            if not self.targeted and statement == inventory_lock:
+                refresh_locked.set()
+                assert target_attempted.wait(10)
             return result
 
     def connect(database_url, *, targeted):
@@ -590,8 +602,6 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
         connection.execute("set statement_timeout = '5s'")
         return Connection(connection, targeted=targeted)
 
-    monkeypatch.setattr(relations, "build_relation_views_from_postgres_rows", pause_built_sources)
-    monkeypatch.setattr(relations, "replace_artist_family_projection_in_transaction", coordinate_family_publication)
     adapter = persistence.PostgresScanCacheAdapter(
         fixture.config, connect=lambda url: connect(url, targeted=True),
     )
@@ -601,24 +611,24 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
             connect=lambda url: connect(url, targeted=False),
         )
         try:
-            assert built.wait(10)
+            assert refresh_locked.wait(10)
             mutation = executor.submit(
                 adapter.persist_targeted_inventory_mutation,
                 root_id=fixture.roots[0]["id"],
                 active_file_entries={concurrent["path"]: concurrent},
             )
-            assert revision_locked.wait(10)
-            publish.set()
+            assert target_attempted.wait(10)
             mutation.result(timeout=15)
             refresh.result(timeout=15)
         finally:
-            publish.set()
-            release_target.set()
-            target_family_attempt.set()
+            target_attempted.set()
+    assert lock_order == {False: [inventory_lock, relation_lock], True: [inventory_lock, relation_lock]}
+
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     aliases = repository._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]
     assert "Concurrent" in aliases["alias_to_canonical"]
+    assert "Added" in aliases["alias_to_canonical"]
 
 
 def test_targeted_publication_coexists_with_legacy_relation_only_publisher(gallery_inventory, monkeypatch):
@@ -629,6 +639,7 @@ def test_targeted_publication_coexists_with_legacy_relation_only_publisher(galle
     fixture = gallery_inventory
     added = fixture.entry("Added/Third/three.flac", artist="Added", album="Third")
     fixture.seed(fixture.first, fixture.second, added)
+    relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
     family_locked, release_publisher = Event(), Event()
     replace_families = relations.replace_artist_family_projection_in_transaction
@@ -673,15 +684,23 @@ def test_targeted_publication_coexists_with_legacy_relation_only_publisher(galle
         connection.execute("set statement_timeout = '5s'")
         return Connection(connection, targeted=targeted)
 
+    def publish_legacy_relations():
+        # An older process owns only the relation lock and publishes only legacy tables.
+        with connect(fixture.runtime_url, targeted=False) as connection:
+            connection.execute(relations.relation_projection_advisory_lock_sql())
+            snapshot = connection.execute(persistence._load_scan_snapshot_sql()).fetchone()["scan_cache"]
+            relations.replace_artist_family_projection_in_transaction(
+                connection, snapshot["relation_views"],
+                relations_last_built=snapshot["relations_last_built"], legacy=True,
+            )
+            connection.execute(persistence._save_scan_snapshot_sql(), {"scan_cache": Jsonb(snapshot)})
+
     monkeypatch.setattr(relations, "replace_artist_family_projection_in_transaction", pause_legacy_publisher)
     adapter = persistence.PostgresScanCacheAdapter(
         fixture.config, connect=lambda url: connect(url, targeted=True),
     )
     with ThreadPoolExecutor(max_workers=2) as executor:
-        refresh = executor.submit(
-            relations.ensure_relation_projection_ready, fixture.config,
-            connect=lambda url: connect(url, targeted=False),
-        )
+        refresh = executor.submit(publish_legacy_relations)
         try:
             assert family_locked.wait(10)
             mutation = executor.submit(
@@ -698,3 +717,52 @@ def test_targeted_publication_coexists_with_legacy_relation_only_publisher(galle
     )._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]
     assert "Concurrent" in aliases["alias_to_canonical"]
+
+
+@pytest.mark.parametrize('sort_name', [None, 'Owner custom sort'])
+def test_targeted_inventory_preserves_shared_artist_identity(watcher_repair_inventory, sort_name):
+    from music_app.services import relation_projection_postgres as relations
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    fixture = watcher_repair_inventory
+    first = fixture.entry('Owner/First/one.flac', artist='Owner', album='First')
+    second = fixture.entry('Owner/Second/two.flac', artist='Owner', album='Second')
+    fixture.seed(first, second)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            'update library.local_artists set sort_name=%s where name=%s',
+            (sort_name, 'Owner'),
+        )
+    relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    sibling_fact_sql = """
+        select to_jsonb(facts) as record, facts.xmin::text as revision
+        from library.local_relation_album_facts facts
+        join library.local_albums albums on albums.id=facts.album_id
+        join library.local_tracks tracks on tracks.album_id=albums.id
+        join library.local_track_files files on files.track_id=tracks.id
+        where files.private_path=%s
+    """
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        sibling_before = connection.execute(sibling_fact_sql, (second['path'],)).fetchone()
+        assert sibling_before is not None
+    updated = {**first, 'title': 'Updated track title'}
+    adapter = PostgresScanCacheAdapter(fixture.config, connect=isolatedPostgres._connect)
+    adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]['id'], active_file_entries={updated['path']: updated},
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        artist = connection.execute(
+            'select name, sort_name from library.local_artists where name=%s', ('Owner',),
+        ).fetchone()
+        assert dict(artist) == {'name': 'Owner', 'sort_name': sort_name}
+        assert connection.execute(sibling_fact_sql, (second['path'],)).fetchone() == sibling_before
+        assert connection.execute('select count(*) as count from library.local_relation_dirty_albums').fetchone()['count'] == 0
+    added = fixture.entry('New Artist/Third/three.flac', artist='New Artist', album='Third')
+    adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]['id'], active_file_entries={added['path']: added},
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute(
+            'select name, sort_name from library.local_artists where name=%s', ('New Artist',),
+        ).fetchone() == {'name': 'New Artist', 'sort_name': 'new artist'}

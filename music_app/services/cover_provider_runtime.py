@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextlib import nullcontext
+import hashlib
 
 import logging
+from threading import Lock
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -163,6 +166,38 @@ def discogs_api_get_json(
     )
 
 
+# Decoding a large cover to measure it dominates probe time. The same image bytes (a repeat search, or several
+# links to one picture) measure the same, so recent measurements are remembered by content.
+_PROBE_MEASUREMENTS: OrderedDict[bytes, tuple[int, int, float]] = OrderedDict()
+_PROBE_MEASUREMENTS_MAX = 256
+_PROBE_MEASUREMENTS_LOCK = Lock()
+
+
+def _measure_probe_image(raw_bytes: bytes) -> tuple[int, int, float] | None:
+    key = hashlib.sha256(raw_bytes).digest()
+    with _PROBE_MEASUREMENTS_LOCK:
+        cached = _PROBE_MEASUREMENTS.get(key)
+        if cached is not None:
+            _PROBE_MEASUREMENTS.move_to_end(key)
+            return cached
+    decoded = decode_image_bytes(raw_bytes)
+    if decoded is None:
+        return None
+    img, width, height = decoded
+    try:
+        measurement = (width, height, measure_image_sharpness(img))
+    finally:
+        try:
+            img.close()
+        except Exception:
+            pass
+    with _PROBE_MEASUREMENTS_LOCK:
+        _PROBE_MEASUREMENTS[key] = measurement
+        while len(_PROBE_MEASUREMENTS) > _PROBE_MEASUREMENTS_MAX:
+            _PROBE_MEASUREMENTS.popitem(last=False)
+    return measurement
+
+
 def probe_candidate_metrics(url: str, *, user_agent: str, service: str, context: str) -> dict[str, object] | None:
     raw_bytes = http_get_bytes(
         url,
@@ -172,17 +207,10 @@ def probe_candidate_metrics(url: str, *, user_agent: str, service: str, context:
     )
     if not raw_bytes:
         return None
-    decoded = decode_image_bytes(raw_bytes)
-    if decoded is None:
+    measurement = _measure_probe_image(raw_bytes)
+    if measurement is None:
         return None
-    img, width, height = decoded
-    try:
-        sharpness = measure_image_sharpness(img)
-    finally:
-        try:
-            img.close()
-        except Exception:
-            pass
+    width, height, sharpness = measurement
     return {
         "raw_bytes": raw_bytes,
         "width": width,

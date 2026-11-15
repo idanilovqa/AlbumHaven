@@ -26,13 +26,12 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   };
 
   const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (mobileIndex) disposeProblematicFilesVirtualList();
-  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+  const virtualListApi = typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
-  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const albumsByKey = new Map(getAllProblematicItems().map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
@@ -41,10 +40,18 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onNearEnd: () => {
+          const query = String(state.utility.searchQuery || '').trim();
+          if (query.length >= 2) void loadNextProblematicServerSearchPage();
+          void loadNextProblematicFilesPage();
+          void loadNextProblematicArtistPage();
+        },
       });
     }
     if (problematicFilesVirtualList) {
       problematicFilesVirtualList.render(items, selectedKey);
+      // A refresh can move the track's album; keep it in view until the user scrolls.
+      if (state.utility.focusedTrackPath) problematicFilesVirtualList.reveal(selectedKey);
     } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
@@ -108,6 +115,33 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
+  const activeSearchQuery = String(state.utility.searchQuery || '').trim();
+  if (!items.length
+      && activeSearchQuery.length >= 2
+      && state.utility.problematicServerSearchPendingQuery === activeSearchQuery
+      && state.utility.problematicServerSearchSettledQuery !== activeSearchQuery) {
+    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
+    return;
+  }
+  if (!items.length && activeSearchQuery.length >= 2
+      && state.utility.problematicServerSearchHasMore) {
+    void loadNextProblematicServerSearchPage();
+    replaceListContents('<div class="utility-empty-state compact">Searching...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Searching problematic albums...</div>';
+    return;
+  }
+  if (!items.length
+      && (state.utility.problematicHasMore || state.utility.problematicArtistHasMore)) {
+    if (activeSearchQuery) void loadProblematicPagesUntilLocalQueryMatch(activeSearchQuery);
+    else {
+      void loadNextProblematicFilesPage();
+      void loadNextProblematicArtistPage();
+    }
+    replaceListContents('<div class="utility-empty-state compact">Loading more matching albums...</div>');
+    els.detail.innerHTML = '<div class="utility-empty-state">Loading more matching albums...</div>';
+    return;
+  }
   if (!items.length) {
     replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
@@ -123,9 +157,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
-  if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
+  if (selectedProblematicMissing && (activeSearchQuery || (state.utility.selectedProblemFilters || []).length)) {
     renderTree('');
-    els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
+    els.detail.innerHTML = '<div class="utility-empty-state">Select an entry from the list to see the details.</div>';
     return;
   }
 
@@ -188,6 +222,11 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
   initializeRepairSelections(selectedAlbum);
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
+  const coverImage = els.detail.querySelector?.('img[data-gallery-cover-src]');
+  const coverUrl = coverImage?.getAttribute?.('data-gallery-cover-src');
+  if (coverImage && coverUrl && typeof loadGalleryCoverPreviewImage === 'function') {
+    void loadGalleryCoverPreviewImage(coverImage, coverUrl);
+  }
   if (state.utility.focusedTrackPath) {
     const focusedTrackPath = String(state.utility.focusedTrackPath);
     const scrollFocusedRowsIntoView = () => {
@@ -359,7 +398,6 @@ function renderUtilityRules() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.rulesLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading rules...</div>';
@@ -629,7 +667,6 @@ function renderUtilityLoops() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.loopsLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading loops...</div>';
@@ -705,7 +742,6 @@ function renderUtilityAppearance() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   const appearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
   if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'backgrounds';
   const selectedKey = state.utility.appearanceKey;
@@ -774,7 +810,6 @@ function renderUtilityIntegrations() {
     els.problemFilterButton.hidden = true;
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
 
   if (state.utility.integrationsLoading) {
     els.list.innerHTML = '<div class="utility-empty-state compact">Loading integrations...</div>';
@@ -824,7 +859,6 @@ function renderUtilityLogHistory() {
   if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
   if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
-  if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
   const scroll = els.list.scrollTop;
   reconcileUtilityLogHistoryTree(els, value);
   els.list.scrollTop = scroll;
@@ -836,6 +870,7 @@ function renderUtilityModalContent(options = {}) {
   if (els.search) els.search.readOnly = false;
   if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  const navigationChanged = els.list?.dataset?.utilityNavigationOwner !== activeTab;
 
   if (activeTab !== 'problematic-files') disposeProblematicFilesVirtualList();
   if (activeTab !== 'log-history' && els.list?.dataset
@@ -843,6 +878,7 @@ function renderUtilityModalContent(options = {}) {
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
+  els.overlay?.removeAttribute?.('data-utility-tab-pending');
   els.detail?.classList.remove('is-loop-detail');
   els.tabs.forEach((tab) => {
     const selected = tab.getAttribute('data-utility-tab') === activeTab;
@@ -859,6 +895,15 @@ function renderUtilityModalContent(options = {}) {
   }
   syncUtilityTabAlignment(els);
   if (options.shellOnly === true) {
+    if (navigationChanged) {
+      if (els.list) {
+        els.list.innerHTML = '<div class="utility-empty-state compact">Loading...</div>';
+        els.list.scrollTop = 0;
+      }
+      if (els.detail) els.detail.innerHTML = '<div class="utility-empty-state">Loading...</div>';
+      if (els.count) els.count.textContent = '';
+      if (els.sidebarLabel) els.sidebarLabel.textContent = selectedTab?.textContent?.trim() || '';
+    }
     if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
     if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
     return;

@@ -31,6 +31,14 @@ const albumTrackTableSource = fs.readFileSync(
   path.join(path.dirname(helperPath), 'album-track-table.js'),
   'utf8',
 );
+const appChromeCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'),
+  'utf8',
+);
+const indexTemplateSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'),
+  'utf8',
+);
 
 class FakeClassList {
   constructor() {
@@ -158,7 +166,6 @@ function loadHelper() {
         focusGlowKey: '',
         focusGlowVisible: false,
       },
-      versionPicker: {},
       ui: {},
       lightbox: {},
       coverLookup: {
@@ -208,6 +215,9 @@ function loadHelper() {
     },
     getProblematicAlbumForTrackPath() {
       return null;
+    },
+    buildProblematicAlbumTrackPathIndex() {
+      return new Map();
     },
     getCurrentGalleryPreferenceArtist() {
       return '';
@@ -284,6 +294,134 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
+test('populated Loose Tracks paints before deferred table enhancements run', () => {
+  const { context, flushAnimationFrame } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  const summary = new FakeElement('summary');
+  const trackTable = new FakeElement('track-table');
+  const details = new FakeElement('details');
+  const calls = [];
+
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  details.open = true;
+  details.querySelector = () => summary;
+  details.closest = () => trackTable;
+  details.addEventListener = () => calls.push('collapsible');
+  trackTable.querySelector = () => null;
+  trackTable.classList.toggle = () => calls.push('collapsed-state');
+  table.querySelectorAll = () => [details];
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.buildAlbumDetailsHeaderHtml = () => '<h2>Loose Tracks</h2>';
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.syncAlbumTrackCreditMotion = () => calls.push('credit-motion');
+  context.attachSharedPlayer = () => calls.push('shared-player');
+  context.URL = URL;
+  context.state.view.library_non_album_tracks = [{
+    path: 'D:/Music/Loose.flac',
+    title: 'Loose',
+    artist: 'Artist',
+    duration_seconds: 60,
+    exception_type: 'Interview',
+  }];
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
+
+  context.openNonAlbumModal({ libraryWide: true });
+
+  assert.equal(overlay.hidden, false);
+  assert.match(table.innerHTML, /Loose/);
+  assert.deepEqual(calls, []);
+
+  flushAnimationFrame();
+
+  assert.deepEqual(calls, []);
+
+  flushAnimationFrame();
+
+  assert.deepEqual(calls, [
+    'credit-motion',
+    'collapsed-state',
+    'collapsible',
+    'shared-player',
+  ]);
+});
+
+test('empty Loose Tracks does not offer Edit Tags', () => {
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.state.view = { library_non_album_tracks: [] };
+  context.state.ui = {};
+  context.hasHydratedLibraryNonAlbumTracks = () => true;
+  context.getVisibleNonAlbumTracks = () => [];
+  context.buildLooseTracksHeaderActionsHtml = () => '<button data-open-non-album-tag-editor="1">Edit</button>';
+  context.buildAlbumDetailsHeaderHtml = config => config.actionsHtml || '';
+
+  context.openNonAlbumModal({ libraryWide: true });
+
+  assert.doesNotMatch(header.innerHTML, /data-open-non-album-tag-editor/);
+});
+
+test('artist-scoped Loose Tracks places Back before the header title', () => {
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  const header = new FakeElement('non-album-modal-header');
+  const table = new FakeElement('non-album-modal-table');
+  overlay.addEventListener = () => {};
+  overlay.querySelector = () => null;
+  overlay.classList.toggle = () => {};
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.document.body.appendChild(overlay);
+  context.document.body.appendChild(header);
+  context.document.body.appendChild(table);
+  context.state.view = { selected_artist: 'Agalloch', non_album_tracks_deferred: false };
+  context.state.ui = {};
+  context.getVisibleNonAlbumTracks = () => [{ path: '/music/agalloch/loose.flac', title: 'Loose' }];
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  vm.runInContext(
+    fs.readFileSync(path.join(path.dirname(helperPath), 'album-details-components.js'), 'utf8'),
+    context,
+  );
+
+  context.openNonAlbumModal({ libraryWide: false });
+
+  assert.match(
+    header.innerHTML,
+    /data-close-non-album-modal="1"[^>]*aria-label="Back to Agalloch"[\s\S]*?<h3[^>]*>Loose Tracks<\/h3>/,
+  );
+});
+
+test('initial artist loose tracks remain usable without a second gallery request', async () => {
+  const { context } = loadHelper();
+  const tracks = [{ path: '/music/agalloch/loose.flac', artist: 'Agalloch', title: 'Loose' }];
+  context.state.view = { selected_artist: 'Agalloch', non_album_tracks: tracks, non_album_tracks_deferred: false };
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Agalloch&include_non_album=1';
+  context.URL = URL;
+  context.fetch = () => { throw new Error('Initial artist payload must not trigger another gallery request'); };
+  assert.deepEqual(await context.hydrateDeferredNonAlbumTracks(), tracks);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks);
+});
+
 test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
   const { context } = loadHelper();
   const requested = [];
@@ -312,10 +450,161 @@ test('deferred non-album tracks hydrate without rerendering the gallery', async 
   await context.hydrateDeferredNonAlbumTracks();
 
   assert.equal(requested.length, 1);
-  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), '1');
+  assert.equal(new URL(requested[0], 'http://localhost').pathname, '/library/loose-tracks');
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('artist'), 'Agalloch');
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), null);
   assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
   assert.equal(context.state.view.non_album_tracks_deferred, false);
   assert.equal(controlSyncs, 1);
+});
+
+test('artist loose-track availability automatically retries a deferred snapshot and follows inventory revision', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  const timers = [];
+  let controlSyncs = 0;
+  const responses = [
+    { non_album_track_count: 0, non_album_tracks_deferred: true },
+    { non_album_track_count: 2 },
+  ];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => { controlSyncs += 1; };
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return timers.length;
+  };
+  context.state.status = { inventory_mutation_revision: 7 };
+  context.state.view = {
+    selected_artist: 'Agalloch',
+    visible_library_categories: ['main_library'],
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => responses.shift() };
+  };
+
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 0);
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
+  assert.equal(requested.length, 1);
+  assert.equal(timers.length, 1);
+  assert.ok(timers[0].delay > 0);
+  await timers[0].callback();
+  assert.equal(requested.length, 2);
+  assert.equal(context.state.view.non_album_track_count, 2);
+  assert.equal(controlSyncs, 1);
+
+  const url = new URL(requested[0], 'http://localhost');
+  assert.equal(url.pathname, '/library/loose-tracks');
+  assert.equal(url.searchParams.get('artist'), 'Agalloch');
+  assert.equal(url.searchParams.get('availability'), '1');
+  assert.equal(url.searchParams.get('inventory_revision'), '7');
+  assert.equal(context.state.view.non_album_tracks_deferred, true);
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), true);
+  context.state.status.inventory_mutation_revision = 8;
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), false);
+});
+
+test('artist loose-track availability ignores gallery search and expands a matched subset to the full artist collection', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.state.view = {
+    selected_artist: 'ДДТ',
+    query: 'ремиксы',
+    visible_library_categories: ['main_library'],
+    non_album_tracks: [{ path: '/music/ddt/remix.flac', artist: 'ДДТ', title: 'Ремиксы' }],
+    non_album_tracks_deferred: false,
+  };
+  context.fetch = async (url) => {
+    const requestUrl = new URL(url, 'http://localhost');
+    requested.push(requestUrl);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => requestUrl.searchParams.get('availability') === '1'
+        ? { non_album_track_count: 2 }
+        : {
+          non_album_tracks: [
+            { path: '/music/ddt/remix.flac', artist: 'ДДТ', title: 'Ремиксы' },
+            { path: '/music/ddt/other.flac', artist: 'ДДТ', title: 'Другая песня' },
+          ],
+        },
+    };
+  };
+
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 2);
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].pathname, '/library/loose-tracks');
+  assert.equal(requested[0].searchParams.get('artist'), 'ДДТ');
+  assert.equal(requested[0].searchParams.get('availability'), '1');
+  assert.equal(requested[0].searchParams.get('q'), null);
+  assert.equal(context.state.view.non_album_tracks_deferred, true,
+    'a search-matched subset must not masquerade as the full artist collection');
+
+  await context.hydrateDeferredNonAlbumTracks();
+  assert.equal(requested.length, 2);
+  assert.equal(requested[1].pathname, '/library/loose-tracks');
+  assert.equal(requested[1].searchParams.get('artist'), 'ДДТ');
+  assert.equal(requested[1].searchParams.get('q'), null);
+  assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Ремиксы', 'Другая песня']);
+});
+
+test('confirmed zero artist loose-track availability remains terminal under search', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.state.view = {
+    selected_artist: 'Начало Века',
+    query: 'ремиксы',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.fetch = async (url) => {
+    requested.push(new URL(url, 'http://localhost'));
+    return { ok: true, status: 200, json: async () => ({ non_album_track_count: 0 }) };
+  };
+
+  assert.equal(await context.hydrateArtistNonAlbumAvailability(), 0);
+  assert.equal(context.hasHydratedArtistNonAlbumAvailability(), true);
+  assert.equal(requested[0].searchParams.get('artist'), 'Начало Века');
+  assert.equal(requested[0].searchParams.get('q'), null);
+});
+
+test('library loose tracks automatically retry a deferred snapshot and follow inventory revision', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  const timers = [];
+  const responses = [
+    { library_non_album_tracks: [], non_album_tracks_deferred: true },
+    { library_non_album_tracks: [{ path: '/music/loose.flac', title: 'Loose' }] },
+  ];
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.scheduleBrowserTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return timers.length;
+  };
+  context.state.status = { inventory_mutation_revision: 7 };
+  context.state.view = { visible_library_categories: ['main_library'] };
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => responses.shift() };
+  };
+
+  assert.deepEqual(await context.hydrateLibraryNonAlbumTracks(), []);
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  assert.equal(requested.length, 1);
+  assert.equal(timers.length, 1);
+  await timers[0].callback();
+  assert.equal(context.state.view.library_non_album_tracks[0].title, 'Loose');
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('inventory_revision'), '7');
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true);
+  context.state.status.inventory_mutation_revision = 8;
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
 });
 
 test('deferred non-album hydration accepts an equivalent reordered category scope', async () => {
@@ -364,6 +653,28 @@ test('deferred non-album hydration accepts an equivalent reordered category scop
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
+test('loose-track search indicator follows confirmed custom-collection results and query scope', async () => {
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.buildApiUrl = view => `/view-data?q=${encodeURIComponent(view.query || '')}`;
+  context.state.view = { query: 'Bright Eyes', non_album_tracks_deferred: true };
+  context.fetch = async () => ({ ok: true, json: async () => ({
+    non_album_tracks: [],
+    library_non_album_tracks: [{ title: 'At the Bottom of Everything', artist: 'Bright Eyes', exception_type: 'Custom Collection' }],
+  }) });
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), true);
+  context.state.view.query = 'Another artist';
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+  context.state.view.query = '';
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+});
+
 test('library-wide non-album tracks hydrate after artist hydration completes', async () => {
   const { context } = loadHelper();
   const requested = [];
@@ -372,8 +683,9 @@ test('library-wide non-album tracks hydrate after artist hydration completes', a
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => {
     requested.push(String(url));
-    const libraryWide = new URL(url, 'http://localhost')
-      .searchParams.get('include_library_wide_non_album') === '1';
+    const requestUrl = new URL(url, 'http://localhost');
+    const libraryWide = requestUrl.pathname === '/library/loose-tracks'
+      && !requestUrl.searchParams.has('artist');
     return {
       ok: true,
       status: 200,
@@ -411,7 +723,10 @@ test('library-wide non-album tracks hydrate after artist hydration completes', a
   };
   await context.hydrateDeferredNonAlbumTracks();
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
-  assert.equal(requested.length, 4);
+  assert.equal(requested.length, 3, 'another artist reuses the same library-wide Loose Tracks');
+  // Library-wide Loose Tracks is its own request, never scoped to the selected artist.
+  assert.equal(new URL(requested[1], 'http://localhost').pathname, '/library/loose-tracks');
+  assert.equal(new URL(requested[1], 'http://localhost').searchParams.get('artist'), null);
 });
 
 test('current artist hydration reaches terminal state while library-wide hydration is pending', async () => {
@@ -422,8 +737,9 @@ test('current artist hydration reaches terminal state while library-wide hydrati
   context.URL = URL;
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => new Promise((resolve) => {
-    const libraryWide = new URL(url, 'http://localhost')
-      .searchParams.get('include_library_wide_non_album') === '1';
+    const requestUrl = new URL(url, 'http://localhost');
+    const libraryWide = requestUrl.pathname === '/library/loose-tracks'
+      && !requestUrl.searchParams.has('artist');
     const respond = () => resolve({
       ok: true,
       status: 200,
@@ -470,8 +786,9 @@ test('late artist hydration preserves completed library-wide non-album tracks', 
   context.URL = URL;
   context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}`;
   context.fetch = async (url) => new Promise((resolve) => {
-    const libraryWide = new URL(url, 'http://localhost')
-      .searchParams.get('include_library_wide_non_album') === '1';
+    const requestUrl = new URL(url, 'http://localhost');
+    const libraryWide = requestUrl.pathname === '/library/loose-tracks'
+      && !requestUrl.searchParams.has('artist');
     const respond = () => resolve({
       ok: true,
       status: 200,
@@ -561,32 +878,22 @@ test('deferred non-album hydration starts a new request after gallery identity c
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
-test('an older deferred hydration cannot overwrite a newer scope for the same artist', async () => {
+test('artist deferred hydration is shared across query changes because it loads the full artist collection', async () => {
   const { context } = loadHelper();
-  let resolveOldRequest;
+  const requested = [];
+  let resolveRequest;
   context.updateGalleryMainControls = () => {};
   context.URL = URL;
-  context.buildApiUrl = (view) => `/view-data?surface=albums&artist=${encodeURIComponent(view.selected_artist || '')}&query=${encodeURIComponent(view.query || '')}`;
-  context.fetch = async (url) => {
-    if (new URL(url, 'http://localhost').searchParams.get('query') === 'old') {
-      return new Promise((resolve) => {
-        resolveOldRequest = () => resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            non_album_tracks: [{ path: '/music/neal-morse/old.flac', title: 'Old Scope' }],
-          }),
-        });
-      });
-    }
-    return {
+  context.fetch = async (url) => new Promise((resolve) => {
+    requested.push(new URL(url, 'http://localhost'));
+    resolveRequest = () => resolve({
       ok: true,
       status: 200,
       json: async () => ({
-        non_album_tracks: [{ path: '/music/neal-morse/new.flac', title: 'New Scope' }],
+        non_album_tracks: [{ path: '/music/neal-morse/full.flac', title: 'Full Artist Scope' }],
       }),
-    };
-  };
+    });
+  });
 
   context.state.view = {
     selected_artist: 'Neal Morse',
@@ -594,7 +901,7 @@ test('an older deferred hydration cannot overwrite a newer scope for the same ar
     non_album_tracks: [],
     non_album_tracks_deferred: true,
   };
-  const oldHydration = context.hydrateDeferredNonAlbumTracks();
+  const oldQueryHydration = context.hydrateDeferredNonAlbumTracks();
   await Promise.resolve();
 
   context.state.view = {
@@ -603,13 +910,17 @@ test('an older deferred hydration cannot overwrite a newer scope for the same ar
     non_album_tracks: [],
     non_album_tracks_deferred: true,
   };
-  await context.hydrateDeferredNonAlbumTracks();
-  resolveOldRequest();
-  await oldHydration;
+  const newQueryHydration = context.hydrateDeferredNonAlbumTracks();
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].pathname, '/library/loose-tracks');
+  assert.equal(requested[0].searchParams.get('artist'), 'Neal Morse');
+  assert.equal(requested[0].searchParams.get('q'), null);
+  resolveRequest();
+  await Promise.all([oldQueryHydration, newQueryHydration]);
 
   assert.deepEqual(
     Array.from(context.state.view.non_album_tracks, (track) => track.title),
-    ['New Scope'],
+    ['Full Artist Scope'],
   );
   assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
@@ -628,8 +939,28 @@ test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', 
     visible_library_categories: categories, loaded_library_categories: categories,
     non_album_tracks: [mainTrack, hoardTrack],
   };
+  const sourceTotalKeys = [
+    '', 'hoard', 'hoard|main_library', 'hoard|main_library|new_arrivals',
+    'hoard|new_arrivals', 'main_library', 'main_library|new_arrivals', 'new_arrivals',
+  ];
+  let completeSourceTotals;
+  const sourceTotalsReady = new Promise(resolve => { completeSourceTotals = resolve; });
+  context.fetch = async () => {
+    await sourceTotalsReady;
+    return {
+      ok: true,
+      json: async () => ({
+        inventory_mutation_revision: 0,
+        source_totals_by_scope: Object.fromEntries(sourceTotalKeys.map(key => [key, {
+          artist_count: 1,
+          album_count: 1,
+        }])),
+      }),
+    };
+  };
   context.window = { location: { href: 'http://localhost/' }, history: {} };
   context.renderArtistGroups = () => {};
+  context.updateGalleryMainChrome = () => {};
   const requests = [];
   let completeRefresh;
   const responseReady = new Promise(resolve => { completeRefresh = resolve; });
@@ -651,10 +982,12 @@ test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', 
   context.openTagEditor = album => edited.push(album);
   context.showRepairAlert = () => {};
 
-  context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
+  const transition = context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
   assert.equal(context.getVisibleNonAlbumTracks().length, 0, 'unscoped records stay unavailable during refresh');
   context.openNonAlbumTagEditor();
   assert.equal(edited.length, 0, 'an immediate Edit tags action cannot use stale records');
+  completeSourceTotals();
+  await transition;
   completeRefresh();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks(), track => track.path), [mainTrack.path],
@@ -704,8 +1037,73 @@ test('library-wide Loose Tracks bypasses selected artist while artist menu retai
    non_album_tracks: [tracks[0]],
    library_non_album_tracks: tracks,
  };
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?artist=${encodeURIComponent(view.selected_artist || '')}`;
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), [],
+    'unhydrated library-wide data is pending, not a confirmed empty library');
+  context.state.view.library_non_album_tracks_hydrated_scope = context.getLibraryNonAlbumScopeKey();
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+  context.state.view.selected_artist = 'B';
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), true, 'changing artist keeps the library scope');
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+});
+
+test('library-wide Loose Tracks keep the whole library when a search found no loose tracks', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?q=${encodeURIComponent(view.query || '')}&artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    const query = new URL(url, 'http://localhost').searchParams.get('q');
+    return { ok: true, status: 200, json: async () => ({
+      library_non_album_tracks: query ? [] : [{ path: 'C:/Music/Начало Века/loose.mp3', title: 'Тебя ждала' }],
+    }) };
+  };
+  context.state.view = { query: 'lost', selected_artist: 'Art Zoyd' };
+  // The search indicator only probes the query-scoped request.
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(requested.length, 1);
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false, 'the button stays enabled for the whole library');
+  // Opening Loose Tracks resolves the whole library without repeating the probe.
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
+  // The query-scoped request never depends on the auto-selected artist.
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), [null, null]);
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', null]);
+  assert.equal(new URL(requested[1], 'http://localhost').pathname, '/library/loose-tracks');
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true }), (track) => track.title), ['Тебя ждала']);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
+});
+
+test('a search starts its Loose Tracks request with the search and the indicator reuses it', async () => {
+  // The follow-up used to start only after the gallery committed: a second
+  // round trip (~0.5 s synthetic, 1-2 s real library) before the search settled.
+  const { context } = loadHelper();
+  const requested = [];
+  context.updateGalleryMainControls = () => {};
+  context.URL = URL;
+  context.buildApiUrl = (view) => `/view-data?surface=albums&q=${encodeURIComponent(view.query || '')}`
+    + `&artist=${encodeURIComponent(view.selected_artist || '')}&category=main_library`;
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ library_non_album_tracks: [{ path: 'C:/Music/x.mp3', title: 'Match' }] }) };
+  };
+  // The search request itself (no artist yet) starts the prefetch.
+  context.prefetchLibraryNonAlbumSearch('/view-data?surface=albums&q=neal&category=main_library&gallery_scope=all');
+  assert.equal(requested.length, 1);
+  // The committed view auto-selected an artist; the indicator reuses the request.
+  context.state.view = { query: 'neal', selected_artist: 'Neal Morse' };
+  context.buildApiUrl = (view) => `/view-data?surface=albums&q=${encodeURIComponent(view.query || '')}`
+    + `&artist=${encodeURIComponent(view.selected_artist || '')}&category=main_library&gallery_scope=all`;
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
+  assert.equal(requested.length, 1);
+  assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), true);
+  // Non-search requests never prefetch.
+  context.prefetchLibraryNonAlbumSearch('/view-data?surface=albums&category=main_library');
+  assert.equal(requested.length, 1);
 });
 
 test('custom exceptions and named collections render collapsible subsections in the shared track table', () => {
@@ -777,18 +1175,20 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /<div class="album-track-table" data-track-path-column /);
+  assert.match(markup, /--cdt-columns: var\(--album-track-table-columns\)/);
   assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
-  assert.match(markup, /data-cdt-column="problem"/);
+  assert.doesNotMatch(markup, /data-cdt-column="problem"/, 'no loose track is problematic, so the slot is removed');
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__title">Rare Song<span class="album-track-table__secondary" title="Main Artist feat\. Guest"><span>Main Artist feat\. Guest<\/span>/);
+  assert.match(markup, /album-track-table__disc-title">Non-album rarity<\/span><span class="album-track-table__disc-count">1 track<\/span><span class="album-track-table__disc-length">4:05</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
   assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
@@ -804,6 +1204,9 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
     exception_type: 'Non-album rarity',
   }]);
   assert.match(rarityOnly, />Non-album rarity</);
+  assert.doesNotMatch(rarityOnly, /data-track-path-column/, 'without a display path the File path column is absent');
+  const withYear = context.buildNonAlbumTrackSectionsMarkup([{ path: 'C:/Music/A.mp3', title: 'Song', artist: 'Band', year_label: '2024', exception_type: 'Interview' }]);
+  assert.match(withYear, /class="album-track-table__title">Song<span class="album-track-table__secondary" title="Band • 2024"><span>Band • 2024</);
   assert.doesNotMatch(rarityOnly, />Interviews</);
 
   const otherOnly = context.buildNonAlbumTrackSectionsMarkup([{
@@ -826,6 +1229,58 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   }]);
   assert.match(missingMetadata, /class="album-track-table__title">Artist - Possible Song\.flac/);
   assert.doesNotMatch(missingMetadata, /Unknown track|Unknown Artist/);
+});
+
+test('Loose Tracks highlights current title and artist matches using the shared table style', () => {
+  const { context } = loadHelper();
+  const items = [
+    { path: 'a.mp3', title: 'Apply Rarity Here', artist: 'Fixture Artist' },
+    { path: 'b.mp3', title: 'Other Song', artist: 'Rarity Guest' },
+    { path: 'c.mp3', title: 'Unrelated Song', artist: 'Other Artist' },
+  ];
+  context.state.view.query = '  RARITY  ';
+  const rows = context.buildNonAlbumTrackRowsMarkup(items, 0);
+  assert.deepEqual(Array.from(rows, row => row.isSearchMatch), [true, true, false]);
+  const markup = context.buildNonAlbumTrackSectionsMarkup(items);
+  assert.equal((markup.match(/album-track-table__row--search-match/g) || []).length, 2);
+  assert.equal((markup.match(/data-track-search-match="true"/g) || []).length, 2);
+  context.state.view.query = 'unrelated';
+  assert.deepEqual(Array.from(context.buildNonAlbumTrackRowsMarkup(items, 0), row => row.isSearchMatch), [false, false, true]);
+  context.state.view.query = '';
+  assert.doesNotMatch(context.buildNonAlbumTrackSectionsMarkup(items), /album-track-table__row--search-match/);
+});
+
+test('Loose Tracks highlights filename and album artist matches but not folder-only text', () => {
+  const { context } = loadHelper();
+  const items = [
+    {
+      path: 'C:\\Music\\ДДТ\\folder-only.mp3',
+      filename: 'folder-only.mp3',
+      title: 'Попса',
+      artist: 'VA',
+      album_artist: 'VA',
+    },
+    {
+      path: 'C:\\Music\\Other\\ДДТ online.mp3',
+      filename: 'ДДТ online.mp3',
+      title: 'Other Song',
+      artist: 'VA',
+      album_artist: 'VA',
+    },
+    {
+      path: 'C:\\Music\\Other\\guest.mp3',
+      filename: 'guest.mp3',
+      title: 'Guest Song',
+      artist: 'VA',
+      album_artist: 'ДДТ',
+    },
+  ];
+  context.state.view.query = 'ДДТ';
+
+  assert.deepEqual(
+    Array.from(context.buildNonAlbumTrackRowsMarkup(items, 0), row => row.isSearchMatch),
+    [false, true, true],
+  );
 });
 
 function createAlbumCard(viewport, options = {}) {
@@ -1821,7 +2276,7 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
 
 {
   const { context } = loadHelper();
-  context.showAlbumCardContextMenu(12, 24, {
+  const album = {
     key: 'arrival-album',
     allowed_actions: { 'library.files.edit_tags': true },
     move_availability: {
@@ -1831,8 +2286,10 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
         move_to_library: { available: true, target_category: 'main_library' },
       },
     },
-  });
+  };
+  context.showAlbumCardContextMenu(12, 24, album);
   const menu = context.document.getElementById('album-card-context-menu');
+  assert.equal(menu.albumContext, album);
   assert.match(menu.innerHTML, /data-album-card-action="edit-tags"/);
   assert.match(menu.innerHTML, /Open in File Explorer[\s\S]*Edit Tags/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_hoard"/);
@@ -1843,6 +2300,7 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   assert.equal(context.__activatedSurfaces[0].surface, menu);
   context.__activatedSurfaces[0].close();
   assert.equal(menu.hidden, true);
+  assert.equal(menu.albumContext, null);
   assert.equal(context.__clearedSurfaces.at(-1), menu);
 }
 
@@ -2031,4 +2489,342 @@ test('paged root loose tracks remain visible outside the loaded artist window', 
     non_album_tracks: [track],
   };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
+});
+
+test('gallery album menu offers Separate release for versions, not for unversioned albums', () => {
+  const menu = { hidden: true, dataset: {}, style: {}, innerHTML: '' };
+  const context = vm.createContext({
+    console,
+    state: { view: { manual_version_links: {} } },
+    document: { getElementById: (id) => (id === 'album-card-context-menu' ? menu : null), createElement: () => menu, body: { appendChild() {} } },
+    escapeHtml: (value) => String(value ?? ''),
+    isMobileClient: () => false,
+    usesMobilePageLayout: () => false,
+    getAlbumIdentity: (album) => album.key,
+    getAvailableAlbumMoveActions: () => [],
+  });
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const sets = {
+    original: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    remaster: [{ key: 'original' }, { key: 'remaster', tabLabel: 'Remastered' }, { key: 'live', tabLabel: 'Live' }],
+    single: [{ key: 'single' }],
+  };
+  context.getAlbumReleaseSet = (album) => ({ releases: sets[album.key] });
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'original' });
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release: Remastered</);
+  assert.match(menu.innerHTML, /data-separate-release-key="live">Separate release: Live</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'remaster' });
+  assert.equal((menu.innerHTML.match(/separate-release"/g) || []).length, 1);
+  assert.match(menu.innerHTML, /data-separate-release-key="remaster">Separate release</);
+
+  context.showAlbumCardContextMenu(10, 20, { key: 'single' });
+  assert.doesNotMatch(menu.innerHTML, /Separate release/);
+});
+
+function loadVersionPicker({ details, view = {}, visible = [], releaseSet }) {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js'), 'utf8');
+  const calls = [];
+  const context = vm.createContext({
+    state: { view },
+    escapeHtml: (value) => String(value ?? ''),
+    compareAlbumVariants: () => 0,
+    flattenVisibleAlbums: () => visible,
+    fetchTrackModalAlbumDetails: async (key) => { calls.push(['details', key]); return details; },
+    getAlbumReleaseSet: releaseSet,
+    getManualVersionFamilyKeys: (key, links) => {
+      const family = new Set([key]);
+      Object.entries(links).forEach(([child, parent]) => { if (child === key || parent === key) { family.add(child); family.add(parent); } });
+      return family;
+    },
+    markAlbumVersion: async (...args) => { calls.push(['mark', ...args]); },
+    unmarkAlbumVersion: async (key) => { calls.push(['unmark', key]); },
+    ignoreAlbumVersion: async (key) => { calls.push(['separate', key]); },
+    scheduleVersionGalleryRefresh: () => calls.push(['refresh']),
+    showAppFormDialog: (options) => { calls.push(['dialog', options]); return Promise.resolve(true); },
+  });
+  useNavigationTree(context);
+  vm.runInContext(source, context);
+  return { context, calls };
+}
+
+async function mountVersionPicker(context, calls, album) {
+  await context.openVersionPickerModal(album);
+  const options = calls.find(([kind]) => kind === 'dialog')[1];
+  let enabled = null;
+  const listeners = {};
+  const list = { innerHTML: '', removeAttribute() {} };
+  const nodes = new Map();
+  const content = {
+    addEventListener: (name, handler) => { listeners[name] = handler; },
+    removeEventListener() {},
+    querySelector: () => list,
+  };
+  context.window.NavigationTree.setItemSelected = (node, value) => { node.selected = value; };
+  options.onMount(content, { setSubmitEnabled: (value) => { enabled = value; } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const click = (key) => {
+    const node = nodes.get(key) || { key, getAttribute: () => key };
+    nodes.set(key, node);
+    listeners.click({ target: { closest: () => node } });
+    return node;
+  };
+  return { options, list, click, enabled: () => enabled };
+}
+
+test('Mark As A Version lists the album details candidates that share tracks, with every current version selected', async () => {
+  // Owner (11-09, INT-007 / UI-11 / UI-VERSION-ROWS): an album that already is a version (linked or automatic)
+  // showed unselected. The gallery loads version rules lazily and folds versions into one card, so the picker reads
+  // the album's own details.
+  const album = { key: 'ayreon::electric castle', name: 'Into The Electric Castle', album_artist: 'Ayreon' };
+  const remix = { key: 'ayreon::electric castle remix', name: 'Into The Electric Castle (Remix)', album_artist: 'Ayreon', shares_tracks: true };
+  const live = { key: 'ayreon::electric castle live', name: 'Into The Electric Castle (Live)', album_artist: 'Ayreon', shares_tracks: true };
+  const other = { key: 'ayreon::electric castle other', name: 'Into The Electric Castle', album_artist: 'Ayreon', shares_tracks: false };
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, remix, live, other], release_candidate_rules: { manual_version_links: { [album.key]: remix.key } } },
+    // The automatic version (live) groups with it; the remix is linked in the album's own rules only.
+    releaseSet: (value) => ({ releases: [value, live] }),
+  });
+  const picker = await mountVersionPicker(context, calls, album);
+  assert.equal(picker.options.description, 'Select the albums that are versions of Into The Electric Castle.');
+  assert.match(picker.list.innerHTML, /data-version-picker-target="ayreon::electric castle remix"/);
+  assert.match(picker.list.innerHTML, /data-version-picker-target="ayreon::electric castle live"/);
+  assert.doesNotMatch(picker.list.innerHTML, /electric castle other/, 'same name, different songs');
+  for (const key of [remix.key, live.key]) {
+    assert.match(picker.list.innerHTML, new RegExp(`class="[^"]* is-selected[^"]*"[^>]*data-version-picker-target="${key}" aria-current="true"`), key);
+  }
+  assert.equal(picker.enabled(), null, 'nothing changed yet');
+});
+
+test('Mark As A Version shows each album cover, taken from the gallery copy of the album', async () => {
+  // Owner (11-09): the selected 20th Anniversary Edition showed an empty artbox. Release candidates are headers only,
+  // so the gallery's copy of the same album supplies the artwork.
+  const album = { key: 'ayreon::castle', name: 'Into The Electric Castle', album_artist: 'Ayreon' };
+  const edition = { key: 'ayreon::castle 20th', name: 'Into The Electric Castle (20th Anniversary Edition)', album_artist: 'Ayreon', shares_tracks: true };
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, edition], release_candidate_rules: {} },
+    visible: [{ key: edition.key, name: edition.name, cover_path: 'N:/Ayreon/2018/cover.jpg' }],
+    releaseSet: (value) => ({ releases: [value, edition] }),
+  });
+  context.buildUtilityAlbumArtbox = (item) => `<img data-cover="${item.cover_path || ''}">`;
+  const picker = await mountVersionPicker(context, calls, album);
+  assert.match(picker.list.innerHTML, /<img data-cover="N:\/Ayreon\/2018\/cover\.jpg">/);
+  assert.match(picker.list.innerHTML, /20th Anniversary Edition/);
+});
+
+test('Mark As A Version saves the changed selection in the background: link, unlink, or separate', async () => {
+  const album = { key: 'a', name: 'Album', album_artist: 'Artist' };
+  const candidates = ['linked', 'automatic', 'new'].map((key) => ({ key, name: 'Album', album_artist: 'Artist', shares_tracks: true }));
+  const { context, calls } = loadVersionPicker({
+    details: { release_candidates: [album, ...candidates], release_candidate_rules: { manual_version_links: { linked: 'a' } } },
+    releaseSet: (value) => ({ releases: [value, candidates[1]] }),
+  });
+  const picker = await mountVersionPicker(context, calls, album);
+  picker.click('linked');
+  picker.click('automatic');
+  picker.click('new');
+  assert.equal(picker.enabled(), true);
+  // UI-11 (owner): Save closes at once; nothing waits for the server.
+  assert.equal(picker.options.onSubmit(), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.filter(([kind]) => ['mark', 'unmark', 'separate'].includes(kind)))).sort(), [
+    ['mark', 'new', 'a'],
+    ['separate', 'automatic'],
+    ['unmark', 'linked'],
+  ]);
+});
+
+test('library navigation modes still switch between Artists and Custom Collections explicitly', () => {
+  assert.match(indexTemplateSource, /class_name='shell-navigation-compact-action is-selected'[^\n]*id='artist-tree-navigation-button'[^\n]*'aria-pressed': 'true'/);
+  assert.match(indexTemplateSource, /class_name='shell-navigation-compact-action shell-navigation-compact-action--loose-tracks'[^\n]*'aria-pressed': 'false'/);
+  const { context } = loadHelper();
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [heading, collections, artists, compactArtists].forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
+  const selected = [];
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-navigation-mode]') return [artistsMode, collectionsMode];
+    if (selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]') return [compactLooseTracks];
+    return [];
+  };
+
+  context.syncLibraryNavigationMode('collections');
+  assert.equal(heading.textContent, 'Custom Collections');
+  assert.equal(collections.hidden, false);
+  assert.equal(artists.hidden, true);
+  assert.equal(collectionsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.classList.contains('is-selected'), false);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactLooseTracks.getAttribute('aria-current'), 'page');
+  assert.equal(compactLooseTracks.classList.contains('is-selected'), true);
+  assert.match(
+    appChromeCssSource,
+    /\.shell-navigation-compact-action\.is-selected\s*\{[^}]*background:\s*var\(--appearance-item-selected,[^}]*!important/,
+  );
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', true]);
+
+  context.syncLibraryNavigationMode('artists');
+  assert.equal(heading.textContent, 'Artists');
+  assert.equal(collections.hidden, true);
+  assert.equal(artists.hidden, false);
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactArtists.classList.contains('is-selected'), true);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactLooseTracks.getAttribute('aria-current'), '');
+  assert.equal(compactLooseTracks.classList.contains('is-selected'), false);
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
+});
+
+test('desktop Loose Tracks keeps the expanded Artist Tree while selecting its compact action', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const rail = new FakeElement('shell-navigation-rail');
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [main, rail, heading, collections, artists, compactArtists].forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
+  const selected = [];
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected: (item, value) => selected.push([item, value]) } };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-navigation-mode]') return [artistsMode, collectionsMode];
+    if (selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]') return [compactLooseTracks];
+    return [];
+  };
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.state.ui.nonAlbumLibraryWide = true;
+  const overlay = new FakeElement('non-album-modal');
+  overlay.classList.toggle = (token, force) => {
+    if (force) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  const dialog = new FakeElement();
+  overlay.querySelector = (selector) => selector === '.non-album-modal-dialog' ? dialog : null;
+
+  context.setNonAlbumPagePresentation(overlay, true);
+
+  assert.equal(heading.textContent, 'Artists');
+  assert.equal(collections.hidden, true);
+  assert.equal(artists.hidden, false);
+  assert.equal(rail.getAttribute('data-library-navigation-mode'), 'artists');
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(collectionsMode.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'false');
+  assert.equal(compactArtists.classList.contains('is-selected'), false);
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactLooseTracks.getAttribute('aria-current'), 'page');
+  assert.equal(compactLooseTracks.classList.contains('is-selected'), true);
+  assert.deepEqual(selected.at(-1), ['loose-tracks-item', false]);
+});
+
+// Mark As A Version renders the real NavigationTree wide item from its template.
+test('hydration-only Loose Tracks repaint preserves an explicit Artist Tree selection', () => {
+  const { context } = loadHelper();
+  const main = new FakeElement('shell-main-surface');
+  const rail = new FakeElement('shell-navigation-rail');
+  const heading = new FakeElement('navigation-tree-heading');
+  const collections = new FakeElement('sidebar-collections');
+  const artists = new FakeElement('sidebar-list');
+  const compactArtists = new FakeElement('artist-tree-navigation-button');
+  [main, rail, heading, collections, artists, compactArtists]
+    .forEach((element) => context.document.body.appendChild(element));
+  const artistsMode = new FakeElement();
+  artistsMode.dataset.navigationMode = 'artists';
+  const collectionsMode = new FakeElement();
+  collectionsMode.dataset.navigationMode = 'collections';
+  const compactLooseTracks = new FakeElement();
+  compactLooseTracks.classList.toggle = (token, force) => {
+    if (force) compactLooseTracks.classList.add(token);
+    else compactLooseTracks.classList.remove(token);
+  };
+  collections.querySelectorAll = () => ['loose-tracks-item'];
+  context.window = { NavigationTree: { setItemSelected() {} } };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === '[data-navigation-mode]') return [artistsMode, collectionsMode];
+    if (selector === '#shell-navigation-compact [data-open-non-album-tracks][data-library-wide="1"]') return [compactLooseTracks];
+    return [];
+  };
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.state.ui.nonAlbumLibraryWide = true;
+  const overlay = new FakeElement('non-album-modal');
+  overlay.classList.toggle = (token, force) => {
+    if (force) overlay.classList.add(token);
+    else overlay.classList.remove(token);
+  };
+  overlay.querySelector = () => null;
+
+  context.syncLibraryNavigationMode('artists');
+  context.setNonAlbumPagePresentation(overlay, true, true, false);
+
+  assert.equal(artists.hidden, false);
+  assert.equal(collections.hidden, true);
+  assert.equal(artistsMode.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactArtists.getAttribute('aria-pressed'), 'true');
+  assert.equal(compactLooseTracks.getAttribute('aria-pressed'), 'false');
+  assert.match(helperSource, /openNonAlbumModal\(\{ \.\.\.options, syncNavigation: false \}\)/,
+    'the delayed hydration repaint must opt out of another navigation transition');
+});
+
+function useNavigationTree(context) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..', '..', '..');
+  const template = fs.readFileSync(path.join(root, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
+  const treeContext = { document: { getElementById: (id) => (id === 'navigation-tree-item-template' ? { textContent: template } : null) } };
+  treeContext.window = treeContext;
+  vm.createContext(treeContext);
+  vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/navigation-tree.js'), 'utf8'), treeContext);
+  context.window = { ...(context.window || {}), NavigationTree: treeContext.NavigationTree };
+  context.buildUtilityAlbumArtbox = () => '<span class="utility-detail-cover"></span>';
+  return context;
+}
+
+test('INT-007: an album already marked as a version is selected in Mark As A Version', () => {
+  const { context } = loadHelper();
+  useNavigationTree(context);
+  context.state.view.manual_version_links = { 'helloween::remaster': 'helloween::original', 'other::x': 'other::y' };
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::original')], ['helloween::remaster']);
+  assert.deepEqual([...context.getLinkedVersionKeys('helloween::remaster')], ['helloween::original']);
+  const html = context.buildVersionPickerListHtml(
+    [{ key: 'helloween::remaster', name: 'Helloween' }, { key: 'helloween::live', name: 'Helloween' }],
+    context.getLinkedVersionKeys('helloween::original'),
+  );
+  // The owner asked for the split-release choice's element: the wide navigation-tree item.
+  const items = html.split('</button>').filter((part) => part.includes('data-version-picker-target'));
+  assert.equal(items.length, 2);
+  assert.match(items[0], /navigation-tree-item--wide[^"]*is-selected is-active"[^>]*data-navigation-tree-item="wide"[^>]*data-version-picker-target="helloween::remaster"/);
+  assert.match(items[0], /aria-current="true"/);
+  assert.doesNotMatch(items[1], /is-selected|aria-current/);
+  assert.match(items[1], /data-version-picker-target="helloween::live"/);
+  const template = require('node:fs').readFileSync(require('node:path').join(__dirname, '../../../music_app/templates/partials/app-form-modal.html'), 'utf8');
+  assert.match(template, /action_button\('Close', class_name='app-form-close', id='app-form-close'/);
 });

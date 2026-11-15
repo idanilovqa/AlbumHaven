@@ -42,6 +42,9 @@
 .small-alert--info,
 .alert-label--info,
 .on-page-alert--info { --alert-edge: var(--appearance-player-accent, #55c7ff); }
+/* Library-source tones keep their source color in every alert family. */
+:root .small-alert.small-alert--tone-hoard { --alert-edge: var(--library-source-hoard, #d5a757); }
+:root .small-alert.small-alert--tone-new_arrivals { --alert-edge: var(--library-source-arrivals, #74bdb4); }
 .small-alert--success,
 .alert-label--success,
 .on-page-alert--success { --alert-edge: var(--appearance-success, var(--success, #2eba70)); }
@@ -59,7 +62,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  width: 30px;
+  width: max-content;
+  max-width: 30px;
   height: 30px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--alert-edge) 72%, transparent);
@@ -67,16 +71,38 @@
   background: var(--alert-tint);
   color: var(--alert-ink);
   box-shadow: 0 0 16px color-mix(in srgb, var(--alert-edge) 20%, transparent);
-  transition: width 180ms ease, box-shadow 180ms ease;
+  transition: max-width 180ms ease, box-shadow 180ms ease;
 }
 
 .small-alert:hover,
 .small-alert:focus-visible,
 .album-card__artbox-trigger:focus-visible .small-alert {
-  width: min(154px, 100%);
+  /* Grows to exactly its icon and text: no dead space. A longer message wraps so its whole text shows. */
+  max-width: min(320px, calc(100vw - 32px));
+  height: auto;
+  min-height: 30px;
+  border-radius: 15px;
   box-shadow: 0 0 20px color-mix(in srgb, var(--alert-edge) 34%, transparent);
   outline: none;
 }
+
+/* presentation: 'badge' — an icon-only marker drawn like the Gallery's source badges (INT-040, owner): the source
+   color outlines it and draws its glyph on the panel; its name stays in aria-label until a tap expands it. */
+.small-alert.small-alert--badge,
+.small-alert.small-alert--badge:is(:hover, :focus-visible) {
+  width: 28px;
+  max-width: none;
+  height: 28px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  background: var(--panel, #161b22);
+  color: var(--alert-edge);
+  box-shadow: 0 1px 6px rgb(0 0 0 / .35);
+}
+.small-alert--badge:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.small-alert--badge .small-alert__icon { width: 22px; height: 22px; color: inherit; }
+.small-alert--badge .small-alert__icon svg { stroke: currentColor; stroke-width: 2.2; }
+.small-alert--badge .small-alert__text { display: none; }
 
 .alert-label {
   box-sizing: border-box;
@@ -171,6 +197,8 @@ button.small-alert:is(:hover, :focus-visible) { width: 200px; }
   box-shadow: 0 0 26px color-mix(in srgb, var(--alert-edge) 14%, transparent);
 }
 .on-page-alert[hidden] { display: none; }
+/* Compact: as wide as its message, for a short note beside the controls it concerns (owner, 11-10). */
+.on-page-alert--compact { width: fit-content; max-width: 100%; }
 .on-page-alert__icon { width: 40px; height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--alert-edge) 15%, transparent); color: var(--alert-ink); }
 .on-page-alert__icon svg { width: 22px; height: 22px; }
 .on-page-alert__content { min-width: 0; }
@@ -198,9 +226,14 @@ button.small-alert:is(:hover, :focus-visible) { width: 200px; }
   white-space: nowrap;
 }
 .on-page-alert__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+/* actionsPlacement: 'inline' puts the actions to the right of the message, wrapping below only when they do not fit. */
+.on-page-alert--inline-actions .on-page-alert__content { display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; }
+.on-page-alert--inline-actions .on-page-alert__title { flex: 1 0 100%; }
+.on-page-alert--inline-actions .on-page-alert__message { flex: 0 1 auto; }
+.on-page-alert--inline-actions .on-page-alert__actions { margin-top: 5px; }
 .on-page-alert__progress { display: grid; gap: 8px; margin-top: 16px; color: var(--muted, var(--appearance-muted, #b8c7d6)); }
 .on-page-alert__progress progress { width: 100%; height: 8px; accent-color: var(--text, #f9fafb); }
-.on-page-alert__actions .ui-button {
+.on-page-alert__actions .ui-button:not(.ui-button--small) {
   min-height: 44px;
   padding: 0 16px;
   border-radius: 10px;
@@ -225,7 +258,6 @@ button.small-alert:is(:hover, :focus-visible) { width: 200px; }
 }
 .on-page-alert__actions .ui-button:hover:not(:disabled) {
   filter: brightness(1.12);
-  transform: translateY(-1px);
 }
 .on-page-alert__actions .ui-button--primary:hover:not(:disabled),
 .on-page-alert__actions .ui-button--primary:active:not(:disabled) {
@@ -270,3 +302,10 @@ button.small-alert:is(:hover, :focus-visible) { width: 200px; }
   min-height: 30px;
   padding: 0 10px;
 }
+
+/* A tapped badge shows its name beside the icon. */
+.small-alert.small-alert--badge.is-expanded { width: auto; max-width: 240px; padding-right: 10px; z-index: 5; position: relative; cursor: pointer; }
+.small-alert--badge.is-expanded .small-alert__text { display: inline; margin-left: 2px; color: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.small-alert--badge { cursor: pointer; }
+/* Expanded alerts show their full text (owner, 11-08): it wraps instead of being cut at the edge. */
+:is(.small-alert:hover, .small-alert:focus-visible, .album-card__artbox-trigger:focus-visible .small-alert):not(.small-alert--badge) .small-alert__text { white-space: normal; padding-block: 6px; line-height: 1.3; }

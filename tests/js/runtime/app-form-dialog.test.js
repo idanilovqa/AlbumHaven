@@ -67,7 +67,7 @@ test('anchored form fits the containing Settings panel and available height with
   const pending=h.context.showAppFormDialog({anchor});
   assert.ok(parseFloat(panel.style.left)>=418,'the popup must not extend under the Settings clipping boundary');
   assert.ok(parseFloat(panel.style.top)+parseFloat(panel.style.maxHeight)<=817,'footer must fit above the Settings bottom');
-  const css=fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/css/runtime/non-album-and-player.css'),'utf8');
+  const css=fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/css/dialog-component.css'),'utf8');
   assert.match(css,/#app-form-content\s*\{[^}]*overflow-y:\s*auto/s);
   assert.match(css,/#app-form-modal \.confirm-modal-dialog\s*\{[^}]*display:\s*flex[^}]*overflow:\s*visible/s);
   h.fire('app-form-cancel','click');await pending;

@@ -15,6 +15,22 @@ from music_app.services.relation_projection_postgres import (
 )
 
 
+def test_repeated_artist_alias_merge_preserves_canonical_bucket():
+    from music_app.services.relation_projection_builder import _merge_artist_alias
+
+    canonical = "Composer"
+    alternate = "Composer & Collaborator"
+    aliases = {canonical: canonical, alternate: alternate}
+    buckets = {canonical: {canonical}, alternate: {alternate}}
+    _merge_artist_alias(canonical, alternate, aliases, buckets)
+    expected_aliases, expected_buckets = deepcopy(aliases), deepcopy(buckets)
+
+    _merge_artist_alias(canonical, alternate, aliases, buckets)
+
+    assert aliases == expected_aliases
+    assert buckets == expected_buckets == {canonical: {canonical, alternate}}
+
+
 @pytest.mark.parametrize("owner,guest", [
     ("Synthetic Scale Artist 0647", "Synthetic Scale Artist 0594"),
     ("Chamber Ensemble 1001", "Chamber Ensemble 1002"),
@@ -873,6 +889,27 @@ def test_whitespace_aliases_collapse_while_empty_signatures_stay_isolated():
         assert relation_views["alias_to_canonical"][artist] == artist
 
 
+def test_relation_view_serialization_breaks_casefold_ties_without_merging_aliases():
+    expected = ['10CC', '10cc', 'ANGE', 'Ange']
+    for aliases in (expected, list(reversed(expected))):
+        views = {
+            'artists': aliases,
+            'canonical_to_aliases': {'Ange': aliases},
+            'family_to_artists': {'family': aliases},
+            'folder_related': {'Ange': aliases},
+            'sidebar_families': [{'family': 'family', 'artists': aliases}],
+            'artists_sidebar': [{'artist': 'Ange', 'count': 1}, {'artist': '10cc', 'count': 2}],
+        }
+        serialized = serialize_relation_views(views)
+        assert serialized['artists'] == expected
+        assert serialized['canonical_to_aliases']['Ange'] == expected
+        assert serialized['family_to_artists']['family'] == expected
+        assert serialized['folder_related']['Ange'] == expected
+        assert serialized['sidebar_families'][0]['artists'] == expected
+        assert serialized['artists_sidebar'] == views['artists_sidebar']
+        assert deserialize_relation_views(views)['canonical_to_aliases']['Ange'] == expected
+
+
 def test_sidebar_family_label_survives_relation_view_serialization_roundtrip():
     relation_views = _build(_family_rows())
 
@@ -1092,9 +1129,9 @@ def test_alias_facts_compact_validated_containers_without_losing_fallback(monkey
     original = builder._build_alias_views
     captured = []
 
-    def capture(albums):
+    def capture(albums, **kwargs):
         captured.extend(albums)
-        return original(albums)
+        return original(albums, **kwargs)
 
     monkeypatch.setattr(builder, '_build_alias_views', capture)
     actual = builder.build_postgres_relation_alias_views(rows)
@@ -1157,3 +1194,40 @@ def test_artist_typo_upper_bound_preserves_original_decisions(isolated_artist_st
             and SequenceMatcher(None, a, b).ratio() >= 0.9
         )
         assert builder._are_probable_artist_typos(left, right) == expected, (left, right)
+
+
+@pytest.mark.parametrize(('joint', 'solo'), [
+    ('Lisa Gerrard & Klaus Badelt', 'Lisa Gerrard'),
+    ("Luca Turilli's Rhapsody", 'Rhapsody'),
+    ("Rikard Sjöblom's Gungfly", 'Gungfly'),
+])
+@pytest.mark.parametrize('builder_name', ['build_postgres_relation_views', 'build_postgres_relation_alias_views'])
+def test_explicit_alias_policy_preserves_both_v11_contracts(joint, solo, builder_name):
+    from music_app.services import relation_projection_builder
+    build_views = getattr(relation_projection_builder, builder_name)
+
+    rows = [
+        _row(album_id=1, artist=joint, relative_path='Shared/Era/Joint/01.flac'),
+        _row(album_id=2, artist=solo, relative_path='Shared/Era/Solo/01.flac'),
+    ]
+    current = build_views(rows)
+    explicit_current = build_views(rows, alias_policy='current-v11-explicit-collaboration')
+    legacy = build_views(rows, alias_policy='legacy-v11-broad-aliases')
+    assert current == explicit_current
+    assert current['alias_to_canonical'][joint] == joint
+    assert legacy['alias_to_canonical'][joint] == solo
+    assert legacy['alias_to_canonical'][solo] == solo
+    assert set(current) == set(legacy)
+    import json
+    golden = json.loads((Path(__file__).parents[1] / 'fixtures' / 'relation_legacy_v11_contracts.json').read_text(encoding='utf-8'))[joint]
+    serialized = serialize_relation_views(legacy)
+    assert {section: serialized[section] for section in legacy} == {section: golden[section] for section in legacy}
+
+
+@pytest.mark.parametrize('builder_name', ['build_postgres_relation_views', 'build_postgres_relation_alias_views'])
+def test_relation_alias_policy_rejects_unknown_semantics(builder_name):
+    from music_app.services import relation_projection_builder
+    build_views = getattr(relation_projection_builder, builder_name)
+
+    with pytest.raises(ValueError, match='Unknown relation alias policy'):
+        build_views([], alias_policy='unrecognized')

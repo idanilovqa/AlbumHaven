@@ -5,16 +5,60 @@ const test = require('node:test');
 const vm = require('node:vm');
 const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
 const clone = value => JSON.parse(JSON.stringify(value));
+
+for (const identity of ['key', 'album_id']) {
+  for (const kind of ['local', 'remote', 'delete']) {
+    test(`${kind} save ownership separates two lean albums identified by ${identity}`, async () => {
+      const h = harness();
+      h.context.getAlbumRequestKey = value => value?.album_ref || value?.key || '';
+      const a = { ...album('A'), tracks: [], [identity]: identity === 'key' ? 'artist::a' : 101 };
+      const b = { ...album('B'), tracks: [], [identity]: identity === 'key' ? 'artist::b' : 102 };
+      const start = value => {
+        if (kind === 'delete') return h.context.deleteLocalCoverFromLookup(value.cover_path);
+        if (kind === 'local') return h.context.saveLocalCoverFromLookup(`/${value.name}/new.jpg`);
+        Object.assign(h.context.state.coverLookup.modal, {
+          taskId: `task-${value.name}`, selectedRemoteId: 'candidate',
+          possibleMatches: [{ id: 'candidate', url: `https://example.test/${value.name}.jpg` }],
+        });
+        return h.context.saveRemoteCoverFromLookup();
+      };
+      await h.open(a);
+      const first = start(a);
+      assert.equal(h.requests.length, 1);
+      h.context.closeCoverLookupModal();
+      await h.open(b);
+      assert.equal(h.context.isCoverLookupMutationPending(), false, 'a different lean album must remain usable');
+      const second = start(b);
+      assert.equal(h.requests.length, 2, 'each album owns an independent save');
+      const reads = h.galleries.length;
+      await h.settle(0);
+      await first;
+      // Save closes its modal on click (owner decision 2026-11-04); Delete keeps it open.
+      if (kind === 'delete') assert.equal(h.context.state.coverLookup.modal.album.name, 'B');
+      assert.equal(h.context.isCoverLookupMutationPending(b), true, 'A must not release B');
+      assert.equal(h.galleries.length, reads, 'A must not refresh B');
+      await h.settle(1);
+      await second;
+      assert.equal(h.context.isCoverLookupMutationPending(b), false);
+    });
+  }
+}
 const album = name => ({ name, cover_path: `/${name}/cover.jpg`, cover_revision: `${name}-old`,
   tracks: [{ path: `/${name}/track.mp3`, cover_path: `/${name}/cover.jpg` }] });
 
 function harness() {
-  class Button { disabled = false; hidden = false; textContent = ''; }
+  class Button {
+    disabled = false; hidden = false; textContent = ''; attributes = {};
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+  }
   const save = new Button(), remove = new Button();
   const overlay = { hidden: true, querySelectorAll: () => [remove] };
   const confirm = { hidden: true, style: {} };
   const requests = [], galleries = [], notifications = [], painted = new Map(), server = new Map();
   const context = vm.createContext({
+    setTimeout,
+    clearTimeout,
+    ButtonComponent: require(path.join(runtime, '../button-component.js')),
     state: { coverRefreshTokens: {}, coverLookup: { modal: { pastedImages: [] }, tasks: [], optimisticAlbumCovers: {} } },
     window: {}, HTMLButtonElement: Button, URL, URLSearchParams, console: { log() {}, error() {}, warn() {} },
     deepCloneJson: clone, persistCoverLookupNotificationTasks() {},
@@ -72,6 +116,30 @@ function harness() {
   };
   return { context, markSeen, open, settle, draft, selection, save, remove, overlay, confirm, requests, galleries, notifications, painted, server };
 }
+
+test('lookup identity previews leave the caller hydrated album and its virtual release reference untouched', async () => {
+  const h = harness();
+  const original = { ...album('A'), id: 7, album_id: 7, key: 'album-a', album_ref: 'edition:album-a',
+    preview_only: false, tracks: [{ path: '/A/track.mp3', title: 'Rich track', duration: 180 }] };
+  const before = clone(original);
+  const richTracks = original.tracks;
+  await h.open(original);
+  assert.notEqual(h.context.state.coverLookup.modal.album, original);
+  h.context.applyCoverLookupGalleryPayload({ album: {
+    id: 7, album_id: 7, key: 'album-a', name: 'A', preview_only: true,
+    tracks: [{ path: '/A/track.mp3' }],
+  } });
+  assert.deepEqual(original, before);
+  assert.equal(original.tracks, richTracks);
+  assert.equal(h.context.state.coverLookup.modal.album.album_ref, 'edition:album-a');
+  let requested;
+  h.context.usesMobilePageLayout = () => false;
+  h.context.openTrackModal = value => { requested = value; };
+  h.context.openCoverLookupAlbumDetails();
+  assert.equal(requested.preview_only, true, 'the existing details cache owner checks freshness');
+  assert.equal(requested.album_ref, 'edition:album-a');
+  assert.deepEqual(original, before);
+});
 
 test('local cover delete confirmation foregrounds the desktop and mobile Cover Lookup layers', async () => {
   const h = harness();
@@ -166,16 +234,14 @@ for (const outcome of ['success', 'error']) {
     const token = h.context.state.coverRefreshTokens['/B/source.jpg'];
     await h.settle(0, outcome);
     await first;
-    assert.equal(h.context.state.coverLookup.modal.saving, true);
-    assert.equal(h.context.isCoverLookupLocalMutationPending(), true);
-    assert.equal(h.save.disabled, true);
-    assert.equal(h.overlay.hidden, false);
+    // B's Save already closed its modal on click; A must still not release B.
+    assert.equal(h.overlay.hidden, true);
+    assert.equal(h.context.isCoverLookupMutationPending(album('B')), true);
     assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/B/track.mp3'], optimistic);
     assert.equal(h.context.state.coverRefreshTokens['/B/source.jpg'], token);
     await h.settle(1);
     await second;
-    assert.equal(h.context.state.coverLookup.modal.saving, false);
-    assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
+    assert.equal(h.context.isCoverLookupMutationPending(album('B')), false);
     assert.equal(h.painted.get('B'), 'B-settled');
   });
 }
@@ -198,9 +264,23 @@ test('local mutation claim spans image preload and releases after synchronous se
   h.context.applyOptimisticLocalCoverSelection = () => { throw new Error('Setup failed'); };
   await h.context.saveLocalCoverFromLookup('/A/newer.jpg');
   assert.equal(h.context.state.coverLookup.modal.saving, false);
-  assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
+  assert.equal(h.context.isCoverLookupMutationPending(), false);
   assert.equal(h.remove.disabled, false);
   assert.equal(h.notifications.at(-1)[1], 'error');
+});
+
+test('failed local selection restores the prior inventory selection ledger', async () => {
+  const h = harness();
+  const a = album('A');
+  await h.open(a);
+  const previousGallery = clone(h.server.get('A'));
+
+  const pending = h.context.saveLocalCoverFromLookup('/A/source.jpg');
+  await h.settle(0, 'error');
+  await pending;
+
+  const reconciled = h.context.reconcileCoverLookupLocalInventory(a, previousGallery, false);
+  assert.equal(reconciled.selected_source_path, a.cover_path);
 });
 
 test('successful local save completes when the authoritative image preload stalls', async () => {
@@ -232,7 +312,7 @@ test('successful local save completes when the authoritative image preload stall
 
   assert.equal(outcome, 'settled');
   assert.equal(h.context.state.coverLookup.modal.saving, false);
-  assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
+  assert.equal(h.context.isCoverLookupMutationPending(), false);
   assert.deepEqual(acknowledged, [['task-a', 'A']]);
   assert.equal(closeCount, 1);
   assert.strictEqual(
@@ -259,6 +339,54 @@ test('a pre-mutation gallery response cannot restore the deleted cover', async (
   assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === '/A/deleted.jpg'));
 });
 
+test('a successful deletion cannot restore the deleted cover as unknown other art', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  h.requests[0].resolve({ ok: true, json: async () => ({
+    ok: true,
+    updated_albums: [{ ...a, cover_path: '/A/settled.jpg', cover_revision: 'A-settled' }],
+    gallery: {
+      ok: true,
+      local_covers: [{ path: '/A/settled.jpg', is_active: true }],
+      other_art: [{ path: a.cover_path, resolution: 'Unknown' }],
+    },
+  }) });
+  await pending;
+
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === a.cover_path));
+  assert.ok(!h.context.state.coverLookup.modal.otherArt.some(card => card.path === a.cover_path));
+});
+
+test('immediate notification reopen does not restore deleted selected art from lagging inventory', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  const fallback = { ...a, cover_path: '/A/source.jpg', cover_revision: 'A-fallback' };
+  h.server.set('A', {
+    ok: true,
+    active_cover_path: a.cover_path,
+    selected_source_path: a.cover_path,
+    local_covers: [
+      { path: a.cover_path, is_active: true },
+      { path: fallback.cover_path, is_active: false },
+    ],
+  });
+  h.requests[0].resolve({ ok: true, json: async () => ({
+    ok: true,
+    updated_albums: [fallback],
+    gallery: clone(h.server.get('A')),
+  }) });
+  await pending;
+  h.context.closeCoverLookupModal();
+
+  await h.open(fallback);
+
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === a.cover_path));
+  assert.equal(h.context.state.coverLookup.modal.activeLocalSelectionPath, fallback.cover_path);
+});
+
 test('closing without reopening settles the local deletion without a new gallery read', async () => {
   const h = harness(), a = album('A');
   await h.open(a);
@@ -270,6 +398,21 @@ test('closing without reopening settles the local deletion without a new gallery
   assert.equal(h.overlay.hidden, true);
   assert.equal(h.galleries.length, reads);
   assert.equal(h.painted.get('A'), 'A-settled');
+});
+
+test('Save closes immediately while selected-cover deletion applies its fallback', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+
+  const deletion = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  assert.equal(h.save.disabled, false, 'the optimistic fallback is immediately actionable');
+
+  await h.context.saveCoverFromLookup();
+
+  assert.equal(h.overlay.hidden, true, 'Save closes without waiting for deletion persistence');
+  assert.equal(h.requests.length, 1, 'Save does not overlap the in-flight deletion');
+  await h.settle(0);
+  await deletion;
 });
 
 for (const outcome of ['success', 'error']) {
@@ -306,15 +449,14 @@ test('a reopened reconciliation read cannot overwrite a subsequently admitted lo
   assert.equal(typeof settleGallery, 'function');
   const second = h.context.saveLocalCoverFromLookup('/A/newer.jpg');
   assert.equal(h.requests.length, 2);
-  const cards = clone(h.context.state.coverLookup.modal.localCovers);
   const optimistic = h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'];
   settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ path: '/A/stale.jpg' }] }) });
   await first;
-  assert.deepEqual(clone(h.context.state.coverLookup.modal.localCovers), cards);
+  // Save closed the modal on click; the stale read must not touch the admitted save.
+  assert.equal(h.overlay.hidden, true);
+  assert.notDeepEqual(clone(h.context.state.coverLookup.modal.localCovers || []), [{ path: '/A/stale.jpg' }]);
   assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'], optimistic);
-  assert.equal(h.context.state.coverLookup.modal.saving, true);
-  assert.equal(h.context.isCoverLookupLocalMutationPending(), true);
-  assert.equal(h.save.disabled, true);
+  assert.equal(h.context.isCoverLookupMutationPending(a), true);
   await h.settle(1);
   await second;
 });
@@ -378,7 +520,7 @@ async function openGenerationAWhileBIsRunning(h, a, generationAChoice) {
   assert.equal(h.context.state.coverLookup.tasks[0].status, 'running');
 }
 
-test('new task completion auto-selects its best candidate when the user made no explicit choice', async () => {
+test('new task completion suggests its best candidate without selecting it when the user made no explicit choice', async () => {
   const h = harness(), a = album('A');
   a.cover_path = null;
   a.tracks[0].cover_path = null;
@@ -392,7 +534,9 @@ test('new task completion auto-selects its best candidate when the user made no 
 
   await h.context.refreshCoverLookupGallery(false);
 
-  assert.equal(h.context.state.coverLookup.modal.selectedRemoteId, generationBChoice.id);
+  // Owner (11-08): an unsaved automatic pick wears the suggestion frame; nothing reads as "Selected".
+  assert.equal(h.context.state.coverLookup.modal.suggestedRemoteId, generationBChoice.id);
+  assert.equal(h.context.state.coverLookup.modal.selectedRemoteId, '');
 });
 
 test('a retained candidate saves through the generation that published it', async () => {
@@ -597,6 +741,35 @@ test('mark-seen completion preserves a newer same-token gallery snapshot', async
   await pending;
   assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, newerRead);
   assert.strictEqual(a.cover_candidate_snapshot, first);
+});
+
+test('mark-seen does not propagate a rebound release snapshot to the historical source album', async () => {
+  const h = harness(), a = album('A'), first = unseen('generation-1', 1);
+  h.context.getAlbumRequestKey = value => value?.key || '';
+  a.key = 'historical-release';
+  a.cover_candidate_snapshot = first;
+  await h.open(a);
+  h.context.state.coverLookup.modal.album.key = 'current-release';
+  h.context.state.coverLookup.modal.candidateSnapshot = first;
+  const pending = h.markSeen(first);
+  settleSeen(h.requests[0], first);
+  await pending;
+  assert.strictEqual(a.cover_candidate_snapshot, first);
+  assert.equal(a.key, 'historical-release');
+});
+
+test('mark-seen does not replace a newer snapshot on the hydrated source album', async () => {
+  const h = harness(), a = album('A'), first = unseen('generation-1', 1);
+  a.cover_candidate_snapshot = first;
+  await h.open(a);
+  h.context.state.coverLookup.modal.candidateSnapshot = first;
+  const pending = h.markSeen(first);
+  const next = unseen('generation-2', 2);
+  a.cover_candidate_snapshot = next;
+  settleSeen(h.requests[0], first);
+  await pending;
+  assert.strictEqual(a.cover_candidate_snapshot, next);
+  assert.strictEqual(h.context.state.coverLookup.modal.candidateSnapshot, first);
 });
 
 test('mark-seen may update an unchanged original resource after opening a different album', async () => {

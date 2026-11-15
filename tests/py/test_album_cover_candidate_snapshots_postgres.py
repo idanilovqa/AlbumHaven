@@ -398,6 +398,8 @@ def test_finish_generation_only_finishes_the_matching_generation(status):
         "album_id": 41,
         "search_generation": GENERATION,
         "status": status,
+        "candidates": None,
+        "best_candidate_id": None,
     }
     assert "where" in normalized_sql
     assert "search_generation = %(search_generation)s" in normalized_sql

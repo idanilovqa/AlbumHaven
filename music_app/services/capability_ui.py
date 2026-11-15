@@ -33,6 +33,8 @@ ACTION_SELECTORS = MappingProxyType({
         "[data-apply-problem-suggestions]",
     ),
     "library.inventory.manage": ("[data-remove-missing-album]",),
+    # Readable file paths in track tables are owner-only; the server also omits loose-track display paths.
+    "library.paths.read": ('.album-track-table [data-cdt-column="path"]',),
     "library.files.move": (
         "[data-move-problematic-album]",
         '[data-album-card-action="move_to_library"]', '[data-album-card-action="move_to_hoard"]',
@@ -43,7 +45,7 @@ ACTION_SELECTORS = MappingProxyType({
         '[data-album-card-action="open-explorer"]',
     ),
     "library.versions.manage": (
-        '[data-album-card-action="mark-version"]', '[data-album-card-action="unmark-version"]',
+        '[data-album-card-action="mark-version"]',
         "#version-picker-modal", '[data-save-version-picker="1"]',
     ),
     "library.logs.read": ("[data-open-log-history-alert]",),

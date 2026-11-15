@@ -39,7 +39,10 @@ function getArtistsDrawerNavigationContentKind(view = state.view || {}) {
 }
 
 function canUseArtistsDrawerForCurrentView() {
-  return getArtistsDrawerNavigationContentKind() === 'artists_sidebar';
+  const contentKind = getArtistsDrawerNavigationContentKind();
+  return contentKind === 'artists_sidebar'
+    || (contentKind === 'custom_collections'
+      && document.getElementById('shell-navigation-rail')?.getAttribute('data-library-navigation-mode') === 'artists');
 }
 
 function isArtistsDrawerMobileViewport() {
@@ -231,6 +234,8 @@ function handleArtistsDrawerClick(event) {
   const foldButton = event.target.closest('[data-toggle-artist-tree-fold="1"]');
   if (foldButton) {
     event.preventDefault();
+    if (foldButton === document.getElementById('artist-tree-navigation-button')
+      && typeof syncLibraryNavigationMode === 'function') syncLibraryNavigationMode('artists');
     toggleArtistTreeFold();
     return true;
   }

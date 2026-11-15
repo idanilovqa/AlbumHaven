@@ -296,6 +296,7 @@ test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons an
     expect([...new Set(approvedLayout.albumReasons)].sort()).toEqual([
       EXPECTED_MISSING_COVER_REASON,
     ]);
+    expect(approvedLayout.albumLabelExtraWidths.every((width) => width > 0 && width <= 32)).toBe(true);
     expect(approvedLayout.headers).toEqual(['Track / file', 'Problems', 'Suggested edits']);
     expect(approvedLayout.rows).toHaveLength(TRACKS.length);
     expect(approvedLayout.rows.every((row) => (

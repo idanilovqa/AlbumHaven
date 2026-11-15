@@ -27,3 +27,14 @@ test('separate metadata fields preserve numeric artist names and unknown years',
   assert.deepEqual(parseVisibleAlbumMetadata('1966', ''), { artist: '1966', year: '' });
   assert.deepEqual(parseVisibleAlbumMetadata('311', '1997'), { artist: '311', year: '1997' });
 });
+
+test('current adjacent metadata spans retain exact artist and decorated year', async () => {
+  const { parseVisibleAlbumMetadata, VISIBLE_ALBUM_YEAR_PATTERN } = await import(moduleUrl);
+  assert.deepEqual(parseVisibleAlbumMetadata('E2E Rarity Artist· 2026'), { artist: 'E2E Rarity Artist', year: '2026' });
+  assert.deepEqual(parseVisibleAlbumMetadata('A · B Ensemble· 2000'), { artist: 'A · B Ensemble', year: '2000' });
+  assert.deepEqual(parseVisibleAlbumMetadata('311', '· 1997'), { artist: '311', year: '1997' });
+  for (const visible of ['Artist· 2026', 'Artist · 2026', '· 2026', '2026']) {
+    assert.equal(visible.match(new RegExp(VISIBLE_ALBUM_YEAR_PATTERN))?.[1], '2026');
+  }
+  assert.equal('Artist· 20260'.match(new RegExp(VISIBLE_ALBUM_YEAR_PATTERN)), null);
+});

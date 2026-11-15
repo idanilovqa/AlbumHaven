@@ -8,7 +8,7 @@
 .settings-host .account-main [contenteditable="true"] {
   caret-color: auto;
 }
-.settings-host .account-main { width: min(910px, 100%); padding: 45px 64px; }
+.settings-host .account-main { width: min(910px, 100%); }
 .settings-host .account-main .account-header { display: flex; align-items: center; gap: 16px; padding-bottom: 26px; border-bottom: 1px solid var(--line); }
 .settings-host .account-main .account-avatar {
   width: 58px; height: 58px; display: grid; place-items: center; flex: 0 0 auto;
@@ -53,7 +53,6 @@
 .settings-host .account-main .session-status { color: var(--muted); font-size: 11px; }
 
 @media (max-width: 760px) {
-.settings-host .account-main { padding: 30px 22px; }
 .settings-host .account-main .form-grid { grid-template-columns: 1fr; }
 .settings-host .account-main .form-spacer { display: none; }
 }

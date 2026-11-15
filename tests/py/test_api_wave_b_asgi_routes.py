@@ -439,6 +439,7 @@ def test_lastfm_scrobble_summary_is_scoped_and_provider_total_is_best_effort(app
         routes, "get_lastfm_total_scrobbles",
         lambda config, *, session: (_ for _ in ()).throw(LastfmError("provider unavailable", retryable=True)),
     )
+    monkeypatch.setattr(routes, "_LASTFM_TOTAL_CACHE", {})
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
@@ -451,9 +452,14 @@ def test_lastfm_scrobble_summary_is_scoped_and_provider_total_is_best_effort(app
     assert status == 200
     assert _decode_json(body) == {
         "ok": True, "scrobbled": 42, "pending": 3,
-        "lastfm_total": None, "can_submit": True,
+        "lastfm_total": None, "lastfm_total_current": False, "can_submit": True,
     }
-    assert counts == [(1, 1)]
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/integrations/lastfm/scrobbles", query={"refresh_total": "1"},
+    )
+    assert status == 200
+    assert _decode_json(body)["lastfm_total"] is None
+    assert counts == [(1, 1), (1, 1)]
 
 
 def test_lastfm_scrobble_submit_bypasses_backoff_with_exact_scope(app, monkeypatch):
@@ -463,6 +469,7 @@ def test_lastfm_scrobble_submit_bypasses_backoff_with_exact_scope(app, monkeypat
     monkeypatch.setattr(routes, "lastfm_api_enabled", lambda config: True)
     monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="listener"))
     monkeypatch.setattr(routes, "get_lastfm_total_scrobbles", lambda config, *, session: 9001)
+    monkeypatch.setattr(routes, "_LASTFM_TOTAL_CACHE", {})
     monkeypatch.setattr(routes, "build_listen_history_status_counts", lambda config, *, account_id, library_id: {
         "listen_history_count": 44, "pending_scrobble_count": 0,
     })
@@ -485,7 +492,7 @@ def test_lastfm_scrobble_submit_bypasses_backoff_with_exact_scope(app, monkeypat
     assert status == 200
     assert _decode_json(body) == {
         "ok": True, "scrobbled": 44, "pending": 0, "lastfm_total": 9001,
-        "pending_before": 2, "attempted": 2, "succeeded": 2, "failed": 0,
+        "lastfm_total_current": True, "pending_before": 2, "attempted": 2, "succeeded": 2, "failed": 0,
         "pending_after": 0,
     }
     assert retry_calls == [{
@@ -500,6 +507,7 @@ def test_lastfm_scrobble_submit_failure_returns_alert_contract_and_logs_safe_cou
     monkeypatch.setattr(routes, "lastfm_api_enabled", lambda config: True)
     monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="listener"))
     monkeypatch.setattr(routes, "get_lastfm_total_scrobbles", lambda config, *, session: 9002)
+    monkeypatch.setattr(routes, "_LASTFM_TOTAL_CACHE", {})
     monkeypatch.setattr(routes, "build_listen_history_status_counts", lambda config, *, account_id, library_id: {
         "listen_history_count": 43, "pending_scrobble_count": 1,
     })
@@ -522,7 +530,7 @@ def test_lastfm_scrobble_submit_failure_returns_alert_contract_and_logs_safe_cou
         "ok": False,
         "error": "Some pending scrobbles could not be submitted to Last.fm.",
         "scrobbled": 43, "pending": 1, "lastfm_total": 9002,
-        "pending_before": 2, "attempted": 2, "succeeded": 1, "failed": 1,
+        "lastfm_total_current": True, "pending_before": 2, "attempted": 2, "succeeded": 1, "failed": 1,
         "pending_after": 1,
     }
     args, fields = events[-1]
@@ -2447,3 +2455,36 @@ def _authorize_loop_fixture(monkeypatch):
         library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
     async def resolve_actor(_request): return actor
     monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)
+
+
+def test_lastfm_total_answers_from_memory_and_only_a_refresh_contacts_lastfm(monkeypatch):
+    """Settings > Integrations waited ~2.3 s on the live Last.fm total every time."""
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    calls = []
+
+    def total(_config, *, session):
+        calls.append(session)
+        if len(calls) > 1:
+            raise routes.LastfmError("offline")
+        return 1234
+
+    monkeypatch.setattr(routes, "get_lastfm_total_scrobbles", total)
+    routes._LASTFM_TOTAL_CACHE.pop(987, None)
+    read = lambda refresh: routes._lastfm_total_scrobbles({}, account_id=987, session="s", refresh=refresh)
+    try:
+        # Opening the page never waits on Last.fm: nothing remembered yet, not current.
+        assert read(False) == (None, False)
+        assert calls == []
+        assert read(True) == (1234, True)
+        assert read(True) == (1234, True)
+        assert read(False) == (1234, True)
+        assert len(calls) == 1
+        # An expired total is still shown at once; a failed refresh keeps it.
+        routes._LASTFM_TOTAL_CACHE[987] = (0.0, 1234)
+        assert read(False) == (1234, False)
+        assert len(calls) == 1
+        assert read(True) == (1234, False)
+        assert len(calls) == 2
+    finally:
+        routes._LASTFM_TOTAL_CACHE.pop(987, None)

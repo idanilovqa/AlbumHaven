@@ -245,6 +245,10 @@
   gap: 0;
   padding: 10px;
 }
+/* A preview move that needs the server owner sits above the lookups, as an ordinary notification card. */
+.cover-lookup-drawer-attention { flex: 0 0 auto; padding: 10px 10px 0; }
+.cover-lookup-drawer-attention[hidden] { display: none; }
+.cover-lookup-drawer-attention .cover-lookup-task-open { color: inherit; text-decoration: none; }
 .cover-lookup-task-card {
   position: relative;
   flex: 0 0 auto;
@@ -274,6 +278,9 @@
   height: 9px;
   margin-top: 8px;
   border-radius: 999px;
+}
+.cover-lookup-task-loading-line,
+.cover-lookup-art-preview.is-loading {
   background: linear-gradient(90deg, var(--appearance-control, var(--panel-2)) 25%, color-mix(in srgb, var(--appearance-ink, var(--text)) 14%, var(--appearance-control, var(--panel-2))) 50%, var(--appearance-control, var(--panel-2)) 75%);
   background-size: 200% 100%;
   animation: cover-lookup-notification-loading 1.2s ease-in-out infinite;
@@ -398,7 +405,8 @@
   background: var(--appearance-error, #e77878);
 }
 @media (prefers-reduced-motion: reduce) {
-  .cover-lookup-task-loading-line { animation: none; }
+  .cover-lookup-task-loading-line,
+  .cover-lookup-art-preview.is-loading { animation: none; }
 }
 .related-box {
   flex: 1 1 auto;
@@ -689,7 +697,8 @@
 /* Submitted searches replace the old results with a compact loading state. */
 .library-loader.is-searching {
   min-height: 0;
-  background: #000;
+  /* The main surface of the viewer's palette, like the gallery it replaces. */
+  background: var(--app-surface);
 }
 .library-loader.is-searching .library-status-workspace > :not(.library-status-state),
 .library-loader.is-searching .library-status-state > :not(.library-loader-state-heading) { display: none; }

@@ -1,9 +1,11 @@
 function getTriggerAnchorGeometry(anchor, surface) {
   const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+  const alignedLeft = Math.abs(anchor.left - surface.left) <= 2;
+  const alignedRight = Math.abs(surface.right - anchor.right) <= 2;
   return {
     edge,
-    side: Math.abs(anchor.left - surface.left) <= 2 ? 'left'
-      : Math.abs(surface.right - anchor.right) <= 2 ? 'right' : 'none',
+    side: alignedLeft && alignedRight ? 'none'
+      : alignedLeft ? 'left' : alignedRight ? 'right' : 'none',
     left: Math.max(0, anchor.left - surface.left),
     right: Math.max(0, surface.right - anchor.right),
     width: anchor.width,
@@ -42,9 +44,16 @@ function clearTriggerAnchor(surface) {
   binding.observer?.disconnect();
  binding.resizeObserver?.disconnect();
  binding.anchor.classList.remove('trigger-anchor-open');
+ binding.visualAnchor?.classList.remove('trigger-anchor-open');
  surface.classList.remove('trigger-anchor-surface');
  delete binding.anchor.dataset.triggerAnchorEdge;
  delete binding.anchor.dataset.triggerAnchorContext;
+ if (binding.visualAnchor && binding.visualAnchor !== binding.anchor) {
+   delete binding.visualAnchor.dataset.triggerAnchorEdge;
+   delete binding.visualAnchor.dataset.triggerAnchorContext;
+   binding.visualAnchor.style.removeProperty?.('--trigger-anchor-background');
+   binding.visualAnchor.style.removeProperty?.('--trigger-anchor-gap');
+ }
  delete surface.dataset.triggerAnchorContext;
  delete surface.dataset.triggerAnchorEdge;
   delete surface.dataset.triggerAnchorSide;
@@ -56,6 +65,7 @@ function clearTriggerAnchor(surface) {
 
 function syncTriggerAnchor(surface, anchor) {
   if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  const visualAnchor = anchor;
   const previous = triggerAnchorBindings.get(surface);
   if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
   const contextOwner = anchor.closest?.('.trigger-anchor-surface, .shell-main-surface, .settings-outlet');
@@ -64,6 +74,7 @@ function syncTriggerAnchor(surface, anchor) {
   const contextChanged = surface.dataset.triggerAnchorContext !== anchorContext;
   if (contextChanged) surface.dataset.triggerAnchorContext = anchorContext;
   if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
+  if (visualAnchor.dataset.triggerAnchorContext !== anchorContext) visualAnchor.dataset.triggerAnchorContext = anchorContext;
   activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
@@ -83,7 +94,7 @@ function syncTriggerAnchor(surface, anchor) {
     bounds = { left: bounds.left - transform.m41, right: bounds.right - transform.m41,
       top: bounds.top - transform.m42, bottom: bounds.bottom - transform.m42 };
   }
-  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), bounds);
+  const geometry = getTriggerAnchorGeometry(visualAnchor.getBoundingClientRect(), bounds);
   const renderedBackground = surfaceStyle?.backgroundColor?.trim();
   const surfaceBackground = renderedBackground
     && renderedBackground !== 'transparent'
@@ -94,20 +105,20 @@ function syncTriggerAnchor(surface, anchor) {
     : surfaceStyle?.getPropertyValue?.('--trigger-anchor-background')?.trim();
   if (surfaceBackground) {
     surface.style.setProperty('--trigger-anchor-background', surfaceBackground);
-    anchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
+    visualAnchor.style.setProperty('--trigger-anchor-background', surfaceBackground);
   }
   if (anchor.matches?.('.search-field-button')) {
     if (surface.dataset.triggerAnchorSearch !== 'true') surface.dataset.triggerAnchorSearch = 'true';
   }
   else delete surface.dataset.triggerAnchorSearch;
-  if (!anchor.classList.contains('trigger-anchor-open')) anchor.classList.add('trigger-anchor-open');
+  if (!visualAnchor.classList.contains('trigger-anchor-open')) visualAnchor.classList.add('trigger-anchor-open');
  if (surface.dataset.triggerAnchorEdge !== geometry.edge) surface.dataset.triggerAnchorEdge = geometry.edge;
   if (surface.dataset.triggerAnchorSide !== geometry.side) surface.dataset.triggerAnchorSide = geometry.side;
-  if (anchor.dataset.triggerAnchorEdge !== geometry.edge) anchor.dataset.triggerAnchorEdge = geometry.edge;
+  if (visualAnchor.dataset.triggerAnchorEdge !== geometry.edge) visualAnchor.dataset.triggerAnchorEdge = geometry.edge;
   for (const name of ['left', 'right', 'width', 'gap']) {
     surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
   }
-  anchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  visualAnchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
   if (previous?.anchor === anchor) return;
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
     if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
@@ -119,9 +130,10 @@ function syncTriggerAnchor(surface, anchor) {
     if (surface.hidden) { clearTriggerAnchor(surface); return; }
     syncTriggerAnchor(surface, anchor);
   }) : null;
-  triggerAnchorBindings.set(surface, { anchor, observer, resizeObserver });
+  triggerAnchorBindings.set(surface, { anchor, visualAnchor, observer, resizeObserver });
   if (resizeObserver) {
     resizeObserver.observe(anchor);
+    if (visualAnchor !== anchor) resizeObserver.observe(visualAnchor);
     resizeObserver.observe(surface);
     if (anchor.parentElement) resizeObserver.observe(anchor.parentElement);
   }
@@ -162,10 +174,23 @@ function installPanelSelectionBoundary() {
   if (panelSelectionBoundaryInstalled) return;
   panelSelectionBoundaryInstalled = true;
   let origin = null;
+  let originMarked = false;
   let gestureOrigin = null;
+  // The marker classes restyle the whole document (their rules reach every
+  // element), so they wait for a drag: a plain click never pays two full style
+  // passes (~100 ms each on a long Loose Tracks list).
+  const markOrigin = () => {
+    if (!origin || originMarked) return;
+    originMarked = true;
+    origin.classList.add('panel-selection-origin');
+    document.documentElement.classList.add('panel-text-selection-active');
+  };
   const release = () => {
-    origin?.classList.remove('panel-selection-origin');
-    document.documentElement.classList.remove('panel-text-selection-active');
+    if (originMarked) {
+      origin?.classList.remove('panel-selection-origin');
+      document.documentElement.classList.remove('panel-text-selection-active');
+    }
+    originMarked = false;
     origin = null;
   };
   const confine = () => {
@@ -176,11 +201,10 @@ function installPanelSelectionBoundary() {
     if (event.pointerType === 'touch') { gestureOrigin = null; return; }
     gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
     origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
-    if (origin) {
-      origin.classList.add('panel-selection-origin');
-      document.documentElement.classList.add('panel-text-selection-active');
-    }
   }, true);
+  document.addEventListener('pointermove', event => {
+    if (origin && !originMarked && (event.buttons & 1)) markOrigin();
+  }, { capture: true, passive: true });
   // A click generated by releasing a drag outside its starting surface is not
   // an outside-click dismissal or an activation of the background underneath.
   document.addEventListener('click', event => {
@@ -214,6 +238,7 @@ globalThis.document?.addEventListener?.('album-haven:surface-opening', event => 
 
 // The existing surface/modal owners remain authoritative. This adapter only
 // reserves a real backdrop gesture before any target or document handler sees it.
+const MOBILE_DISMISSIBLE_SURFACE_SELECTOR = '.shell-navigation-rail, .mobile-settings-drawer, .artist-family-panel, .gallery-anchored-menu';
 function getDismissibleForegroundSurface() {
   const modal = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
   const isBackdrop = target => Boolean(modal && target === modal)
@@ -223,7 +248,18 @@ function getDismissibleForegroundSurface() {
   const anchor = owner && (triggerAnchorBindings.get(owner.surface)?.anchor || owner.anchor);
   if (owner && !owner.surface.hidden && (!modal || modal === owner.surface
       || modal.contains(owner.surface) || (anchor && modal.contains(anchor)))) {
-    return { surface: owner.surface, anchor, isBackdrop, dismiss() {
+    // On mobile a gallery tap outside an open side panel or dropdown only
+    // closes it; it must never also select or frame the album underneath.
+    // Always-visible surfaces (such as the view switcher) keep normal taps.
+    const mobileGalleryTapDismisses = !modal && typeof usesMobilePageLayout === 'function'
+      && usesMobilePageLayout()
+      && Boolean(owner.surface.matches?.(MOBILE_DISMISSIBLE_SURFACE_SELECTOR)
+        || owner.surface.classList?.contains('trigger-anchor-surface'));
+    return { surface: owner.surface, anchor,
+      isBackdrop: mobileGalleryTapDismisses
+        ? target => isBackdrop(target) || Boolean(target?.closest?.('#albums-scroll'))
+        : isBackdrop,
+      dismiss() {
       if (activeTriggerSurface !== owner) return;
       owner.close();
       if (anchor?.isConnected) anchor.focus?.({ preventScroll: true });

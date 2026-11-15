@@ -27,6 +27,10 @@ export class NavigationPanel extends BasePage {
     this.artistTreeFoldButton = page.getByRole('button', { name: 'Collapse Artist Tree', exact: true });
     this.artistTreeNavigationButton = page.getByRole('button', { name: 'Artist Tree', exact: true });
     this.artistRail = page.locator('#shell-navigation-rail');
+    this.navigationTreeHeader = page.locator('#shell-navigation-rail .shell-navigation-rail-header');
+    this.navigationTreeHeaderButtons = this.navigationTreeHeader.locator('button:visible');
+    this.looseTracksEntryPoints = page.locator('#shell-navigation-rail [data-open-non-album-tracks]:visible, #shell-navigation-rail [data-navigation-mode="collections"]:visible');
+    this.looseTracksSideBarButton = page.locator('#shell-navigation-compact').getByRole('button', { name: 'Loose Tracks', exact: true });
     this.mobileArtistTreeButton = page.locator('#mobile-library-button');
   }
 

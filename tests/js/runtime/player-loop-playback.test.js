@@ -3821,6 +3821,17 @@ for (const actions of [{ 'library.media.read': false }, {}]) {
   });
 }
 
+test('a track started from Loose Tracks remembers that collection as its player origin', async () => {
+  const f = loadCapabilityTrackRow(undefined);
+  const looseTracksModal = {};
+  f.button.closest = selector => (selector === '#non-album-modal' ? looseTracksModal : null);
+  f.context.state.ui = { ...(f.context.state.ui || {}), nonAlbumLibraryWide: true };
+  f.context.state.player.current = null;
+  f.context.activateSharedTrackButton(f.button, { restart: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(f.context.state.player.current.looseTracksOrigin)), { libraryWide: true });
+});
+
 for (const actions of [{ 'library.media.read': true }, undefined]) {
   test(`mobile track click resumes and double-tap restarts through shared playback (${actions ? 'allowed' : 'legacy'})`, async () => {
     const f = loadCapabilityTrackRow(actions);

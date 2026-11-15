@@ -605,6 +605,12 @@
           "project": "utility-problematic-files",
           "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
           "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail"
+        },
+        {
+          "config": "playwright.utility-problematic-files.config.cjs",
+          "project": "utility-problematic-files",
+          "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+          "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files paints its bounded first page before the complete tree and keeps the filter icon stable"
         }
       ]
     },

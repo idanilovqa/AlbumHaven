@@ -10,6 +10,8 @@ export class MobileLayoutPage {
     this.signInButton = page.getByRole('button', { name: 'Sign in', exact: true });
     this.appShell = page.locator('#app-shell');
     this.home = page.locator('#mobile-home');
+    this.homeLink = page.locator('[data-library-home="1"]');
+    this.artistTreeEntries = page.locator('#sidebar-list [data-sidebar-artist]');
     this.galleryContextName = page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]');
     this.artistHeading = page.locator('#shell-navigation-rail h2:visible');
     this.homeCards = this.home.locator('.album-card');

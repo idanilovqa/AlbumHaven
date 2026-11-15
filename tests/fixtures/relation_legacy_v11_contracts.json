@@ -1,0 +1,74 @@
+{
+  "Lisa Gerrard & Klaus Badelt": {
+    "artists": [
+      "Lisa Gerrard"
+    ],
+    "artists_sidebar": [
+      {
+        "artist": "Lisa Gerrard",
+        "count": 2
+      }
+    ],
+    "family_to_artists": {},
+    "folder_related": {},
+    "sidebar_families": [],
+    "alias_to_canonical": {
+      "Lisa Gerrard & Klaus Badelt": "Lisa Gerrard",
+      "Lisa Gerrard": "Lisa Gerrard"
+    },
+    "canonical_to_aliases": {
+      "Lisa Gerrard": [
+        "Lisa Gerrard",
+        "Lisa Gerrard & Klaus Badelt"
+      ]
+    }
+  },
+  "Luca Turilli's Rhapsody": {
+    "artists": [
+      "Rhapsody"
+    ],
+    "artists_sidebar": [
+      {
+        "artist": "Rhapsody",
+        "count": 2
+      }
+    ],
+    "family_to_artists": {},
+    "folder_related": {},
+    "sidebar_families": [],
+    "alias_to_canonical": {
+      "Luca Turilli's Rhapsody": "Rhapsody",
+      "Rhapsody": "Rhapsody"
+    },
+    "canonical_to_aliases": {
+      "Rhapsody": [
+        "Luca Turilli's Rhapsody",
+        "Rhapsody"
+      ]
+    }
+  },
+  "Rikard Sjöblom's Gungfly": {
+    "artists": [
+      "Gungfly"
+    ],
+    "artists_sidebar": [
+      {
+        "artist": "Gungfly",
+        "count": 2
+      }
+    ],
+    "family_to_artists": {},
+    "folder_related": {},
+    "sidebar_families": [],
+    "alias_to_canonical": {
+      "Rikard Sjöblom's Gungfly": "Gungfly",
+      "Gungfly": "Gungfly"
+    },
+    "canonical_to_aliases": {
+      "Gungfly": [
+        "Gungfly",
+        "Rikard Sjöblom's Gungfly"
+      ]
+    }
+  }
+}

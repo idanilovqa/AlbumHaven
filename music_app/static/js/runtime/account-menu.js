@@ -29,6 +29,7 @@ function attachAccountMenu(component, options = {}) {
     position();
     const items = enabledItems();
     if (focusItem) (last ? items[items.length - 1] : items[0])?.focus({ preventScroll: true });
+    options?.onOpen?.(menu);
   };
   on(globalThis, 'resize', () => {
     if (!menu.hidden) position();

@@ -93,6 +93,9 @@ def test_load_returns_the_singleton_storage_state():
     assert "inventory_count" in connection.calls[0][0]
     assert "inventory_bytes" in connection.calls[0][0]
     assert connection.calls[0][0].count("from app.generated_preview_inventory") == 1
+    # UI-8: the summary separates re-checked previews and previews left to be regenerated.
+    assert "as rechecked_count" in connection.calls[0][0]
+    assert "item.status = 'skipped' and item.actual_sha256 is not null" in connection.calls[0][0]
 
 
 def test_request_location_is_revision_guarded_and_records_requested_target():
@@ -303,6 +306,11 @@ def test_complete_item_records_one_terminal_checkpoint(status):
     sql, params = connection.calls[0]
     assert "update app.generated_preview_relocation_items" in sql
     assert "finished_at = now()" in sql
+    assert "set current_path = finished.target_path" in sql
+    assert "and %(status)s <> 'failed'" in sql
+    # UI-8: a preview re-checked during the move records the checksum it moved with, and the planned bytes follow.
+    assert "sha256 = case when %(status)s = 'completed' then finished.actual_sha256" in sql
+    assert "total_bytes = total_bytes + case when %(status)s <> 'failed' then %(byte_count)s - finished.expected_bytes" in sql
     assert params["status"] == status
 
 
@@ -393,3 +401,15 @@ def test_non_owner_serialization_never_exposes_server_paths():
     assert "requested_root" not in public
     assert owner["active_root"] == "C:/private/previews"
     assert owner["requested_root"] == "D:/private/previews"
+
+
+def test_covered_source_paths_lists_where_the_moves_previews_came_from():
+    """Owner (11-09): the move cleans the album folders its previews came from."""
+    connection = FakeConnection([FakeCursor(rows=[{"source_path": "N:/Music/Album/.album-haven/cover_variants/ab/1.jpg"}])])
+
+    paths = repository_for(connection).covered_source_paths(operation_id="10e2fc89-439a-4f74-a508-97596cf20771")
+
+    assert paths == ["N:/Music/Album/.album-haven/cover_variants/ab/1.jpg"]
+    sql, params = connection.calls[0]
+    assert "select distinct source_path from app.generated_preview_relocation_items" in sql
+    assert params == {"operation_id": "10e2fc89-439a-4f74-a508-97596cf20771"}

@@ -705,16 +705,9 @@ def _finalize_save_task(
             )
         ):
             try:
-                if isinstance(committed_relation_state, dict) and isinstance(
-                    committed_relation_state.get("relation_views"),
-                    dict,
-                ):
-                    st["relation_views"] = dict(
-                        committed_relation_state["relation_views"]
-                    )
-                    st["relations_last_built"] = float(
-                        committed_relation_state.get("relations_last_built") or 0.0
-                    )
+                if isinstance(committed_relation_state, dict):
+                    from music_app.services.scoped_relation_projection import apply_committed_relation_state
+                    apply_committed_relation_state(st, committed_relation_state, config=config)
                 else:
                     raise RuntimeError(
                         "Postgres persistence returned no canonical relation projection state."
@@ -940,10 +933,10 @@ def finalize_structural_tag_edit_save_task(
         committed_separate_release_key = str(
             persistence_result.get("separate_release_key") or ""
         ).strip()
+        committed_separate_release_keys = {
+            str(key) for key in persistence_result.get("separate_release_keys", []) if key
+        }
         committed_relation_views = persistence_result.get("relation_views")
-        committed_relations_last_built = float(
-            persistence_result.get("relations_last_built") or 0.0
-        )
 
         def refresh_runtime_state() -> None:
             st = get_state()
@@ -952,6 +945,7 @@ def finalize_structural_tag_edit_save_task(
                 int(persistence_result.get("inventory_mutation_revision") or 0),
             )
             current_separate_release_keys = set(separate_release_keys)
+            current_separate_release_keys.update(committed_separate_release_keys)
             if committed_separate_release_key:
                 current_separate_release_keys.add(
                     committed_separate_release_key
@@ -975,12 +969,15 @@ def finalize_structural_tag_edit_save_task(
                 changed_entries=changed_entries,
                 latest_file_cache=current_file_cache,
             )
+            inherited_paths = set(persistence_result.get("cover_inherited_paths", [])) & set(changed_paths)
             if persistence_result.get("cover_inherited_from_structural_edit") is True:
+                inherited_paths.update(changed_paths)
+            if inherited_paths:
                 current_file_cache = _mark_structurally_inherited_cover_entries(
                     file_cache=current_file_cache,
                     previous_file_entries=previous_file_cache,
                     updated_file_entries=updated_file_cache,
-                    changed_paths=changed_paths,
+                    changed_paths=inherited_paths,
                 )
             st["file_cache"] = current_file_cache
             required_relation_fields = (
@@ -991,15 +988,16 @@ def finalize_structural_tag_edit_save_task(
             if changed_field_names & required_relation_fields:
                 if (
                     not isinstance(committed_relation_views, dict)
+                    and not isinstance(persistence_result.get('relation_view_patch'), dict)
                     and persistence_result.get("projection_mode") != "stale"
                 ):
                     warnings.append(
                         "Relation state refresh failed after persistence committed: "
                         "Postgres persistence returned no canonical relation projection state."
                     )
-                elif isinstance(committed_relation_views, dict):
-                    st["relation_views"] = dict(committed_relation_views)
-                    st["relations_last_built"] = committed_relations_last_built
+                elif isinstance(committed_relation_views, dict) or isinstance(persistence_result.get('relation_view_patch'), dict):
+                    from music_app.services.scoped_relation_projection import apply_committed_relation_state
+                    apply_committed_relation_state(st, persistence_result, config=config)
             try:
                 rebuild_affected_albums_in_state(
                     st,
@@ -1045,6 +1043,9 @@ def finalize_structural_tag_edit_save_task(
                 None,
             )
         warning_count_before_canonical_lookup = len(warnings)
+        canonical_lookup_paths = set(requested_track_paths) | {
+            str(path) for path in persistence_result.get("affected_track_paths", []) if path
+        }
         with (
             timing_recorder.measure("canonical_album_lookup")
             if timing_recorder is not None
@@ -1053,7 +1054,7 @@ def finalize_structural_tag_edit_save_task(
             updated_albums = _post_commit_value(
                 warnings,
                 "Canonical album reconciliation",
-                lambda: find_albums_by_track_paths(requested_track_paths),
+                lambda: find_albums_by_track_paths(canonical_lookup_paths),
                 [],
             )
         reconciliation_pending = (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import Future
 from pathlib import Path
 from threading import Event, Thread, current_thread
@@ -675,6 +676,23 @@ def _install_fake_notification_adapter(monkeypatch, config, initial_tasks=None):
         def load_notifications(self):
             return list(persisted_tasks)
 
+        def load_notification(self, task_id):
+            return next((task for task in persisted_tasks if task["id"] == task_id), None)
+
+        def load_reusable_notification(self, track_paths, *, manual_urls, excluded_task_ids):
+            normalize = lambda paths: sorted(os.path.normcase(str(Path(path).resolve())) for path in paths)
+            matches = [task for task in persisted_tasks if (
+                task["id"] not in excluded_task_ids
+                and task.get("status") in {"completed", "failed", "canceled"}
+                and not task.get("internal")
+                and normalize(task.get("track_paths", [])) == normalize(track_paths)
+            )]
+            matches.sort(key=lambda task: (
+                set(task.get("manual_urls", [])) == set(manual_urls),
+                task.get("finished_at", ""), task["id"],
+            ), reverse=True)
+            return matches[0] if matches else None
+
         def save_notifications(self, tasks):
             persisted_tasks[:] = list(tasks)
 
@@ -695,10 +713,12 @@ def _install_fake_notification_adapter(monkeypatch, config, initial_tasks=None):
 
 
 @pytest.mark.parametrize("preferred_task_id", ["", "  "])
-def test_fresh_lookup_allocates_new_task_for_same_files_without_manual_urls(
+@pytest.mark.parametrize("manual_urls", [[], ["https://covers.example/new.jpg"]])
+def test_gallery_lookup_reuses_terminal_notification_when_manual_urls_change(
     config,
     monkeypatch,
     preferred_task_id,
+    manual_urls,
 ):
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     other_track_path = track_path.with_name("different.mp3")
@@ -709,9 +729,17 @@ def test_fresh_lookup_allocates_new_task_for_same_files_without_manual_urls(
             "status": "completed",
             "artist": "Test Artist",
             "album": "Test Album",
-            "track_paths": [str(track_path).swapcase()],
+            "track_paths": [str(track_path).swapcase() if os.name == "nt" else str(track_path)],
             "created_at": "2026-05-17T00:00:00+00:00",
             "finished_at": "2026-05-17T00:01:00+00:00",
+            "started_at": "2026-05-17T00:00:01+00:00",
+            "progress": 100,
+            "progress_label": "Interrupted",
+            "result_kind": "interrupted",
+            "notification_action_taken": True,
+            "possible_matches": [{"id": "cached", "url": "https://covers.example/front.jpg"}],
+            "best_candidate_id": "cached",
+            "manual_urls": ["https://covers.example/previous.jpg"],
         },
         {
             "id": "different-files-same-labels",
@@ -727,17 +755,79 @@ def test_fresh_lookup_allocates_new_task_for_same_files_without_manual_urls(
     task_id, _cancel_event = create_cover_lookup_task(
         _album_payload(track_path),
         {str(track_path)},
+        manual_urls,
         config=config,
         preferred_task_id=preferred_task_id,
     )
 
-    assert task_id != completed_id
-    assert cover_lookup_result(task_id)["status"] == "pending"
+    assert task_id == completed_id
+    task = cover_lookup_result(task_id)
+    assert task["status"] == "pending"
+    assert task["progress"] == 0
+    assert task["progress_label"] == "Queued"
+    assert task["finished_at"] == ""
+    assert task["started_at"] == ""
+    assert task["result_kind"] == ""
+    assert task["notification_action_taken"] is False
+    assert task["best_candidate_id"] == "cached"
+    assert task["created_at"] > "2026-05-18T00:00:00+00:00"
+    assert task["notification_order_at"] == "2026-05-17T00:01:00+00:00"
+    assert task["possible_matches"] == [{"id": "cached", "url": "https://covers.example/front.jpg"}]
     assert {task["id"] for task in list_cover_lookup_tasks(config=config)} == {
-        task_id,
         completed_id,
         "different-files-same-labels",
     }
+    assert [task["id"] for task in list_cover_lookup_tasks(config=config)] == [
+        "different-files-same-labels", completed_id,
+    ]
+
+
+@pytest.mark.parametrize("preferred_task_id", ["", "completed-public-lookup"])
+def test_internal_cover_save_does_not_repurpose_public_notification(
+    config, monkeypatch, preferred_task_id,
+):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    public_task = {
+        "id": "completed-public-lookup",
+        "status": "completed",
+        "track_paths": [str(track_path)],
+        "created_at": "2026-05-17T00:00:00+00:00",
+        "finished_at": "2026-05-17T00:01:00+00:00",
+    }
+    persisted = _install_fake_notification_adapter(monkeypatch, config, [public_task])
+
+    task_id, _ = create_cover_lookup_task(
+        _album_payload(track_path), {str(track_path)}, config=config,
+        internal=True, preferred_task_id=preferred_task_id,
+    )
+
+    assert task_id != public_task["id"]
+    assert cover_lookup_result(task_id)["internal"] is True
+    assert persisted == [public_task]
+
+
+def test_retry_preserves_full_known_candidate_inventory_after_reload_but_bounds_progress(config, monkeypatch):
+    track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    old = [{"id": f"old-{index}", "url": f"https://covers.example/old-{index}.jpg"} for index in range(80)]
+    new = [{"id": f"new-{index}", "url": f"https://covers.example/new-{index}.jpg"} for index in range(100)]
+    persisted = _install_fake_notification_adapter(monkeypatch, config, [{
+        "id": "retained-gallery", "status": "completed", "track_paths": [str(track_path)],
+        "possible_matches": old,
+    }])
+
+    task_id, _ = create_cover_lookup_task(_album_payload(track_path), {str(track_path)}, config=config)
+    assert task_id == "retained-gallery"
+    assert persisted[0]["possible_matches"] == old
+    update_cover_lookup_task(task_id, config=config, possible_matches=[*old, *new])
+    durable = dict(persisted[0])
+    assert durable["possible_matches"] == [*old, *new[:64]]
+    reset_cover_lookup_runtime_state()
+
+    reloaded = task_service.load_cover_lookup_notification(config, task_id)
+    gallery_task = task_service.serialize_cover_lookup_task_payload(reloaded, include_retained_candidates=True)
+    assert gallery_task["possible_matches"] == [*old, *new[:64]]
+    polling_task = task_service.serialize_cover_lookup_task_payload(durable)
+    assert polling_task["possible_matches"] == old[:64]
 
 
 def test_manual_lookup_reuses_terminal_task_for_same_files_and_urls_without_preferred_id(

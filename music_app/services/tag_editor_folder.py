@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Collection, Mapping
+from itertools import chain
 from pathlib import Path
 
-from music_app.services.cover_workflow import resolve_album_root_from_track_paths
+from music_app.services.cover_workflow import (
+    _is_explicit_release_part_layout,
+    resolve_album_root_from_track_paths,
+)
 from music_app.services.library_roots import configured_library_root_paths_snapshot
 from music_app.services.metadata import read_editable_tag_values
 
@@ -35,6 +39,21 @@ def _natural_path_key(path: Path, root: Path) -> tuple[tuple[int, object], ...]:
     )
 
 
+_LEADING_DISC_FOLDER = re.compile(r"^\s*(?:cd|disc|disk)\s*[-_.]?\s*\d{1,2}(?![0-9])", re.IGNORECASE)
+_DISC_NUMBER = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _disc_order_key(path: Path, root: Path) -> tuple[object, ...]:
+    """CD1 files first, then CD2 and so on, whatever the disc folders are called."""
+    disc = 0
+    for component in path.relative_to(root).parent.parts:
+        match = _DISC_NUMBER.search(component)
+        if match:
+            disc = int(match.group(1))
+            break
+    return (disc, _natural_path_key(path, root))
+
+
 def _is_within_any_root(path: Path, roots: Collection[Path]) -> bool:
     return any(path.is_relative_to(root.resolve(strict=False)) for root in roots)
 
@@ -44,6 +63,7 @@ def load_tag_editor_folder_files(
     source_path: str,
     *,
     indexed_paths: Collection[str],
+    paths_only: bool = False,
 ) -> dict[str, object]:
     normalized_source = str(source_path or "").strip()
     indexed_keys = {str(Path(value).resolve(strict=False)).casefold() for value in indexed_paths}
@@ -70,6 +90,33 @@ def load_tag_editor_folder_files(
     )
     folder = resolved_album_root or source.parent
     entries = folder.rglob("*") if resolved_album_root is not None else folder.iterdir()
+    release_root = folder.parent
+    resolved_roots = {root.resolve(strict=False) for root in roots}
+    if (
+        _is_explicit_release_part_layout(release_root, [folder])
+        and _is_within_any_root(release_root, roots)
+        and release_root not in resolved_roots
+    ):
+        children = list(release_root.iterdir())
+        discs = {child.resolve(strict=True) for child in children if child.is_dir()
+                 and _is_explicit_release_part_layout(release_root, [child])
+                 and _is_explicit_release_part_layout(release_root, [child.resolve(strict=True)])}
+        if len(discs) > 1 and folder in discs:
+            folder = release_root
+            # The explicit folder action may add sibling discs; artwork stays
+            # scoped to represented tracks. Do not traverse other release folders.
+            entries = chain((child for child in children if child.is_file()),
+                            *(disc.rglob("*") for disc in discs))
+    # REC-005: a folder named as a disc (CD1, Disc 2, "CD2 - Bonus", ...) loads its whole album folder.
+    # An album folder that only ends with a disc marker ("First Album CD1") stays a release of its own.
+    if (
+        folder.parent == release_root
+        and _LEADING_DISC_FOLDER.match(folder.name)
+        and release_root not in resolved_roots
+        and _is_within_any_root(release_root, roots)
+    ):
+        folder = release_root
+        entries = folder.rglob("*")
     candidates = sorted(
         (
             candidate
@@ -80,10 +127,12 @@ def load_tag_editor_folder_files(
             )
             if candidate.is_relative_to(folder) and _is_within_any_root(candidate, roots)
         ),
-        key=lambda path: _natural_path_key(path, folder),
+        key=lambda path: _disc_order_key(path, folder),
     )
     if len(candidates) > _MAX_FOLDER_FILES:
         raise ValueError("The selected folder contains too many audio files.")
+    if paths_only:
+        return {"folder_path": str(folder), "paths": [str(candidate) for candidate in candidates]}
 
     tracks: list[dict[str, object]] = []
     for candidate in candidates:

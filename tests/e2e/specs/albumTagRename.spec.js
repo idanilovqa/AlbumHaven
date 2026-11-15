@@ -97,8 +97,6 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
       FIXTURE_ARTIST,
       FAILURE_FIXTURE_ALBUM,
     );
-    // Status polling would otherwise replace the card as soon as the split lands.
-    await staleCardSession.context.setOffline(true);
   });
 
   await stepLogger.step('Split both tracks into distinct current releases', async () => {
@@ -147,7 +145,6 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
   });
 
   await stepLogger.step('Click the rendered stale card and resolve it to a current release', async () => {
-    await staleCardSession.context.setOffline(false);
     await staleCardSession.galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
       album: FAILURE_FIXTURE_ALBUM,
@@ -195,9 +192,11 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
     await trackModalActions.closeIfOpen();
 
-    const mergedSummary = await staleMergeSession.trackModalActions.waitForTitle(
+    await staleMergeSession.trackModalActions.waitForTitle(
       albumDetailsTitle(FAILURE_FIXTURE_ALBUM),
     );
+    const mergedSummary = await staleMergeSession.trackModalActions.waitForInteractiveSummary();
+    expect(mergedSummary.title).toBe(albumDetailsTitle(FAILURE_FIXTURE_ALBUM));
     expect(mergedSummary.trackRows).toBe(1);
     await staleMergeSession.trackModalActions.close();
 
@@ -807,6 +806,13 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
     destinationCoverSrc = destinationCover.productionSrc;
     expect(coverResourceIdentity(destinationCoverSrc)).toBe(coverResourceIdentity(originalCoverSrc));
 
+    await galleryActions.openAlbumTagEditorFromContextMenu(SPLIT_RENAMED_ALBUM);
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+    expect((await tagEditorActions.readSummary()).trackFilenames).toEqual(
+      [SPLIT_SELECTED_FILENAME],
+    );
+    await tagEditorActions.close();
+
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
       album: SPLIT_RENAMED_ALBUM,
@@ -1027,6 +1033,17 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       )
     ).productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await galleryActions.waitForAlbumHidden(SPLIT_RENAMED_ALBUM);
+
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST,
+      album: SPLIT_ORIGINAL_ALBUM,
+      year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForExactAlbumDetails({
+      title: albumDetailsTitle(SPLIT_ORIGINAL_ALBUM),
+      trackTitles: [EXPECTED_SPLIT_TRACK_TITLES[0], ...EXPECTED_SPLIT_TRACK_TITLES.slice(2)],
+    });
+    await trackModalActions.close();
   });
 
   await stepLogger.step('Restore the second moved track without duplicating the original album', async () => {

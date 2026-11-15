@@ -17,7 +17,7 @@ def save_exception_overrides(config: dict[str, object], overrides: dict[str, str
 
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files",),
+        kinds=("problematic-files", "loose-tracks"),
     )
 
 
@@ -67,7 +67,7 @@ def set_track_exception_overrides(
 
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files",),
+        kinds=("problematic-files", "loose-tracks"),
     )
     return normalized_updates
 

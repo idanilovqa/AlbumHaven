@@ -24,6 +24,7 @@ function createContext(overrides = {}) {
   };
   const context = {
     Date, Intl, URLSearchParams,
+    ButtonComponent: require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'button-component.js')),
     document: { getElementById: () => null },
     getUtilityModalElements: () => ({ overlay: { hidden: true } }),
     buildMissingAlbumMarkHtml: () => '',

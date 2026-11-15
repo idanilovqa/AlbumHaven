@@ -14,6 +14,15 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const openTagEditorFolderButton = event.target.closest('[data-open-tag-editor-folder]');
+  if (openTagEditorFolderButton) {
+    event.preventDefault();
+    if (openTagEditorFolderButton.disabled) return;
+    const trackPath = openTagEditorFolderButton.getAttribute('data-open-tag-editor-folder') || '';
+    void openAlbumInExplorer({ name: '', tracks: [{ path: trackPath }] });
+    return;
+  }
+
   const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
   if (exceptionOption) {
     event.preventDefault();
@@ -21,9 +30,23 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
   const exceptionInput = event.target.closest('#tag-editor-form [data-tag-field="exception_type"]');
-  if (exceptionInput) openTagEditorExceptionMenu();
+  if (exceptionInput) toggleTagEditorExceptionMenu(exceptionInput);
   else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
 
+  const keepMissingAlbumButton = event.target.closest('#utility-modal [data-keep-missing-album="1"]');
+  if (keepMissingAlbumButton) {
+    event.preventDefault();
+    void keepMissingAlbum(getSelectedProblematicAlbum());
+    return;
+  }
+  const rescanMissingAlbumButton = event.target.closest('#utility-modal [data-rescan-missing-album="1"]');
+  if (rescanMissingAlbumButton) {
+    event.preventDefault();
+    if (!rescanMissingAlbumButton.disabled) {
+      void rescanMissingAlbum(getSelectedProblematicAlbum(), rescanMissingAlbumButton);
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -56,12 +79,12 @@ async function handleUtilityBootstrapClick(event) {
     });
   }
 
-  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
+  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
     renderProblemFilterControls(getUtilityModalElements());
   }
   if (
-    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal')
+    !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox, #track-modal, #tag-editor-modal, #tag-edit-confirm-modal, #app-form-modal')
     && state.coverLookup.drawerOpen
   ) {
     state.coverLookup.drawerOpen = false;
@@ -169,10 +192,13 @@ async function handleUtilityBootstrapClick(event) {
       state.utility.selectedProblemFilters = nextSelectedFilters;
       state.utility.deferProblematicAutoSelection = true;
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
-      state.utility.problemDropdownOpen = false;
+      state.utility.problemDropdownOpen = true;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
-      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+      if (event.detail === 0) {
+        Array.from(getUtilityModalElements().problemFilterMenu?.querySelectorAll?.('[data-problem-filter-value]') || [])
+          .find((option) => option.getAttribute('data-problem-filter-value') === value)?.focus();
+      }
     }
     return;
   }
@@ -501,6 +527,12 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-open-problematic-album-details="1"]')) {
+    event.preventDefault();
+    openTrackModal(getSelectedProblematicAlbum(), { foreground: true });
+    return;
+  }
+
   const tagEditorOpenButton = event.target.closest('[data-open-tag-editor="1"]');
   if (tagEditorOpenButton) {
     event.preventDefault();
@@ -720,7 +752,7 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    const album = resolveTrackModalActionAlbum(trackModalCoverLookupButton);
     if (album) openCoverLookupModal(album);
     return;
   }
@@ -948,14 +980,6 @@ async function handleUtilityBootstrapClick(event) {
     event.preventDefault();
     const candidateId = selectRemoteCoverButton.getAttribute('data-select-remote-cover') || '';
     selectRemoteCoverFromLookup(candidateId);
-    return;
-  }
-  const currentReleaseButton = event.target.closest('[data-cover-lookup-current-release]');
-  if (currentReleaseButton) {
-    event.preventDefault();
-    void chooseCoverLookupCurrentRelease(
-      currentReleaseButton.getAttribute('data-cover-lookup-current-release') || '',
-    );
     return;
   }
     const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');
@@ -1340,6 +1364,11 @@ function handleUtilityBootstrapKeyDown(event) {
     if (event.key === 'Enter' && exceptionOption) {
       event.preventDefault();
       selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+      return true;
+    }
+    if (exceptionInput && ['Enter', ' '].includes(event.key)) {
+      event.preventDefault();
+      toggleTagEditorExceptionMenu(exceptionInput);
       return true;
     }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {

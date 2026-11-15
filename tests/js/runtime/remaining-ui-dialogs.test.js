@@ -7,7 +7,7 @@ const root = path.resolve(__dirname, '../../..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 test('remaining UI confirmations stay compact and Appearance offers explicit safe and destructive actions', () => {
-  const css = read('music_app/static/css/runtime/utilities.css');
+  const css = read('music_app/static/css/dialog-component.css');
   const markup = read('music_app/templates/partials/confirm-modals.html');
   const bridge = read('music_app/static/js/runtime/appearance-backgrounds-bridge.js');
 

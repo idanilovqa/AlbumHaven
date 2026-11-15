@@ -69,8 +69,8 @@ def render():
     templates = Path(__file__).resolve().parents[2] / "music_app" / "templates"
     environment = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape())
 
-    def render_template(name="index.html", *, administrator=True):
-        actions = AllowedActions(("accounts.read", "accounts.create") if administrator else ())
+    def render_template(name="index.html", *, administrator=True, extra_actions=(), **context):
+        actions = AllowedActions((("accounts.read", "accounts.create") if administrator else ()) + tuple(extra_actions))
         initial_view = {
             "gallery_scope": "local",
             "gallery_display_mode": "rows",
@@ -93,13 +93,14 @@ def render():
             playback_allowed_actions=AllowedActions(()),
             account_menu_csrf_token="library-csrf",
             allowed_actions=actions,
-            csrf_token="settings-csrf",
+            **({"csrf_token": "settings-csrf"} if name != "index.html" else {}),
             profile={"username": "Listener", "sessions": []},
             roster={"library_name": "Test library", "members": []},
             member=None,
             listener_defaults=[],
             capability_groups=[],
             access_editor=assignment_editor(None, []),
+            **context,
         )
         return Document(html).root
 
@@ -112,6 +113,25 @@ def assert_home_brand(bar):
     link = links[0]
     assert link.attrs.get("aria-label"), "The image-only home link needs an accessible name"
     assert link.one("img").attrs["src"].endswith("/album-haven-cloud-vinyl.png")
+
+
+@pytest.mark.parametrize("template", ["index.html", "admin-members.html", "admin-account-detail.html", "admin-server.html", "account.html"])
+def test_complete_document_account_menus_have_unique_ids_and_valid_logout_tokens(render, template):
+    document = render(template)
+    identifiers = [element.attrs["id"] for element in document.find_all(id=None)]
+    assert len(identifiers) == len(set(identifiers)), "Hidden shell chrome must not duplicate document IDs"
+    components = document.find_all(**{"data-account-menu-component": None})
+    assert len(components) == (2 if template == "index.html" else 1)
+    expected_token = "library-csrf" if template == "index.html" else "settings-csrf"
+    for component in components:
+        trigger = component.one("button", **{"data-account-menu-trigger": None})
+        menu = component.one("div", **{"data-account-menu": None})
+        assert trigger.attrs["aria-controls"] == menu.attrs["id"]
+        assert document.one(id=trigger.attrs["aria-controls"]) is menu
+        logout = menu.one("form", action="/logout")
+        assert logout.one("input", name="csrf_token").attrs["value"] == expected_token
+    if template == "index.html":
+        document.one("button", id="settings-button")
 
 
 def test_library_app_bar_is_above_both_sidebar_and_main_content(render):
@@ -170,6 +190,28 @@ def test_library_app_bar_owns_sources_and_aligns_search_with_gallery_body(render
     assert not any("Open New Arrivals" in switch.text for switch in menu.find_all())
 
 
+def test_loose_tracks_is_a_side_panel_mode_with_its_own_collections_tree(render):
+    shell = render().one(id="app-shell")
+    toolbar = render().one(**{"class": "toolbar-right"})
+    assert toolbar.find_all(**{"data-open-non-album-tracks": None}) == []
+    modes = shell.one(**{"class": "mobile-artists-mode"}).find_all(**{"data-navigation-mode": None})
+    assert [mode.attrs["data-navigation-mode"] for mode in modes] == ["artists", "collections"]
+    assert [mode.attrs["aria-pressed"] for mode in modes] == ["true", "false"]
+    artists = shell.one(id="sidebar-list")
+    assert artists.find_all(**{"data-open-non-album-tracks": None}) == []
+    collections = shell.one(id="sidebar-collections")
+    assert collections.attrs["data-navigation-tree"] == "collections"
+    assert collections.attrs["aria-label"] == "Custom Collections"
+    assert "hidden" in collections.attrs
+    item = collections.one(**{"data-navigation-tree-key": "collection:loose-tracks"})
+    assert item.attrs["data-library-wide"] == "1"
+    compact = shell.one(id="shell-navigation-compact")
+    buttons = compact.find_all("button")
+    assert buttons[0].attrs["id"] == "artist-tree-navigation-button"
+    assert buttons[1].attrs["data-open-non-album-tracks"] == "1"
+    assert "disabled" not in buttons[1].attrs
+
+
 def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
     shell = render().one(id="app-shell")
     gallery_bar = shell.one(**{"data-gallery-bar-instance": "gallery"})
@@ -192,8 +234,10 @@ def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
         assert "disabled" in choices_by_type[release_type].attrs
         assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
     split_albums = album_types.one("button", **{"data-gallery-split-albums": "1"})
-    assert split_albums.attrs["aria-pressed"] == "true"
-    assert split_albums.text.strip().endswith("Show split albums")
+    assert "gallery-switch--tri" in split_albums.attrs["class"]
+    assert split_albums.attrs["role"] == "slider"
+    assert split_albums.attrs["aria-valuenow"] == "2"
+    assert split_albums.attrs["aria-valuetext"] == "Show Split Albums"
     album_types.one("button", **{"data-open-non-album-tracks": "1"})
     customize = album_types.one("button", **{"data-gallery-customize-preview": "1"})
     assert "disabled" in customize.attrs or customize.attrs.get("aria-disabled") == "true"
@@ -325,3 +369,90 @@ def test_search_component_appends_custom_actions_and_supports_multiple_instances
     assert custom.parent.children[-1] is custom
     second_field = document.one("input", id="second-search")
     assert second_field.parent.one("button", type="submit").attrs["aria-label"] == "Find tracks"
+
+
+@pytest.mark.parametrize("template", ["admin-members.html", "admin-account-detail.html", "admin-server.html", "account.html"])
+def test_standalone_app_bar_keeps_settings_and_logout(render, template):
+    document = render(template)
+    menu = document.one("div", **{"data-account-menu": None})
+    assert menu.one("a", **{"data-account-menu-settings": None}).attrs["href"] == "/?settings=appearance"
+    assert not menu.find_all(**{"data-account-menu-admin": None})
+    assert menu.one("form").attrs["action"] == "/logout"
+    assert menu.one("input", name="csrf_token").attrs["value"] == "settings-csrf"
+
+
+@pytest.mark.parametrize(
+    ("template", "section"),
+    [("admin-members.html", "users"), ("admin-account-detail.html", "users"), ("admin-server.html", "server"), ("account.html", "account")],
+)
+def test_settings_navigation_selects_only_the_current_page(render, template, section):
+    document = render(template, extra_actions=("system.preview_storage.read",))
+    selected = [item.attrs["data-settings-section"] for item in document.find_all(**{"data-settings-section": None}) if item.attrs.get("aria-current") == "page"]
+    assert selected == [section]
+
+
+@pytest.mark.parametrize("template", ["admin-members.html", "admin-server.html", "account.html"])
+def test_settings_pages_share_the_gallery_header_geometry_without_desktop_library_back(render, template):
+    document = render(template, extra_actions=("system.preview_storage.read",))
+    owners = [section for section in document.find_all("section") if "settings-main" in (section.attrs.get("class") or "").split()]
+    assert len(owners) == 1, "Every Settings page uses the shared settings-main surface"
+    header = owners[0].one("header", **{"data-gallery-bar-instance": "page"})
+    back = header.one("a", **{"data-settings-parent": None})
+    assert "page-gallery-bar__back--narrow-only" in back.attrs["class"].split()
+
+
+def test_account_detail_keeps_its_desktop_back_to_users(render):
+    header = render("admin-account-detail.html").one("header", **{"data-gallery-bar-instance": "page"})
+    back = header.one("a", **{"data-settings-parent": None})
+    assert back.attrs["href"] == "/admin/members"
+    assert "page-gallery-bar__back--narrow-only" not in back.attrs["class"].split()
+
+
+def test_server_settings_compose_shared_radio_path_and_button_components(render):
+    document = render("admin-server.html", extra_actions=("system.preview_storage.read",), can_browse_server_folders=True)
+    form = document.one("form", **{"data-admin-server": None})
+    radios = form.find_all("input", type="radio")
+    assert [radio.parent.attrs["class"] for radio in radios] == ["ui-radio-option", "ui-radio-option"]
+    assert [radio.parent.one("span").text.strip() for radio in radios] == ["Album folders", "Special path"]
+    path_input = form.one("input", **{"data-preview-path": None})
+    assert path_input.parent.attrs["class"] == "ui-path-input ui-input-action"
+    browse = path_input.parent.one("button", **{"data-path-input-browse": None})
+    assert "action-button" in browse.attrs["class"].split()
+    assert "disabled" in path_input.attrs and "disabled" in browse.attrs, "The path stays disabled until Special path is chosen"
+    assert "data-path-input-browsable" in browse.attrs, "Browse permission survives the initial disabled state"
+    plain = render("admin-server.html", extra_actions=("system.preview_storage.read",), can_browse_server_folders=False)
+    assert "data-path-input-browsable" not in plain.one("button", **{"data-path-input-browse": None}).attrs
+    save = form.one("button", **{"data-preview-save": None})
+    assert {"ui-button", "ui-button--primary"} <= set(save.attrs["class"].split())
+    assert "disabled" in save.attrs
+    # Owner (11-10): "I clicked Retry failed files - but saw no reaction". The alerts kept no hook, so every message
+    # was dropped; they carry their data attributes and sit right before the buttons that cause them.
+    status = form.one("section", **{"data-preview-status": None})
+    error = form.one("section", **{"data-preview-error": None})
+    assert (status.attrs["role"], error.attrs["role"]) == ("status", "alert")
+    siblings = status.parent.children
+    actions = next(child for child in siblings if child.find_all("button", **{"data-preview-retry": None}))
+    assert siblings.index(status) < siblings.index(error) < siblings.index(actions)
+    assert not form.find_all("progress"), "Relocation uses concise text, not a progress bar"
+    assert "Loading" not in form.text
+    assert len(document.find_all(id="app-form-modal")) == 1, "The folder picker dialog is available on direct loads"
+
+
+def test_page_header_hamburger_buttons_have_no_outline(render):
+    # Owner (11-09): "loose outline on this hamburger button everywhere it is used" - the Settings sections and
+    # library navigation hamburgers are bare, like Back and the admin Account navigation hamburger.
+    document = render()
+    for button_id in ("mobile-settings-button", "mobile-library-button"):
+        classes = document.one(id=button_id).attrs["class"].split()
+        assert "action-button--bare" in classes, button_id
+
+
+def test_notification_panel_has_a_preview_move_slot_only_for_preview_storage_readers(render):
+    """Owner (11-10): a preview move that needs the server owner shows in the notification panel."""
+    owner = render("index.html", extra_actions=("system.preview_storage.read",))
+    drawer = owner.one("aside", id="cover-lookup-drawer")
+    slot = drawer.one("div", id="preview-move-attention")
+    assert "hidden" in slot.attrs
+    assert drawer.children.index(slot) < drawer.children.index(drawer.one("div", id="cover-lookup-drawer-body"))
+    listener = render("index.html")
+    assert not listener.find_all(id="preview-move-attention")

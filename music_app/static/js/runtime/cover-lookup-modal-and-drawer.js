@@ -64,7 +64,7 @@ function buildCoverLookupModalStatusHtml(taskRunning) {
     return `<span class="cover-lookup-inline-notice">${buildSmallAlertHtml({
       severity: 'warning',
       message: modal.failureNotice,
-    })}<button class="icon-button" type="button" data-dismiss-cover-lookup-notice="1" aria-label="Dismiss cover lookup notice">×</button></span>`;
+    })}${ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Dismiss cover lookup notice', presentation: 'bare', attributes: { 'data-dismiss-cover-lookup-notice': '1' } })}</span>`;
   }
   const statusText = String(modal.statusText || '');
   if (!statusText) return '';
@@ -279,12 +279,6 @@ function extractCoverLookupPendingAttachments() {
       ? state.coverLookup.modal.pastedImages : []),
   ];
   state.coverLookup.modal.manualImageAttachments = [];
-  const taskId = String(state.coverLookup.modal.taskId || '').trim();
-  const task = (state.coverLookup.tasks || []).find(item => String(item?.id || '') === taskId);
-  if (taskId && state.coverLookup.modal.album && isCompletedCoverLookupTask(task)) {
-    markCoverLookupTaskActionTaken(taskId, state.coverLookup.modal.album);
-    renderCoverLookupDrawer({ taskIds: [taskId] });
-  }
   return attachments.length;
 }
 
@@ -315,7 +309,7 @@ function buildCoverLookupAlbumSubtitleHtml(album) {
     album.album_artist
       ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.album_artist)}</span>` : '',
     album.name
-      ? `<button class="cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
+      ? `<button class="ui-text-link cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
     album.year
       ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.year)}</span>` : '',
   ].filter(Boolean).join('<span class="cover-lookup-modal-subtitle-separator" aria-hidden="true"> · </span>');
@@ -338,15 +332,6 @@ function openCoverLookupAlbumDetails() {
       ? album
       : { ...album, preview_only: true },
   );
-}
-
-function buildCoverLookupCurrentReleaseLabel(release) {
-  return [
-    release?.album_artist || '',
-    release?.name || '',
-    release?.year || '',
-    release?.edition || '',
-  ].filter(Boolean).join(' · ');
 }
 
 function buildTrackPathSignature(album) {
@@ -403,7 +388,7 @@ function logCoverLookupTaskDebug(context, task) {
   });
 }
 
-function reconcileCoverLookupRemoteSelection(possibleMatches) {
+function reconcileCoverLookupRemoteSelection(possibleMatches, { suggestFirst = false } = {}) {
   const matches = Array.isArray(possibleMatches) ? possibleMatches : [];
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const selectedMatchExists = selectedRemoteId
@@ -421,8 +406,10 @@ function reconcileCoverLookupRemoteSelection(possibleMatches) {
     && String(candidate?.art_kind || 'cover') === 'cover'
     && !Boolean(candidate?.display_only)
   ));
-  if (selectableMatches.length) {
-    state.coverLookup.modal.selectedRemoteId = String(selectableMatches[0].id);
+  // Owner (11-08): nothing is pre-selected. An unsaved automatic pick is only suggested (the green
+  // suggestion frame), so the gallery never shows "Selected" for a cover that is not the album's.
+  if (selectableMatches.length && suggestFirst && !state.coverLookup.modal.suggestedRemoteId) {
+    state.coverLookup.modal.suggestedRemoteId = String(selectableMatches[0].id);
   }
 }
 
@@ -466,7 +453,7 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
       status: normalizedSnapshot.status,
     } : null;
   }
-  const taskGeneration = String(normalizedTask.id || '').trim();
+  const taskGeneration = String(normalizedTask.search_generation || normalizedTask.id || '').trim();
   const taskCandidates = sanitizeCoverLookupPossibleMatches(normalizedTask.possible_matches);
   const snapshotOwnedByTask = coverLookupCandidateGenerationKey(normalizedSnapshot?.search_generation)
     === coverLookupCandidateGenerationKey(taskGeneration);
@@ -492,12 +479,16 @@ function getCoverLookupCandidateSource(task, candidateSnapshot) {
         > coverLookupCandidateTimestamp(normalizedTask.candidate_updated_at)
     )
   ) {
+    const retainedRetry = Number(normalizedTask.retained_candidate_count || 0) > 0
+      && ['pending', 'running'].includes(String(normalizedTask.status || '').trim());
     return {
-      candidates: normalizedSnapshot.candidates,
+      candidates: retainedRetry
+        ? sanitizeCoverLookupPossibleMatches([...taskCandidates, ...normalizedSnapshot.candidates])
+        : normalizedSnapshot.candidates,
       generation: normalizedSnapshot.search_generation,
       bestCandidateId: normalizedSnapshot.best_candidate_id,
       revision: normalizedSnapshot.revision,
-      status: normalizedSnapshot.status,
+      status: retainedRetry ? normalizedTask.status : normalizedSnapshot.status,
     };
   }
   return {
@@ -580,9 +571,31 @@ function applyCoverLookupCandidateSource(candidateSource) {
     possibleMatches = previousMatches;
     retainedPreviousMatches = true;
   }
+  // The suggestion is the lookup's best selectable cover. It stays marked whatever the user selects,
+  // so the card shown in Notifications is always identifiable in the gallery.
+  const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
+  // INT-028: a cover is suggested only after a recent cover search for this album that the user has not acted
+  // on yet (or for an album with no cover at all), and only when it is sharper than the current cover (never
+  // the same or a lower resolution).
+  const suggestionTask = (state.coverLookup.tasks || []).find((item) => String(item?.id || '') === String(modal.taskId || ''));
+  const activeLocalCover = (modal.localCovers || []).find((cover) => cover?.is_active);
+  const hasCurrentCover = Boolean(activeLocalCover || String(modal.album?.cover_path || '').trim()
+    || String(modal.album?.remote_cover_url || '').trim());
+  const searchAwaitsDecision = !hasCurrentCover
+    || (Boolean(suggestionTask) && !isActionedCoverLookupNotification(suggestionTask));
+  const shortEdge = (width, height) => Math.min(Number(width) || 0, Number(height) || 0);
+  const currentCoverEdge = shortEdge(
+    activeLocalCover?.width ?? modal.album?.local_cover_width,
+    activeLocalCover?.height ?? modal.album?.local_cover_height,
+  );
+  const isSelectableSuggestion = (matches, candidateId) => searchAwaitsDecision && Boolean(candidateId) && matches.some((candidate) => (
+    String(candidate?.id || '') === candidateId
+    && String(candidate?.art_kind || 'cover') === 'cover'
+    && !Boolean(candidate?.display_only)
+    && (!currentCoverEdge || shortEdge(candidate?.width, candidate?.height) > currentCoverEdge)
+  ));
   const hasExplicitRemoteSelection = Boolean(overrideGeneration && overrideCandidateId);
   if (hasExplicitRemoteSelection) {
-    modal.suggestedRemoteId = '';
     const incomingOverride = possibleMatches.find(candidateMatchesOverride);
     const selectedOverride = overrideGeneration !== generation
       ? (retainedOverride || incomingOverride)
@@ -605,12 +618,14 @@ function applyCoverLookupCandidateSource(candidateSource) {
       }
     }
     modal.possibleMatches = possibleMatches;
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, bestCandidateId) ? bestCandidateId : '';
     modal.selectedRemoteId = String(selectedOverride?.id || '');
     return;
   }
   modal.possibleMatches = possibleMatches;
   if (retainedPreviousMatches) {
-    modal.suggestedRemoteId = '';
+    const previousSuggestion = String(modal.suggestedRemoteId || '');
+    modal.suggestedRemoteId = isSelectableSuggestion(possibleMatches, previousSuggestion) ? previousSuggestion : '';
     modal.selectedRemoteId = '';
     return;
   }
@@ -621,52 +636,74 @@ function applyCoverLookupCandidateSource(candidateSource) {
     || String(modal.activeLocalSelectionPath || '')
     || String(getCoverLookupActiveLocalPath() || '')
   );
-  const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
-  const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
-    String(candidate?.id || '') === bestCandidateId
-    && String(candidate?.art_kind || 'cover') === 'cover'
-    && !Boolean(candidate?.display_only)
+  const bestCandidateIsSelectable = isSelectableSuggestion(possibleMatches, bestCandidateId);
+  const task = (state.coverLookup.tasks || []).find((item) => (
+    String(item?.id || '') === String(modal.taskId || '')
   ));
+  const hasManualChoice = Boolean(modal.artboxSlot)
+    || modal.album?.cover_selection_origin === 'user'
+    || Boolean(task && isActionedCoverLookupNotification(task))
+    || Boolean(modal.pendingLocalPath || modal.pendingPastedImageId);
+  modal.suggestedRemoteId = bestCandidateIsSelectable ? bestCandidateId : '';
   if (hasPendingNonRemoteSelection) {
-    modal.suggestedRemoteId = '';
     modal.selectedRemoteId = '';
     return;
   }
-  if (bestCandidateIsSelectable) {
-    modal.suggestedRemoteId = bestCandidateId;
-    modal.selectedRemoteId = bestCandidateId;
+  // An unchosen cover is only suggested, never pre-selected: the user picks it, then saves.
+  if (bestCandidateIsSelectable && !hasManualChoice) {
+    modal.selectedRemoteId = '';
     return;
   }
-  modal.suggestedRemoteId = '';
-  reconcileCoverLookupRemoteSelection(possibleMatches);
+  reconcileCoverLookupRemoteSelection(possibleMatches, { suggestFirst: !hasManualChoice && searchAwaitsDecision && !hasCurrentCover });
 }
 
-function applyCoverLookupGalleryPayload(gallery) {
+function applyCoverLookupGalleryPayload(gallery, { confirmLocalInventory = true } = {}) {
   if (!gallery || typeof gallery !== 'object') return;
-  cacheCoverLookupGalleryPayload(state.coverLookup.modal.album, gallery);
-  const incomingLocalCovers = Array.isArray(gallery.local_covers) ? gallery.local_covers : [];
-  const savedSource = String(gallery.selected_source_path || '');
-  const candidates = [...incomingLocalCovers, ...(Array.isArray(gallery.other_art) ? gallery.other_art : [])];
-  const incomingActiveLocalCover = !gallery.remote_cover
-    ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
-      || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
-    : null;
-  if (incomingActiveLocalCover) {
-    state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
-    const revision = String(incomingActiveLocalCover.cover_revision || '').trim();
-    if (revision && !state.coverLookup.modal.saving
-        && revision === String(state.coverLookup.modal.album?.cover_revision || '').trim()) {
-      markAlbumCoverPathsFresh([{ cover_path: incomingActiveLocalCover.path, cover_revision: revision }]);
+  gallery = reconcileCoverLookupLocalInventory(state.coverLookup.modal.album, gallery, confirmLocalInventory);
+  if (gallery.album && typeof gallery.album === 'object' && state.coverLookup.modal.album) {
+    const album = state.coverLookup.modal.album;
+    const previousId = String(album.album_id || album.id || '');
+    const currentId = String(gallery.album.album_id || gallery.album.id || '');
+    const previousKey = String(album.key || '');
+    const currentKey = String(gallery.album.key || '');
+    if (currentKey && ((previousId && currentId && previousId !== currentId)
+      || (previousKey && previousKey !== currentKey))) {
+      album.album_ref = currentKey;
     }
+    Object.assign(album, gallery.album);
   }
-  state.coverLookup.modal.remoteCover = gallery.remote_cover && typeof gallery.remote_cover === 'object' ? gallery.remote_cover : null;
-  // The canonical copy is not a second artwork choice when the server verified
-  // an identical source. Keep the real sources visible and the saved source selected.
-  state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
-    incomingActiveLocalCover && String(cover?.path || '') === String(gallery.active_cover_path || '')
-    && String(cover?.path || '') !== String(incomingActiveLocalCover.path)
-  ));
-  state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
+  if (Object.prototype.hasOwnProperty.call(gallery, 'local_inventory_pending')) {
+    state.coverLookup.modal.localInventoryPending = Boolean(gallery.local_inventory_pending);
+    state.coverLookup.modal.galleryError = String(gallery.local_inventory_error || '');
+  }
+  if ((gallery.local_inventory_complete !== false || gallery.local_inventory_available) && Array.isArray(gallery.local_covers)) {
+    if (gallery.local_inventory_complete !== false) cacheCoverLookupGalleryPayload(state.coverLookup.modal.album, gallery);
+    const incomingLocalCovers = Array.isArray(gallery.local_covers) ? gallery.local_covers : [];
+    const savedSource = String(gallery.selected_source_path || '');
+    const candidates = [...incomingLocalCovers, ...(Array.isArray(gallery.other_art) ? gallery.other_art : [])];
+    const incomingActiveLocalCover = !gallery.remote_cover
+      ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
+        || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
+      : null;
+    // UI-14 (owner): the second artbox's lookup keeps its own saved art selected, not the album cover.
+    if (incomingActiveLocalCover && !state.coverLookup.modal.artboxSlot) {
+      state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
+      const revision = String(incomingActiveLocalCover.cover_revision || '').trim();
+      if (revision && !state.coverLookup.modal.saving
+          && revision === String(state.coverLookup.modal.album?.cover_revision || '').trim()) {
+        markAlbumCoverPathsFresh([{ cover_path: incomingActiveLocalCover.path, cover_revision: revision }]);
+      }
+    }
+    // The canonical copy is not a second artwork choice when the server verified
+    // an identical source. Keep the real sources visible and the saved source selected.
+    state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
+      incomingActiveLocalCover && String(cover?.path || '') === String(gallery.active_cover_path || '')
+      && String(cover?.path || '') !== String(incomingActiveLocalCover.path)
+    ));
+    state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
+    state.coverLookup.modal.localInventoryLoaded = gallery.local_inventory_complete !== false;
+  }
+  if ('remote_cover' in gallery) state.coverLookup.modal.remoteCover = gallery.remote_cover || null;
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
   const candidateSnapshot = normalizeCoverLookupCandidateSnapshot(gallery.candidate_snapshot);
   state.coverLookup.modal.candidateSnapshot = candidateSnapshot;
@@ -705,7 +742,7 @@ function applyCoverLookupGalleryPayload(gallery) {
       && task.possible_matches.length >= possibleMatchCount;
     const candidateSnapshotHydrated = Boolean(candidateSnapshot)
       && coverLookupCandidateGenerationKey(candidateSnapshot.search_generation)
-        === coverLookupCandidateGenerationKey(task.id)
+        === coverLookupCandidateGenerationKey(task.search_generation || task.id)
       && ['completed', 'failed', 'canceled'].includes(String(candidateSnapshot.status || ''))
       && candidateSnapshot.revision > 0;
     const terminalCandidatesPending = ['completed', 'failed', 'canceled'].includes(
@@ -725,6 +762,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
   const snapshot = normalizeCoverLookupCandidateSnapshot(candidateSnapshot);
   const album = state.coverLookup.modal.album;
   const session = coverLookupModalSession;
+  const sourceAlbum = state.coverLookup.modal.sourceAlbum || album;
+  const sourceSnapshot = sourceAlbum?.cover_candidate_snapshot;
+  const sourceKey = buildCoverLookupGalleryCacheKey(sourceAlbum);
   const albumSnapshot = album?.cover_candidate_snapshot;
   const modalSnapshot = state.coverLookup.modal.candidateSnapshot;
   const automaticRevision = Math.max(0, Number(snapshot?.automatic_improvement_revision || 0) || 0);
@@ -739,7 +779,7 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
   if (String(state.coverLookup.modal.seenCandidateImprovementToken || '') === seenToken) return;
   state.coverLookup.modal.seenCandidateImprovementToken = seenToken;
   const requestOwner = {};
-  coverLookupSeenRequests.set(album, requestOwner);
+  coverLookupSeenRequests.set(sourceAlbum, requestOwner);
   try {
     const response = await fetch('/utilities/cover-lookup/gallery/mark-seen', {
       method: 'POST',
@@ -755,16 +795,23 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       seen_automatic_improvement_revision: automaticRevision,
       has_unseen_automatic_improvement: false,
     };
-    const ownsResource = coverLookupSeenRequests.get(album) === requestOwner;
+    const ownsResource = coverLookupSeenRequests.get(sourceAlbum) === requestOwner
+      && sourceAlbum.cover_candidate_snapshot === sourceSnapshot;
     const ownsModal = ownsResource && session === coverLookupModalSession
       && state.coverLookup.modal.album === album
       && state.coverLookup.modal.seenCandidateImprovementToken === seenToken
       && state.coverLookup.modal.candidateSnapshot === modalSnapshot;
     const overlay = getCoverLookupModalElements().overlay;
-    const albumIsOpen = state.coverLookup.modal.album === album && overlay && !overlay.hidden;
+    const albumIsOpen = (state.coverLookup.modal.sourceAlbum || state.coverLookup.modal.album) === sourceAlbum
+      && overlay && !overlay.hidden;
     if (ownsResource && album.cover_candidate_snapshot === albumSnapshot
         && (!albumIsOpen || ownsModal)) {
       album.cover_candidate_snapshot = markedSnapshot;
+      if (sourceAlbum.cover_candidate_snapshot === sourceSnapshot
+          && sourceKey === buildCoverLookupGalleryCacheKey(sourceAlbum)
+          && sourceKey === buildCoverLookupGalleryCacheKey(album)) {
+        sourceAlbum.cover_candidate_snapshot = markedSnapshot;
+      }
     }
     if (!ownsModal) return;
     state.coverLookup.modal.candidateSnapshot = markedSnapshot;
@@ -776,18 +823,24 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
       }
     }
   } catch (error) {
-    if (coverLookupSeenRequests.get(album) === requestOwner
+    if (coverLookupSeenRequests.get(sourceAlbum) === requestOwner
         && session === coverLookupModalSession && state.coverLookup.modal.album === album
         && state.coverLookup.modal.seenCandidateImprovementToken === seenToken) {
       state.coverLookup.modal.seenCandidateImprovementToken = '';
     }
     console.warn('[AlbumHaven][CoverLookup] Failed to mark automatic candidate update as seen.', error);
   } finally {
-    if (coverLookupSeenRequests.get(album) === requestOwner) coverLookupSeenRequests.delete(album);
+    if (coverLookupSeenRequests.get(sourceAlbum) === requestOwner) coverLookupSeenRequests.delete(sourceAlbum);
   }
 }
 
 function getCoverLookupActiveLocalPath() {
+  // UI-14 (owner, 11-09): the second artbox's lookup starts with only its own saved art selected, never the
+  // album cover.
+  if (state.coverLookup.modal.artboxSlot) {
+    const artwork = typeof getAlbumAdditionalArtwork === 'function' ? getAlbumAdditionalArtwork(state.coverLookup.modal.album) : null;
+    return state.coverLookup.modal.artboxCleared ? '' : String(artwork?.cover_path || '');
+  }
   const retainedPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
   if (retainedPath) return retainedPath;
   if (state.coverLookup.modal.remoteCover && typeof state.coverLookup.modal.remoteCover === 'object') {
@@ -914,8 +967,13 @@ function buildTrackModalCoverSourceBadge(source) {
 }
 
 function hasPendingLocalCoverSelection() {
-  const pendingPath = String(state.coverLookup.modal.pendingLocalPath || '');
-  return Boolean(pendingPath && pendingPath !== getCoverLookupActiveLocalPath());
+  const modal = state.coverLookup.modal;
+  const pendingPath = String(modal.pendingLocalPath || '');
+  if (!pendingPath) return false;
+  if (pendingPath !== getCoverLookupActiveLocalPath()) return true;
+  if (modal.fallbackLocalSelectionPending) return true;
+  // Clicking a cover the app applied automatically confirms it as the user's own choice.
+  return !modal.artboxSlot && modal.album?.cover_selection_origin === 'automatic';
 }
 
 function hasPendingPastedCoverSelection() {
@@ -942,19 +1000,19 @@ function syncCoverLookupManualControlsUi() {
     input.disabled = searchControlsDisabled;
   }
   if (submitButton instanceof HTMLButtonElement) {
-    submitButton.disabled = searchControlsDisabled || !coverLookupHasManualInput();
+    ButtonComponent.setDisabled(submitButton, searchControlsDisabled || !coverLookupHasManualInput());
   }
   if (findBetterButton instanceof HTMLButtonElement) {
-    findBetterButton.disabled = searchControlsDisabled;
+    ButtonComponent.setDisabled(findBetterButton, searchControlsDisabled);
   }
 }
 
 function syncCoverLookupSaveButton() {
   const saveButton = document.getElementById('cover-lookup-save-remote-button');
   if (!saveButton) return;
-  const localMutationPending = isCoverLookupLocalMutationPending();
+  const mutationPending = isCoverLookupMutationPending();
   getCoverLookupModalElements().overlay?.querySelectorAll?.('[data-delete-local-cover]').forEach(button => {
-    button.disabled = localMutationPending;
+    button.disabled = mutationPending;
   });
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
   const pendingPastedImageId = String(state.coverLookup.modal.pendingPastedImageId || '');
@@ -962,9 +1020,14 @@ function syncCoverLookupSaveButton() {
   const savedRemoteCandidateId = String(currentTask?.selected_candidate_id || '');
   const hasRemoteSelection = Boolean(selectedRemoteId) && selectedRemoteId !== savedRemoteCandidateId;
   const hasLocalSelection = hasPendingLocalCoverSelection();
-  const hasPastedSelection = Boolean(pendingPastedImageId);
+  // The second artbox takes a local or remote image; staged pasted images save to the album cover only.
+  const hasPastedSelection = Boolean(pendingPastedImageId) && !state.coverLookup.modal.artboxSlot;
   saveButton.hidden = false;
-  saveButton.disabled = localMutationPending || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection);
+  const clearsArtbox = Boolean(state.coverLookup.modal.artboxSlot && state.coverLookup.modal.artboxCleared);
+  const fallbackAlreadyApplied = Boolean(
+    state.coverLookup.modal.fallbackLocalSelectionPending && hasLocalSelection,
+  );
+  ButtonComponent.setDisabled(saveButton, (mutationPending && !fallbackAlreadyApplied) || Boolean(state.coverLookup.modal.saving) || !(hasRemoteSelection || hasLocalSelection || hasPastedSelection || clearsArtbox));
   saveButton.textContent = state.coverLookup.modal.saving ? 'Saving…' : 'Save';
 }
 
@@ -978,7 +1041,7 @@ function isActionedCoverLookupNotification(task) {
 
 function isCoverLookupSavePending(task) {
   return ['pending', 'running'].includes(String(task?.status || ''))
-    && String(task?.job_kind || '') === 'save_remote_selection';
+    && String(task?.job_kind || task?.job_contract?.job_kind || '') === 'save_remote_selection';
 }
 
 function isActiveCoverLookupSearchTask(task) {
@@ -1008,7 +1071,7 @@ function syncCoverLookupSelectionUi() {
     const shouldBeActive = !selectedRemoteId && !pendingPastedImageId && (
       pendingLocalPath
         ? localPath === pendingLocalPath
-        : card.hasAttribute('data-cover-lookup-local-active')
+        : card.hasAttribute('data-cover-lookup-local-active') && !state.coverLookup.modal.artboxCleared
     );
     card.classList.toggle('is-active', shouldBeActive);
     if (shouldBeActive) {
@@ -1031,10 +1094,12 @@ function syncCoverLookupSelectionUi() {
     }
   });
   modal.querySelectorAll('[data-select-remote-cover]').forEach((card) => {
-    const isActive = String(card.getAttribute('data-select-remote-cover') || '') === selectedRemoteId;
-    const isSuggested = isActive
-      && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
-      && String(card.getAttribute('data-select-remote-cover') || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
+    const cardId = String(card.getAttribute('data-select-remote-cover') || '');
+    const isActive = cardId === selectedRemoteId || (typeof isSecondArtboxSavedRemoteActive === 'function'
+      && isSecondArtboxSavedRemoteActive((state.coverLookup.modal.possibleMatches || []).find((candidate) => String(candidate?.id || '') === cardId)));
+    const suggestedRemoteId = String(state.coverLookup.modal.suggestedRemoteId || '');
+    const isSuggested = Boolean(suggestedRemoteId)
+      && String(card.getAttribute('data-select-remote-cover') || '') === suggestedRemoteId;
     card.classList.toggle('is-active', isActive);
     card.classList.toggle('is-suggested', isSuggested);
     let check = card.querySelector('.cover-lookup-art-check');
@@ -1111,7 +1176,7 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
   }
 }
 
-function markTrackModalCoverTransitionPending(album) {
+function markTrackModalCoverTransitionPending(album, optimisticSrc = '') {
   if (typeof document === 'undefined') return false;
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return false;
@@ -1123,6 +1188,13 @@ function markTrackModalCoverTransitionPending(album) {
   const visual = document.querySelector('#track-modal-cover .track-modal-cover-visual');
   const image = visual?.querySelector?.('img');
   if (!visual || !image) return false;
+  // UI-2 (owner, 11-10): Album Details shows the chosen picture at once, like the gallery, instead of an empty
+  // box until the save finishes; the lookup already loaded this preview.
+  if (optimisticSrc) {
+    image.src = optimisticSrc;
+    return true;
+  }
+  visual.classList?.add('is-loading');
   visual.setAttribute?.('aria-busy', 'true');
   return true;
 }
@@ -1150,16 +1222,33 @@ function syncCoverLookupAlbumReferences(updatedAlbums) {
   if (modalAlbum) {
     const replacement = findCoverLookupAlbumReplacement(modalAlbum, candidates);
     if (replacement) {
-      state.coverLookup.modal.album = replacement;
+      // UI-5 (owner): a chosen split release keeps its identity through task updates.
+      state.coverLookup.modal.album = modalAlbum.identity_resolution === 'album_split_choice'
+        ? { ...replacement, identity_resolution: 'album_split_choice' } : replacement;
     }
   }
+  const taskIds = [];
   state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
     const taskAlbum = task && typeof task === 'object' ? task.album_payload : null;
     if (!taskAlbum) return task;
     const replacement = findCoverLookupAlbumReplacement(taskAlbum, candidates);
-    return replacement ? { ...task, album_payload: replacement } : task;
+    if (!replacement) return task;
+    const signature = (typeof getAlbumPathSignature === 'function' ? getAlbumPathSignature(replacement) : '')
+      || `${replacement?.key || ''}::${replacement?.name || ''}::${replacement?.album_artist || ''}`;
+    const optimisticCover = state.coverLookup.optimisticAlbumCovers?.[signature]?.src;
+    const coverUrl = typeof buildAlbumDisplayCoverUrl === 'function'
+      ? String(buildAlbumDisplayCoverUrl(replacement) || '').trim() : '';
+    taskIds.push(String(task.id || ''));
+    return {
+      ...task,
+      album_payload: replacement,
+      current_cover_preview_url: coverUrl,
+      current_user_cover_preview_url: optimisticCover || replacement.cover_selection_origin === 'user'
+        ? coverUrl : '',
+    };
   });
   persistCoverLookupNotificationTasks(state.coverLookup.tasks || []);
+  if (taskIds.length) renderCoverLookupDrawer({ taskIds, preserveInteraction: false });
 }
 
 function clearOptimisticAlbumCovers(updatedAlbums) {
@@ -1176,20 +1265,23 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
   if (!album) return;
   const normalizedSourcePath = String(sourcePath || '').trim();
   if (!normalizedSourcePath) return;
-  invalidateCoverLookupGalleryCache(album);
   const selectedCandidate = (state.coverLookup.modal.localCovers || []).find((candidate) => (
     String(candidate?.path || '').trim() === normalizedSourcePath
   ));
   const signature = getAlbumPathSignature(album)
     || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
   if (!signature) return;
-  state.coverLookup.optimisticAlbumCovers[signature] = {
-    src: buildCoverUrl(normalizedSourcePath, {
-      size: 480,
-      revision: selectedCandidate?.cover_revision,
-    }),
-    coverPath: normalizedSourcePath,
-  };
+  const src = buildCoverUrl(normalizedSourcePath, {
+    size: 480,
+    revision: selectedCandidate?.cover_revision,
+  });
+  cacheOptimisticLocalCoverGallery(album, {
+    ...selectedCandidate,
+    path: normalizedSourcePath,
+    preview_url: selectedCandidate?.preview_url || src,
+  });
+  state.coverLookup.optimisticAlbumCovers[signature] = { src, coverPath: normalizedSourcePath };
+  return src;
 }
 
 function preloadCoverLookupAlbumImage(album) {
@@ -1316,7 +1408,6 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
   const previewImageUrl = String(selectedMatch?.thumbnail_url || imageUrl || '').trim();
   const previewKey = String(selectedMatch?.id || selectedMatch?.url || '').trim();
   const nextCoverPath = String(coverPath || '').trim();
-  invalidateCoverLookupGalleryCache(album);
   const updatedAlbum = {
     ...album,
     cover_path: null,
@@ -1358,7 +1449,6 @@ function applyOptimisticPastedCoverSelection(album, pastedItem) {
   if (!album || !pastedItem) return;
   const imageUrl = String(pastedItem?.data_url || pastedItem?.preview_url || '').trim();
   if (!imageUrl) return;
-  invalidateCoverLookupGalleryCache(album);
   const updatedAlbum = {
     ...album,
     cover_path: String(album?.cover_path || '').trim() || null,
@@ -1822,11 +1912,14 @@ function renderCoverLookupDrawer({
   const terminalCount = hasAuthoritativeCounts
     ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
     : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts
+  // A preview move that needs the server owner counts as one more notification (owner, 11-10).
+  const attentionCount = typeof getPreviewMoveAttentionCount === 'function' ? getPreviewMoveAttentionCount() : 0;
+  const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
-    : tasks.length;
+    : tasks.length) + attentionCount;
   if (summary) {
     summary.textContent = [
+      attentionCount ? 'Needs your attention' : '',
       activeCount ? `${activeCount} active` : '',
       terminalCount ? `${terminalCount} finished` : '',
     ].filter(Boolean).join(' · ') || 'No activity';
@@ -1903,7 +1996,7 @@ function renderCoverLookupDrawer({
         ? task.possible_matches.filter(isSelectableRemoteCoverCandidate).length
         : 0;
     const statusLabel = savePending
-      ? 'Saving art…'
+      ? 'Downloading'
       : artChosen
       ? 'Art chosen'
       : status === 'failed'
@@ -1968,7 +2061,7 @@ function renderCoverLookupDrawer({
       || bestCandidateCoverUrl
       || String(task?.current_cover_preview_url || '').trim();
     const coverMarkup = coverUrl
-      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
+      ? `<img class="cover-lookup-task-cover" data-gallery-cover-src="${escapeHtml(coverUrl)}" data-production-cover-src="${escapeHtml(coverUrl)}" alt="" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
       <div class="cover-lookup-task-card ${taskStateClass}">
@@ -2025,6 +2118,12 @@ function renderCoverLookupDrawer({
       ${taskMarkup}
       <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
     `, taskIds);
+    body.querySelectorAll?.('img[data-gallery-cover-src]').forEach((image) => {
+      const source = image.getAttribute('data-gallery-cover-src');
+      if (source && typeof loadGalleryCoverPreviewImage === 'function') {
+        void loadGalleryCoverPreviewImage(image, source);
+      }
+    });
     if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
       body.scrollTop = Math.max(0, restoreScrollTop);
     }
@@ -2145,12 +2244,22 @@ function scheduleDeferredCoverLookupPreviews(root) {
   window.setTimeout?.(release, 500);
 }
 
+function coverLookupLocalPathMatches(left, right) {
+  return typeof sameLocalPath === 'function'
+    ? sameLocalPath(left, right)
+    : String(left || '') === String(right || '');
+}
+
 function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
+  const inFirstArtbox = typeof isCoverLookupItemInFirstArtbox === 'function' && isCoverLookupItemInFirstArtbox(item, kind);
+  // UI-14 (owner): in the album cover's Cover Look Up, the second artbox's art is dimmed and cannot be chosen.
+  const inSecondArtbox = !inFirstArtbox && typeof isCoverLookupItemInSecondArtbox === 'function' && isCoverLookupItemInSecondArtbox(item, kind);
+  const inOtherArtbox = inFirstArtbox || inSecondArtbox;
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
@@ -2160,7 +2269,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : buildCoverUrl(item?.path || '', {
+      : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', {
         size: 480,
         revision: item?.cover_revision,
       });
@@ -2170,13 +2279,13 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.url || item?.thumbnail_url || '', `full:saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
-  const isActive = kind === 'local'
+      : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
+  const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')
-        ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
+        ? coverLookupLocalPathMatches(state.coverLookup.modal.pendingLocalPath, item?.path)
         : !String(state.coverLookup.modal.pendingPastedImageId || '')
-          && String(item?.path || '') === getCoverLookupActiveLocalPath()
+          && coverLookupLocalPathMatches(item?.path, getCoverLookupActiveLocalPath())
     ))
     : kind === 'pasted'
       ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalPath || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))
@@ -2186,12 +2295,15 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         && !String(state.coverLookup.modal.pendingLocalPath || '')
         && !String(state.coverLookup.modal.pendingPastedImageId || '')
         && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
+        // UI-3 (owner): the selection never moves on its own. Until LOCAL has loaded, nothing reads "Selected";
+        // then an active local file wins and the linked remote cover is selected only when none is.
+        && state.coverLookup.modal.localInventoryLoaded === true
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
-        && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
+        && (state.coverLookup.modal.selectedRemoteId === String(item?.id || '')
+          || (typeof isSecondArtboxSavedRemoteActive === 'function' && isSecondArtboxSavedRemoteActive(item)))));
   const isSuggested = kind === 'remote'
-    && isActive
-    && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
+    && Boolean(String(state.coverLookup.modal.suggestedRemoteId || ''))
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
     ? String(item?.path || '')
@@ -2202,7 +2314,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     ? `data-cover-lookup-item-key="${escapeHtml(`${kind}:${itemIdentity}`)}"`
     : '';
   const otherRemoteArtAttr = isOtherRemoteArt ? 'data-cover-lookup-other-remote-art="1"' : '';
-  const selectAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+  const selectAttr = inOtherArtbox || (isOtherRemoteArt && !isSelectableOtherRemoteArt)
     ? ''
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
@@ -2227,10 +2339,15 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = kind === 'saved-remote'
+  const actionLabel = inFirstArtbox ? 'In the first artbox' : inSecondArtbox ? 'In the second artbox' : kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
-  const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
+  // UI-14 (owner): hovering art held by the second artbox says how to free it.
+  const roleAttr = inSecondArtbox
+    ? 'role="group" aria-disabled="true" title="Deselect cover in the second artbox first"'
+    : inOtherArtbox
+    ? 'role="group" aria-disabled="true"'
+    : isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
     : 'role="button" tabindex="0"';
   const fallbackPreviewHtml = `
@@ -2240,10 +2357,10 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   `;
   return `
     <div class="cover-lookup-art-card-shell">
-      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
-        <span class="cover-lookup-art-preview">
+      <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isSuggested ? 'is-suggested' : ''} ${inOtherArtbox ? 'is-disabled' : ''} ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${otherRemoteArtAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
+        <span class="cover-lookup-art-preview${imageUrl ? ' is-loading' : ''}" aria-busy="${Boolean(imageUrl)}">
           ${fallbackPreviewHtml}
-        ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
+        ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="var preview=this.parentElement; preview.classList.remove('is-loading'); preview.classList.remove('has-load-error'); preview.setAttribute('aria-busy', 'false');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.remove('is-loading'); preview.classList.add('has-load-error'); preview.setAttribute('aria-busy', 'false'); }">` : ''}
           <button class="cover-lookup-art-preview-button" type="button" ${previewAttrs} aria-label="${previewButtonLabel}">
             <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
               <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
@@ -2257,7 +2374,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isOtherRemoteArt && !isSelectableOtherRemoteArt && !inOtherArtbox ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -2325,6 +2442,7 @@ function buildCoverLookupPossibleMatchesMarkup(possibleMatches) {
   }).join('');
 }
 
+
 function captureCoverLookupModalScrollAnchor(body) {
   if (!body) return null;
   const scrollTop = Number(body.scrollTop || 0);
@@ -2371,6 +2489,10 @@ function restoreCoverLookupModalScrollAnchor(body, snapshot) {
 }
 
 function replaceCoverLookupModalMarkup(body, markup) {
+  // Identical renders must not touch the DOM: rebuilding hovered cards restarts their transitions
+  // and swallows the first click on controls such as the zoom button.
+  if (body.__coverLookupMarkup === markup && body.firstElementChild
+    && body.__coverLookupFirstElement === body.firstElementChild) return;
   const retainedCards = new Map();
   body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
@@ -2381,6 +2503,12 @@ function replaceCoverLookupModalMarkup(body, markup) {
     const key = String(card.getAttribute?.('data-cover-lookup-item-key') || '');
     const retained = retainedCards.get(key);
     if (!retained || typeof card.replaceWith !== 'function') return;
+    const incomingMarkup = String(card.outerHTML || '');
+    if (incomingMarkup && retained.__coverLookupCardMarkup === incomingMarkup) {
+      card.replaceWith(retained);
+      return;
+    }
+    retained.__coverLookupCardMarkup = incomingMarkup;
     const retainedImage = retained.querySelector?.('img.cover-lookup-art-preview-image');
     const incomingImage = card.querySelector?.('img.cover-lookup-art-preview-image');
     const previewSource = (image) => String(
@@ -2398,6 +2526,10 @@ function replaceCoverLookupModalMarkup(body, markup) {
       && previewSource(retainedImage) === previewSource(incomingImage)
       && typeof incomingImage.replaceWith === 'function'
     ) {
+      if (retainedImage.complete && retainedImage.naturalWidth > 0) {
+        incomingImage.parentElement.classList.remove('is-loading');
+        incomingImage.parentElement.setAttribute('aria-busy', 'false');
+      }
       incomingImage.replaceWith(retainedImage);
     }
     if (retained.attributes && card.attributes) {
@@ -2418,6 +2550,11 @@ function replaceCoverLookupModalMarkup(body, markup) {
     }
     card.replaceWith(retained);
   });
+  body.querySelectorAll?.('[data-cover-lookup-item-key]').forEach((card) => {
+    if (!card.__coverLookupCardMarkup) card.__coverLookupCardMarkup = String(card.outerHTML || '');
+  });
+  body.__coverLookupMarkup = markup;
+  body.__coverLookupFirstElement = body.firstElementChild;
 }
 
 function formatCoverLookupImageCount(count) {
@@ -2556,37 +2693,22 @@ function renderCoverLookupModal() {
         ${showCaaEmptyNotice ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-empty">We cannot guarantee Cover Art Archive results. Its API is flaky, you can try doing the same search later and might see good matches here</div>` : ''}
       `
     : '';
-  const galleryLoadingMarkup = modalState.loading
-    ? buildCoverLookupGalleryLoadingMarkup(modalState)
-    : '';
-  const currentReleases = Array.isArray(modalState.currentReleases)
-    ? modalState.currentReleases : [];
-  if (currentReleases.length) {
-    els.body.innerHTML = `
-      <section class="cover-lookup-section cover-lookup-current-release-choice" role="group" aria-labelledby="cover-lookup-current-release-title">
-        <h4 class="cover-lookup-section-title" id="cover-lookup-current-release-title">This album was split—choose the current release</h4>
-        <div class="cover-lookup-current-release-list">
-          ${currentReleases.map((release) => `
-            <button class="cover-lookup-current-release" type="button" data-cover-lookup-current-release="${escapeHtml(release.album_id || '')}">
-              <span>${escapeHtml(buildCoverLookupCurrentReleaseLabel(release))}</span>
-              <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}</span>
-            </button>
-          `).join('')}
-        </div>
-      </section>`;
-    els.body.scrollTop = 0;
-    if (els.findBetter) els.findBetter.disabled = true;
-    if (els.saveRemote) {
-      els.saveRemote.hidden = false;
-      els.saveRemote.disabled = true;
-    }
-    return;
-  }
+  // NEW-003: a local-art problem is a compact alert right after the LOCAL heading, expanding to its text on
+  // hover or focus; the section itself never moves or changes shape.
+  const galleryErrorMarkup = modalState.galleryError
+    ? buildSmallAlertHtml({ severity: 'warning', message: modalState.galleryError, focusable: true, className: 'cover-lookup-local-alert' }) : '';
+  const localInventoryUnknown = Boolean((modalState.galleryError || modalState.localInventoryPending) && !modalState.localInventoryLoaded);
+  // The album's own selected local cover is known before the listing arrives.
+  const expectedLocalCount = String(modalState.album?.cover_path || '').trim() && !remoteCover ? 1 : 0;
+  const galleryLoadingMarkup = modalState.loading ? buildCoverLookupGalleryLoadingMarkup(modalState) : '';
   replaceCoverLookupModalMarkup(els.body, `
     ${galleryLoadingMarkup || `
     <section class="cover-lookup-section">
-      <h4 class="cover-lookup-section-title">LOCAL · ${formatCoverLookupImageCount(localCovers.length)}</h4>
-      <div class="cover-lookup-gallery">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : '<div class="cover-lookup-empty">No local cover art found in this album folder.</div>'}</div>
+      <div class="cover-lookup-section-heading">
+        <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown && !localCovers.length ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
+        ${galleryErrorMarkup}
+      </div>
+      <div class="cover-lookup-gallery${!localCovers.length && localInventoryUnknown && expectedLocalCount ? ' cover-lookup-gallery-loading' : ''}">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown && expectedLocalCount ? buildCoverLookupGalleryLoadingCards('local', expectedLocalCount) : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
       ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>
@@ -2613,7 +2735,7 @@ function renderCoverLookupModal() {
               ${manualImageAttachments.map((item) => `
                 <span class="cover-lookup-manual-attachment" data-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" title="${escapeHtml(item.filename || 'Image')}">
                   <img src="${escapeHtml(item.object_url || item.data_url || '')}" alt="">
-                  <button type="button" data-remove-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" aria-label="Remove ${escapeHtml(item.filename || 'image')}">×</button>
+                  ${ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: `Remove ${item.filename || 'image'}`, presentation: 'bare', attributes: { 'data-remove-cover-lookup-pending-attachment': item.id || '' } })}
                 </span>
               `).join('')}
             </div>
@@ -2639,16 +2761,20 @@ function renderCoverLookupModal() {
     els.pastedUrls.focus({ preventScroll: true });
     els.pastedUrls.setSelectionRange(manualSelectionStart, manualSelectionEnd);
   }
-  if (compact && modalState.initialScrollPending === true && !modalState.loading) {
-    const selectedCard = els.body.querySelector?.('.cover-lookup-art-card.is-active');
-    els.body.scrollTop = selectedCard
-      ? Math.max(0, Number(selectedCard.offsetTop || 0) - (Number(els.body.clientHeight || 0) - Number(selectedCard.offsetHeight || 0)) / 2)
-      : 0;
-    modalState.initialScrollPending = false;
+  // Owner (11-08): on web and mobile the gallery opens at the top, with LOCAL first even when it is empty.
+  // Later renders (local inventory or candidates arriving) keep it there until the user scrolls.
+  const userScrolledSinceOpen = modalState.initialScrollTop != null
+    && Math.abs(Number(els.body.scrollTop || 0) - Number(modalState.initialScrollTop)) > 2;
+  if (modalState.initialScrollPending === true && !modalState.loading && !userScrolledSinceOpen) {
+    els.body.scrollTop = 0;
+    modalState.initialScrollTop = 0;
+    if (!modalState.localInventoryPending) modalState.initialScrollPending = false;
   } else {
+    if (userScrolledSinceOpen) modalState.initialScrollPending = false;
     restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
   }
   scheduleDeferredCoverLookupPreviews(els.body);
+  if (typeof markOtherArtboxDuplicatePictures === 'function') markOtherArtboxDuplicatePictures(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
@@ -2699,9 +2825,27 @@ function mergeCoverLookupTaskSummaries(
 ) {
   const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const currentById = new Map(current.map((task) => [String(task?.id || ''), task]));
-  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks).map((task) => {
+  const incoming = reconcileCoverLookupOptimisticIdentityTasks(
+    mergeCoverLookupTasksWithNotifications(incomingTasks),
+  ).map((task) => {
+    const currentTask = currentById.get(String(task?.id || ''));
+    const currentSearchGeneration = String(currentTask?.search_generation || '').trim();
+    const incomingSearchGeneration = String(task?.search_generation || '').trim();
+    if (currentTask && currentSearchGeneration !== incomingSearchGeneration) {
+      const currentCreatedAt = coverLookupCandidateTimestamp(currentTask.created_at);
+      const incomingCreatedAt = coverLookupCandidateTimestamp(task.created_at);
+      if (!(currentCreatedAt > 0 && incomingCreatedAt > currentCreatedAt)) return currentTask;
+      coverLookupPendingRemoteSaves.delete(String(task?.id || ''));
+    }
     if (isStalePendingRemoteSaveUpdate(task)) {
-      return currentById.get(String(task?.id || '')) || task;
+      return currentTask || task;
+    }
+    if (
+      String(currentTask?.status || '') === 'running'
+      && String(task?.status || '') === 'pending'
+      && currentSearchGeneration === incomingSearchGeneration
+    ) {
+      return currentTask;
     }
     return task;
   });
@@ -2942,7 +3086,11 @@ async function loadCoverLookupTasks(options = {}) {
       applyCoverLookupTaskUpdates(task);
     });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && tasksChanged) {
+    // Other notifications changing must not re-render or reload the open lookup.
+    const modalTaskSnapshot = (snapshots) => JSON.stringify(snapshots.find((task) => String(task?.id || '') === modalTaskId) || null);
+    const modalTaskChanged = Boolean(modalTaskId)
+      && modalTaskSnapshot(previousTaskSnapshots) !== modalTaskSnapshot(nextTaskSnapshots);
+    if (modalTaskId && tasksChanged && modalTaskChanged) {
       const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
@@ -2955,7 +3103,7 @@ async function loadCoverLookupTasks(options = {}) {
         const terminalCandidatesPending = terminalTask
           && Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0);
         if (terminalCandidatesPending && options.refreshModalGallery !== false) {
-          await refreshCoverLookupGallery(false);
+          await refreshCoverLookupGallery(false, { includeLocal: !state.coverLookup.modal.localInventoryLoaded });
         } else {
           applyCoverLookupTaskModalStatus(task);
           applyCoverLookupCandidateSource(candidateSource);
@@ -3102,11 +3250,18 @@ function ensureCoverLookupPolling() {
         String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
         && ['pending', 'running'].includes(String(task?.status || ''))
       ));
+      // A persisted snapshot can claim "running" after its task ended. Refresh once per distinct
+      // snapshot, not on every tick, so a stale status cannot drive endless gallery reloads.
+      const stalledSnapshotToken = ['pending', 'running'].includes(String(snapshot?.status || ''))
+        ? `${state.coverLookup.modal.taskId}|${snapshot?.search_generation || ''}|${snapshot?.revision || ''}|${snapshot?.updated_at || ''}`
+        : '';
       if (
         modalOpen
         && !hasMatchingActiveTask
-        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+        && stalledSnapshotToken
+        && stalledSnapshotToken !== state.coverLookup.modal.refreshedStalledSnapshotToken
       ) {
+        state.coverLookup.modal.refreshedStalledSnapshotToken = stalledSnapshotToken;
         await refreshCoverLookupGallery(false);
       }
     } finally {
@@ -3152,24 +3307,20 @@ function coverLookupTaskOwnsAlbum(task, album) {
     && normalize(album?.edition) === normalize(taskAlbum.edition);
 }
 
-function reusableManualCoverLookupTaskId(album, manualUrls) {
-  if (!manualUrls.length) return '';
-  const terminalTaskWithUrls = (task) => {
-    if (!['completed', 'failed', 'canceled'].includes(String(task?.status || ''))) return false;
-    const previousUrls = Array.isArray(task.manual_urls)
-      ? task.manual_urls.map((item) => String(item || '').trim()).filter(Boolean)
-      : [];
-    return previousUrls.length === manualUrls.length
-      && previousUrls.every((url, index) => url === manualUrls[index]);
-  };
+function reusableCoverLookupTaskId(album) {
+  const isTerminal = (task) => !task?.internal
+    && ['completed', 'failed', 'canceled'].includes(String(task?.status || ''));
   const tasks = state.coverLookup.tasks || [];
-  const matchingTask = tasks.find((task) => (
-    terminalTaskWithUrls(task) && coverLookupTaskOwnsAlbum(task, album)
-  ));
-  if (matchingTask) return String(matchingTask.id || '').trim();
   const modalTaskId = String(state.coverLookup.modal.taskId || '').trim();
   const modalTask = tasks.find((task) => String(task?.id || '') === modalTaskId);
-  return terminalTaskWithUrls(modalTask) && !modalTask?.album_payload ? modalTaskId : '';
+  if (isTerminal(modalTask) && (
+    coverLookupTaskOwnsAlbum(modalTask, album)
+    || (!modalTask?.album_payload && state.coverLookup.modal.album === album)
+  )) return modalTaskId;
+  const matchingTask = tasks.find((task) => (
+    isTerminal(task) && coverLookupTaskOwnsAlbum(task, album)
+  ));
+  return String(matchingTask?.id || '').trim();
 }
 
 function applyCoverLookupTaskUpdates(task, options = {}) {
@@ -3179,6 +3330,11 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   if (isStalePendingRemoteSaveUpdate(task)) return;
   if (pendingRemoteSave && ['failed', 'canceled'].includes(taskStatus)) {
     coverLookupPendingRemoteSaves.delete(taskId);
+    restoreCoverLookupGalleryAfterRemoteSaveFailure(
+      pendingRemoteSave.previousAlbum,
+      pendingRemoteSave,
+      taskId,
+    );
     if (
       pendingRemoteSave.optimisticCover
       && state.coverLookup.optimisticAlbumCovers[pendingRemoteSave.signature] === pendingRemoteSave.optimisticCover
@@ -3218,17 +3374,53 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
 }
 
 let coverLookupGalleryRequest = 0;
+let coverLookupLocalInventoryTimer = null;
 let coverLookupModalSession = 0;
 const coverLookupGalleryCache = new Map();
+const coverLookupLocalInventoryMutations = new Map();
 
 function buildCoverLookupGalleryCacheKey(album) {
   const requestKey = typeof getAlbumRequestKey === 'function' ? getAlbumRequestKey(album) : '';
   return String(requestKey || buildTrackPathSignature(album)).trim();
 }
 
+function sortCoverLookupLocalCovers(covers) {
+  const sortKey = (cover) => {
+    const coverPath = String(cover?.path || '');
+    const width = Number(cover?.width || 0);
+    const height = Number(cover?.height || 0);
+    const isSquareish = typeof cover?.is_squareish === 'boolean'
+      ? cover.is_squareish
+      : width > 0 && height > 0 && Math.abs(width - height) / Math.max(width, height) <= 0.18;
+    const explicitArea = cover?.area == null ? NaN : Number(cover.area);
+    const explicitDepth = cover?.depth == null ? NaN : Number(cover.depth);
+    return [
+      isSquareish ? 0 : 1,
+      -(Number.isFinite(explicitArea) ? explicitArea : width * height),
+      Number.isFinite(explicitDepth) ? explicitDepth : 1,
+      String(
+        cover?.sort_relative_path
+        || String(cover?.relative_path || cover?.filename || coverPath).toLowerCase(),
+      ),
+    ];
+  };
+  return Array.isArray(covers) ? covers.slice().sort((left, right) => {
+    const leftKey = sortKey(left);
+    const rightKey = sortKey(right);
+    for (let index = 0; index < leftKey.length; index += 1) {
+      if (leftKey[index] < rightKey[index]) return -1;
+      if (leftKey[index] > rightKey[index]) return 1;
+    }
+    return 0;
+  }) : [];
+}
+
 function cacheCoverLookupGalleryPayload(album, gallery) {
   const key = buildCoverLookupGalleryCacheKey(album);
   if (!key || !gallery || typeof gallery !== 'object') return;
+  gallery = Array.isArray(gallery.local_covers)
+    ? { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) }
+    : gallery;
   coverLookupGalleryCache.delete(key);
   coverLookupGalleryCache.set(key, JSON.parse(JSON.stringify(gallery)));
   if (coverLookupGalleryCache.size > 50) {
@@ -3241,10 +3433,186 @@ function cachedCoverLookupGalleryPayload(album) {
   return cached ? JSON.parse(JSON.stringify(cached)) : null;
 }
 
+function reconcileCoverLookupLocalInventory(album, gallery, confirmLocalInventory) {
+  const key = buildCoverLookupGalleryCacheKey(album);
+  const mutation = coverLookupLocalInventoryMutations.get(key);
+  if (!Array.isArray(gallery?.local_covers)) return gallery;
+  if (!mutation) return { ...gallery, local_covers: sortCoverLookupLocalCovers(gallery.local_covers) };
+  let localCovers = gallery.local_covers.slice();
+  let otherArt = Array.isArray(gallery.other_art) ? gallery.other_art.slice() : [];
+  const hasIncomingPath = path => localCovers.some((cover) => coverLookupLocalPathMatches(cover?.path, path));
+  mutation.deletedPaths.forEach((path) => {
+    if (hasIncomingPath(path) || otherArt.some((cover) => coverLookupLocalPathMatches(cover?.path, path))) {
+      localCovers = localCovers.filter((cover) => !coverLookupLocalPathMatches(cover?.path, path));
+      otherArt = otherArt.filter((cover) => !coverLookupLocalPathMatches(cover?.path, path));
+    }
+    else if (confirmLocalInventory) mutation.deletedPaths.delete(path);
+  });
+  const selectedPath = String(gallery.selected_source_path || gallery.active_cover_path || '');
+  if (confirmLocalInventory && mutation.selectedPath
+      && hasIncomingPath(mutation.selectedPath)
+      && coverLookupLocalPathMatches(selectedPath, mutation.selectedPath)) {
+    mutation.selectedPath = '';
+  }
+  mutation.addedCovers.forEach((cover, path) => {
+    if (confirmLocalInventory && hasIncomingPath(path)) {
+      localCovers = localCovers.map((incoming) => {
+        if (!coverLookupLocalPathMatches(incoming?.path, path)) return incoming;
+        const width = Number(incoming?.width || 0) || Number(cover?.width || 0) || null;
+        const height = Number(incoming?.height || 0) || Number(cover?.height || 0) || null;
+        const incomingResolution = String(incoming?.resolution || '').trim();
+        return {
+          ...cover,
+          ...incoming,
+          preview_url: String(incoming?.preview_url || '').trim() || cover?.preview_url,
+          width,
+          height,
+          resolution: incomingResolution && incomingResolution !== 'Unknown'
+            ? incomingResolution
+            : String(cover?.resolution || '').trim() || (width && height ? `${width}x${height}` : 'Unknown'),
+        };
+      });
+      mutation.addedCovers.delete(path);
+      return;
+    }
+    localCovers = [cover, ...localCovers.filter((item) => !coverLookupLocalPathMatches(item?.path, path))];
+  });
+  const optimisticSelectedPath = mutation.selectedPath;
+  const selectedInventoryPath = optimisticSelectedPath || selectedPath;
+  if (selectedInventoryPath || mutation.addedCovers.size) {
+    localCovers = localCovers.map((cover) => ({
+      ...cover,
+      is_active: coverLookupLocalPathMatches(cover?.path, selectedInventoryPath),
+    }));
+  }
+  if (!mutation.addedCovers.size && !mutation.deletedPaths.size && !mutation.selectedPath) {
+    coverLookupLocalInventoryMutations.delete(key);
+  }
+  return {
+    ...gallery,
+    local_covers: sortCoverLookupLocalCovers(localCovers),
+    other_art: otherArt,
+    ...(optimisticSelectedPath ? {
+      active_cover_path: optimisticSelectedPath,
+      selected_source_path: optimisticSelectedPath,
+      remote_cover: null,
+    } : {}),
+  };
+}
+
+function cacheOptimisticLocalCoverGallery(album, selectedCover) {
+  const path = String(selectedCover?.path || '').trim();
+  if (!path) return;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const previousCovers = Array.isArray(previousGallery?.local_covers)
+    ? previousGallery.local_covers : [];
+  const existing = previousCovers.find((cover) => coverLookupLocalPathMatches(cover?.path, path));
+  const width = Number(selectedCover?.width || 0) || null;
+  const height = Number(selectedCover?.height || 0) || null;
+  const key = buildCoverLookupGalleryCacheKey(album);
+  const mutation = coverLookupLocalInventoryMutations.get(key)
+    || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
+  mutation.selectedPath = path;
+  if (!existing) {
+    mutation.addedCovers.set(path, { ...selectedCover, path, is_active: true });
+    mutation.deletedPaths.delete(path);
+  }
+  coverLookupLocalInventoryMutations.set(key, mutation);
+  cacheCoverLookupGalleryPayload(album, {
+    ...(previousGallery || { ok: true, other_art: [] }),
+    remote_cover: null,
+    local_inventory_available: true,
+    selected_source_path: path,
+    active_cover_path: path,
+    local_covers: existing
+      ? previousCovers.map((cover) => (coverLookupLocalPathMatches(cover?.path, path)
+        ? {
+          ...cover,
+          ...selectedCover,
+          path,
+          is_active: true,
+          ...(selectedCover?.resolution || (width && height)
+            ? { resolution: selectedCover?.resolution || `${width}x${height}` }
+            : {}),
+        }
+        : { ...cover, is_active: false }))
+      : [{
+        ...selectedCover,
+        path,
+        is_active: true,
+        ...(selectedCover?.resolution || (width && height)
+          ? { resolution: selectedCover?.resolution || `${width}x${height}` }
+          : {}),
+      }, ...previousCovers.map((cover) => ({ ...cover, is_active: false }))],
+  });
+}
+
+function cacheOptimisticRemoteCoverGallery(album, selectedMatch, coverPath, taskId) {
+  const normalizedPath = String(coverPath || '').trim();
+  const marker = String(taskId || '').trim();
+  if (!normalizedPath || !marker) return null;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const localCovers = Array.isArray(previousGallery?.local_covers)
+    ? previousGallery.local_covers : [];
+  const filename = normalizedPath.split(/[\\/]/).pop() || 'cover.jpg';
+  const optimisticCover = {
+    path: normalizedPath,
+    filename,
+    is_active: true,
+    preview_url: String(selectedMatch?.thumbnail_url || selectedMatch?.url || '').trim(),
+    resolution: String(selectedMatch?.resolution || '').trim(),
+    width: Number(selectedMatch?.width || 0) || null,
+    height: Number(selectedMatch?.height || 0) || null,
+    pending_remote_save_task_id: marker,
+  };
+  cacheCoverLookupGalleryPayload(album, {
+    ...(previousGallery || { ok: true, other_art: [] }),
+    local_inventory_available: true,
+    local_inventory_complete: previousGallery?.local_inventory_complete === true,
+    active_cover_path: normalizedPath,
+    selected_source_path: normalizedPath,
+    remote_cover: null,
+    local_covers: [
+      optimisticCover,
+      ...localCovers
+        .filter((cover) => String(cover?.path || '') !== normalizedPath)
+        .map((cover) => ({ ...cover, is_active: false })),
+    ],
+  });
+  return previousGallery;
+}
+
+function restoreCoverLookupGalleryAfterRemoteSaveFailure(album, pendingRemoteSave, taskId) {
+  const currentGallery = cachedCoverLookupGalleryPayload(album);
+  const currentSelectionPath = String(
+    currentGallery?.selected_source_path || currentGallery?.active_cover_path || '',
+  );
+  const ownsCurrentGallery = currentGallery?.local_covers?.some((cover) => (
+    String(cover?.path || '') === currentSelectionPath
+    && String(cover?.pending_remote_save_task_id || '') === String(taskId || '')
+  ));
+  if (!ownsCurrentGallery) return;
+  if (pendingRemoteSave.previousGallery) {
+    cacheCoverLookupGalleryPayload(album, pendingRemoteSave.previousGallery);
+  } else {
+    invalidateCoverLookupGalleryCache(album);
+  }
+  if (buildCoverLookupGalleryCacheKey(state.coverLookup.modal.album)
+      !== buildCoverLookupGalleryCacheKey(album)) return;
+  if (pendingRemoteSave.previousGallery) {
+    applyCoverLookupGalleryPayload(pendingRemoteSave.previousGallery);
+  } else {
+    state.coverLookup.modal.localCovers = (state.coverLookup.modal.localCovers || []).filter((cover) => (
+      String(cover?.pending_remote_save_task_id || '') !== String(taskId || '')
+    ));
+    state.coverLookup.modal.activeLocalSelectionPath = String(album?.cover_path || '');
+  }
+}
+
 function invalidateCoverLookupGalleryCache(album) {
   coverLookupGalleryCache.delete(buildCoverLookupGalleryCacheKey(album));
 }
-const coverLookupPendingLocalMutations = new Set();
+const coverLookupPendingMutations = new Map();
 const coverLookupPendingRemoteSaves = new Map();
 const coverLookupSeenRequests = new WeakMap();
 
@@ -3259,14 +3627,21 @@ function isStalePendingRemoteSaveUpdate(task) {
   );
 }
 
-function isCoverLookupLocalMutationPending(album = state.coverLookup.modal.album) {
-  return coverLookupPendingLocalMutations.size > 0
-    && coverLookupPendingLocalMutations.has(buildTrackPathSignature(album));
+function buildCoverLookupMutationKey(album) {
+  const albumId = Number(album?.album_id);
+  return Number.isSafeInteger(albumId) && albumId > 0
+    ? `album-id:${albumId}` : buildCoverLookupGalleryCacheKey(album);
 }
 
-async function finishCoverLookupLocalMutation(mutationKey, session) {
-  coverLookupPendingLocalMutations.delete(mutationKey);
-  if (buildTrackPathSignature(state.coverLookup.modal.album) !== mutationKey) return;
+function isCoverLookupMutationPending(album = state.coverLookup.modal.album) {
+  return coverLookupPendingMutations.get(buildCoverLookupMutationKey(album)) === coverLookupModalSession;
+}
+
+async function finishCoverLookupMutation(mutationKey, session) {
+  if (coverLookupPendingMutations.get(mutationKey) === session) {
+    coverLookupPendingMutations.delete(mutationKey);
+  }
+  if (buildCoverLookupMutationKey(state.coverLookup.modal.album) !== mutationKey) return;
   state.coverLookup.modal.saving = false;
   syncCoverLookupSaveButton();
   const overlay = getCoverLookupModalElements().overlay;
@@ -3275,60 +3650,439 @@ async function finishCoverLookupLocalMutation(mutationKey, session) {
   }
 }
 
-async function refreshCoverLookupGallery(showLoading = true) {
+async function refreshCoverLookupGallery(showLoading = true, { includeLocal = true } = {}) {
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   const album = state.coverLookup.modal.album;
   if (!album) return;
   const request = ++coverLookupGalleryRequest;
   const isCurrent = () => request === coverLookupGalleryRequest;
-  if (showLoading) state.coverLookup.modal.loading = true;
-  renderCoverLookupModal();
+  // Background refreshes keep the current gallery and any shown error until the response settles,
+  // so an unchanged failure stays steady instead of flashing on every refresh.
+  if (showLoading) {
+    if (!state.coverLookup.modal.localInventoryLoaded) state.coverLookup.modal.loading = true;
+    state.coverLookup.modal.galleryError = '';
+    renderCoverLookupModal();
+  }
   try {
     const response = await fetch('/utilities/cover-lookup/gallery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '' }),
+      body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '', ...(!includeLocal ? { include_local: false } : {}) }),
     });
     const data = await response.json().catch(() => ({}));
+    const isSplit = !response.ok && data.resolution_kind === 'album_split'
+      && Array.isArray(data.current_releases) && data.current_releases.length > 1;
+    // UI-5 (owner): a split is a fact about this lookup, not this request. While a search runs, each progress
+    // poll starts a newer request, so a split answer must not be dropped as stale or the chooser waits for
+    // the search to end.
+    if (isSplit && state.coverLookup.modal.album === album) {
+      handleCoverLookupSplitResponse(data.current_releases);
+      return;
+    }
     if (!isCurrent()) return;
     if (!response.ok || !data.ok) {
-      if (
-        data.resolution_kind === 'album_split'
-        && Array.isArray(data.current_releases)
-        && data.current_releases.length > 1
-      ) {
-        state.coverLookup.modal.currentReleases = data.current_releases;
-        state.coverLookup.modal.loading = false;
-        renderCoverLookupModal();
-        return;
-      }
       throw new Error(data.error || 'Failed to load cover art gallery');
     }
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
-    state.coverLookup.modal.currentReleases = [];
-    applyCoverLookupGalleryPayload(data);
+    state.coverLookup.modal.galleryError = '';
+      applyCoverLookupGalleryPayload(data);
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
+    if (state.coverLookup.modal.localInventoryPending && typeof setTimeout === 'function') {
+      coverLookupLocalInventoryTimer = setTimeout(() => {
+        if (isCurrent()) void refreshCoverLookupGallery(false);
+      }, 1000);
+    }
     void markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
   } catch (error) {
     if (!isCurrent()) return;
+    const previousError = state.coverLookup.modal.galleryError;
     state.coverLookup.modal.loading = false;
+    state.coverLookup.modal.galleryError = error.message || 'Could not load cover art. Reopen to retry.';
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
     renderCoverLookupModal();
-    showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    if (previousError !== state.coverLookup.modal.galleryError) {
+      showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    }
   }
 }
 
-async function chooseCoverLookupCurrentRelease(albumId) {
-  const release = (state.coverLookup.modal.currentReleases || []).find((candidate) => (
-    String(candidate?.album_id || '') === String(albumId || '')
-  ));
-  if (!release) return;
-  const taskId = state.coverLookup.modal.taskId;
-  const overlay = getCoverLookupModalElements().overlay;
-  await openCoverLookupModal(release, {
-    taskId,
-    mobileSheet: Boolean(overlay && isCoverLookupMobileSheet(overlay)),
+const coverLookupSplitReleasesByTask = new Map();
+// UI-5 (owner): once the user chooses a split release for a notification, that choice is final.
+const coverLookupSplitChoiceByTask = new Map();
+const coverLookupOptimisticIdentityByTrackSignature = new Map();
+
+function buildCoverLookupTrackSetSignature(paths) {
+  return Array.from(paths || []).sort().join('\n');
+}
+
+function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
+  const incomingTasks = Array.isArray(tasks) ? tasks : [];
+  if (!coverLookupOptimisticIdentityByTrackSignature.size) return incomingTasks;
+  return incomingTasks.map((task) => {
+    const taskId = String(task?.id || '');
+    const signature = buildCoverLookupTrackSetSignature(getAlbumTrackPaths(task?.album_payload));
+    const transition = coverLookupOptimisticIdentityByTrackSignature.get(signature)
+      || Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).find((candidate) => (
+        candidate?.originalAlbum
+        && (
+          findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+          || findCoverLookupAlbumReplacement(task?.album_payload, candidate.priorReleases || [])
+        )
+      ));
+    if (!taskId || !transition) return task;
+    if (transition.releases) {
+      coverLookupSplitReleasesByTask.set(taskId, transition.releases);
+      return task;
+    }
+    if (!transition.replacement) return task;
+    coverLookupSplitReleasesByTask.delete(taskId);
+    coverLookupSplitChoiceByTask.delete(taskId);
+    const optimisticTask = {
+      ...task,
+      artist: String(transition.replacement.album_artist || task.artist || ''),
+      album: String(transition.replacement.name || task.album || ''),
+      year: transition.replacement.year ?? task.year,
+      album_payload: transition.replacement,
+    };
+    const previousRequestKey = typeof getAlbumRequestKey === 'function'
+      ? String(getAlbumRequestKey(task?.album_payload) || '') : '';
+    const replacementRequestKey = typeof getAlbumRequestKey === 'function'
+      ? String(getAlbumRequestKey(transition.replacement) || '') : '';
+    if (
+      Array.isArray(transition.replacedTasks)
+      && !transition.replacedTasks.some((entry) => entry.taskId === taskId)
+      && (!previousRequestKey || !replacementRequestKey || previousRequestKey !== replacementRequestKey)
+    ) {
+      transition.replacedTasks.push({ taskId, previousTask: task, optimisticTask });
+    }
+    return optimisticTask;
   });
+}
+
+function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
+  const originalPaths = getAlbumTrackPaths(originalAlbum);
+  if (!originalPaths.size) return null;
+  const candidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
+  const releasesByPaths = new Map();
+  candidates.forEach((album) => {
+    const paths = getAlbumTrackPaths(album);
+    if (
+      paths.size > 0
+      && paths.size < originalPaths.size
+      && Array.from(paths).every((path) => originalPaths.has(path))
+    ) {
+      releasesByPaths.set(Array.from(paths).sort().join('\n'), {
+        ...album,
+        track_count: Number(album?.track_count || 0) || paths.size,
+      });
+    }
+  });
+  const releases = Array.from(releasesByPaths.values());
+  const coveredPaths = new Set(releases.flatMap((album) => Array.from(getAlbumTrackPaths(album))));
+  const isSplit = originalPaths.size >= 2
+    && releases.length >= 2
+    && coveredPaths.size === originalPaths.size;
+  let identitySignature = buildCoverLookupTrackSetSignature(originalPaths);
+  let previousIdentity = coverLookupOptimisticIdentityByTrackSignature.get(identitySignature);
+  let mergedReplacement = null;
+  let updatedSplitReleases = null;
+  if (!isSplit) {
+    const priorTransition = Array.from(coverLookupOptimisticIdentityByTrackSignature.entries())
+      .find(([, transition]) => {
+        if (!transition?.releases || !transition.paths) return false;
+        const matchingReleaseIndex = transition.releases.findIndex((release) => {
+          const releasePaths = getAlbumTrackPaths(release);
+          return releasePaths.size === originalPaths.size
+            && Array.from(originalPaths).every((path) => releasePaths.has(path));
+        });
+        if (matchingReleaseIndex < 0) return false;
+        mergedReplacement = candidates.find((album) => {
+          const paths = getAlbumTrackPaths(album);
+          return Array.from(transition.paths).every((path) => paths.has(path));
+        }) || null;
+        if (mergedReplacement) return true;
+        const renamedRelease = candidates.find((album) => {
+          const paths = getAlbumTrackPaths(album);
+          return paths.size === originalPaths.size
+            && Array.from(originalPaths).every((path) => paths.has(path));
+        });
+        if (!renamedRelease) return false;
+        updatedSplitReleases = transition.releases.map((release, index) => (
+          index === matchingReleaseIndex ? renamedRelease : release
+        ));
+        return true;
+      });
+    if (priorTransition) {
+      [identitySignature, previousIdentity] = priorTransition;
+    }
+  }
+  if (mergedReplacement) {
+    mergedReplacement = { ...mergedReplacement };
+    delete mergedReplacement.identity_resolution;
+    delete mergedReplacement._identity_split_choices;
+  }
+  const nextIdentity = isSplit
+    ? { originalAlbum, releases, paths: new Set(originalPaths) }
+    : mergedReplacement ? {
+      originalAlbum: previousIdentity.originalAlbum || originalAlbum,
+      replacement: mergedReplacement,
+      paths: previousIdentity.paths,
+      priorReleases: previousIdentity.releases || previousIdentity.priorReleases || [],
+    } : updatedSplitReleases ? {
+      ...previousIdentity,
+      releases: updatedSplitReleases,
+    } : null;
+  if (nextIdentity) coverLookupOptimisticIdentityByTrackSignature.set(identitySignature, nextIdentity);
+  const taskIds = [];
+  const replacedTasks = [];
+  const removedSplits = [];
+  const removedChoices = [];
+  if (nextIdentity) nextIdentity.replacedTasks = replacedTasks;
+  const nextTasks = (state.coverLookup.tasks || []).map((task) => {
+    const taskPaths = getAlbumTrackPaths(task?.album_payload);
+    const taskId = String(task?.id || '');
+    if (isSplit && (
+      task?.id
+      && taskPaths.size === originalPaths.size
+      && Array.from(taskPaths).every((path) => originalPaths.has(path))
+    )) {
+      coverLookupSplitReleasesByTask.set(taskId, releases);
+      taskIds.push(taskId);
+      return task;
+    }
+    let knownSplit = coverLookupSplitReleasesByTask.get(taskId);
+    if (updatedSplitReleases && knownSplit === previousIdentity?.releases) {
+      knownSplit = updatedSplitReleases;
+      coverLookupSplitReleasesByTask.set(taskId, knownSplit);
+      const chosen = coverLookupSplitChoiceByTask.get(taskId);
+      if (chosen) {
+        coverLookupSplitChoiceByTask.set(
+          taskId,
+          findCoverLookupAlbumReplacement(chosen, knownSplit) || chosen,
+        );
+      }
+      taskIds.push(taskId);
+      return task;
+    }
+    const knownSplitPaths = new Set(
+      (knownSplit || []).flatMap((album) => Array.from(getAlbumTrackPaths(album))),
+    );
+    const replacement = candidates.find((album) => {
+      const paths = getAlbumTrackPaths(album);
+      const coversOriginal = Array.from(originalPaths).every((path) => paths.has(path));
+      const coversTask = taskPaths.size > 0
+        && Array.from(taskPaths).every((path) => paths.has(path));
+      const coversKnownSplit = knownSplitPaths.size > 0
+        && Array.from(knownSplitPaths).every((path) => paths.has(path));
+      return coversOriginal && (coversTask || coversKnownSplit);
+    });
+    if (!taskId || !replacement) return task;
+    if (knownSplit) {
+      removedSplits.push([taskId, knownSplit]);
+      coverLookupSplitReleasesByTask.delete(taskId);
+    }
+    if (coverLookupSplitChoiceByTask.has(taskId)) {
+      removedChoices.push([taskId, coverLookupSplitChoiceByTask.get(taskId)]);
+      coverLookupSplitChoiceByTask.delete(taskId);
+    }
+    const optimisticTask = {
+      ...task,
+      artist: String(replacement.album_artist || task.artist || ''),
+      album: String(replacement.name || task.album || ''),
+      year: replacement.year ?? task.year,
+      album_payload: replacement,
+    };
+    replacedTasks.push({ taskId, previousTask: task, optimisticTask });
+    taskIds.push(taskId);
+    return optimisticTask;
+  });
+  if (!taskIds.length && !nextIdentity) return null;
+  if (replacedTasks.length) {
+    state.coverLookup.tasks = nextTasks;
+    if (typeof persistCoverLookupNotificationTasks === 'function') {
+      persistCoverLookupNotificationTasks(state.coverLookup.tasks || []);
+    }
+    if (typeof renderCoverLookupDrawer === 'function') {
+      renderCoverLookupDrawer({ taskIds, preserveInteraction: false });
+    }
+  }
+  return {
+    taskIds,
+    releases,
+    replacedTasks,
+    removedSplits,
+    removedChoices,
+    identitySignature,
+    previousIdentity,
+    nextIdentity,
+  };
+}
+
+function clearCoverLookupOptimisticSplit(recordedSplit) {
+  if (
+    recordedSplit?.nextIdentity
+    && coverLookupOptimisticIdentityByTrackSignature.get(recordedSplit.identitySignature)
+      === recordedSplit.nextIdentity
+  ) {
+    if (recordedSplit.previousIdentity) {
+      coverLookupOptimisticIdentityByTrackSignature.set(
+        recordedSplit.identitySignature,
+        recordedSplit.previousIdentity,
+      );
+    } else {
+      coverLookupOptimisticIdentityByTrackSignature.delete(recordedSplit.identitySignature);
+    }
+  }
+  if (recordedSplit?.nextIdentity?.releases) {
+    coverLookupSplitReleasesByTask.forEach((releases, taskId) => {
+      if (releases !== recordedSplit.nextIdentity.releases) return;
+      if (recordedSplit.previousIdentity?.releases) {
+        coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+        const chosen = coverLookupSplitChoiceByTask.get(taskId);
+        if (chosen) {
+          const restoredChoice = findCoverLookupAlbumReplacement(
+            chosen,
+            recordedSplit.previousIdentity.releases,
+          ) || chosen;
+          coverLookupSplitChoiceByTask.set(taskId, {
+            ...restoredChoice,
+            identity_resolution: 'album_split_choice',
+          });
+        }
+      } else {
+        coverLookupSplitReleasesByTask.delete(taskId);
+        coverLookupSplitChoiceByTask.delete(taskId);
+      }
+    });
+  }
+  (recordedSplit?.taskIds || []).forEach((taskId) => {
+    if (coverLookupSplitReleasesByTask.get(taskId) === recordedSplit.releases) {
+      coverLookupSplitReleasesByTask.delete(taskId);
+    }
+  });
+  let restoredTask = false;
+  (recordedSplit?.replacedTasks || []).forEach(({ taskId, previousTask, optimisticTask }) => {
+    state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+      if (String(task?.id || '') !== taskId) return task;
+      const stillShowsOptimisticAlbum = task === optimisticTask
+        || findCoverLookupAlbumReplacement(
+          task?.album_payload,
+          [optimisticTask.album_payload],
+        ) === optimisticTask.album_payload;
+      if (!stillShowsOptimisticAlbum) return task;
+      restoredTask = true;
+      return {
+        ...task,
+        artist: previousTask.artist,
+        album: previousTask.album,
+        year: previousTask.year,
+        album_payload: previousTask.album_payload,
+      };
+    });
+  });
+  if (recordedSplit?.previousIdentity?.releases) {
+    (recordedSplit?.replacedTasks || []).forEach(({ taskId }) => {
+      if (!coverLookupSplitReleasesByTask.has(taskId)) {
+        coverLookupSplitReleasesByTask.set(taskId, recordedSplit.previousIdentity.releases);
+      }
+    });
+  }
+  (recordedSplit?.removedSplits || []).forEach(([taskId, releases]) => {
+    if (!coverLookupSplitReleasesByTask.has(taskId)) {
+      coverLookupSplitReleasesByTask.set(taskId, releases);
+    }
+  });
+  (recordedSplit?.removedChoices || []).forEach(([taskId, choice]) => {
+    if (!coverLookupSplitChoiceByTask.has(taskId)) {
+      coverLookupSplitChoiceByTask.set(taskId, choice);
+    }
+  });
+  if (restoredTask) {
+    if (typeof persistCoverLookupNotificationTasks === 'function') {
+      persistCoverLookupNotificationTasks(state.coverLookup.tasks || []);
+    }
+    if (typeof renderCoverLookupDrawer === 'function') {
+      renderCoverLookupDrawer({
+        taskIds: recordedSplit.taskIds || [],
+        preserveInteraction: false,
+      });
+    }
+  }
+}
+
+function handleCoverLookupSplitResponse(releases) {
+  const taskId = String(state.coverLookup.modal.taskId || '');
+  const album = state.coverLookup.modal.album;
+  const overlay = getCoverLookupModalElements().overlay;
+  const mobileSheet = Boolean(overlay && isCoverLookupMobileSheet(overlay));
+  coverLookupGalleryRequest += 1;
+  if (taskId) coverLookupSplitReleasesByTask.set(taskId, releases);
+  const chosen = coverLookupSplitChoiceByTask.get(taskId);
+  if (chosen && album?.identity_resolution !== 'album_split_choice') {
+    // The open album lost its chosen identity (a task update replaced it): restore it and reload, never re-ask.
+    state.coverLookup.modal.album = { ...album, ...chosen };
+    void refreshCoverLookupGallery(false);
+    return;
+  }
+  if (chosen) {
+    state.coverLookup.modal.galleryError = 'This release changed again. Reopen the notification to choose it.';
+    coverLookupSplitChoiceByTask.delete(taskId);
+    renderCoverLookupModal();
+    return;
+  }
+  closeCoverLookupModal();
+  void presentCoverLookupSplitChoice(releases, { taskId, mobileSheet });
+}
+
+function buildCoverLookupSplitReleaseItemsHtml(releases) {
+  return releases.map((release) => {
+    const album = (typeof getIndexedAlbum === 'function' && getIndexedAlbum(release.key)) || release;
+    const label = String(release.name || album.name || 'Album');
+    return window.NavigationTree.renderItem({
+      variant: 'wide',
+      action: true,
+      key: String(release.album_id || release.key || ''),
+      label,
+      subtitle: [release.album_artist, release.edition].filter(Boolean).join(' · '),
+      year: String(release.year || ''),
+      artworkHtml: buildUtilityAlbumArtbox(album, { label: `Artwork for ${label}` }),
+      count: `${Number(release.track_count || 0)} ${Number(release.track_count) === 1 ? 'track' : 'tracks'}`,
+      attributes: { 'data-cover-lookup-split-release': String(release.album_id || release.key || '') },
+    });
+  }).join('');
+}
+
+// A notification whose album was split asks which current release it belongs to in a compact
+// dialog, then opens Cover Look Up for that release only.
+async function presentCoverLookupSplitChoice(releases, { taskId = '', mobileSheet = false } = {}) {
+  let chosenId = '';
+  const chosen = await showAppFormDialog({
+    title: 'Choose the current release',
+    contentHtml: `<p class="confirm-modal-text">This album was split. Choose the release this notification belongs to.</p><nav class="navigation-tree navigation-tree--choice" aria-label="Split releases">${buildCoverLookupSplitReleaseItemsHtml(releases)}</nav>`,
+    submitLabel: 'Open Cover Look Up',
+    submitEnabled: false,
+    onMount: (content, dialog) => {
+      content.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-cover-lookup-split-release]');
+        if (!item) return;
+        event.preventDefault();
+        chosenId = item.getAttribute('data-cover-lookup-split-release') || '';
+        content.querySelectorAll('[data-cover-lookup-split-release]')
+          .forEach((node) => window.NavigationTree.setItemSelected(node, node === item));
+        dialog?.setSubmitEnabled(Boolean(chosenId));
+      });
+    },
+    onSubmit: () => chosenId,
+  });
+  const found = releases.find((candidate) => (
+    String(candidate?.album_id || candidate?.key || '') === String(chosen || '')
+  ));
+  if (!found) return false;
+  const release = { ...found, identity_resolution: 'album_split_choice' };
+  if (taskId) coverLookupSplitChoiceByTask.set(taskId, release);
+  await openCoverLookupModal(release, { taskId, mobileSheet });
+  return true;
 }
 
 function restoreCoverLookupDrawerScroll() {
@@ -3346,11 +4100,22 @@ async function openCoverLookupModal(album, options = {}) {
   coverLookupModalSession += 1;
   const els = getCoverLookupModalElements();
   if (!els.overlay || !album) return;
+  // Lookup responses are identity previews; never downgrade the caller's hydrated album/cache.
+  state.coverLookup.modal.sourceAlbum = album;
+  album = { ...album };
   const mobileSheet = Boolean(options.mobileSheet) && (
     typeof usesMobilePageLayout === 'function'
       ? usesMobilePageLayout()
       : Number(window.innerWidth || 0) > 0 && Number(window.innerWidth) <= 900
   );
+  const knownSplit = coverLookupSplitReleasesByTask.get(String(options.taskId || ''));
+  const chosenSplit = coverLookupSplitChoiceByTask.get(String(options.taskId || ''));
+  if (knownSplit && chosenSplit && album.identity_resolution !== 'album_split_choice') album = { ...chosenSplit };
+  else if (knownSplit && album.identity_resolution !== 'album_split_choice') {
+    await presentCoverLookupSplitChoice(knownSplit, { taskId: String(options.taskId), mobileSheet });
+    return;
+  }
+  if (typeof cancelBottomSheetExit === 'function') cancelBottomSheetExit(els.overlay);
   els.overlay.classList?.toggle?.('is-mobile-sheet', mobileSheet);
   if (!mobileSheet && typeof presentMobileCoverLookupPage === 'function') presentMobileCoverLookupPage(album);
   if (mobileSheet) bindCoverLookupMobileSheetSwipe(els.overlay);
@@ -3362,8 +4127,10 @@ async function openCoverLookupModal(album, options = {}) {
       : albumTrackSignature
         && buildTrackPathSignature(task?.album_payload) === albumTrackSignature
   ));
-  const cachedCandidateGeneration = String(matchingTask?.id || '').trim();
-  const cachedCandidates = sanitizeCoverLookupPossibleMatches(matchingTask?.possible_matches).map((candidate) => ({
+  const savedCandidateSnapshot = normalizeCoverLookupCandidateSnapshot(album.cover_candidate_snapshot);
+  const savedCandidateSource = getCoverLookupCandidateSource(matchingTask, savedCandidateSnapshot);
+  const cachedCandidateGeneration = String(savedCandidateSource?.generation || matchingTask?.id || '').trim();
+  const cachedCandidates = sanitizeCoverLookupPossibleMatches(savedCandidateSource?.candidates).map((candidate) => ({
     ...candidate,
     _coverLookupGeneration: cachedCandidateGeneration,
   }));
@@ -3373,27 +4140,35 @@ async function openCoverLookupModal(album, options = {}) {
     cachedCandidates.length,
   );
   state.coverLookup.modal.album = album;
+  // Slot 1 means the lookup chooses art for the second artbox, not the album cover.
+  state.coverLookup.modal.artboxSlot = Number(options.artboxSlot) || 0;
   state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
   state.coverLookup.modal.remoteCover = null;
+  state.coverLookup.modal.localInventoryLoaded = false;
   state.coverLookup.modal.localCovers = [];
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
-  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = cachedCandidates.length
-    ? String(matchingTask?.id || '')
+    ? cachedCandidateGeneration
     : '';
   state.coverLookup.modal.candidateRevision = cachedCandidates.length
-    ? Math.max(0, Number(matchingTask?.candidate_revision || 0) || 0)
+    ? Math.max(0, Number(savedCandidateSource?.revision || matchingTask?.candidate_revision || 0) || 0)
     : 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
   state.coverLookup.modal.activeLocalSelectionPath = '';
+  // UI-14: the second artbox's lookup starts with its own saved art selected; deselecting it lets Save empty it.
+  state.coverLookup.modal.artboxCleared = false;
+  if (state.coverLookup.modal.artboxSlot && typeof getAlbumAdditionalArtwork === 'function') {
+    state.coverLookup.modal.activeLocalSelectionPath = String(getAlbumAdditionalArtwork(album)?.cover_path || '');
+  }
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
   state.coverLookup.modal.remoteSelectionOverrideUrl = '';
@@ -3407,25 +4182,43 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.manualStatusText = '';
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.initialScrollPending = true;
-  state.coverLookup.modal.loading = !cachedGallery;
+  state.coverLookup.modal.refreshedStalledSnapshotToken = '';
+  state.coverLookup.modal.initialScrollTop = null;
+  state.coverLookup.modal.galleryError = '';
+  state.coverLookup.modal.loading = !cachedGallery
+    || !(cachedGallery.local_covers?.length || cachedGallery.other_art?.length);
   state.coverLookup.modal.saving = false;
-  if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery);
+  if (cachedGallery) applyCoverLookupGalleryPayload(cachedGallery, { confirmLocalInventory: false });
+  // UI-5 (owner, 11-09): a notification may belong to an album that was split; until its first gallery answer
+  // says otherwise, the lookup stays invisible so a split goes straight to the chooser without a flash of it.
+  const awaitIdentity = Boolean(requestedTaskId)
+    && !cachedGallery
+    && album.identity_resolution !== 'album_split_choice';
+  els.overlay.toggleAttribute?.('data-awaiting-identity', awaitIdentity);
+  const revealSession = coverLookupModalSession;
+  const reveal = () => { if (revealSession === coverLookupModalSession) els.overlay.removeAttribute?.('data-awaiting-identity'); };
+  if (awaitIdentity && typeof setTimeout === 'function') setTimeout(reveal, 1200);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
-    els.saveRemote.disabled = true;
+    ButtonComponent.setDisabled(els.saveRemote, true);
   }
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
   await refreshCoverLookupGallery(false);
+  reveal();
   if (!els.overlay.hidden) {
     restoreCoverLookupDrawerScroll();
     ensureCoverLookupPolling();
   }
 }
 
-function closeCoverLookupModal() {
+function closeCoverLookupModal({ immediate = false } = {}) {
+  const sheetOverlay = getCoverLookupModalElements().overlay;
+  if (!immediate && isCoverLookupMobileSheet(sheetOverlay) && !sheetOverlay.hidden && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(sheetOverlay, () => closeCoverLookupModal({ immediate: true }))) return;
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
   coverLookupGalleryRequest += 1;
   coverLookupModalSession += 1;
   const els = getCoverLookupModalElements();
@@ -3436,6 +4229,7 @@ function closeCoverLookupModal() {
   els.overlay.classList?.remove?.('is-mobile-sheet');
   els.overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.remoteCover = null;
@@ -3449,11 +4243,12 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.manualStatusTone = 'neutral';
   state.coverLookup.modal.saving = false;
   state.coverLookup.modal.album = null;
+  state.coverLookup.modal.artboxSlot = 0;
+  state.coverLookup.modal.sourceAlbum = null;
   state.coverLookup.modal.taskId = '';
   state.coverLookup.modal.localCovers = [];
   state.coverLookup.modal.otherArt = [];
   state.coverLookup.modal.possibleMatches = [];
-  state.coverLookup.modal.currentReleases = [];
   state.coverLookup.modal.candidateSnapshot = null;
   state.coverLookup.modal.candidateGeneration = '';
   state.coverLookup.modal.candidateRevision = 0;
@@ -3465,7 +4260,7 @@ function closeCoverLookupModal() {
   if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
-    els.saveRemote.disabled = true;
+    ButtonComponent.setDisabled(els.saveRemote, true);
   }
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
@@ -3478,7 +4273,7 @@ function closeCoverLookupModal() {
 
 function openCoverLookupDeleteConfirm(path) {
   const els = getCoverLookupDeleteConfirmElements();
-  if (!els.overlay || !path || isCoverLookupLocalMutationPending()) return;
+  if (!els.overlay || !path || isCoverLookupMutationPending()) return;
   state.coverLookup.modal.pendingDeletePath = String(path || '');
   if (els.text) {
     els.text.textContent = 'Are you sure you want to delete this local cover art?';
@@ -3526,7 +4321,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
   }
   try {
     if (triggerButton) {
-      triggerButton.disabled = true;
+      ButtonComponent.setDisabled(triggerButton, true);
       triggerButton.setAttribute?.('aria-busy', 'true');
     }
     if (backgroundOnly && retryTask) {
@@ -3535,10 +4330,15 @@ async function startCoverLookupForAlbum(album, options = {}) {
         String(task?.id || '') === retryTaskId
           ? {
             ...task,
-            status: 'pending',
+            status: 'running',
+            job_kind: 'candidate_lookup',
+            job_contract: {
+              ...(task.job_contract || {}),
+              job_kind: 'candidate_lookup',
+            },
             result_kind: '',
             progress: 0,
-            progress_label: 'Queued',
+            progress_label: 'Searching...',
             message: '',
             created_at: queuedAt,
             started_at: '',
@@ -3560,7 +4360,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
     const manualUrls = !backgroundOnly ? collectManualCoverLookupUrls() : [];
     const reusableTaskId = backgroundOnly
       ? retryTaskId
-      : reusableManualCoverLookupTaskId(album, manualUrls);
+      : reusableCoverLookupTaskId(album);
     const response = await fetch('/utilities/cover-lookup/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3575,13 +4375,29 @@ async function startCoverLookupForAlbum(album, options = {}) {
       throw new Error(data.error || 'Failed to start cover lookup');
     }
     console.log('[AlbumHaven][CoverLookup] Start lookup response.', data);
-    const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
+    const acceptedTask = data.task && typeof data.task === 'object'
+      ? (String(data.task.status || '').toLowerCase() === 'pending'
+        ? {
+          ...data.task,
+          status: 'running',
+        job_kind: 'candidate_lookup',
+        job_contract: {
+          ...(data.task.job_contract || {}),
+          job_kind: 'candidate_lookup',
+        },
+          result_kind: '',
+          progress_label: 'Searching...',
+          started_at: data.task.started_at || new Date().toISOString(),
+        }
+        : data.task)
+      : null;
     if (acceptedTask?.id) {
       const acceptedTaskId = String(acceptedTask.id);
-      state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications([
-        ...(state.coverLookup.tasks || []).filter((task) => String(task?.id || '') !== acceptedTaskId),
-        acceptedTask,
-      ]);
+      const existingTasks = state.coverLookup.tasks || [];
+      const alreadyListed = existingTasks.some((task) => String(task?.id || '') === acceptedTaskId);
+      state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(alreadyListed
+        ? existingTasks.map((task) => String(task?.id || '') === acceptedTaskId ? { ...task, ...acceptedTask } : task)
+        : [...existingTasks, acceptedTask]);
       if (!backgroundOnly) {
         state.coverLookup.modal.taskId = acceptedTaskId;
       }
@@ -3607,7 +4423,7 @@ async function startCoverLookupForAlbum(album, options = {}) {
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {
     if (triggerButton) {
-      triggerButton.disabled = triggerWasDisabled;
+      ButtonComponent.setDisabled(triggerButton, triggerWasDisabled);
       triggerButton.removeAttribute?.('aria-busy');
     }
     if (!backgroundOnly) {
@@ -3619,6 +4435,17 @@ async function startCoverLookupForAlbum(album, options = {}) {
 
 function selectLocalCoverFromLookup(sourcePath) {
   if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
+  const modalState = state.coverLookup.modal;
+  // UI-14 (owner): clicking the second artbox's saved art deselects it (Save then empties the artbox);
+  // clicking it again selects it back.
+  if (modalState.artboxSlot && String(sourcePath || '') === String(modalState.activeLocalSelectionPath || '')
+      && !modalState.pendingLocalPath && !modalState.selectedRemoteId) {
+    modalState.artboxCleared = !modalState.artboxCleared;
+    syncCoverLookupSelectionUi();
+    syncCoverLookupSaveButton();
+    return;
+  }
+  modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -3630,20 +4457,30 @@ function selectLocalCoverFromLookup(sourcePath) {
 
 async function saveLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
-  const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
-  if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupLocalMutationPending(album)) return;
-  const mutationKey = buildTrackPathSignature(album);
+  if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupMutationPending(album)) return;
+  const mutationKey = buildCoverLookupMutationKey(album);
   const previousAlbum = deepCloneJson(album);
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const inventoryKey = buildCoverLookupGalleryCacheKey(album);
+  const previousInventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey);
+  const previousInventoryMutationSnapshot = previousInventoryMutation ? {
+    addedCovers: new Map(previousInventoryMutation.addedCovers),
+    deletedPaths: new Set(previousInventoryMutation.deletedPaths),
+    selectedPath: previousInventoryMutation.selectedPath,
+  } : null;
   const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
-  coverLookupPendingLocalMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   coverLookupGalleryRequest += 1;
   try {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
-    applyOptimisticLocalCoverSelection(album, sourcePath);
-    markTrackModalCoverTransitionPending(album);
+    const optimisticSrc = applyOptimisticLocalCoverSelection(album, sourcePath);
+    // The optimistic cover is already visible and a failure rolls back with an
+    // error alert, so Save closes at once instead of waiting for promotion.
+    closeCoverLookupModal();
+    markTrackModalCoverTransitionPending(album, optimisticSrc);
     if (optimisticAlbum) {
       markAlbumCoverPathsFresh([optimisticAlbum]);
       syncCoverLookupAlbumReferences([optimisticAlbum]);
@@ -3661,7 +4498,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     const updatedAlbums = Array.isArray(data.updated_albums) && data.updated_albums.length
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
-    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
@@ -3669,7 +4506,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       markCoverLookupTaskActionTaken(taskId, updatedAlbums[0] || album);
       renderCoverLookupDrawer({ taskIds: [taskId] });
     }
-    if (ownsModal()) closeCoverLookupModal();
     const preloadResult = updatedAlbums[0]
       ? await preloadCoverLookupAlbumImageWithTimeout(updatedAlbums[0])
       : false;
@@ -3678,7 +4514,18 @@ async function saveLocalCoverFromLookup(sourcePath) {
       refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     }
   } catch (error) {
-    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    const currentInventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey);
+    if (currentInventoryMutation
+        && coverLookupLocalPathMatches(currentInventoryMutation.selectedPath, sourcePath)) {
+      if (previousInventoryMutationSnapshot) {
+        coverLookupLocalInventoryMutations.set(inventoryKey, previousInventoryMutationSnapshot);
+      } else {
+        coverLookupLocalInventoryMutations.delete(inventoryKey);
+      }
+    }
+    if (previousGallery) cacheCoverLookupGalleryPayload(album, previousGallery);
+    else invalidateCoverLookupGalleryCache(album);
     if (previousAlbum) {
       clearOptimisticAlbumCovers([previousAlbum]);
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -3688,7 +4535,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     console.error('[AlbumHaven][CoverLookup] Failed to select local cover.', error);
     showToast(error.message || 'Failed to select local cover art.', 'error', 2800);
   } finally {
-    await finishCoverLookupLocalMutation(mutationKey, session);
+    await finishCoverLookupMutation(mutationKey, session);
   }
 }
 
@@ -3696,16 +4543,25 @@ async function deleteLocalCoverFromLookup(sourcePath) {
   const session = coverLookupModalSession;
   const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
-  if (!album || !sourcePath || isCoverLookupLocalMutationPending(album)) return;
-  const mutationKey = buildTrackPathSignature(album);
+  if (!album || !sourcePath || isCoverLookupMutationPending(album)) return;
+  const mutationKey = buildCoverLookupMutationKey(album);
   const previousLocalCovers = Array.isArray(state.coverLookup.modal.localCovers)
     ? state.coverLookup.modal.localCovers.slice()
     : [];
+  const previousPendingLocalPath = String(state.coverLookup.modal.pendingLocalPath || '');
+  const previousActiveLocalSelectionPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
+  const previousFallbackLocalSelectionPending = Boolean(state.coverLookup.modal.fallbackLocalSelectionPending);
   const previousAlbum = deepCloneJson(album);
   const remainingLocalCovers = previousLocalCovers.filter((item) => String(item?.path || '') !== String(sourcePath || ''));
   const fallbackLocalCoverPath = String(remainingLocalCovers[0]?.path || '').trim();
+  const deletedPendingLocalSelection = Boolean(previousPendingLocalPath)
+    && coverLookupLocalPathMatches(previousPendingLocalPath, sourcePath);
+  const deletedActiveLocalSelection = coverLookupLocalPathMatches(
+    previousActiveLocalSelectionPath || album?.cover_path,
+    sourcePath,
+  );
   const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(album, sourcePath, fallbackLocalCoverPath);
-  coverLookupPendingLocalMutations.add(mutationKey);
+  coverLookupPendingMutations.set(mutationKey, session);
   invalidateCoverLookupGalleryCache(album);
   coverLookupGalleryRequest += 1;
   try {
@@ -3716,6 +4572,14 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     }
     if (String(state.coverLookup.modal.activeLocalSelectionPath || '') === String(sourcePath || '')) {
       state.coverLookup.modal.activeLocalSelectionPath = '';
+    }
+    if (
+      fallbackLocalCoverPath
+      && (deletedPendingLocalSelection
+        || (deletedActiveLocalSelection && !previousPendingLocalPath))
+    ) {
+      state.coverLookup.modal.pendingLocalPath = fallbackLocalCoverPath;
+      state.coverLookup.modal.fallbackLocalSelectionPending = true;
     }
     state.coverLookup.modal.pendingPastedImageId = '';
     state.coverLookup.modal.selectedRemoteId = '';
@@ -3735,7 +4599,25 @@ async function deleteLocalCoverFromLookup(sourcePath) {
       throw new Error(data.error || 'Failed to delete local cover art');
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
-    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    const selectedFallbackPath = String(
+      updatedAlbums[0]?.cover_path
+      || data.gallery?.selected_source_path
+      || fallbackLocalCoverPath,
+    );
+    const inventoryKey = buildCoverLookupGalleryCacheKey(album);
+    const inventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey)
+      || { addedCovers: new Map(), deletedPaths: new Set(), selectedPath: '' };
+    inventoryMutation.addedCovers.delete(String(sourcePath));
+    inventoryMutation.deletedPaths.add(String(sourcePath));
+    if (deletedActiveLocalSelection) {
+      inventoryMutation.selectedPath = selectedFallbackPath;
+      if (ownsModal() && !previousPendingLocalPath) {
+        state.coverLookup.modal.pendingLocalPath = selectedFallbackPath;
+        state.coverLookup.modal.fallbackLocalSelectionPending = Boolean(selectedFallbackPath);
+      }
+    }
+    coverLookupLocalInventoryMutations.set(inventoryKey, inventoryMutation);
+    if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
@@ -3748,8 +4630,13 @@ async function deleteLocalCoverFromLookup(sourcePath) {
       }
     }
   } catch (error) {
-    if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
-    if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
+    if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
+    if (ownsModal()) {
+      state.coverLookup.modal.localCovers = previousLocalCovers;
+      state.coverLookup.modal.pendingLocalPath = previousPendingLocalPath;
+      state.coverLookup.modal.activeLocalSelectionPath = previousActiveLocalSelectionPath;
+      state.coverLookup.modal.fallbackLocalSelectionPending = previousFallbackLocalSelectionPending;
+    }
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
@@ -3759,7 +4646,7 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     console.error('[AlbumHaven][CoverLookup] Failed to delete local cover.', error);
     showToast(error.message || 'Failed to delete local cover art.', 'error', 2800);
   } finally {
-    await finishCoverLookupLocalMutation(mutationKey, session);
+    await finishCoverLookupMutation(mutationKey, session);
   }
 }
 
@@ -3769,7 +4656,19 @@ function selectRemoteCoverFromLookup(candidateId) {
   ));
   if (!isSelectableRemoteCoverCandidate(selectedCandidate)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
+  const modalState = state.coverLookup.modal;
+  // UI-14 (owner): clicking the second artbox's saved remote art deselects it (Save then empties the artbox);
+  // clicking it again selects it back.
+  if (typeof isSecondArtboxSavedRemote === 'function' && isSecondArtboxSavedRemote(selectedCandidate)
+      && !modalState.selectedRemoteId && !modalState.pendingLocalPath && !modalState.pendingPastedImageId) {
+    modalState.artboxCleared = !modalState.artboxCleared;
+    syncCoverLookupSelectionUi();
+    syncCoverLookupSaveButton();
+    return;
+  }
+  modalState.artboxCleared = false;
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
@@ -3803,6 +4702,7 @@ function selectRemoteCoverFromLookup(candidateId) {
 
 function selectPastedCoverFromLookup(imageId) {
   state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.pendingPastedImageId = String(imageId || '');
   state.coverLookup.modal.activeLocalSelectionPath = '';
@@ -3820,21 +4720,32 @@ async function saveRemoteCoverFromLookup() {
   const selectionOwnerGeneration = String(
     state.coverLookup.modal.remoteSelectionOverrideGeneration || '',
   ).trim();
-  const taskId = selectionOwnerGeneration || state.coverLookup.modal.taskId;
+  // A search's generation is not its task id. Send the owning task's id so the server saves on that task and
+  // stops its remaining provider work instead of opening a second task (FTC-COVERS-013).
+  const generationOwnerTask = selectionOwnerGeneration
+    ? (state.coverLookup.tasks || []).find((task) => coverLookupCandidateGenerationKey(task?.search_generation || task?.id)
+      === coverLookupCandidateGenerationKey(selectionOwnerGeneration))
+    : null;
+  const taskId = String(generationOwnerTask?.id || selectionOwnerGeneration || state.coverLookup.modal.taskId || '');
   const snapshotGeneration = selectionOwnerGeneration || String(
     state.coverLookup.modal.candidateSnapshot?.search_generation || '',
   ).trim();
-  if (!album || (!taskId && !snapshotGeneration) || !candidateId || state.coverLookup.modal.saving) return;
+  if (!album || (!taskId && !snapshotGeneration) || !candidateId || state.coverLookup.modal.saving
+      || isCoverLookupMutationPending(album)) return;
   const previousAlbum = deepCloneJson(album);
   const selectedMatch = (state.coverLookup.modal.possibleMatches || []).find((item) => String(item?.id || '') === String(candidateId || ''));
   if (!isSelectableRemoteCoverCandidate(selectedMatch)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedMatch)) return;
+  const mutationKey = buildCoverLookupMutationKey(album);
+  coverLookupPendingMutations.set(mutationKey, session);
   state.coverLookup.modal.saving = true;
   syncCoverLookupSaveButton();
   const previousOptimisticCovers = { ...(state.coverLookup.optimisticAlbumCovers || {}) };
   let optimisticAlbum = null;
   let optimisticEntry = null;
   try {
+    // Remote saves continue as a task; Save closes at once on every layout.
+    closeCoverLookupModal();
     optimisticAlbum = applyOptimisticRemoteCoverSelection(album, selectedMatch, '');
     optimisticEntry = Object.entries(state.coverLookup.optimisticAlbumCovers || {})
       .find(([signature, cover]) => previousOptimisticCovers[signature] !== cover) || null;
@@ -3852,7 +4763,14 @@ async function saveRemoteCoverFromLookup() {
     const optimisticCoverPath = String(data.optimistic_cover_path || '').trim();
     if (optimisticEntry?.[1]) optimisticEntry[1].coverPath = optimisticCoverPath;
     const acceptedTaskId = String(data.task?.id || taskId || '').trim();
+    let previousGallery = null;
     if (acceptedTaskId && selectedMatch) {
+      previousGallery = cacheOptimisticRemoteCoverGallery(
+        album,
+        selectedMatch,
+        optimisticCoverPath,
+        acceptedTaskId,
+      );
       const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
       if (acceptedTask) {
         const optimisticPreviewUrl = String(
@@ -3880,6 +4798,7 @@ async function saveRemoteCoverFromLookup() {
         previousOptimisticCover: optimisticEntry
           ? previousOptimisticCovers[optimisticEntry[0]]
           : undefined,
+        previousGallery,
         saveGeneration: String(data.task?.save_generation || ''),
       });
       markCoverLookupTaskActionTaken(acceptedTaskId, optimisticAlbum || album, { persist: false });
@@ -3889,7 +4808,6 @@ async function saveRemoteCoverFromLookup() {
       state.coverLookup.modal.manualBusy = false;
       state.coverLookup.modal.pendingLocalPath = '';
       state.coverLookup.modal.selectedRemoteId = '';
-      closeCoverLookupModal();
     }
     ensureCoverLookupPolling();
     renderCoverLookupDrawer({ taskIds: acceptedTaskId ? [acceptedTaskId] : [] });
@@ -3912,6 +4830,11 @@ async function saveRemoteCoverFromLookup() {
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save remote cover.', error);
     showToast(error.message || 'Failed to save selected cover art.', 'error', 2800);
+  } finally {
+    if (coverLookupPendingMutations.get(mutationKey) === session) {
+      coverLookupPendingMutations.delete(mutationKey);
+    }
+    if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) syncCoverLookupSaveButton();
   }
 }
 
@@ -3954,7 +4877,7 @@ async function addRemoteCoverLinksFromLookup() {
     }
     if (data.gallery && typeof data.gallery === 'object') {
       state.coverLookup.modal.remoteCover = data.gallery.remote_cover && typeof data.gallery.remote_cover === 'object' ? data.gallery.remote_cover : null;
-      state.coverLookup.modal.localCovers = Array.isArray(data.gallery.local_covers) ? data.gallery.local_covers : [];
+      state.coverLookup.modal.localCovers = sortCoverLookupLocalCovers(data.gallery.local_covers);
       state.coverLookup.modal.otherArt = Array.isArray(data.gallery.other_art) ? data.gallery.other_art : [];
     }
     if (data.task && typeof data.task === 'object') {
@@ -3979,16 +4902,83 @@ async function addRemoteCoverLinksFromLookup() {
 }
 
 async function savePastedCoverFromLookup(imageId) {
+  const session = coverLookupModalSession;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
   const pastedItem = (state.coverLookup.modal.pastedImages || []).find((item) => String(item?.id || '') === String(imageId || ''));
-  if (!album || !pastedItem?.data_url) return;
+  if (!album || !pastedItem?.data_url || state.coverLookup.modal.saving
+      || isCoverLookupMutationPending(album)) return;
+  const mutationKey = buildCoverLookupMutationKey(album);
   const previousAlbum = deepCloneJson(album);
-  const previousTask = taskId
-    ? deepCloneJson((state.coverLookup.tasks || []).find((task) => String(task?.id || '') === taskId) || null)
-    : null;
+  const previousGallery = cachedCoverLookupGalleryPayload(album);
+  const inventoryKey = buildCoverLookupGalleryCacheKey(album);
+  const previousInventoryMutation = coverLookupLocalInventoryMutations.get(inventoryKey);
+  const previousInventoryMutationSnapshot = previousInventoryMutation ? {
+    addedCovers: new Map(previousInventoryMutation.addedCovers),
+    deletedPaths: new Set(previousInventoryMutation.deletedPaths),
+    selectedPath: previousInventoryMutation.selectedPath,
+  } : null;
+  const optimisticPath = `pasted-image:${String(pastedItem.id || '')}`;
+  const restorePreviousInventory = () => {
+    if (previousInventoryMutationSnapshot) {
+      coverLookupLocalInventoryMutations.set(inventoryKey, previousInventoryMutationSnapshot);
+    } else {
+      coverLookupLocalInventoryMutations.delete(inventoryKey);
+    }
+    if (previousGallery) cacheCoverLookupGalleryPayload(album, previousGallery);
+    else invalidateCoverLookupGalleryCache(album);
+  };
+  const notificationFields = [
+    'notification_action_taken',
+    'notification_completed_at',
+    'notification_expires_at',
+    'current_user_cover_preview_url',
+  ];
+  const albumSignature = buildTrackPathSignature(album);
+  const previousTaskNotifications = new Map((state.coverLookup.tasks || [])
+    .filter((task) => {
+      if (!isCoverLookupTaskCompleted(task)) return false;
+      const idMatches = taskId && String(task?.id || '') === taskId;
+      const taskSignature = task?.album_payload ? buildTrackPathSignature(task.album_payload) : '';
+      return idMatches || (albumSignature && taskSignature === albumSignature);
+    })
+    .map((task) => [String(task.id), Object.fromEntries(notificationFields.map((field) => [
+      field,
+      {
+        present: Object.prototype.hasOwnProperty.call(task, field),
+        value: task[field],
+      },
+    ]))]));
+  const restoreTaskNotifications = (preservedTaskIds = new Set()) => {
+    state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => {
+      const id = String(task?.id || '');
+      const snapshot = previousTaskNotifications.get(id);
+      if (!snapshot || preservedTaskIds.has(id)) return task;
+      const restored = { ...task };
+      notificationFields.forEach((field) => {
+        if (snapshot[field].present) restored[field] = snapshot[field].value;
+        else delete restored[field];
+      });
+      return restored;
+    });
+  };
+  coverLookupPendingMutations.set(mutationKey, session);
+  state.coverLookup.modal.saving = true;
+  syncCoverLookupSaveButton();
   try {
     const optimisticAlbum = applyOptimisticPastedCoverSelection(album, pastedItem);
+    cacheOptimisticLocalCoverGallery(album, {
+      path: optimisticPath,
+      preview_url: pastedItem.data_url,
+      filename: pastedItem.filename,
+      width: pastedItem.width,
+      height: pastedItem.height,
+    });
+    const optimisticGallery = cachedCoverLookupGalleryPayload(album);
+    if (optimisticGallery) {
+      applyCoverLookupGalleryPayload(optimisticGallery, { confirmLocalInventory: false });
+      renderCoverLookupModal();
+    }
     if (taskId && optimisticAlbum) {
       markCoverLookupTaskActionTaken(taskId, optimisticAlbum, { persist: false });
       renderCoverLookupDrawer({ taskIds: [taskId] });
@@ -4015,6 +5005,20 @@ async function savePastedCoverFromLookup(imageId) {
       throw new Error(data.error || 'Failed to save pasted image.');
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
+    const updatedAlbum = updatedAlbums[0];
+    const selectedCoverPath = String(data.selected_cover_path || updatedAlbum?.cover_path || '').trim();
+    const selectedCoverRevision = String(data.cover_revision || updatedAlbum?.cover_revision || '').trim();
+    restorePreviousInventory();
+    if (selectedCoverPath) {
+      cacheOptimisticLocalCoverGallery(album, {
+        path: selectedCoverPath,
+        preview_url: pastedItem.data_url,
+        filename: selectedCoverPath.split(/[\\/]/).pop() || pastedItem.filename,
+        width: pastedItem.width,
+        height: pastedItem.height,
+        cover_revision: selectedCoverRevision,
+      });
+    }
     clearOptimisticAlbumCovers(updatedAlbums);
     markAlbumCoverPathsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
@@ -4023,26 +5027,39 @@ async function savePastedCoverFromLookup(imageId) {
     actionedTaskIds.forEach((actionedTaskId) => {
       markCoverLookupTaskActionTaken(actionedTaskId, updatedAlbums[0] || album, { persist: false });
     });
-    renderCoverLookupDrawer({ taskIds: actionedTaskIds });
+    const actionedTaskIdSet = new Set(actionedTaskIds.map((id) => String(id || '')));
+    restoreTaskNotifications(actionedTaskIdSet);
+    renderCoverLookupDrawer({
+      taskIds: Array.from(new Set([...previousTaskNotifications.keys(), ...actionedTaskIdSet])),
+    });
   } catch (error) {
+    restorePreviousInventory();
     if (previousAlbum) {
+      clearOptimisticAlbumCovers([previousAlbum]);
       markAlbumCoverPathsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
-    if (previousTask) {
-      state.coverLookup.tasks = (state.coverLookup.tasks || []).map((task) => (
-        String(task?.id || '') === taskId ? previousTask : task
-      ));
-      renderCoverLookupDrawer({ taskIds: [taskId] });
+    if (previousTaskNotifications.size) {
+      restoreTaskNotifications();
+      renderCoverLookupDrawer({ taskIds: Array.from(previousTaskNotifications.keys()) });
     }
     console.error('[AlbumHaven][CoverLookup] Failed to save pasted image.', error);
     showToast(error.message || 'Failed to save pasted image.', 'error', 2800);
+  } finally {
+    await finishCoverLookupMutation(mutationKey, session);
   }
 }
 
 async function saveCoverFromLookup() {
-  if (isCoverLookupLocalMutationPending()) return;
+  if (isCoverLookupMutationPending()) {
+    if (state.coverLookup.modal.fallbackLocalSelectionPending) closeCoverLookupModal();
+    return;
+  }
+  if (state.coverLookup.modal.artboxSlot) {
+    await saveAdditionalArtworkFromLookup();
+    return;
+  }
   if (String(state.coverLookup.modal.selectedRemoteId || '')) {
     await saveRemoteCoverFromLookup();
     return;

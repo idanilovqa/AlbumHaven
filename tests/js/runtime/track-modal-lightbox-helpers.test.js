@@ -1149,7 +1149,7 @@ test('inventory mutation refresh rehydrates the album that is still open', async
   assert.deepEqual(refreshed, [{ albumKey: 'watcher-album', album: fresh }]);
 });
 
-test('inventory mutation refresh hides stale rows while canonical details load', async () => {
+test('inventory mutation refresh keeps rows until fresh details replace them', async () => {
   const stale = {
     key: 'watcher-album',
     request_key: 'watcher-album',
@@ -1174,18 +1174,20 @@ test('inventory mutation refresh hides stale rows while canonical details load',
   const elements = context.getTrackModalElements();
   elements.overlay.hidden = false;
   elements.list.innerHTML = '<li>Old title</li>';
-  context.refreshOpenTrackModalVersionState = () => {};
+  let rendered = null;
+  context.refreshOpenTrackModalVersionState = (_key, album) => { rendered = album; };
 
   const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
 
-  assert.match(elements.list.innerHTML, /track-modal-loading-row/);
-  assert.doesNotMatch(elements.list.innerHTML, /Old title/);
+  assert.doesNotMatch(elements.list.innerHTML, /track-modal-loading-row/);
+  assert.match(elements.list.innerHTML, /Old title/);
   resolveResponse({
     ok: true,
     status: 200,
     json: async () => ({ ok: true, album: fresh }),
   });
   assert.equal(await refresh, true);
+  assert.equal(rendered.tracks[0].title, 'Fresh title');
 });
 
 test('inventory mutation refresh keeps rows and title of an album this session edited', async () => {
@@ -1683,6 +1685,49 @@ async function run() {
     assert.equal(trackModal.hidden, false);
     assert.equal(context.renderTrackModalReleaseAlbums.length, 1);
     assert.equal(context.renderTrackModalReleaseAlbums[0].tracks.length, 15);
+  }
+
+  {
+    const compactMergedAlbum = {
+      key: 'merged-album',
+      name: 'Merged Album',
+      album_artist: 'Merge Artist',
+      preview_only: true,
+      tracks: [],
+      track_count_preview: 11,
+    };
+    const optimisticMergedAlbum = {
+      ...compactMergedAlbum,
+      preview_only: false,
+      tracks: [{ path: 'C:\\Music\\Merge Artist\\Merged Album\\11 Moved Track.flac' }],
+      track_count_preview: 1,
+    };
+    const canonicalMergedAlbum = {
+      ...compactMergedAlbum,
+      preview_only: false,
+      tracks: Array.from({ length: 11 }, (_value, index) => ({
+        path: `C:\\Music\\Merge Artist\\Merged Album\\${String(index + 1).padStart(2, '0')} Track.flac`,
+      })),
+      track_count_preview: 11,
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactMergedAlbum],
+      fetchedAlbum: canonicalMergedAlbum,
+    });
+
+    context.cacheHydratedTrackModalAlbum(compactMergedAlbum.key, optimisticMergedAlbum, {
+      tagEditMutationClaim: { id: 'merge-in-flight' },
+    });
+
+    assert.strictEqual(
+      context.state.gallery.albumIndex.get(compactMergedAlbum.key),
+      compactMergedAlbum,
+      'a partial optimistic merge must not replace the compact card that declares full membership',
+    );
+    const resolvedMergedAlbum = await context.loadTrackModalAlbumDetails(compactMergedAlbum.key);
+    assert.strictEqual(resolvedMergedAlbum, canonicalMergedAlbum);
+    assert.equal(resolvedMergedAlbum.tracks.length, 11);
+    assert.equal(context.fetchCalls.length, 1, 'opening the merged card must fetch canonical membership');
   }
 
   {
@@ -3333,11 +3378,11 @@ async function run() {
       duplicate_sources: [
         {
           folder_path: 'C:\\Music\\Album Alpha',
-          tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
+          tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac', album: 'Album Alpha' }],
         },
         {
           folder_path: 'D:\\Mirror\\Album Alpha',
-          tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac' }],
+          tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac', album: 'ALBUM ÄLPHA' }],
         },
       ],
     };
@@ -3345,22 +3390,39 @@ async function run() {
       initialAlbums: [duplicateAlbum],
     });
     context.state.modalReleases = [duplicateAlbum];
+    context.state.modalDuplicateSourceIndices = { alpha: 0 };
+    context.getTrackModalDuplicateSourceIndex = (album, duplicateSources) => {
+      const sourceIndex = Number(context.state.modalDuplicateSourceIndices[album.key]);
+      return Number.isInteger(sourceIndex) && sourceIndex >= 0 && sourceIndex < duplicateSources.length
+        ? sourceIndex
+        : 0;
+    };
     const button = new FakeHtmlElement('duplicate-folder-button');
     button.getAttribute = (name) => {
       if (name === 'data-album-key') return 'alpha';
-      if (name === 'data-duplicate-source-index') return '1';
       return '';
     };
 
-    const resolvedAlbum = context.resolveTrackModalDuplicateSourceAlbum(button);
+    const firstSourceAlbum = context.resolveTrackModalDuplicateSourceAlbum(button);
+    context.state.modalDuplicateSourceIndices.alpha = 1;
+    const secondSourceAlbum = context.resolveTrackModalDuplicateSourceAlbum(button);
 
-    assert.equal(resolvedAlbum.key, 'alpha');
+    assert.equal(firstSourceAlbum.key, 'alpha');
+    assert.equal(secondSourceAlbum.key, 'alpha');
     assert.deepEqual(
-      resolvedAlbum.tracks.map((track) => track.path),
+      firstSourceAlbum.tracks.map((track) => track.path),
+      ['C:\\Music\\Album Alpha\\01 Track.flac'],
+    );
+    assert.deepEqual(
+      secondSourceAlbum.tracks.map((track) => track.path),
       ['D:\\Mirror\\Album Alpha\\01 Track.flac'],
     );
     assert.deepEqual(
-      Array.from(resolvedAlbum.open_directory_paths),
+      [firstSourceAlbum, secondSourceAlbum].map((album) => album.tracks[0].album),
+      ['Album Alpha', 'ALBUM ÄLPHA'],
+    );
+    assert.deepEqual(
+      Array.from(secondSourceAlbum.open_directory_paths),
       ['D:\\Mirror\\Album Alpha'],
     );
   }
@@ -3416,3 +3478,15 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+
+test('release candidate cache follows changes to the manual version family', () => {
+  const album = { key: 'artist::album', name: 'Album', album_artist: 'Artist', preview_only: false,
+    tracks: [{ path: 'one.flac' }], release_candidate_family_keys: ['artist::album'] };
+  const { context } = loadHelper({ initialAlbums: [album] });
+  context.getManualVersionFamilyKeys = () => new Set([album.key]);
+  context.cacheHydratedTrackModalAlbum(album.key, album);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), album);
+  context.getManualVersionFamilyKeys = () => new Set([album.key, 'artist::bonus']);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), null);
+});

@@ -100,6 +100,18 @@ const alertComponentsPath = path.join(
   'alert-components.js',
 );
 const alertComponentsSource = fs.readFileSync(alertComponentsPath, 'utf8');
+const albumDetailsComponentsPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'album-details-components.js',
+);
+const albumDetailsComponentsSource = fs.readFileSync(albumDetailsComponentsPath, 'utf8');
 const tagEditorHelperPath = path.join(
   __dirname,
   '..',
@@ -625,6 +637,7 @@ function loadProblematicTrackNavigationHelpers() {
     },
     async loadProblematicFiles() {},
     async loadProblematicAlbumDetail() {},
+    async loadProblematicAlbumDetailForTrackPath() { return null; },
     getSelectedProblematicAlbum() {
       return context.state.utility.problematicFiles.find(
         (item) => item.key === context.state.utility.selectedProblematicKey,
@@ -661,6 +674,7 @@ function loadProblematicTrackNavigationHelpers() {
   vm.runInContext(alertComponentsSource, context, { filename: alertComponentsPath });
   context.window = context;
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
+  vm.runInContext(albumDetailsComponentsSource, context, { filename: albumDetailsComponentsPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { album, context, trackPath };
 }
@@ -2494,6 +2508,49 @@ test('applyUpdatedAlbumsToCurrentView restores compact source membership from th
   );
 });
 
+test('moving tracks into an album whose details are loaded shows the merged album at once', () => {
+  const context = loadHelpers();
+  const artist = 'Мумий Тролль';
+  const name = '8 (Часть 1)';
+  const makeAlbum = (albumName, start, count, extra = {}) => ({
+    key: `мумий тролль::${albumName.toLowerCase()}`,
+    album_ref: `мумий тролль::${albumName.toLowerCase()}`,
+    name: albumName, album_artist: artist, artists: [artist], display_artist: artist,
+    year: 2008, edition: null, preview_only: false, track_count_preview: count,
+    total_duration_seconds: count * 4,
+    tracks: Array.from({ length: count }, (_, index) => ({
+      path: `owned-track-${start + index}.mp3`, title: `Track ${start + index}`,
+      album: albumName, album_artist: artist, artist, year: 2008, edition: null,
+      track_number: start + index, disc_number: 1, duration_seconds: 4,
+    })),
+    ...extra,
+  });
+  const loadedDestination = makeAlbum(name, 1, 8, { album_id: 739000 });
+  // The gallery card is a preview: its track list was never loaded.
+  const previewDestination = { ...loadedDestination, preview_only: true, tracks: [] };
+  const original = makeAlbum(`${name}332`, 9, 2);
+  const groups = [{ artist, albums: [previewDestination, original] }];
+  context.state.view = {
+    ...context.state.view, selected_artist: artist, related_artists: [],
+    artist_groups: groups, primary_artist_groups: groups, family_artist_groups: [],
+  };
+  context.getAlbumRequestKey = album => album.album_ref || album.key;
+  context.getAlbumIdentity = album => album.key;
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  context.formatAlbumDuration = () => '';
+  context.findVisibleAlbumByTrackPaths = () => original;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+  context.getCachedHydratedTrackModalAlbum = key => (key === loadedDestination.key ? loadedDestination : null);
+  const updates = Object.fromEntries(original.tracks.map(track => [track.path, { album: name }]));
+
+  const [merged] = context.buildOptimisticUpdatedAlbumsFromEdits(original, updates);
+
+  assert.equal(merged.key, loadedDestination.key);
+  assert.equal(merged.album_id, 739000);
+  assert.deepEqual(Array.from(merged.tracks, track => track.track_number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(merged.track_count_preview, 10);
+});
+
 test('album-name merge keeps all sixteen tracks visible before canonical refresh', () => {
   const context = loadHelpers();
   const artist = 'DDT';
@@ -2533,6 +2590,44 @@ test('album-name merge keeps all sixteen tracks visible before canonical refresh
     assert.equal(albums[0].track_count_preview, 16);
     assert.equal(new Set(albums[0].tracks.map(track => track.path)).size, 16);
   }
+});
+
+test('partial tag rename retains the untouched album and Hoard styling through destination-only completion', () => {
+  const context = loadHelpers();
+  context.flattenVisibleAlbums = () => context.state.view.artist_groups.flatMap(group => group.albums);
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+  const artist = 'Мумий Тролль';
+  const original = {
+    key: 'мумий тролль::8', name: '8', album_artist: artist, year: 2008,
+    root_provenance: { categories: ['hoard'] },
+    tracks: [
+      { path: 'hoard/8/part1.mp3', title: 'First part', album: '8', album_artist: artist, duration_seconds: 120 },
+      { path: 'hoard/8/part2.mp3', title: 'Second part', album: '8', album_artist: artist, duration_seconds: 180 },
+    ],
+  };
+  const groups = [{ artist, albums: [original] }];
+  context.state.view = { ...context.state.view, selected_artist: artist, related_artists: [], artist_groups: groups, primary_artist_groups: groups, family_artist_groups: [] };
+  const edits = { 'hoard/8/part1.mp3': { album: '8 Часть 1' } };
+  const optimistic = context.buildOptimisticUpdatedAlbumsFromEdits(original, edits);
+  const assertSplit = () => {
+    for (const field of ['artist_groups', 'primary_artist_groups']) {
+      const albums = context.state.view[field].flatMap(group => group.albums);
+      assert.equal(albums.length, 2);
+      const remainder = albums.find(album => album.name === '8');
+      const edited = albums.find(album => album.name === '8 Часть 1');
+      assert.deepEqual(Array.from(remainder.tracks, track => track.path), ['hoard/8/part2.mp3']);
+      assert.deepEqual(Array.from(edited.tracks, track => track.path), ['hoard/8/part1.mp3']);
+      for (const album of albums) assert.deepEqual(Array.from(album.root_provenance.categories), ['hoard']);
+    }
+  };
+  context.applyUpdatedAlbumsToCurrentView(optimistic, { originalAlbum: original, tagEdits: edits, skipRender: true });
+  assertSplit();
+  const destination = optimistic.find(album => album.name === '8 Часть 1');
+  context.applyUpdatedAlbumsToCurrentView([destination], { originalAlbum: original, tagEdits: edits, skipRender: true });
+  assertSplit();
+  context.applyUpdatedAlbumsToCurrentView(optimistic, { originalAlbum: original, tagEdits: edits, skipRender: true });
+  assertSplit();
 });
 
 test('applyUpdatedAlbumsToCurrentView reconciles duplicate selected-artist source projections during restore', () => {
@@ -2806,6 +2901,30 @@ test('reconcileCommittedTagEditDestination selects the committed artist and remo
   assert.equal(context.collectVisibleAlbumsUnique()[0].identity_key, destinationAlbum.identity_key);
   assert.equal(historyCalls.length, 1);
   assert.equal(historyCalls[0].url, '/albums?artist=Overhead');
+});
+
+test('reconcileCommittedTagEditDestination does not turn an automatic search match into an explicit artist selection', async () => {
+  const context = loadHelpers();
+  context.state.view = {
+    ...context.state.view,
+    query: 'ремиксы',
+    selected_artist: 'ДДТ',
+    search_context: { selected_artist_source: 'auto_top_match' },
+  };
+  let refreshCount = 0;
+  context.buildApiUrl = () => '/view-data';
+  context.fetchAndRender = async () => {
+    refreshCount += 1;
+    return false;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'ДДТ',
+    destination_album_key: 'ddt::remixes',
+  }), false);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.view.search_context.selected_artist_source, 'auto_top_match');
 });
 
 test('reconcileCommittedTagEditDestination inserts a newly committed artist into a stale sidebar', async () => {
@@ -3417,7 +3536,7 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
 for (const scenario of [
   { name: 'auto-selected content search', source: 'auto_top_match', allResults: true },
   { name: 'explicit artist selection', source: 'requested_artist' },
-  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true },
+  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true, allResults: true },
   { name: 'nonstructural edit', source: 'auto_top_match', field: 'title' },
   { name: 'superseded view', source: 'auto_top_match', superseded: true },
   { name: 'changed query', source: 'auto_top_match', changedQuery: true },
@@ -4058,11 +4177,13 @@ test('Problematic Files mutation follows the retained source album when a struct
     loaded: true,
     problematicFiles: [unrelatedAlbum, originalAlbum],
     selectedProblematicKey: originalAlbum.key,
+    pinnedProblematicKey: originalAlbum.key,
   };
   context.getUtilityModalElements = () => ({ list: { scrollTop: 0, scrollHeight: 0, clientHeight: 0 } });
   context.renderUtilityModalContent = () => {};
 
   context.claimProblematicSaveTaskMutation('structural-key-change', originalAlbum);
+  assert.equal(context.state.utility.pinnedProblematicKey, '', 'the mutation refresh must be allowed to remove the stale key');
   context.state.utility.problematicFiles = [unrelatedAlbum, retainedAlbum];
   await context.settleProblematicSaveTaskMutation('structural-key-change', { reconcileSelection: true });
 
@@ -6033,7 +6154,7 @@ test('watchSaveTask keeps default callers on ordinary anchor preservation', asyn
   );
 });
 
-test('watchSaveTask persists a failed tag edit and exposes Log History', async () => {
+test('watchSaveTask keeps Edit Tags closed after a late failure and exposes Log History', async () => {
   const context = loadHelpers();
   const originalAlbum = { key: 'artist::album', name: 'Album', tracks: [] };
   const tagEditorDraft = { album: originalAlbum, values: {} };
@@ -6045,6 +6166,8 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   const persistedEntries = [];
   const alerts = [];
   const restoredDrafts = [];
+  const clearedOptimisticSplits = [];
+  const coverLookupOptimisticSplit = { taskIds: ['cover-task-1'] };
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -6059,16 +6182,32 @@ test('watchSaveTask persists a failed tag edit and exposes Log History', async (
   context.prependUtilityLogHistoryEntry = async (entry) => persistedEntries.push(entry);
   context.showRepairAlert = (...args) => alerts.push(args);
   context.restoreTagEditorDraftAfterFailedSave = (draft) => restoredDrafts.push(draft);
+  context.clearCoverLookupOptimisticSplit = (split) => clearedOptimisticSplits.push(split);
 
-  await context.watchSaveTask('failed-tag-task', { originalAlbum, tagEditorDraft });
+  await context.watchSaveTask('failed-tag-task', {
+    originalAlbum,
+    tagEditorDraft,
+    coverLookupOptimisticSplit,
+  });
 
   assert.deepEqual(persistedEntries, [logEntry]);
-  assert.deepEqual(restoredDrafts, [tagEditorDraft]);
+  assert.deepEqual(restoredDrafts, []);
+  assert.deepEqual(clearedOptimisticSplits, [coverLookupOptimisticSplit]);
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0][0], logEntry.error);
   assert.equal(alerts[0][1], 'error');
   assert.equal(alerts[0][2], null);
   assert.equal(alerts[0][3].logHistoryLink, true);
+
+  clearedOptimisticSplits.length = 0;
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  await context.watchSaveTask('superseded-failed-tag-task', {
+    originalAlbum,
+    tagEditorDraft,
+    tagEditMutationClaim: { generation: 1 },
+    coverLookupOptimisticSplit,
+  });
+  assert.deepEqual(clearedOptimisticSplits, [], 'an older failure cannot roll back newer cover topology');
 });
 
 test('watchSaveTask refreshes the compensated authoritative view before surfacing a failed tag edit', async () => {
@@ -6976,13 +7115,30 @@ test('problematic search always includes structured summary fields beside compac
   }];
   context.state.utility.selectedProblemFilters = [];
 
-  for (const query of ['structured match album', 'structured raw artist', '2026', 'incomplete track order']) {
+  for (const query of ['structured match album', 'structured raw artist', '2026', 'only track title']) {
     context.state.utility.searchQuery = query;
     assert.deepEqual(
       Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
       ['structured-search-album'],
     );
   }
+});
+
+test('problematic search does not treat problem reasons as artist, album, or track content', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problematicFiles = [{
+    key: 'reason-only-album',
+    name: 'Unrelated Album',
+    album_artist: 'Unrelated Performer',
+    problem_reasons: ['Album artist mismatch', 'Poor art quality'],
+  }];
+  context.state.utility.selectedProblemFilters = [];
+
+  context.state.utility.searchQuery = 'art';
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
+
+  context.state.utility.searchQuery = 'album artist mismatch';
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums()), []);
 });
 
 test('track problem navigation refreshes one stale loaded summary before selecting the exact track', async () => {
@@ -7500,13 +7656,14 @@ test('missing-album reason uses a static error AlertLabel without becoming exclu
   assert.doesNotMatch(html, /data-problem-exclusion-reason="Album not found"/);
 });
 
-test('missing album is an album-level non-excludable problem with the shared removal action', () => {
+test('missing album is an album-level non-excludable problem with shared recovery actions', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   const album = {
     key: 'transatlantic-roine-stolt-mixes',
     name: 'SMPTe - The Roine Stolt Mixes',
     album_artist: 'Transatlantic',
     inventory_status: 'missing',
+    missing_reason: 'deleted',
     missing_since: '2026-09-03T12:00:00Z',
     problem_reasons: ['Album not found'],
     album_problem_rows: [{ reason: 'Album not found', display_reason: 'Album not found', row_key: '' }],
@@ -7517,7 +7674,10 @@ test('missing album is an album-level non-excludable problem with the shared rem
   const html = context.buildDetectedProblemsHtml(album);
 
   assert.match(html, /ALBUM-LEVEL PROBLEMS[^]*Album not found/);
-  assert.match(html, /data-remove-missing-album="1"[^]*>Remove from Album Haven</);
+  assert.match(html, /The files of this album were deleted from disk\./);
+  assert.match(html, /data-rescan-missing-album="1"[^>]*data-album-key="transatlantic-roine-stolt-mixes"[^]*Re-scan/);
+  assert.match(html, /data-remove-missing-album="1"[^>]*data-album-key="transatlantic-roine-stolt-mixes"[^]*Remove from library/);
+  assert.match(html, /data-keep-missing-album="1"[^]*Keep as missing/);
   assert.doesNotMatch(html, /data-problem-exclusion-reason="Album not found"/);
   assert.doesNotMatch(html, /Exclude the problem/);
   assert.doesNotMatch(html, /data-problematic-track-path|TRACK-LEVEL PROBLEMS/);
@@ -7528,6 +7688,7 @@ test('missing album Problematic Files detail gives read-only reviewers explanato
   const html = context.buildDetectedProblemsHtml({
     key: 'transatlantic-roine-stolt-mixes',
     inventory_status: 'missing',
+    missing_reason: 'unreachable',
     missing_since: '2026-09-03T12:00:00Z',
     problem_reasons: ['Album not found'],
     album_problem_rows: [{ reason: 'Album not found', display_reason: 'Album not found', row_key: '' }],
@@ -7535,8 +7696,9 @@ test('missing album Problematic Files detail gives read-only reviewers explanato
     allowed_actions: { 'library.inventory.manage': false },
   });
 
+  assert.match(html, /The drive or network share holding this album cannot be reached\./);
   assert.match(html, /Ask an owner or administrator to remove it\./);
-  assert.doesNotMatch(html, /data-remove-missing-album|Exclude the problem/);
+  assert.doesNotMatch(html, /data-rescan-missing-album|data-remove-missing-album|Exclude the problem/);
 });
 
 test('Problematic Files accepts a path-free targeted reconciliation failure warning', () => {
@@ -8111,4 +8273,165 @@ test('watchSaveTask hydrates an open merged destination from canonical visible s
   assert.deepEqual(loadedKeys, ['canonical-source']);
   assert.equal(context.state.modalReleases[0].tracks.length, 17);
   assert.equal(context.state.modalReleases[0].preview_only, false);
+});
+
+test('Edit Tags orders untagged multi-disc files by the disc in their folder, then by file name (Kiama)', () => {
+  const context = loadHelpers();
+  const track = (folder, file) => ({ path: ['N:', 'Music', 'Kiama', '2016 - Sign Of IV', folder, file].join('/') });
+  const ordered = context.orderAlbumTracks([
+    track('cd2 (bonus)', '01. Come On Home.mp3'),
+    track('CD1', '02. Tears.mp3'),
+    track('cd2 (bonus)', '02. The Things You Do.mp3'),
+    track('CD1', '01. Cold Black Heart.mp3'),
+  ]);
+  assert.deepEqual(Array.from(ordered, (item) => item.path.split('/').slice(-2).join('/')), [
+    'CD1/01. Cold Black Heart.mp3',
+    'CD1/02. Tears.mp3',
+    'cd2 (bonus)/01. Come On Home.mp3',
+    'cd2 (bonus)/02. The Things You Do.mp3',
+  ]);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/TFK/Adam & Eve CD2/01.flac' }), 2);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/Band/Discography/01.flac' }), null);
+  assert.equal(context.getAlbumTrackDiscNumber({ path: 'D:/Music/CD3/01.flac', disc_number: '1' }), 1, 'a disc tag wins');
+});
+
+test('Problematic Files names tagged tracks with their number and untagged tracks by file name', () => {
+  const context = loadHelpers();
+  context.getFilenameFromPath = (value) => String(value || '').split(/[\/]/).pop();
+  assert.equal(
+    context.formatProblematicTrackLabel({ title: 'Bruit, silence - Bruit, repos', track_number: 1 }, { filename: '01 - Bruit.flac' }),
+    '01. Bruit, silence - Bruit, repos',
+  );
+  assert.equal(
+    context.formatProblematicTrackLabel({ title: 'Trio', track_number: null }, { path: 'C:/Music/Art Zoyd/03 - Trio.flac' }),
+    '03 - Trio.flac',
+  );
+  assert.equal(context.formatProblematicTrackLabel({}, { filename: '07 - Untitled.mp3' }), '07 - Untitled.mp3');
+});
+
+test('Problematic Files highlights only the matching track title or filename substring', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.escapeHtml = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  assert.equal(
+    context.highlightProblematicTrackLabel('03 - The Art of Noise.flac', 'art'),
+    '03 - The <mark class="utility-track-search-match">Art</mark> of Noise.flac',
+  );
+  assert.equal(
+    context.highlightProblematicTrackLabel('<Art>', 'art'),
+    '&lt;<mark class="utility-track-search-match">Art</mark>&gt;',
+  );
+  assert.equal(context.highlightProblematicTrackLabel('Track', 'artist'), 'Track');
+});
+
+test('Problematic Files keeps complete filter types while a bounded refresh is pending', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problematicFilesComplete = true;
+  context.state.utility.problematicFiles = [
+    { key: 'missing-year', problem_reasons: ['Missing year'] },
+    { key: 'poor-art', problem_reasons: ['Poor art quality'] },
+  ];
+  assert.deepEqual(Array.from(context.getProblemReasonTypes()), ['Missing year', 'Poor art quality']);
+
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.problematicFiles = [{ key: 'missing-year', problem_reasons: ['Missing year'] }];
+  assert.deepEqual(Array.from(context.getProblemReasonTypes()), ['Missing year', 'Poor art quality']);
+  const elements = {
+    problemFilterButton: { classList: { toggle() {} }, setAttribute() {} },
+    problemFilterMenu: { hidden: true, innerHTML: '' },
+  };
+  context.renderProblemFilterControls(elements);
+  assert.match(elements.problemFilterMenu.innerHTML, /Poor art quality/);
+  assert.doesNotMatch(elements.problemFilterMenu.innerHTML, /Loading more problem types/);
+});
+
+test('Problematic Files keeps a cold incomplete problem filter disabled and closed', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.completeProblemReasonTypes = [];
+  context.state.utility.problematicFiles = [{ problem_reasons: ['Missing year'] }];
+  context.state.utility.problemDropdownOpen = true;
+  const elements = {
+    problemFilterButton: { disabled: false, classList: { toggle() {} }, setAttribute() {} },
+    problemFilterMenu: { hidden: false, innerHTML: '' },
+  };
+
+  context.renderProblemFilterControls(elements);
+
+  assert.equal(elements.problemFilterButton.disabled, true);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(elements.problemFilterMenu.hidden, true);
+  assert.doesNotMatch(elements.problemFilterMenu.innerHTML, /Loading more problem types/);
+});
+
+test('Problematic Files filter uses a shared inner scroll owner so its anchor outline stays fixed', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  const menuRule = css.match(/\.utility-problem-filter-menu\s*\{([^}]*)\}/)?.[1] || '';
+  const triggerCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/trigger-anchor.css'), 'utf8');
+  const scrollRule = triggerCss.match(/\.trigger-anchor-scroll\s*\{([^}]*)\}/)?.[1] || '';
+
+  assert.match(helperSource, /<div class="trigger-anchor-scroll">\$\{optionsHtml\}<\/div>/);
+  assert.doesNotMatch(menuRule, /overflow-y:\s*auto/);
+  assert.match(scrollRule, /overflow-y:\s*auto/);
+  assert.match(scrollRule, /max-height:\s*var\(--trigger-anchor-scroll-max-height/);
+});
+
+test('track problem labels align while album problem labels stay content-sized', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  assert.match(css, /\.utility-track-problem-labels > \.utility-problem-exclusion-pill \{[^}]*inline-size: min\(100%, 16rem\);/);
+  assert.doesNotMatch(css, /\.utility-album-problem-labels > \.utility-problem-exclusion-pill[^}]*inline-size:/);
+});
+
+test('Problematic Files tag display toggle is compact and actionable in both states', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  const toggleRule = css.match(/\.utility-repair-toggle\s*\{([^}]*)\}/)?.[1] || '';
+
+  assert.match(helperSource, /showRepairedDisplay \? 'Displaying: converted tags' : 'Displaying: original tags'/);
+  assert.match(helperSource, /aria-pressed="\$\{showRepairedDisplay \? 'true' : 'false'\}"/);
+  assert.match(toggleRule, /min-height:\s*22px/);
+  assert.match(toggleRule, /padding:\s*3px 8px/);
+  assert.match(toggleRule, /font-size:\s*0\.71rem/);
+  assert.match(toggleRule, /color:\s*var\(--text\)/);
+  assert.doesNotMatch(toggleRule, /width:\s*140px/);
+  assert.doesNotMatch(css, /\.utility-repair-toggle\.is-active\s*\{/);
+});
+
+test('Problematic Files reuses Album Details Edit Tags icon', () => {
+  assert.match(
+    helperSource,
+    /ariaLabel: 'Edit Tags'[\s\S]*?iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit'[\s\S]*?'data-open-tag-editor': '1'/,
+  );
+});
+
+test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const albums = [
+    { key: 'a', problematic_track_paths: ['x.mp3'], track_paths: ['x.mp3', 'y.mp3'] },
+    { key: 'b', track_paths: ['y.mp3', 'z.mp3'] },
+    { key: 'c', problematic_track_paths: ['z.mp3'] },
+  ];
+  const context = vm.createContext({ state: { utility: { problematicFiles: albums } }, window: {}, escapeHtml: value => value });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/utility-list-builders.js'), 'utf8'), context);
+  const index = context.buildProblematicAlbumTrackPathIndex();
+  for (const trackPath of ['x.mp3', 'y.mp3', 'z.mp3', 'missing.mp3']) {
+    assert.equal(index.get(trackPath) || null, context.getProblematicAlbumForTrackPath(trackPath), trackPath);
+  }
+});
+
+test('problematic track-path index matches the per-row lookup for long Loose Tracks lists', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const albums = [
+    { key: 'a', problematic_track_paths: ['x.mp3'], track_paths: ['x.mp3', 'y.mp3'] },
+    { key: 'b', track_paths: ['y.mp3', 'z.mp3'] },
+    { key: 'c', problematic_track_paths: ['z.mp3'] },
+  ];
+  const context = vm.createContext({ state: { utility: { problematicFiles: albums } }, window: {}, escapeHtml: value => value });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime/utility-list-builders.js'), 'utf8'), context);
+  const index = context.buildProblematicAlbumTrackPathIndex();
+  for (const trackPath of ['x.mp3', 'y.mp3', 'z.mp3', 'missing.mp3']) {
+    assert.equal(index.get(trackPath) || null, context.getProblematicAlbumForTrackPath(trackPath), trackPath);
+  }
 });

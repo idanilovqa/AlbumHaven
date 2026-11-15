@@ -71,6 +71,8 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     const firstSummary = summary.items[0];
     const detail = summary.initial_detail;
     let readinessOutcome;
+    let detailReadinessOutcome;
+    let missingAlbumReadinessOutcome;
 
     await stepLogger.step('Verify populated list, automatic detail, telemetry, layout, and timing ceiling', async () => {
       expectPostgresLibraryBrowseTelemetry(summary);
@@ -93,6 +95,43 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       expect(activeItem.meta).toBe([detailSummary.artist, detail.year].filter(Boolean).join(' · '));
       readinessOutcome = evaluateTimingBudget(readyMs, READY_BUDGET);
       expect(await utilityProblematicFilesActions.readErrorToastCount()).toBe(0);
+    });
+
+    await stepLogger.step('Measure a newly selected populated detail independently', async () => {
+      const startedAt = performance.now();
+      await utilityProblematicFilesActions.selectListItemByIndex(1);
+      const selectedDetail = await utilityProblematicFilesActions.readSelectedDetailSummary();
+      detailReadinessOutcome = evaluateTimingBudget(performance.now() - startedAt, READY_BUDGET);
+      expect(selectedDetail.title, 'The selected PF detail must render its album title.').not.toBe('');
+      expect(selectedDetail.artist, 'The selected PF detail must render its artist.').not.toBe('');
+      expect(selectedDetail.problemReasons.length, 'The selected PF detail must render its problems.').toBeGreaterThan(0);
+      expectTimingBudgetOutcome(expect, detailReadinessOutcome, 'Problematic Files selected detail readiness');
+    });
+
+    await stepLogger.step('Measure Missing Albums and keep its selected row stable', async () => {
+      expect(await utilityProblematicFilesActions.readProblemFilterValues()).toContain('Album not found');
+      const startedAt = performance.now();
+      await utilityProblematicFilesActions.applySingleProblemFilter('Album not found');
+      await expect(page.locator('#utility-problematic-list [data-problematic-album-key]').first()).toBeVisible();
+      const missingSelection = await utilityProblematicFilesActions.selectListItemByIndex(0);
+      const missingDetail = await utilityProblematicFilesActions.readSelectedDetailSummary();
+      missingAlbumReadinessOutcome = evaluateTimingBudget(performance.now() - startedAt, READY_BUDGET);
+      expect(missingDetail.problemReasons).toContain('Album not found');
+      expectTimingBudgetOutcome(expect, missingAlbumReadinessOutcome, 'Problematic Files Missing Albums readiness');
+
+      const activeBefore = await utilityProblematicFilesActions.readActiveListItem();
+      expect(activeBefore.key).toBe(missingSelection.key);
+      expect(activeBefore.title).toBe(missingDetail.title);
+      await page.locator('#utility-problem-filter-button').click();
+      await expect(page.locator('#utility-problem-filter-menu')).toBeVisible();
+      await page.locator('#utility-problem-filter-button').click();
+      await expect(page.locator('#utility-problem-filter-menu')).toBeHidden();
+      expect(await utilityProblematicFilesActions.readActiveListItem()).toEqual(activeBefore);
+      expect(
+        (await utilityProblematicFilesActions.readVisibleListItems()).some((item) => item.key === activeBefore.key),
+        'The selected missing-album row must remain in the list after its detail opens.',
+      ).toBe(true);
+      await utilityProblematicFilesActions.clearProblemFilter('Album not found');
     });
 
     await problematicFilesFocusedLocalReport.recordTimingCheckpoint({
@@ -152,6 +191,10 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       readinessGraceUsed: readinessOutcome.graceUsed,
       readinessPerformanceStatus: readinessOutcome.status,
       readinessTargetMet: readinessOutcome.targetMet,
+      selectedDetailReadyMs: detailReadinessOutcome.actualMs,
+      selectedDetailReadinessPerformanceStatus: detailReadinessOutcome.status,
+      missingAlbumReadyMs: missingAlbumReadinessOutcome.actualMs,
+      missingAlbumReadinessPerformanceStatus: missingAlbumReadinessOutcome.status,
       persistenceBackend: summary.persistence_backend,
       persistenceSeam: summary.persistence_seam,
       viewDataSource: summary.view_data_source,
@@ -189,5 +232,159 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       },
     });
     expectTimingBudgetOutcome(expect, readinessOutcome, 'Problematic Files populated detail readiness');
+  });
+
+  test('Problematic Files paints its bounded first page before the complete tree and keeps the filter icon stable', async ({
+    galleryActions,
+    page,
+    settingsModalAppBarActions,
+    utilityProblematicFilesActions,
+  }) => {
+    expect(process.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP).toBe('1');
+    expect(process.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE).toBe('postgres');
+    await galleryActions.goto('/');
+
+    let completeResponseReceived = false;
+    const trackCompleteResponse = (response) => {
+      const url = new URL(response.url());
+      if (url.pathname === SUMMARY_PATHNAME && !url.searchParams.has('limit')) {
+        completeResponseReceived = true;
+      }
+    };
+    page.on('response', trackCompleteResponse);
+
+    try {
+      await settingsModalAppBarActions.prepareToOpenSettings();
+      const firstPageStartedAt = performance.now();
+      const boundedResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === SUMMARY_PATHNAME && url.searchParams.has('limit');
+      }, { timeout: 120000 });
+      const openSettings = settingsModalAppBarActions.openSettings();
+      await boundedResponse;
+      await utilityProblematicFilesActions.waitForFirstVisible({ timeout: 120000 });
+      const firstPageReadiness = evaluateTimingBudget(performance.now() - firstPageStartedAt, READY_BUDGET);
+      await expect(page.locator('#utility-problematic-list [data-problematic-album-key]').first()).toBeVisible();
+      expectTimingBudgetOutcome(expect, firstPageReadiness, 'Problematic Files first populated page readiness');
+      expect(
+        completeResponseReceived,
+        'The bounded first page must paint before the complete background tree response arrives.',
+      ).toBe(false);
+
+      const earlyFilterButton = page.locator('#utility-problem-filter-button');
+      const earlyFilterMenu = page.locator('#utility-problem-filter-menu');
+      await earlyFilterButton.click();
+      await expect(earlyFilterMenu).toBeVisible();
+      expect(
+        completeResponseReceived,
+        'The filter must open from bounded metadata before the complete response arrives.',
+      ).toBe(false);
+      const earlyOptions = earlyFilterMenu.locator('[data-problem-filter-value]');
+      expect(await earlyOptions.count(), 'The bounded response must provide multiple usable filter types.').toBeGreaterThanOrEqual(2);
+      const boundedDetail = await utilityProblematicFilesActions.readSelectedDetailSummary();
+      const normalizeReason = (reason) => {
+        const value = String(reason || '').trim();
+        if (value === 'Inconsistent year' || value.startsWith('Year mismatch')) return 'Year mismatch';
+        return value.startsWith('Incomplete track order:') ? 'Incomplete track order' : value;
+      };
+      const boundedReasons = new Set(boundedDetail.problemReasons.map(normalizeReason));
+      const earlyOptionValues = await earlyOptions.evaluateAll((options) => (
+        options.map((option) => String(option.getAttribute('data-problem-filter-value') || ''))
+      ));
+      const retainedIndex = earlyOptionValues.findIndex((value) => boundedReasons.has(value));
+      expect(retainedIndex, 'The bounded selected detail must expose one usable matching filter.').toBeGreaterThanOrEqual(0);
+      const secondIndex = retainedIndex === 0 ? 1 : 0;
+      const retainedOption = earlyOptions.nth(retainedIndex);
+      const secondOption = earlyOptions.nth(secondIndex);
+      await retainedOption.click();
+      await expect(retainedOption).toHaveAttribute('aria-selected', 'true');
+      await expect(earlyFilterMenu).toBeVisible();
+      await secondOption.click();
+      await expect(secondOption).toHaveAttribute('aria-selected', 'true');
+      await expect(earlyFilterMenu).toBeVisible();
+      await secondOption.click();
+      await expect(secondOption).toHaveAttribute('aria-selected', 'false');
+      await expect(retainedOption).toHaveAttribute('aria-selected', 'true');
+      await expect(earlyFilterMenu).toBeVisible();
+      await earlyFilterButton.click();
+      await expect(earlyFilterMenu).toBeHidden();
+      const activeBeforeComplete = await utilityProblematicFilesActions.readActiveListItem();
+
+      await openSettings;
+      await utilityProblematicFilesActions.waitForReady({ timeout: 120000, requirePopulated: true });
+      expect(await utilityProblematicFilesActions.readActiveListItem()).toEqual(activeBeforeComplete);
+      expect(
+        (await utilityProblematicFilesActions.readVisibleListItems())
+          .some((item) => item.key === activeBeforeComplete.key),
+        'The bounded selected row must remain visible when complete PF work settles.',
+      ).toBe(true);
+      await earlyFilterButton.click();
+      await expect(earlyFilterMenu).toBeVisible();
+      const settledOptions = earlyFilterMenu.locator('[data-problem-filter-value]');
+      const settledOptionValues = await settledOptions.evaluateAll((options) => (
+        options.map((option) => String(option.getAttribute('data-problem-filter-value') || ''))
+      ));
+      expect(settledOptionValues.length).toBeGreaterThanOrEqual(earlyOptionValues.length);
+      const settledRetainedIndex = settledOptionValues.indexOf(earlyOptionValues[retainedIndex]);
+      expect(settledRetainedIndex).toBeGreaterThanOrEqual(0);
+      const settledRetainedOption = settledOptions.nth(settledRetainedIndex);
+      await expect(settledRetainedOption).toHaveAttribute('aria-selected', 'true');
+      await settledRetainedOption.click();
+      await expect(settledRetainedOption).toHaveAttribute('aria-selected', 'false');
+      await earlyFilterButton.click();
+      await expect(earlyFilterMenu).toBeHidden();
+
+      const filterButton = page.locator('#utility-problem-filter-button');
+      const filterControl = filterButton.locator(
+        'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " search-field-control ")][1]',
+      );
+      const filterIcon = filterButton.locator('svg');
+      const filterMenu = page.locator('#utility-problem-filter-menu');
+      const baseline = await filterIcon.boundingBox();
+      expect(baseline, 'Expected a measurable Problematic Files filter icon.').toBeTruthy();
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await filterButton.click();
+        await expect(filterMenu).toBeVisible();
+        const openBox = await filterIcon.boundingBox();
+        expect(openBox, 'Expected the filter icon to remain measurable while open.').toBeTruthy();
+        for (const property of ['x', 'y', 'width', 'height']) {
+          expect(
+            Math.abs(openBox[property] - baseline[property]),
+            `Opening Filters must not move or resize the SVG ${property}.`,
+          ).toBeLessThanOrEqual(0.5);
+        }
+        await expect(filterButton).toHaveClass(/trigger-anchor-open/);
+        await expect(filterControl).not.toHaveClass(/trigger-anchor-open/);
+        await expect(filterMenu).toHaveClass(/trigger-anchor-surface/);
+        await expect(filterButton).toHaveAttribute('data-trigger-anchor-edge', /^(top|bottom)$/);
+        await expect(filterMenu).toHaveAttribute('data-trigger-anchor-edge', /^(top|bottom)$/);
+        const edge = await filterButton.getAttribute('data-trigger-anchor-edge');
+        expect(edge).toBe(await filterMenu.getAttribute('data-trigger-anchor-edge'));
+        const anchorBox = await filterButton.boundingBox();
+        const menuBox = await filterMenu.boundingBox();
+        expect(anchorBox, 'Expected a measurable open filter anchor.').toBeTruthy();
+        expect(menuBox, 'Expected a measurable open filter menu.').toBeTruthy();
+        const connectedGap = edge === 'bottom'
+          ? Math.abs((menuBox.y + menuBox.height) - anchorBox.y)
+          : Math.abs(menuBox.y - (anchorBox.y + anchorBox.height));
+        expect(connectedGap, 'The trigger and menu must retain a continuous connected edge.').toBeLessThanOrEqual(2);
+        expect(anchorBox.x + anchorBox.width).toBeGreaterThanOrEqual(menuBox.x);
+        expect(anchorBox.x).toBeLessThanOrEqual(menuBox.x + menuBox.width);
+
+        await filterButton.click();
+        await expect(filterMenu).toBeHidden();
+        const closedBox = await filterIcon.boundingBox();
+        expect(closedBox, 'Expected the filter icon to remain measurable after closing.').toBeTruthy();
+        for (const property of ['x', 'y', 'width', 'height']) {
+          expect(
+            Math.abs(closedBox[property] - baseline[property]),
+            `Closing Filters must restore the SVG ${property} without jitter.`,
+          ).toBeLessThanOrEqual(0.5);
+        }
+      }
+    } finally {
+      page.off('response', trackCompleteResponse);
+    }
   });
 });

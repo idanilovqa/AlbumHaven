@@ -52,6 +52,59 @@ const buttonComponentCssPath = path.join(
 const componentUrl = 'http://album-track-table-component.test/album-track-table';
 const detailsComponentUrl = 'http://album-track-table-component.test/album-details';
 
+for (const width of [390, 960]) {
+  test(`long track artist credits pan without moving the row at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await page.setContent('<div id="table"></div>');
+    await page.addStyleTag({ path: compactDataTableCssPath });
+    await page.addStyleTag({ path: albumTrackTableCssPath });
+    await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/runtime/running-line.css') });
+    await page.evaluate(() => {
+      window.escapeHtml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+      window.ButtonComponent = { renderIconSvg: () => '' };
+    });
+    for (const file of ['running-line.js', 'compact-data-table.js', 'album-track-table.js']) {
+      await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime', file) });
+    }
+    await page.evaluate(() => {
+      document.getElementById('table').innerHTML = buildAlbumTrackTableHtml({ playingAnimation: false, groups: [{ tracks: [
+        { title: 'Track with guests', secondaryArtist: 'Featured guest artist and orchestra with a very long complete credit '.repeat(5), duration: '3:42' },
+        { title: 'Short credit', secondaryArtist: 'Guest', duration: '2:10' },
+      ] }] });
+    });
+    await page.evaluate(() => syncAlbumTrackCreditMotion(document.getElementById('table')));
+    const rows = page.locator('.album-track-table__row');
+    const before = await rows.first().boundingBox();
+    const credit = page.locator('.album-track-table__secondary').first();
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'running-line-pan');
+    await credit.locator('span').evaluate(node => {
+      const animation = node.getAnimations()[0];
+      animation.pause();
+      animation.currentTime = 11000;
+    });
+    const boxes = await credit.evaluate(node => ({ outer: node.getBoundingClientRect().toJSON(), inner: node.firstElementChild.getBoundingClientRect().toJSON() }));
+    expect(boxes.inner.left).toBeLessThan(boxes.outer.left);
+    expect(boxes.inner.right).toBeCloseTo(boxes.outer.right, 0);
+    expect(await rows.first().boundingBox()).toEqual(before);
+    const short = page.locator('.album-track-table__secondary').last();
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
+    expect(await short.locator('span').evaluate(node => node.getAnimations().length)).toBe(0);
+    await short.evaluate(node => { node.style.width = '10px'; });
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'running-line-pan');
+    await short.evaluate(node => { node.style.width = ''; });
+    await expect(short.locator('span')).toHaveCSS('animation-name', 'none');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    await expect(credit).toHaveAttribute('title', /Featured guest artist/);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'running-line-pan');
+    await page.evaluate(() => disposeAlbumTrackCreditMotion(document.getElementById('table')));
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+    await page.setViewportSize({ width: width + 20, height: 720 });
+    await expect(credit.locator('span')).toHaveCSS('animation-name', 'none');
+  });
+}
+
 async function mountAlbumTrackTable(page) {
   await page.route(componentUrl, (route) => route.fulfill({
     contentType: 'text/html; charset=utf-8',
@@ -210,7 +263,7 @@ for (const width of [960, 390]) {
       });
       expect(masks.every(mask => mask === 'none')).toBe(true);
     }
-    const decoration = await frame.locator('.album-track-table__total').evaluate(element => {
+    const decoration = await frame.locator(':scope > .album-track-table__total').evaluate(element => {
       const style = getComputedStyle(element, '::before');
       return { mask: style.maskImage, pointerEvents: style.pointerEvents };
     });
@@ -219,6 +272,12 @@ for (const width of [960, 390]) {
     await expect(frame.getByRole('table')).toHaveCount(2);
     await expect(frame.locator('.compact-data-table-header')).toHaveCount(1);
     await expect(frame.getByRole('heading')).toHaveText(['Bonus Disc']);
+    const wrappedLines = await frame.locator('.album-track-table__total > div').evaluateAll(lines => lines.filter(line => {
+      const range = document.createRange();
+      range.selectNodeContents(line);
+      return new Set(Array.from(range.getClientRects(), rect => Math.round(rect.top))).size !== 1;
+    }).length);
+    expect(wrappedLines, 'every duration stays on its label line').toBe(0);
     await frame.screenshot({ path: testInfo.outputPath('duration-summaries.png') });
   });
 }
@@ -333,17 +392,17 @@ test('playing album rows use the player accent color', async ({ page }) => {
   });
   await expect(table.locator('.album-track-table__row')).toHaveCSS('--album-track-accent', '#55c7ff');
 });
-test('ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
+test('Album Details header actions show no edge on hover while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
 
   const action = page.getByRole('button', { name: 'Edit album tags', exact: true });
   const restingBox = await action.boundingBox();
   expect(restingBox).not.toBeNull();
+  await expect(action).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
 
   await action.hover();
-  await expect(action).toHaveCSS('outline-width', '1px');
-  await expect(action).toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
-  await expect(action).toHaveCSS('border-color', 'rgb(82, 97, 114)');
+  await expect(action).toHaveCSS('outline-style', 'none');
+  await expect(action).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
   expect(await action.boundingBox()).toEqual(restingBox);
 
   await page.mouse.move(0, 0);
@@ -473,3 +532,42 @@ test('decoded Album Details artwork stays square and visible while only tracks s
     await page.unroute('http://album-track-table-component.test/artwork');
   }
 });
+
+for (const width of [340, 760]) {
+  test(`Loose Tracks keep #, Track and Length in view and show File path only with room in a ${width}px table`, async ({ page }) => {
+    await mountAlbumDetailsComponents(page);
+    await page.setViewportSize({ width: 1280, height: 844 });
+    await page.locator('#table-host').evaluate((host, hostWidth) => {
+      host.style.width = `${hostWidth}px`;
+      host.innerHTML = buildAlbumTrackTableHtml({
+        showPath: true,
+        forceGroupLabels: true,
+        collapsibleGroups: true,
+        ariaLabel: 'Loose tracks',
+        groups: [{ discLabel: 'Non-album rarity', tracks: [{
+          path: 'D:/Music/A very long artist folder name/A very long album folder name/01 - A very long loose track title.flac',
+          displayPath: 'A very long artist folder name/A very long album folder name/01 - A very long loose track title.flac',
+          title: 'A very long loose track title that should truncate', trackNumber: 1, duration: '12:34',
+        }] }],
+        totalLength: '12m 34s',
+      });
+    }, width);
+    const table = page.getByRole('table', { name: /Loose tracks/ });
+    const row = table.locator('.album-track-table__row').first();
+    const tableBox = await table.boundingBox();
+    for (const column of ['number', 'title', 'duration']) {
+      const cell = row.locator(`[data-cdt-column="${column}"]`);
+      await expect(cell).toBeVisible();
+      const box = await cell.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(tableBox.x - 0.5);
+      expect(box.x + box.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 0.5);
+    }
+    await expect(row.locator('[data-cdt-column="duration"]')).toHaveText('12:34');
+    await expect(table.locator('[data-cdt-column="problem"]')).toHaveCount(0);
+    const pathCell = row.locator('[data-cdt-column="path"]');
+    if (width < 520) await expect(pathCell).toBeHidden();
+    else await expect(pathCell).toBeVisible();
+    const scroll = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(scroll).toBeLessThanOrEqual(0);
+  });
+}

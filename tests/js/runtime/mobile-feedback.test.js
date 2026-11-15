@@ -810,9 +810,9 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
   context.URLSearchParams = URLSearchParams;
   const descriptor = { kind: 'album', albumKey: 'one' };
   for (const [view, expected] of [
-    [{ surface: { active: 'albums' } }, '/?surface=albums'],
+    [{ surface: { active: 'albums' } }, '/albums'],
     [{ surface: { active: 'home' } }, '/'],
-    [{ surface: { active: 'albums' }, all_artists_active: true }, '/?surface=albums&all_artists=1'],
+    [{ surface: { active: 'albums' }, all_artists_active: true }, '/albums?all_artists=1'],
   ]) {
     const url = context.buildUrl(view);
     assert.equal(url, expected);
@@ -823,6 +823,91 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
   }
   assert.equal(context.resolveMobileParentViewUrl(descriptor, null,
     { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
+});
+
+test('single-page gallery return retires only the requested topmost mobile page', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js');
+  context.cleanupMobilePage = descriptor => calls.push(`cleanup:${descriptor.kind}`);
+  context.syncMobilePageShell = () => calls.push('sync-shell');
+  context.writeMobilePageHistory = mode => calls.push(`history:${mode}`);
+  context.syncMobileHome = () => calls.push('sync-home');
+  vm.runInContext("mobilePageState.pages.push({ kind: 'utilities' }, { kind: 'non-album' })", context);
+
+  assert.equal(context.returnMobilePageToGallery('non-album'), true);
+  assert.deepEqual(calls, ['cleanup:non-album', 'sync-shell', 'history:replace', 'sync-home']);
+  assert.equal(vm.runInContext("mobilePageState.pages.at(-1).kind", context), 'utilities');
+
+  calls.length = 0;
+  assert.equal(context.returnMobilePageToGallery('non-album'), false);
+  assert.deepEqual(calls, []);
+  assert.equal(vm.runInContext("mobilePageState.pages.at(-1).kind", context), 'utilities');
+});
+
+test('desktop Loose Tracks owns a reloadable URL with Back and Forward history', () => {
+  const location = { href: 'https://example.test/?surface=albums' };
+  let pushedUrl = '';
+  const history = {
+    state: {},
+    pushState(snapshot, _title, url) {
+      this.state = snapshot;
+      pushedUrl = String(url);
+      location.href = new URL(url, location.href).href;
+    },
+  };
+  const nonAlbum = {};
+  const restored = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: { innerWidth: 1180, location, history },
+    document: { getElementById: id => id === 'non-album-modal' ? nonAlbum : null },
+    state: { view: { surface: { active: 'albums' } }, ui: {}, status: {} },
+    buildUrl: () => '/?surface=albums',
+    mobileGalleryParentIsSettled: () => false,
+    captureMobileParentGalleryAnchorArtist: () => '',
+    closeArtistsDrawer() {},
+    closeGalleryMainSurface() {},
+  });
+  context.syncMobilePageShell = () => {};
+  context.cleanupMobilePage = descriptor => restored.push(`closed:${descriptor.kind}`);
+  context.restoreMobileGalleryParent = () => {};
+  context.openNonAlbumModal = options => {
+    restored.push(`non-album:${options.libraryWide}`);
+    context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: options.libraryWide });
+  };
+
+  assert.equal(context.presentMobilePage({ kind: 'non-album', albumKey: '', libraryWide: true }), true);
+  assert.equal(new URL(pushedUrl).searchParams.get('mobile_page'), null);
+  assert.equal(new URL(pushedUrl).searchParams.get('loose_tracks'), null);
+  assert.equal(new URL(pushedUrl).pathname, '/loose-tracks');
+  assert.equal(new URL(pushedUrl).searchParams.has('surface'), false);
+  const forwardState = history.state;
+
+  history.state = {};
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(restored, ['closed:non-album']);
+
+  history.state = forwardState;
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(restored, ['closed:non-album', 'non-album:true']);
+});
+
+test('desktop copied Loose Tracks URL restores through the existing page route', () => {
+  const restored = [];
+  const context = load('mobile-navigation.js', {
+    URL,
+    window: {
+      innerWidth: 1180,
+      location: { href: 'https://example.test/loose-tracks' },
+    },
+    openNonAlbumModal: options => restored.push(`non-album:${options.libraryWide}`),
+    getMobileLoopPage: () => null,
+  });
+  context.writeMobilePageHistory = mode => restored.push(mode);
+
+  context.restoreMobilePageFromUrl();
+
+  assert.deepEqual(restored, ['non-album:true', 'replace']);
 });
 
 test('mobile parent restoration retains the transient root gallery anchor outside the canonical URL', () => {
@@ -1173,13 +1258,13 @@ test('mobile gallery cards do not move when touch hover or focus changes during 
   );
 });
 
-test('mobile album Cover Lookup keeps Manual Search visible without desktop composer controls', () => {
+test('mobile album Cover Lookup keeps the full image extractor visible', () => {
   const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
   assert.doesNotMatch(
     css,
     /\.is-mobile-page\s+\.cover-lookup-manual-add[^}]*display:\s*none/,
   );
-  assert.match(
+  assert.doesNotMatch(
     css,
     /\.is-mobile-page\s+:is\(\.cover-lookup-manual-row,\s*\.cover-lookup-manual-actions\)\s*\{[^}]*display:\s*none/,
   );
@@ -1198,4 +1283,174 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /white-space:\s*nowrap/);
   assert.match(rule, /overflow:\s*hidden/);
   assert.match(rule, /text-overflow:\s*ellipsis/);
+});
+
+test('Home names the account and drops all previous artist metadata', () => {
+  // Owner (11-09): going back to Home kept the "i" beside the account name, and it opened the last searched band.
+  const removed = [];
+  const info = { remove: () => removed.push('info') };
+  const name = { textContent: 'Folkstone' };
+  const summary = { textContent: '2 albums' };
+  const metadata = { hidden: false, innerHTML: '<span>singer-songwriter</span>' };
+  const bar = {
+    parentElement: null,
+    before() {},
+    hidden: true,
+    querySelector: (selector) => ({
+      '[data-gallery-context-name]': name,
+      '[data-gallery-context-summary]': summary,
+      '[data-gallery-context-metadata]': metadata,
+      '[data-artist-info-trigger]': info,
+      '.gallery-bar__home-tabs': { hidden: false },
+      '.gallery-bar__actions': { hidden: false },
+    })[selector] || null,
+  };
+  const host = { dataset: { accountName: 'Rendref', homeMounted: 'true' }, hidden: true, prepend(node) { node.parentElement = host; } };
+  const context = load('mobile-home.js', {
+    window: { innerWidth: 390, location: { href: 'https://example.test/' } },
+    URL,
+    state: { view: { query: '', selected_artist: '' }, ui: {} },
+    usesMobilePageLayout: () => true,
+    showMobileGalleryPinchHint() {},
+    document: {
+      getElementById: (id) => (id === 'mobile-home' ? host : null),
+      querySelector: (selector) => (selector === '[data-gallery-bar-instance="gallery"]' ? bar : null),
+      createComment: () => ({ after() {}, parentNode: null }),
+    },
+  });
+  context.syncMobileHome();
+  assert.equal(name.textContent, 'Rendref');
+  assert.equal(summary.textContent, '');
+  assert.equal(metadata.hidden, true);
+  assert.equal(metadata.innerHTML, '');
+  assert.deepEqual(removed, ['info']);
+});
+
+test('Loose Tracks reapplies surface and navigation ownership across the mobile breakpoint', () => {
+  function node(attributes = {}) {
+    const classes = new Set();
+    return {
+      hidden: false,
+      inert: false,
+      dataset: {},
+      slot: 'desktop',
+      attributes: { ...attributes },
+      classList: {
+        contains: name => classes.has(name),
+        add: name => classes.add(name),
+        remove: name => classes.delete(name),
+        toggle(name, force) {
+          if (force) classes.add(name);
+          else classes.delete(name);
+        },
+      },
+      getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      removeAttribute(name) { delete this.attributes[name]; },
+      appendChild() {},
+    };
+  }
+
+  const ids = [
+    'shell-main-surface', 'mobile-page-header', 'mobile-page-outlet', 'mobile-back-button',
+    'mobile-library-button', 'mobile-page-title', 'mobile-page-summary',
+    'mobile-settings-actions', 'mobile-settings-button',
+  ];
+  const nodes = Object.fromEntries(ids.map(id => [id, node()]));
+  const surface = nodes['non-album-modal'] = node();
+  const dialog = node({ role: 'dialog', 'aria-modal': 'true' });
+  surface.querySelector = selector => selector === '.non-album-modal-dialog' ? dialog : null;
+  const originalParent = node();
+  surface.parentElement = originalParent;
+  nodes['mobile-page-outlet'].appendChild = element => {
+    element.parentElement = nodes['mobile-page-outlet'];
+    element.slot = 'mobile';
+  };
+  nodes['shell-main-surface'].appendChild = element => {
+    element.parentElement = nodes['shell-main-surface'];
+    element.slot = 'main';
+  };
+  const body = node();
+  const presentationCalls = [];
+  const context = load('mobile-navigation.js', {
+    document: {
+      body,
+      title: 'Album Haven',
+      getElementById: id => nodes[id] || null,
+      querySelectorAll: () => [],
+    },
+    window: { innerWidth: 390 },
+    originalParent,
+    setNonAlbumPagePresentation: (element, open, navigationActive = open) => {
+      presentationCalls.push([element, open, navigationActive]);
+      const page = open && context.window.innerWidth > 900 && !element.classList.contains('is-mobile-page');
+      element.classList.toggle('non-album-modal--page', page);
+      if (page) nodes['shell-main-surface'].appendChild(element);
+      if (page) {
+        dialog.setAttribute('role', 'region');
+        dialog.removeAttribute('aria-modal');
+      } else if (!element.classList.contains('is-mobile-page')) {
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+      }
+    },
+  });
+  context.syncMobileAlbumHeader = () => {};
+  context.syncMobileLoopHeader = () => {};
+  vm.runInContext(`
+    mobilePageState.pages.push({ kind: 'non-album', title: 'Loose Tracks', libraryWide: true });
+    mobilePageState.originals.set('non-album', {
+      dialog: document.getElementById('non-album-modal').querySelector('.non-album-modal-dialog'),
+      role: 'dialog', modal: 'true', label: null,
+      placeholder: { before(element) { element.parentElement = originalParent; element.slot = 'desktop'; } },
+    });
+  `, context);
+
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('is-mobile-page'), true);
+  assert.equal(surface.classList.contains('non-album-modal--page'), false);
+  assert.equal(surface.parentElement, nodes['mobile-page-outlet']);
+  assert.equal(surface.slot, 'mobile');
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), null);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
+
+  context.window.innerWidth = 1440;
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('is-mobile-page'), false);
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.equal(surface.parentElement, nodes['shell-main-surface']);
+  assert.equal(surface.slot, 'main');
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), null);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
+
+  context.window.innerWidth = 390;
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('is-mobile-page'), true);
+  assert.equal(surface.classList.contains('non-album-modal--page'), false);
+  assert.equal(surface.parentElement, nodes['mobile-page-outlet']);
+  assert.equal(dialog.getAttribute('role'), 'region');
+  assert.equal(dialog.getAttribute('aria-modal'), null);
+
+  context.window.innerWidth = 1440;
+  vm.runInContext("mobilePageState.pages.push({ kind: 'album', title: 'Child album' })", context);
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.equal(surface.parentElement, nodes['shell-main-surface']);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, false]);
+
+  vm.runInContext('mobilePageState.pages.pop()', context);
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
+
+  vm.runInContext(`
+    mobilePageState.pages.length = 0;
+    mobilePageState.pages.push({ kind: 'non-album', title: 'Artist Loose Tracks', libraryWide: false });
+  `, context);
+  context.syncMobilePageShell();
+  assert.equal(surface.classList.contains('non-album-modal--page'), true);
+  assert.equal(surface.parentElement, nodes['shell-main-surface']);
+  assert.deepEqual(presentationCalls.at(-1), [surface, true, true]);
 });

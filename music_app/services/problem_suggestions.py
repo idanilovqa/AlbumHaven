@@ -9,6 +9,9 @@ from datetime import date
 
 from music_app.routes.api_rules_helpers import looks_like_collaboration_name
 from music_app.services.edition_title_normalization import reviewable_edition_title
+from music_app.services.metadata import (
+    derive_readable_artist_credits, entry_with_original_tag_text, text_correction_reason,
+)
 from music_app.services.utils import (
     _repair_text_candidates, _text_readability_score,
     _is_plausible_utf16_swap_repair, looks_like_mojibake,
@@ -89,10 +92,23 @@ def build_problem_suggestions(path, entry, *, alias_to_canonical=None, verified_
                           "original": original, "corrected": corrected, "updates": updates,
                           "source_revision": revision, "reason": reason})
 
+    # Proposals describe the tags as written, so a stored entry shown corrected
+    # and a fresh read of the same file propose the same edit.
+    entry = entry_with_original_tag_text(entry)
+    corrections = derive_readable_artist_credits(
+        {"album_artist": entry.get("album_artist"), "artist": entry.get("artist")}
+    )["text_corrections"] or {}
     aliases = alias_to_canonical or {}
     for field in ("album", "album_artist", "artist", "title"):
         original = _text(entry.get(field))
         if not original:
+            continue
+        if field in corrections:
+            corrected = corrections[field]["corrected"]
+            add(field, {field: corrected}, text_correction_reason(field, corrections[field]["kind"]),
+                ["text-correction", original, corrected])
+            # Library Data Corrections "Write in tags" applies exactly these.
+            proposals[-1]["display_correction"] = True
             continue
         canonical = _text(aliases.get(original)) if field in {"artist", "album_artist"} else ""
         if canonical and canonical != original and not any(looks_like_collaboration_name(value) for value in (original, canonical)):

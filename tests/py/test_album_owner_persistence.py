@@ -43,7 +43,6 @@ def _published_rows(
     track_artists: tuple[str, ...],
     is_compilation: bool | None = None,
     persisted_album_artists: tuple[str | None, ...] | None = None,
-    preserve_tagged_compilation_owner: bool = False,
 ):
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     file_cache = _file_cache(
@@ -68,7 +67,6 @@ def _published_rows(
     return albums[0], scan_cache_persistence._inventory_rows_from_albums(
         file_cache,
         albums,
-        preserve_tagged_compilation_owner=preserve_tagged_compilation_owner,
     )
 
 
@@ -543,7 +541,6 @@ def test_targeted_various_artists_release_keeps_two_constituent_display_credit(
         album="Songs From Northern Wasteland",
         album_artist="Various Artists",
         track_artists=("Jordsjø", "Breidablik"),
-        preserve_tagged_compilation_owner=True,
     )
     artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
 
@@ -568,7 +565,6 @@ def test_targeted_various_artists_tag_does_not_replace_structural_split_owner(
         album_artist="Solo Voice",
         track_artists=("Solo Voice feat. Featured Voice",),
         persisted_album_artists=("Various Artists",),
-        preserve_tagged_compilation_owner=True,
     )
     _artist_rows, album_rows, featured_rows, _track_rows, _track_file_rows = rows
 
@@ -593,7 +589,6 @@ def test_targeted_various_artists_release_keeps_every_track_artist_visible(
         album_artist="Various Artists",
         track_artists=("Belle Stars", "Watcher Compilation Performer"),
         is_compilation=True,
-        preserve_tagged_compilation_owner=True,
     )
     artist_rows, album_rows, featured_rows, track_rows, _track_file_rows = rows
 
@@ -638,3 +633,81 @@ def test_structured_shared_release_does_not_persist_composite_owner(monkeypatch)
     }
     assert {row["artist_key"] for row in track_rows} == {"jordsjø", "breidablik"}
     assert {row["artist_key"] for row in artist_rows} == {"jordsjø", "breidablik"}
+
+
+def test_full_publication_keeps_named_owner_despite_composite_family_display(monkeypatch):
+    from music_app.services.library_browse_postgres import _album_artist_relationship
+    monkeypatch.setattr(scan_cache_persistence, 'Jsonb', None)
+    cache = _file_cache(album='Non-Compilation Cross-Credits', album_artist='Control Signal Lead',
+                        track_artists=('Control Signal Lead', 'Control Signal Partner'), is_compilation=False)
+    albums = build_albums_from_file_cache(cache)
+    assert albums[0].album_artist == 'Control Signal Lead / Control Signal Partner'
+    assert albums[0].artists == ['Control Signal Lead', 'Control Signal Partner']
+    _, album_rows, featured, _, _ = scan_cache_persistence._inventory_rows_from_albums(cache, albums)
+    row = album_rows[0]
+    assert row['artist_key'] == 'control signal lead'
+    assert row['metadata']['album_artist'] == 'Control Signal Lead'
+    assert row['metadata']['is_split_album'] is False
+    assert row['album_key'].startswith('control signal lead::')
+    assert ('control signal partner', 'featured_member') in {(r['artist_key'], r['featured_kind']) for r in featured}
+    assert _album_artist_relationship([{'album_metadata': row['metadata'], 'artist_name': 'Control Signal Partner',
+                                       'featured_kind': 'featured_member'}]) == 'featured'
+    assert {entry['album_artist'] for entry in cache.values()} == {'Control Signal Lead'}
+
+
+@pytest.mark.parametrize('physical_compilation', ['missing', None, False, True])
+@pytest.mark.parametrize('cached_compilation', [None, False, True])
+def test_single_performer_various_artist_owner_agrees_between_save_and_rescan(
+    monkeypatch, physical_compilation, cached_compilation,
+):
+    monkeypatch.setattr(scan_cache_persistence, 'Jsonb', None)
+    cache = _file_cache(album='Solo Split', album_artist='Various Artists',
+                        track_artists=('Solo Voice',), is_compilation=cached_compilation)
+    if physical_compilation != 'missing':
+        for entry in cache.values():
+            entry['compilation_tag'] = physical_compilation
+    original = {path: dict(entry) for path, entry in cache.items()}
+    expected = ('Various Artists' if physical_compilation is True or
+                (physical_compilation == 'missing' and cached_compilation is True) else 'Solo Voice')
+    rescanned = build_albums_from_file_cache(cache)[0]
+    saved = scan_cache_persistence._structural_destination_album_projection(
+        build_albums_from_file_cache, cache, frozenset({'album'}))
+    assert rescanned.album_artist == expected
+    assert saved.album_artist == expected
+    assert saved.key == rescanned.key
+    _, rows, credits, _, _ = scan_cache_persistence._inventory_rows_from_albums(cache, [rescanned])
+    assert rows[0]['metadata']['album_artist'] == expected
+    if expected == 'Solo Voice':
+        assert rows[0]['artist_key'] == 'solo voice'
+        assert ('solo voice', 'owner') in {(r['artist_key'], r['featured_kind']) for r in credits}
+    assert cache == original, 'Logical ownership must not rewrite physical album-artist credits'
+
+
+@pytest.mark.parametrize('structured_artists', [[], ['', None]])
+@pytest.mark.parametrize('tagged_owner,performers,expected', [
+    ('Various Artists', ('Solo Voice',), 'Solo Voice'),
+    ('Control Lead', ('Control Lead','Control Partner'), 'Control Lead / Control Partner'),
+])
+def test_empty_structured_artist_list_keeps_primary_track_credit(structured_artists,tagged_owner,performers,expected):
+    cache = _file_cache(album='Empty Parsed Credits',album_artist=tagged_owner,
+                        track_artists=performers,is_compilation=False)
+    for entry in cache.values():
+        entry.update(artists=structured_artists,compilation_tag=None)
+    album = build_albums_from_file_cache(cache)[0]
+    assert album.album_artist == expected
+    assert album.artists == list(performers)
+
+
+@pytest.mark.parametrize('physical_compilation', [None, False, True])
+@pytest.mark.parametrize('cached_compilation', [False, True])
+def test_two_performer_va_split_respects_physical_compilation_evidence(monkeypatch,physical_compilation,cached_compilation):
+    monkeypatch.setattr(scan_cache_persistence,'Jsonb',None)
+    cache = _file_cache(album='Two Main Artists',album_artist='Various Artists',
+                        track_artists=('Jordsjø','Breidablik'),is_compilation=cached_compilation)
+    for entry in cache.values():
+        entry.update(compilation_tag=physical_compilation,artists=[])
+    album = build_albums_from_file_cache(cache)[0]
+    _, rows, _, _, _ = scan_cache_persistence._inventory_rows_from_albums(cache,[album])
+    expected = 'Various Artists' if physical_compilation is True else 'Jordsjø / Breidablik'
+    assert rows[0]['metadata']['album_artist'] == expected
+    assert rows[0]['metadata']['is_split_album'] is (physical_compilation is not True)

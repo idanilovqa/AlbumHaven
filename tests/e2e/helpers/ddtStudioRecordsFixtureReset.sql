@@ -570,10 +570,9 @@ updated_library as (
       jsonb_set(
         coalesce(library.libraries.metadata, '{}'::jsonb),
         '{scan_cache}',
-        coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb)
-          - 'relation_projection'
-          - 'relation_views'
-          - 'relations_last_built',
+        -- Retain the proven baseline; normal reset writes journal the changes
+        -- that startup must publish before the next edit.
+        coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb),
         true
       ),
       '{inventory_mutation_revision}',

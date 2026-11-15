@@ -64,10 +64,12 @@ def is_disc_like_folder(path: Path) -> bool:
     return bool(_ALBUM_DISC_MARKER_RE.search(path.name or ""))
 
 
-def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[str]) -> Path:
+def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[str], *, cancel_requested=None) -> Path:
     resolved_album_root = album_root.resolve(strict=False)
     represented_roots: dict[str, Path] = {}
     for raw_path in track_paths:
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Local cover context resolution cancelled")
         if not str(raw_path or "").strip():
             continue
         track_root = Path(str(raw_path)).resolve(strict=False).parent
@@ -82,12 +84,15 @@ def restrict_album_root_to_represented_disc(album_root: Path, track_paths: set[s
     ):
         return resolved_album_root
     try:
-        has_unrepresented_disc_sibling = any(
-            child.is_dir()
-            and is_disc_like_folder(child)
-            and child.resolve(strict=False) != track_root
-            for child in resolved_album_root.iterdir()
-        )
+        has_unrepresented_disc_sibling = False
+        for child in resolved_album_root.iterdir():
+            if cancel_requested is not None and cancel_requested():
+                raise InterruptedError("Local cover context resolution cancelled")
+            if child.is_dir() and is_disc_like_folder(child) and child.resolve(strict=False) != track_root:
+                has_unrepresented_disc_sibling = True
+                break
+    except InterruptedError:
+        raise
     except OSError:
         return track_root
     return track_root if has_unrepresented_disc_sibling else resolved_album_root
@@ -105,6 +110,8 @@ def _is_explicit_release_part_layout(album_root: Path, paths: list[Path]) -> boo
 def resolve_album_root_from_track_paths(
     config: dict[str, object],
     track_paths: set[str],
+    *,
+    cancel_requested=None,
 ) -> Path | None:
     configured_roots = get_library_roots(config)
     configured_root_paths = [
@@ -115,6 +122,8 @@ def resolve_album_root_from_track_paths(
     resolved_dirs: list[Path] = []
     has_existing_track = False
     for raw_path in track_paths:
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Local cover context resolution cancelled")
         raw_text = str(raw_path or "")
         if not raw_text:
             continue
@@ -170,7 +179,7 @@ def resolve_album_root_from_track_paths(
             parent_config, parent_root = parent_roots[0]
             parent_depth = len(album_root.parent.relative_to(parent_root).parts)
             if parent_depth == _minimum_album_folder_depth(parent_config):
-                album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths)
+                album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths, cancel_requested=cancel_requested)
     if not _is_valid_album_root(
         config,
         album_root,
@@ -203,6 +212,14 @@ def resolve_album_write_root_from_track_paths(
     album_root = resolve_album_root_from_track_paths(config, track_paths)
     if album_root is not None or len(track_paths) < 2:
         return album_root
+    # Owner (11-09): part folders with any name ("Часть 1".."Часть 4") under one album folder: that shared folder
+    # is the album folder, as Cover Look Up already lists it, so the art beside the parts can be saved.
+    folders = {Path(str(path)).resolve(strict=False).parent for path in track_paths}
+    parents = {folder.parent for folder in folders}
+    if len(folders) > 1 and len(parents) == 1:
+        shared = next(iter(parents))
+        if _is_valid_album_root(config, shared, enforce_layout_depth=True):
+            return shared
     contexts = [
         resolve_album_context(config, {"tracks": [{"path": path}]})
         for path in sorted(track_paths)
@@ -272,6 +289,39 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
+def _is_shared_disc_parent_image(config: dict[str, object], image: Path, disc_root: Path) -> bool:
+    """UI-2 (owner): art beside the disc folders (Album/cover.jpg next to CD1..CD4) belongs to every disc.
+
+    Cover Look Up lists it for an album that holds only some of those discs, so Save accepts it too. Only
+    images directly in that shared album folder qualify (at album depth for its library layout), never a
+    sibling disc's art or an artist folder's."""
+    shared = disc_root.parent
+    return (
+        is_disc_like_folder(disc_root)
+        and image.parent == shared
+        and _is_valid_album_root(config, shared, enforce_layout_depth=True)
+    )
+
+
+def _is_in_album_track_folder(config: dict[str, object], image: Path, track_paths: set[str]) -> bool:
+    """Owner (11-09): an image Cover Look Up shows for the album can be used. An album whose tracks span several
+    folders (two editions grouped as one album) lists the art of each, so art in any folder holding the album's
+    own tracks qualifies, as does art beside its disc folders; always inside the configured library roots."""
+    library_roots = tuple(iter_library_root_paths(config))
+    for raw_path in track_paths:
+        if not str(raw_path or "").strip():
+            continue
+        folder = Path(str(raw_path)).resolve(strict=False).parent
+        if not any(_is_path_within(folder, root) for root in library_roots):
+            continue
+        if is_disc_like_folder(folder):
+            if _is_path_within(image, folder) or _is_shared_disc_parent_image(config, image, folder):
+                return True
+        elif _is_path_within(image, folder) and _is_valid_album_root(config, folder, enforce_layout_depth=True):
+            return True
+    return False
+
+
 def validate_local_cover_source(
     config: dict[str, object],
     album_root: Path,
@@ -287,10 +337,10 @@ def validate_local_cover_source(
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
-    try:
-        resolved.relative_to(resolved_album_root)
-    except Exception as exc:
-        raise ValueError("Selected image is outside the album folder") from exc
+    if not (_is_path_within(resolved, resolved_album_root)
+            or _is_shared_disc_parent_image(config, resolved, resolved_album_root)
+            or _is_in_album_track_folder(config, resolved, track_paths or set())):
+        raise ValueError("Selected image is outside the album folder")
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
     if is_managed_preview_path(resolved):
@@ -312,20 +362,17 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
         raw_bytes = base64.b64decode(encoded, validate=True)
     except Exception as exc:
         raise ValueError("Clipboard image data could not be decoded.") from exc
-    target = album_root / "cover.jpg"
-    with suppress_library_watch_events((target,)):
-        if Image is None:
-            if mime_type != "image/jpeg":
-                raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-            target.write_bytes(raw_bytes)
-            return target
-        try:
-            with Image.open(io.BytesIO(raw_bytes)) as img:
-                converted = img.convert("RGB")
-                converted.save(target, format="JPEG", quality=95)
-        except Exception as exc:
-            raise ValueError("Clipboard image could not be processed.") from exc
-    return target
+    if Image is None:
+        if mime_type != "image/jpeg":
+            raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
+        target = album_root / "cover.jpg"
+        reserve_existing_cover_variant(album_root, raw_bytes)
+        _atomic_replace_file_bytes(target, raw_bytes)
+        return target
+    saved = write_remote_cover_bytes_as_authoritative_cover(album_root, raw_bytes)
+    if saved is None:
+        raise ValueError("Clipboard image could not be processed.")
+    return saved
 
 
 def decode_image_bytes(raw_bytes: bytes) -> tuple[object, int, int] | None:
@@ -515,6 +562,7 @@ def begin_local_image_promotion(
                 else None
             ),
         )
+        promotion.reserve_artifact = reserve_existing_cover_variant(album_root, raw_bytes)
         _atomic_replace_file_bytes(target, raw_bytes)
     except Exception:
         if "promotion" in locals():

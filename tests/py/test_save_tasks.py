@@ -1488,8 +1488,10 @@ def test_structural_tag_edit_schedules_stale_projection_rebuild_after_commit(tmp
     assert "warnings" not in terminal_task
 
 
+@pytest.mark.parametrize("multiple", [False, True])
 def test_structural_year_edit_publishes_committed_separate_release_key_before_rebuild(
     tmp_path,
+    multiple,
 ):
     task_id = create_save_task("edit-tags")
     state = {
@@ -1505,6 +1507,8 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
     }
     rebuilt_keys: list[set[str]] = []
     release_key = "year split artist::year split album"
+    expected_keys = {release_key, "another::year split"} if multiple else {release_key}
+    lookup_paths = []
 
     def rebuild_with_committed_release_key(
         current_state,
@@ -1513,7 +1517,7 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
         _paths,
         separate_release_keys,
     ):
-        assert current_state["separate_release_keys"] == {release_key}
+        assert current_state["separate_release_keys"] == expected_keys
         rebuilt_keys.append(set(separate_release_keys))
 
     finalize_structural_tag_edit_save_task(
@@ -1524,11 +1528,12 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
         rebuild_affected_albums_in_state=rebuild_with_committed_release_key,
         persist_structural_tag_edit=lambda **_kwargs: {
             "album_rows_updated": 1,
-            "separate_release_key": release_key,
+            **({"separate_release_keys": sorted(expected_keys), "affected_track_paths": ["remainder.mp3"]}
+               if multiple else {"separate_release_key": release_key}),
         },
         append_log_history=lambda *_args, **_kwargs: None,
         log_app_event=lambda *_args, **_kwargs: None,
-        find_albums_by_track_paths=lambda _paths: [],
+        find_albums_by_track_paths=lambda paths: lookup_paths.append(set(paths)) or [],
         find_problematic_album_by_track_paths=lambda _paths: None,
         updated_file_cache={
             "track-1.mp3": {
@@ -1553,8 +1558,9 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
     )
 
     assert save_task_result(task_id)["status"] == "completed"
-    assert state["separate_release_keys"] == {release_key}
-    assert rebuilt_keys == [{release_key}]
+    assert state["separate_release_keys"] == expected_keys
+    assert rebuilt_keys == [expected_keys]
+    assert lookup_paths == [{"track-1.mp3", "remainder.mp3"} if multiple else {"track-1.mp3"}]
 
 
 def test_structural_tag_edit_runtime_refresh_preserves_cover_selected_after_commit(

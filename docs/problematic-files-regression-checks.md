@@ -13,17 +13,18 @@ SQL tests skip without it; a skipped test does not satisfy this gate.
 
 ```powershell
 python -m pytest tests/py/test_library_browse_postgres.py tests/py/test_api_read_asgi_routes.py -k problematic -q
-python -m pytest tests/py/test_multi_root_duplicates.py tests/py/test_problematic_albums.py tests/py/test_problematic_detail_identity.py tests/py/test_problematic_physical_files_postgres.py tests/py/test_problematic_file_projection_migration_postgres.py -q
+python -m pytest tests/py/test_multi_root_duplicates.py tests/py/test_problematic_albums.py tests/py/test_problematic_detail_identity.py tests/py/test_problematic_physical_files_postgres.py tests/py/test_problematic_file_projection_migration_postgres.py tests/py/test_problematic_files_search_postgres.py -q
 ```
 
-Check bounded candidate hydration, one read snapshot, compact summary/detail
+Check bounded candidate hydration, search reaching albums beyond the first page
+without the complete list, one read snapshot, compact summary/detail
 separation, cache misses, single-flight invalidation, and indexed physical-folder
 reads. Keep real SQL EXPLAIN checks; mocked row fixtures cannot prove query cost.
 
 ## JavaScript and components
 
 ```powershell
-node --test --test-concurrency=1 tests/js/runtime/utility-problematic-load-diagnostics.test.js tests/js/runtime/utility-problematic-tab.test.js tests/js/runtime/problematic-files-virtual-list.test.js tests/js/runtime/utility-problematic-focused-track-render.test.js tests/js/runtime/problem-exclusion-mutations.test.js tests/js/problematic-payload-evidence.test.js tests/js/performance-change-impact.test.js tests/js/e2e-performance-helper-guards.test.js
+node --test --test-concurrency=1 tests/js/runtime/utility-problematic-load-diagnostics.test.js tests/js/runtime/utility-problematic-tab.test.js tests/js/runtime/problematic-files-virtual-list.test.js tests/js/runtime/utility-problematic-focused-track-render.test.js tests/js/runtime/problem-exclusion-mutations.test.js tests/js/runtime/utility-rules-search.test.js tests/js/problematic-payload-evidence.test.js tests/js/performance-change-impact.test.js tests/js/e2e-performance-helper-guards.test.js
 npx playwright test problematicFilesVirtualFocus.spec.js --config=playwright.component.config.js --workers=1
 ```
 

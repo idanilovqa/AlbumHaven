@@ -18,11 +18,10 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
       frame = 0;
       for (const [row, text] of entries) {
         const motion = !media?.matches && !row.hidden
-          ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+          ? resolveRunningLineMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
           : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-metadata-overflowing', motion.overflowing);
-        row.style.setProperty('--player-metadata-distance', `${motion.distance}px`);
-        row.style.setProperty('--player-metadata-duration', `${motion.durationMs}ms`);
+        applyRunningLineMotion(row, motion);
       }
     };
     const schedule = () => {
@@ -57,8 +56,7 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
         window.removeEventListener('resize', schedule);
         for (const row of entries.keys()) {
           row.classList.remove('is-metadata-overflowing');
-          row.style.removeProperty('--player-metadata-distance');
-          row.style.removeProperty('--player-metadata-duration');
+          clearRunningLineMotion(row);
         }
         entries.clear();
       },
@@ -1155,6 +1153,9 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     album: btn.getAttribute('data-track-album') || '',
     coverPath: btn.getAttribute('data-track-cover') || '',
     durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
+    ...(btn.closest?.('#non-album-modal')
+      ? { looseTracksOrigin: { libraryWide: state.ui?.nonAlbumLibraryWide === true } }
+      : {}),
   });
   if (currentAlbum) {
     setAlbumPlaybackQueue(currentAlbum, trackPath);

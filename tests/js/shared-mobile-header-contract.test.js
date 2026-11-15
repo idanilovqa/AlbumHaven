@@ -11,6 +11,7 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
   const galleryHeader = read('music_app/templates/partials/gallery-bar.html');
   const index = read('music_app/templates/index.html');
   const mobileCss = read('music_app/static/css/mobile-layout.css');
+  const mobileNavigation = read('music_app/static/js/runtime/mobile-navigation.js');
 
   assert.match(pageHeader, /from ["']partials\/gallery-bar\.html["'] import gallery_bar/);
   assert.match(pageHeader, /gallery_bar\([^)]*mobile_layout='mobile-primary'/s);
@@ -20,6 +21,7 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
   assert.match(index, /gallery_bar\([^)]*mobile_layout='mobile-primary'[^)]*gallery_context=true/s);
   assert.doesNotMatch(index, /<section class="mobile-page-header gallery-bar"/);
   assert.match(mobileCss, /\[data-gallery-bar-layout="mobile-primary"\]/);
+  assert.match(mobileNavigation, /\['cover-lookup', 'non-album'\]\.includes\(active\?\.kind\)\s*\?\s*'mobile-primary'/);
   assert.doesNotMatch(
     mobileCss,
     /\.settings-outlet \.page-gallery-bar\s*\{[^}]*(?:padding|margin|top):/s,

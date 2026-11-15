@@ -15,8 +15,8 @@ select coalesce(
   ),
   '[]'::jsonb
 )
-from library.local_artists
-join library.local_albums
+from library.local_albums
+left join library.local_artists
   on library.local_albums.library_id = library.local_artists.library_id
  and library.local_albums.artist_id = library.local_artists.id
 join library.local_tracks
@@ -24,7 +24,10 @@ join library.local_tracks
  and library.local_tracks.album_id = library.local_albums.id
 join library.local_track_files
   on library.local_track_files.track_id = library.local_tracks.id
-where library.local_artists.name =
+where case when library.local_albums.artist_id is null
+    then nullif(library.local_albums.metadata ->> 'album_artist', '')
+    else library.local_artists.name
+  end =
       convert_from(decode(:'artist_b64', 'base64'), 'UTF8')
   and library.local_albums.title =
       convert_from(decode(:'album_b64', 'base64'), 'UTF8');

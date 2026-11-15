@@ -367,7 +367,11 @@ def suspend_gallery_restore_triggers(connection: Any, tables: Iterable[tuple[str
         join pg_catalog.pg_class relation on relation.oid = trigger.tgrelid
         join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
         where not trigger.tgisinternal and trigger.tgconstraint = 0
-          and trigger.tgfoid = to_regprocedure('library.invalidate_gallery_projection_statement()')
+          and trigger.tgfoid in (
+            to_regprocedure('library.invalidate_gallery_projection_statement()'),
+            to_regprocedure('library.capture_relation_album_changes()'),
+            to_regprocedure('library.capture_gallery_metadata_changes()')
+          )
         order by namespace.nspname, relation.relname, trigger.tgname
         """
     ).fetchall()

@@ -114,6 +114,7 @@ test('problematic-file render scrolls the focused track row into view determinis
       return { top: 40, bottom: 200 };
     },
     querySelector(selector) {
+      if (selector === 'img[data-gallery-cover-src]') return null;
       selectorCalls.push(selector);
       return selector === `[data-problematic-track-path="${escapedTrackPath}"]`
         ? focusedTrackMatch
@@ -321,6 +322,7 @@ test('incomplete problematic summary does not replace a missing existing selecti
       },
     },
     getUtilityModalElements() { return elements; },
+    getAllProblematicItems() { return [boundedAlbum]; },
     getFilteredProblematicAlbums() { return [boundedAlbum]; },
     renderProblemFilterControls() {},
     getSelectedProblematicAlbumFrom() { return null; },
@@ -337,6 +339,11 @@ test('incomplete problematic summary does not replace a missing existing selecti
   assert.equal(context.state.utility.selectedProblematicKey, 'edited-source');
   assert.deepEqual(loadCalls, []);
   assert.match(elements.detail.innerHTML, /Loading problematic albums/);
+
+  context.state.utility.searchQuery = 'art zoyd';
+  context.renderProblematicFiles();
+  assert.match(elements.detail.innerHTML, /Select an entry from the list to see the details/);
+  assert.doesNotMatch(elements.detail.innerHTML, /Loading/);
 });
 
 test('optimistic problematic detail shell defers the ordinary loader to its targeted hydration owner', () => {
@@ -1083,3 +1090,60 @@ test('empty scoped log history renders its captured console and keeps export exp
   assert.ok(exportCurrent);
   assert.match(exportCurrent, /\bdisabled(?:="[^"]*")?(?:\s|>)/);
 });
+
+for (const focused of [true, false]) {
+  test(`a summary refresh that moves the selected album ${focused ? 'reveals it during track navigation' : 'keeps the user scroll position'}`, () => {
+    const trackPath = 'C:\Music\DDT\Studio Records\01 Track.flac';
+    const target = { key: 'studio', name: 'Studio Records', detail_loaded: true, track_paths: [trackPath] };
+    const others = Array.from({ length: 60 }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}` }));
+    let items = [...others.slice(0, 50), target];
+    const reveals = [];
+    const elements = {
+      overlay: {},
+      list: { innerHTML: '', querySelector() { return null; } },
+      detail: { innerHTML: '', removeAttribute() {}, querySelector() { return null; } },
+      count: { textContent: '' },
+      search: { disabled: false, placeholder: '', value: '' },
+      problemFilterButton: { disabled: false, hidden: false },
+      tabs: [],
+    };
+    const context = {
+      window: { ProblematicFilesVirtualList: { create() {
+        return { render() {}, reveal(key) { reveals.push(key); }, dispose() {} };
+      } } },
+      state: {
+        utility: {
+          activeTab: 'problematic-files',
+          focusedTrackPath: focused ? trackPath : '',
+          loading: false,
+          problemDropdownOpen: false,
+          problematicFiles: items,
+          searchQuery: '',
+          selectedProblematicKey: 'studio',
+          selectedProblemFilters: [],
+          showRepairedDisplay: true,
+        },
+      },
+      getUtilityModalElements() { return elements; },
+      getFilteredProblematicAlbums() { return items; },
+      renderProblemFilterControls() {},
+      getSelectedProblematicAlbumFrom(list) { return list.find((item) => item.key === 'studio') || null; },
+      buildProblematicAlbumListItem(album) { return `<button>${album.name}</button>`; },
+      initializeRepairSelections() {},
+      buildProblematicAlbumDetail(album) { return `<h2>${album.name}</h2>`; },
+      cssEscape(value) { return value; },
+      async loadProblematicAlbumDetail() {},
+    };
+    vm.createContext(context);
+    vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+    context.renderProblematicFiles();
+    reveals.length = 0;
+    // The complete list moves the pinned target from the page tail to its sorted place.
+    items = [...others.slice(0, 30), target, ...others.slice(30)];
+    context.state.utility.problematicFiles = items;
+    context.renderProblematicFiles();
+
+    assert.deepEqual(reveals, focused ? ['studio'] : []);
+  });
+}

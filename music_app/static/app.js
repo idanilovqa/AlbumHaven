@@ -21,6 +21,7 @@
   pushStartupMark('app_entry_started', {
     inlinePreviewVisible: Boolean(document.querySelector('#sidebar-list .artist-link, #artist-groups .artist-section')),
   });
+  window.AlbumHavenStartupProgress?.show(50);
 
   const defaultInitialView = {
     artist_groups: [],
@@ -379,7 +380,7 @@
       const script = document.createElement('script');
       script.text = `\n//# sourceURL=${scriptUrl}\n${source}\n`;
       document.head.appendChild(script);
-      pushStartupMark('runtime_bundle_ready', { scriptCount: 1, bundledScriptCount: 84 });
+      pushStartupMark('runtime_bundle_ready', { scriptCount: 1, bundledScriptCount: 87 });
     } catch (error) {
       console.error('[AlbumHaven] Failed to load runtime bundle.', error);
       pushStartupMark('runtime_bundle_failed');

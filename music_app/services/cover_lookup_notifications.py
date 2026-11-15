@@ -29,6 +29,15 @@ def load_cover_lookup_notification(
     return _cover_lookup_notifications_adapter(config).load_notification(task_id)
 
 
+def load_reusable_cover_lookup_notification(
+    config: dict[str, object], track_paths: set[str], *,
+    manual_urls: list[str], excluded_task_ids: set[str],
+) -> dict[str, object] | None:
+    return _cover_lookup_notifications_adapter(config).load_reusable_notification(
+        track_paths, manual_urls=manual_urls, excluded_task_ids=excluded_task_ids,
+    )
+
+
 def load_cover_lookup_notification_summaries(
     config: dict[str, object],
 ) -> list[dict[str, object]]:
@@ -80,18 +89,30 @@ def save_cover_lookup_notifications(config: dict[str, object], tasks: list[dict[
     _cover_lookup_notifications_adapter(config).save_notifications(filtered_tasks)
 
 
+def admit_cover_lookup_notification(
+    config: dict[str, object], task: dict[str, object], *, preferred_task_id: str = "", allow_preferred_path_rebind: bool = False,
+) -> tuple[dict[str, object], bool]:
+    return _cover_lookup_notifications_adapter(config).admit_notification(
+        task, preferred_task_id=preferred_task_id, allow_preferred_path_rebind=allow_preferred_path_rebind,
+    )
+
+
 def upsert_cover_lookup_notification(
     config: dict[str, object],
     task: dict[str, object],
     *,
     persistence_revision: int,
+    expected_search_generation: str = "",
 ) -> None:
     if not isinstance(task, dict) or not str(task.get("id") or "").strip():
         return
     adapter = _cover_lookup_notifications_adapter(config)
     upsert_notification = getattr(adapter, "upsert_notification", None)
     if callable(upsert_notification):
-        upsert_notification(task, persistence_revision=persistence_revision)
+        kwargs = {"persistence_revision": persistence_revision}
+        if expected_search_generation:
+            kwargs["expected_search_generation"] = expected_search_generation
+        upsert_notification(task, **kwargs)
         return
     task_id = str(task.get("id") or "").strip()
     retained = [

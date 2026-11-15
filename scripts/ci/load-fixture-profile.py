@@ -2311,8 +2311,73 @@ def load_fixture_profile(
         prepare_relation_projection(database_url)
 
 
+def load_fixture_scenario(
+    *, fixture_root: Path, profile: str, scenario: str, database_url: str,
+    connect: Callable[[str], Any] = psycopg.connect,
+) -> None:
+    validate_database_url(database_url)
+    fixture_root = fixture_root.resolve()
+    definition = validate_manifest_profile(
+        json.loads((fixture_root / "manifest.json").read_text(encoding="utf-8")), profile,
+    )
+    scenario_definition = definition["namedScenarioAssertions"].get(scenario)
+    if not isinstance(scenario_definition, dict) or not scenario_definition.get("seed"):
+        raise ValueError("fixture scenario is not declared in the pinned manifest")
+    seed = (fixture_root / scenario_definition["seed"]).resolve()
+    if not seed.is_relative_to(fixture_root) or seed.name != "cover_lookup_tasks.jsonl":
+        raise ValueError("fixture scenario seed must be an owned notification seed")
+    records = [json.loads(line) for line in seed.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(records) != scenario_definition.get("taskCount"):
+        raise ValueError("fixture scenario task count mismatch")
+    keys = [record.get("taskKey") for record in records]
+    if any(not isinstance(key, str) or not key.startswith("fixture-") for key in keys) or len(set(keys)) != len(keys):
+        raise ValueError("fixture scenario task keys must be unique fixture identities")
+    with connect(database_url) as connection:
+        validate_connected_identity(connection, database_url)
+        libraries = connection.execute(
+            "select id from library.libraries where metadata->>'profile'=%s", (profile,),
+        ).fetchall()
+        if len(libraries) != 1:
+            raise ValueError("fixture scenario requires exactly one loaded profile library")
+        library_id = libraries[0][0]
+        for record in records:
+            refs = record.get("trackRefs")
+            if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref for ref in refs):
+                raise ValueError("fixture scenario requires portable track references")
+            refs = sorted(set(refs))
+            rows = connection.execute("""select distinct t.metadata->>'fixture_track_key', f.private_path
+                from library.local_tracks t join library.local_track_files f on f.track_id=t.id
+                where t.library_id=%s and t.metadata->>'fixture_track_key'=any(%s::text[])
+                  and f.scan_cache_stale is false""", (library_id, refs)).fetchall()
+            if {row[0] for row in rows} != set(refs):
+                raise ValueError("fixture scenario track references are not fully loaded")
+            paths = sorted({row[1] for row in rows})
+            task_key = record["taskKey"]
+            album = str(record.get("album") or "").strip()
+            if not album:
+                raise ValueError("fixture scenario album label is required")
+            old_key = task_key + "-historical-album"
+            source = {
+                "id": task_key, "status": "completed", "artist": "Historical Identity Fixture",
+                "album": album, "year": "2026", "progress": 1,
+                "progress_label": "No covers found", "result_kind": "empty",
+                "track_paths": paths, "candidates": [], "manual_urls": [],
+                "notification_action_taken": False,
+                "album_payload": {"id": 2147483646, "key": old_key,
+                                  "name": album, "album_artist": "Historical Identity Fixture", "year": 2026},
+            }
+            metadata = {"source_family": "runtime_cover_lookup_notifications_adapter",
+                        "track_paths": paths, "source_payload": source,
+                        "notification_action_taken": False}
+            connection.execute("""insert into ops.cover_lookup_tasks
+                (library_id,task_key,status,album_key,requested_at,completed_at,metadata)
+                values(%s,%s,'completed',%s,now(),now(),%s::jsonb)""",
+                (library_id, task_key, old_key, json.dumps(metadata)))
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Load an Album Haven CI fixture profile")
+    parser.add_argument("--scenario", help="Load a declared scenario into the pre-start fixture database")
     parser.add_argument(
         "--fixture-root",
         type=Path,
@@ -2351,6 +2416,10 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.scenario:
+        load_fixture_scenario(fixture_root=args.fixture_root, profile=args.profile,
+                              scenario=args.scenario, database_url=args.database_url)
+        return 0
     load_fixture_profile(
         fixture_root=args.fixture_root,
         profile=args.profile,

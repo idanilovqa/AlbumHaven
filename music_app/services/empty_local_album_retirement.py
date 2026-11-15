@@ -12,6 +12,7 @@ Ratings (album and disc) and the album's MusicBrainz artist identity are never
 dropped: when every moved track went to one successor row, each is carried
 there unless the successor already holds its own, and the row is retired only
 when the successor holds an equal one for every one. Otherwise the row is kept.
+Additional artwork keeps its album row and is never reassigned by inference.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
 GUARDED_ALBUM_CHILD_TABLES = frozenset(
     {
         "app.album_ratings",
+        "library.local_album_additional_artworks",
         "app.album_disc_ratings",
         "library.local_album_artist_identities",
         "library.local_mbid_assertions",
@@ -49,6 +51,9 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
     # Ambiguous legacy `user` origins count as a cover choice too.
     ("cover_selection", """coalesce(album.metadata ->> 'cover_selection_origin', '') <> 'user'
       and coalesce(album.metadata ->> 'cover_selection_provenance', '') <> 'explicit'"""),
+    ("additional_artwork", """not exists (
+      select 1 from library.local_album_additional_artworks as artwork
+      where artwork.album_id = album.id)"""),
     # `missing` is the automatic no-evidence classification.
     ("mbid_decision", """album.mbid is null
       and album.evidence_source is null

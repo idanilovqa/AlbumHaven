@@ -3,11 +3,15 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
+import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
+from music_app.services.album_identity_lineage_postgres import album_path_ownership_sql
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -70,6 +74,26 @@ class CoverLookupTasksPostgresAdapter:
             row = connection.execute(_load_notification_sql(), (normalized_id,)).fetchone()
         task = _task_from_row(row) if row is not None else {}
         return task if str(task.get("id") or "").strip() else None
+
+    def load_reusable_notification(
+        self, track_paths: set[str], *, manual_urls: list[str],
+        excluded_task_ids: set[str],
+    ) -> dict[str, object] | None:
+        resolved_paths = list({
+            str(Path(path).resolve(strict=False))
+            for path in track_paths if str(path).strip()
+        })
+        if not resolved_paths:
+            return None
+        urls = _jsonb(sorted(set(manual_urls)))
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            row = connection.execute(
+                _load_reusable_notification_sql(windows_paths=os.name == "nt"),
+                (list(_SOURCE_FAMILIES), sorted(excluded_task_ids),
+                 resolved_paths, resolved_paths, urls, urls),
+            ).fetchone()
+        return _task_from_row(row) if row is not None else None
 
     def load_notification_summaries(self) -> list[dict[str, object]]:
         with self._connect_to_database() as connection:
@@ -203,11 +227,91 @@ class CoverLookupTasksPostgresAdapter:
                         ),
                     )
 
+    def admit_notification(
+        self, task: dict[str, object], *, preferred_task_id: str = "", allow_preferred_path_rebind: bool = False,
+    ) -> tuple[dict[str, object], bool]:
+        """Persist one execution claim before any process starts provider work."""
+        paths = sorted({os.path.normcase(str(Path(path).resolve(strict=False)))
+                        for path in task.get("track_paths", []) if str(path).strip()})
+        if not paths:
+            raise ValueError("Cover lookup admission requires track paths")
+        urls = _jsonb(sorted(set(task.get("manual_urls") or [])))
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                _ensure_bootstrap_context(connection)
+                connection.execute(
+                    _bootstrap_context_sql() + """
+                    select pg_advisory_xact_lock(hashtextextended(
+                      'cover-lookup:' || library_id::text || ':' || %s, 0))
+                    from bootstrap_context
+                    """, (json.dumps(paths, ensure_ascii=True),),
+                )
+                row = connection.execute(
+                    _load_reusable_notification_sql(windows_paths=os.name == "nt", include_active=True).rstrip().rstrip(";")
+                    + ("" if preferred_task_id else " for update of cover_lookup_tasks"),
+                    (list(_SOURCE_FAMILIES), [], paths, paths, urls, urls),
+                ).fetchone()
+                existing = _task_from_row(row) if row is not None else None
+                if preferred_task_id:
+                    preferred = connection.execute(
+                        _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
+                        (preferred_task_id,),
+                    ).fetchone()
+                    if preferred is not None:
+                        preferred = _task_from_row(preferred)
+                        preferred_paths = sorted({os.path.normcase(str(Path(path).resolve(strict=False)))
+                                                  for path in preferred.get("track_paths", []) if str(path).strip()})
+                        if preferred_paths != paths and not allow_preferred_path_rebind:
+                            raise ValueError("Cover lookup does not belong to this album")
+                        if not existing or str(existing.get("status")) not in {"pending", "running"}:
+                            existing = preferred
+                if (preferred_task_id and existing and existing["id"] != preferred_task_id
+                        and str(existing.get("status")) not in {"pending", "running"}):
+                    # No preferred row was found. Lock the fallback only now; never
+                    # lock two different reusable/preferred rows in opposite orders.
+                    row = connection.execute(
+                        _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
+                        (str(existing["id"]),),
+                    ).fetchone()
+                    existing = _task_from_row(row) if row is not None else None
+                if existing and str(existing.get("status")) in {"pending", "running"}:
+                    return existing, False
+                claimed = dict(task)
+                if existing:
+                    claimed["id"] = existing["id"]
+                    claimed["notification_order_at"] = (
+                        existing.get("notification_order_at") or existing.get("notification_completed_at")
+                        or existing.get("finished_at") or existing.get("created_at")
+                    )
+                    claimed["possible_matches"] = list(existing.get("possible_matches") or [])
+                    claimed["retained_candidate_count"] = len(claimed["possible_matches"])
+                    # A crashed worker can leave its snapshot running after its task
+                    # was interrupted. End only that execution, retaining its cards.
+                    try:
+                        previous_generation = uuid.UUID(str(existing.get("search_generation") or existing["id"]))
+                    except ValueError:
+                        previous_generation = None
+                    if previous_generation is not None:
+                        connection.execute("""
+                            update library.local_album_cover_candidate_snapshots
+                            set status='failed', finished_at=now(), updated_at=now()
+                            where search_generation=%s and status='running'
+                        """, (previous_generation,))
+                claimed["search_generation"] = str(uuid.uuid4())
+                row = _task_row(claimed, source_index=0, persistence_revision=1)
+                connection.execute(_upsert_notification_sql(), (
+                    row["task_key"], row["status"], row["requested_at"], row["completed_at"],
+                    row["album_key"], row["selected_cover_private_path"], _jsonb(row["provider_payload"]),
+                    row["error_message"], _jsonb(row["metadata"]),
+                ))
+        return claimed, True
+
     def upsert_notification(
         self,
         task: dict[str, object],
         *,
         persistence_revision: int | None = None,
+        expected_search_generation: str = "",
     ) -> None:
         normalized_task = _normalize_task(task)
         if normalized_task is None:
@@ -220,6 +324,26 @@ class CoverLookupTasksPostgresAdapter:
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
+                if expected_search_generation:
+                    current_row = connection.execute(
+                        _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
+                        (str(normalized_task["id"]),),
+                    ).fetchone()
+                    current = _task_from_row(current_row) if current_row is not None else {}
+                    if (
+                        current.get("search_generation") != expected_search_generation
+                        or ((current.get("job_contract") or {}).get("job_kind") == "save_remote_selection"
+                            and (normalized_task.get("job_contract") or {}).get("job_kind") != "save_remote_selection")
+                        or (current.get("status") in {"completed", "failed", "canceled"}
+                            and normalized_task.get("status") != current.get("status"))
+                    ):
+                        return
+                    if current.get("notification_action_taken"):
+                        for key in ("notification_action_taken", "selected_candidate_id", "save_generation",
+                                    "notification_completed_at", "notification_expires_at"):
+                            if key in current:
+                                normalized_task[key] = current[key]
+                    row = _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision)
                 connection.execute(
                     _upsert_notification_sql(),
                     (
@@ -570,6 +694,7 @@ def _task_row(
         "source": _SOURCE,
         "source_key": task_id,
         "source_index": source_index,
+        "notification_order_at": _text(payload.get("notification_order_at")) or completed_at or requested_at,
         "notification_action_taken": bool(payload.get("notification_action_taken")),
         "notification_completed_at": completed_at,
         "notification_expires_at": _text(payload.get("notification_expires_at")),
@@ -597,6 +722,12 @@ def _task_from_row(row: object) -> dict[str, object]:
     metadata_dict = metadata if isinstance(metadata, Mapping) else {}
     source_payload = metadata_dict.get("source_payload")
     task = dict(source_payload) if isinstance(source_payload, Mapping) else {}
+    task["notification_order_at"] = (
+        _text(metadata_dict.get("notification_order_at"))
+        or _timestamp_text(row_payload.get("completed_at"))
+        or _timestamp_text(row_payload.get("requested_at"))
+        or _text(task.get("notification_order_at"))
+    )
     task_id = _text(row_payload.get("task_key"))
     status = _text(row_payload.get("status"))
     if task_id:
@@ -670,7 +801,8 @@ def _load_notifications_sql() -> str:
           on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
         where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
         order by
-          coalesce(ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
+          coalesce(nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+            ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
           ops.cover_lookup_tasks.task_key desc;
     """
     ).replace("%s::text[]", f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]")
@@ -704,6 +836,43 @@ def _load_notification_sql() -> str:
     )
 
 
+def _load_reusable_notification_sql(*, windows_paths: bool, include_active: bool = False) -> str:
+    return _bootstrap_context_sql() + """
+        select ops.cover_lookup_tasks.task_key, ops.cover_lookup_tasks.status,
+          ops.cover_lookup_tasks.requested_at, ops.cover_lookup_tasks.completed_at,
+          ops.cover_lookup_tasks.album_key, ops.cover_lookup_tasks.selected_cover_private_path,
+          ops.cover_lookup_tasks.provider_payload, ops.cover_lookup_tasks.error_message,
+          ops.cover_lookup_tasks.metadata
+        from ops.cover_lookup_tasks
+        join bootstrap_context
+          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+          and (__INCLUDE_ACTIVE__ or ops.cover_lookup_tasks.status in ('completed', 'failed', 'canceled'))
+          and not (ops.cover_lookup_tasks.task_key = any(%s::text[]))
+          and coalesce(ops.cover_lookup_tasks.metadata #>> '{source_payload,internal}', 'false') <> 'true'
+          and md5(ops.cover_lookup_track_path_set(coalesce(
+              ops.cover_lookup_tasks.metadata -> 'track_paths',
+              ops.cover_lookup_tasks.metadata #> '{source_payload,track_paths}', '[]'::jsonb
+            ), __WINDOWS_PATHS__)::text)
+            = md5(ops.cover_lookup_track_path_set(to_jsonb(%s::text[]), __WINDOWS_PATHS__)::text)
+          and ops.cover_lookup_track_path_set(coalesce(
+              ops.cover_lookup_tasks.metadata -> 'track_paths',
+              ops.cover_lookup_tasks.metadata #> '{source_payload,track_paths}', '[]'::jsonb
+            ), __WINDOWS_PATHS__)
+            = ops.cover_lookup_track_path_set(to_jsonb(%s::text[]), __WINDOWS_PATHS__)
+        order by (ops.cover_lookup_tasks.status in ('pending', 'running')) desc, (
+          coalesce(ops.cover_lookup_tasks.metadata #> '{source_payload,manual_urls}', '[]'::jsonb) @> %s::jsonb
+          and coalesce(ops.cover_lookup_tasks.metadata #> '{source_payload,manual_urls}', '[]'::jsonb) <@ %s::jsonb
+        ) desc,
+          coalesce(nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+            ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
+          ops.cover_lookup_tasks.task_key desc
+        limit 1;
+    """.replace("__WINDOWS_PATHS__", "true" if windows_paths else "false").replace(
+        "__INCLUDE_ACTIVE__", "true" if include_active else "false",
+    )
+
+
 def _load_notification_summaries_sql() -> str:
     return (
         _bootstrap_context_sql()
@@ -725,6 +894,7 @@ def _load_notification_summaries_sql() -> str:
                 'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
                 'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
                 'save_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'save_generation',
+            'search_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'search_generation',
                 'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
                 'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
                 'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at'
@@ -733,6 +903,10 @@ def _load_notification_summaries_sql() -> str:
                 'id', ops.cover_lookup_tasks.task_key,
                 'status', ops.cover_lookup_tasks.status,
                 'created_at', ops.cover_lookup_tasks.requested_at,
+                'notification_order_at', coalesce(
+                    nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+                    ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at
+                ),
                 'notification_completed_at', coalesce(
                     nullif(ops.cover_lookup_tasks.metadata ->> 'notification_completed_at', ''),
                     ops.cover_lookup_tasks.completed_at::text
@@ -832,7 +1006,8 @@ def _load_notification_summaries_sql() -> str:
         where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
           and {_actionable_notification_predicate_sql()}
         order by
-            coalesce(ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
+            coalesce(nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+              ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
             ops.cover_lookup_tasks.task_key desc;
         """
     ).replace("%s::text[]", f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]")
@@ -898,7 +1073,8 @@ def _load_notification_summary_page_sql(
         filters.append("ops.cover_lookup_tasks.task_key = any(%s::text[])")
     if has_cursor:
         filters.append(
-            "(coalesce(ops.cover_lookup_tasks.completed_at, "
+            "(coalesce(nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz, "
+            "ops.cover_lookup_tasks.completed_at, "
             "ops.cover_lookup_tasks.requested_at), ops.cover_lookup_tasks.task_key) "
             "< (%s::timestamptz, %s)"
         )
@@ -924,6 +1100,7 @@ def _load_notification_summary_page_sql(
               'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
               'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
               'save_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'save_generation',
+            'search_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'search_generation',
               'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
               'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
               'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at',
@@ -933,6 +1110,10 @@ def _load_notification_summary_page_sql(
               'id', ops.cover_lookup_tasks.task_key,
               'status', ops.cover_lookup_tasks.status,
               'created_at', ops.cover_lookup_tasks.requested_at,
+              'notification_order_at', coalesce(
+                nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+                ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at
+              ),
               'notification_completed_at', coalesce(
                 nullif(ops.cover_lookup_tasks.metadata ->> 'notification_completed_at', ''),
                 ops.cover_lookup_tasks.completed_at::text
@@ -1018,6 +1199,7 @@ def _load_notification_summary_page_sql(
             )
           ) as task_summary,
           coalesce(
+            nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
             ops.cover_lookup_tasks.completed_at,
             ops.cover_lookup_tasks.requested_at
           ) as effective_timestamp,
@@ -1029,6 +1211,7 @@ def _load_notification_summary_page_sql(
         where {where_sql}
         order by
           coalesce(
+            nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
             ops.cover_lookup_tasks.completed_at,
             ops.cover_lookup_tasks.requested_at
           ) desc,
@@ -1039,7 +1222,7 @@ def _load_notification_summary_page_sql(
 
 
 def _current_notification_album_joins_sql() -> str:
-    return """
+    return f"""
         cross join lateral (
           select
             case
@@ -1083,6 +1266,39 @@ def _current_notification_album_joins_sql() -> str:
                 current_album_by_key.id
               )
             )
+        ) as direct_album(album_id, cover_path, metadata, has_active_tracks)
+        left join lateral (
+          select array(
+            select distinct jsonb_array_elements_text(
+              case when jsonb_typeof(saved_paths.value) = 'array'
+                   then saved_paths.value else '[]'::jsonb end
+            )
+          ) as paths
+          from (select coalesce(
+            ops.cover_lookup_tasks.metadata -> 'track_paths',
+            ops.cover_lookup_tasks.metadata #> '{{source_payload,track_paths}}',
+            '[]'::jsonb
+          )) as saved_paths(value)
+        ) as requested_paths on not direct_album.has_active_tracks
+        left join lateral (
+          select min(ownership.album_id) as album_id,
+                 count(*) as owner_count,
+                 (cardinality(requested_paths.paths) > 0
+                  and sum(ownership.matched_path_count) = cardinality(requested_paths.paths))
+                   as complete
+          from (
+            {album_path_ownership_sql('ops.cover_lookup_tasks.library_id', 'requested_paths.paths')}
+          ) as ownership
+        ) as path_owners on not direct_album.has_active_tracks
+        left join library.local_albums as path_album
+          on path_owners.complete and path_owners.owner_count = 1
+         and path_album.id = path_owners.album_id
+        cross join lateral (
+          select
+            case when direct_album.has_active_tracks then direct_album.album_id else path_album.id end,
+            case when direct_album.has_active_tracks then direct_album.cover_path else path_album.cover_path end,
+            case when direct_album.has_active_tracks then direct_album.metadata else path_album.metadata end,
+            direct_album.has_active_tracks or coalesce(path_owners.complete, false)
         ) as current_album(album_id, cover_path, metadata, has_active_tracks)
     """
 
@@ -1114,6 +1330,10 @@ def _interrupt_stale_notifications_sql() -> str:
             completed_at = %s::timestamptz,
             error_message = %s,
             metadata = ops.cover_lookup_tasks.metadata || jsonb_build_object(
+                'notification_order_at', coalesce(
+                    nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+                    ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at
+                ),
                 'notification_action_taken', false,
                 'notification_completed_at', %s::timestamptz::text,
                 'notification_expires_at', '',
@@ -1208,7 +1428,12 @@ def _upsert_notification_sql() -> str:
               selected_cover_private_path = excluded.selected_cover_private_path,
               provider_payload = excluded.provider_payload,
               error_message = excluded.error_message,
-              metadata = excluded.metadata;
+              metadata = excluded.metadata || jsonb_build_object(
+                'notification_order_at', coalesce(
+                  nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+                  ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at
+                )
+              );
     """
     )
 

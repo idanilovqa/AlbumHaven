@@ -24,6 +24,8 @@ _APPLE_SUFFICIENT_COVER_EDGE = 3000
 _APPLE_SUFFICIENT_COVER_SHARPNESS = 4.0
 _APPLE_MAX_PAGE_FETCH_RESULTS = 2
 _APPLE_MAX_PROBE_CONTENDERS = 3
+_APPLE_WEB_DISCOVERY_SEARCH_REQUEST_LIMIT = 2
+_APPLE_WEB_DISCOVERY_ALBUM_PAGE_LIMIT = 3
 
 HttpGetJson = Callable[..., dict | None]
 HttpGetText = Callable[..., str | None]
@@ -525,6 +527,7 @@ def discover_apple_album_urls_via_web_search(
     active_logger = logger or _LOGGER
     discovered_urls: list[str] = []
     seen_urls: set[str] = set()
+    request_count = 0
     for query_text in build_apple_album_discovery_queries(artist, album, edition, year):
         if _canceled(should_cancel):
             break
@@ -534,6 +537,9 @@ def discover_apple_album_urls_via_web_search(
         ):
             if _canceled(should_cancel):
                 break
+            if request_count >= _APPLE_WEB_DISCOVERY_SEARCH_REQUEST_LIMIT:
+                return discovered_urls
+            request_count += 1
             html, final_url = getter(
                 search_url,
                 user_agent,
@@ -839,34 +845,17 @@ def collect_apple_web_matches(
                     },
                 ))
 
-    for artist_page_url in collect_apple_artist_page_urls(
-        query_artist,
+    collect_from_album_urls(discover_apple_album_urls_via_web_search(
+        artist,
+        album,
+        edition,
+        year,
         user_agent,
-        http_get_json=http_get_json,
-        similarity=similarity,
+        http_get_text_with_url=http_get_text_with_url,
         should_cancel=should_cancel,
-    ):
-        if _canceled(should_cancel):
-            break
-        artist_html = text_getter(artist_page_url, user_agent, service="apple", context=f"artist-page:{artist_page_url}")
-        if _canceled(should_cancel):
-            break
-        if not artist_html:
-            continue
-        collect_from_album_urls(extract_apple_album_urls(artist_html)[:20])
-
-    if not matches and not _canceled(should_cancel):
-        collect_from_album_urls(discover_apple_album_urls_via_web_search(
-            artist,
-            album,
-            edition,
-            year,
-            user_agent,
-            http_get_text_with_url=http_get_text_with_url,
-            should_cancel=should_cancel,
-            log_event=log_event,
-            logger=logger,
-        )[:20])
+        log_event=log_event,
+        logger=logger,
+    )[:_APPLE_WEB_DISCOVERY_ALBUM_PAGE_LIMIT])
 
     matches.sort(key=lambda item: item[0], reverse=True)
     return matches
@@ -1441,10 +1430,9 @@ def search_apple_candidates(
     log_miss = log_miss or log_apple_miss
     seen_queries: set[str] = set()
     candidates: list[CoverCandidate] = []
-    deferred_web_fallbacks: dict[
-        tuple[str, str, str | None, int | None],
-        tuple[str, str, str | None, int | None, str, bool],
-    ] = {}
+    deferred_web_fallback: tuple[
+        str, str, str | None, int | None, str, bool
+    ] | None = None
     for query_artist, query_album, query_edition, query_year in build_query_variants(artist, album, edition, year):
         if _canceled(should_cancel):
             break
@@ -1524,14 +1512,15 @@ def search_apple_candidates(
                         should_cancel=should_cancel,
                     ))
                     found_viable_matches = True
-            if allow_web_fallback and not found_viable_matches:
-                fallback_key = (
-                    query_artist,
-                    query_album,
-                    query_edition,
-                    query_year,
+            if (
+                allow_web_fallback
+                and not found_viable_matches
+                and (
+                    deferred_web_fallback is None
+                    or (deferred_web_fallback[-1] and not enforce_year)
                 )
-                deferred_web_fallbacks[fallback_key] = (
+            ):
+                deferred_web_fallback = (
                     query_artist,
                     query_album,
                     query_edition,
@@ -1539,14 +1528,15 @@ def search_apple_candidates(
                     query_mode,
                     enforce_year,
                 )
-    for (
-        query_artist,
-        _query_album,
-        _query_edition,
-        _query_year,
-        query_mode,
-        enforce_year,
-    ) in deferred_web_fallbacks.values():
+    if deferred_web_fallback is not None:
+        (
+            query_artist,
+            _query_album,
+            _query_edition,
+            _query_year,
+            query_mode,
+            enforce_year,
+        ) = deferred_web_fallback
         if _canceled(should_cancel):
             return []
         web_matches = collect_web_matches(

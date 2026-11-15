@@ -205,10 +205,7 @@ test('disc presentation reads shared track totals while the superseded modal foo
   const { TrackModal } = await import('../e2e/poms/trackModal.js');
   const modal = Object.create(TrackModal.prototype);
   modal.discHeaders = { allTextContents: async () => [' Disc 1 '] };
-  modal.albumTrackTable = { total: { locator(selector) {
-    assert.equal(selector, ':scope > *');
-    return { allTextContents: async () => [' Total Length: 18m 00s ', ''] };
-  } } };
+  modal.albumTrackTable = { summaryLines: { allTextContents: async () => [' Total Length: 18m 00s ', ''] } };
   modal.readFooterLines = async () => assert.fail('Disc totals must not use the removed legacy footer');
   assert.deepEqual(await modal.readDiscGroupPresentation(), {
     headers: ['Disc 1'], totals: ['Total Length: 18m 00s'],

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from music_app.services.artist_credits import track_artist_credit_members
 from music_app.services.opinion_read_seams import (
     build_track_popularity_payload,
     resolve_viewer_opinion_preferences,
@@ -88,7 +89,25 @@ def _stable_artist_credit_members(value: object) -> list[str]:
     text = " ".join(str(value or "").strip().split())
     if not text:
         return []
-    return [member.strip() for member in _STABLE_ARTIST_COMPOSITE_RE.split(text) if member.strip()]
+    members: list[str] = []
+    for segment in text.split(";"):
+        featured = _extract_terminal_featured_credit(segment, allow_plain_full_words=True)[1]
+        if featured and all(part.strip().isdecimal() for part in featured.split("/")):
+            members.extend(track_artist_credit_members(segment, ""))
+            continue
+        segment_members: list[str] = []
+        for member in _STABLE_ARTIST_COMPOSITE_RE.split(segment):
+            member = member.strip()
+            if not member:
+                continue
+            if segment_members and member.isdecimal():
+                previous = _LEADING_FEAT_CREDIT_RE.sub(r"\g<featured>", segment_members[-1])
+                if all(part.isdecimal() for part in previous.split("/")):
+                    segment_members[-1] += "/" + member
+                    continue
+            segment_members.append(member)
+        members.extend(segment_members)
+    return members
 
 
 def _stable_unique_artist_credits(values: Iterable[object]) -> list[str]:
@@ -161,7 +180,11 @@ def _track_row_display_values(track: object, *, album: object = None) -> tuple[o
         _normalize_artist_key(member)
         for member in album_owner_members
     }
-    track_members = _stable_artist_credit_members(track_artist)
+    track_members = _stable_unique_artist_credits(
+        member
+        for segment in _stable_artist_credit_members(track_artist)
+        for member in track_artist_credit_members(segment, album_artist)
+    )
     track_primary_keys = {
         _normalize_artist_key(_extract_terminal_featured_credit(member)[0])
         for member in track_members

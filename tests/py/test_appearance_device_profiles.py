@@ -207,7 +207,8 @@ def test_device_profile_load_returns_profiles_and_outline_for_one_account():
 
 
 def test_device_profile_load_ignores_values_a_newer_build_saved():
-    """A newer Album field must not discard the known stored appearance."""
+    """sandbox3 saved Album 'album_art_quality_alert'; builds without that field
+    rejected the whole appearance and every page fell back to default blue."""
     from music_app.services.appearance_preferences_postgres import (
         PostgresAppearancePreferencesRepository,
     )

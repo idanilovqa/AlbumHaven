@@ -69,8 +69,11 @@ const startupMetrics = (() => {
   return {
     markOnce,
     schedulePaintMark,
+    advanceInitialRefresh(value) {
+      window.AlbumHavenStartupProgress?.show(value);
+    },
     markInitialRender(view = {}) {
-      window.AlbumHavenStartupProgress?.show(75);
+      this.advanceInitialRefresh(70);
       markOnce('runtime_boot_complete', {
         query: String(view.query || ''),
         selectedArtist: String(view.selected_artist || ''),
@@ -87,20 +90,23 @@ const startupMetrics = (() => {
     beginInitialRefresh() {
       if (bootState.initialRefreshStarted) return;
       bootState.initialRefreshStarted = true;
+      this.advanceInitialRefresh(65);
       markOnce('initial_refresh_started');
       publishSnapshot();
     },
     completeVisibleInitialRefresh(view = {}, detail = {}) {
       if (bootState.initialVisibleRefreshCompleted) return;
       bootState.initialVisibleRefreshCompleted = true;
-      window.AlbumHavenStartupProgress?.finish();
       const extraDetail = detail && typeof detail === 'object' ? detail : {};
-      schedulePaintMark('initial_visible_refresh_complete', () => ({
-        artistCount: Number(view.artist_count || 0),
-        albumCount: Number(view.album_count || 0),
-        partialView: Boolean(view.initial_view_partial),
-        hydrationTier: String(extraDetail.hydrationTier || view.payload_tier || 'full'),
-      }));
+      schedulePaintMark('initial_visible_refresh_complete', () => {
+        window.AlbumHavenStartupProgress?.finish();
+        return {
+          artistCount: Number(view.artist_count || 0),
+          albumCount: Number(view.album_count || 0),
+          partialView: Boolean(view.initial_view_partial),
+          hydrationTier: String(extraDetail.hydrationTier || view.payload_tier || 'full'),
+        };
+      });
       publishSnapshot();
     },
     completeInitialRefresh(view = {}) {

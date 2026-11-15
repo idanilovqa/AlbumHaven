@@ -119,11 +119,18 @@ def test_executor_terminal_paths_freeze_timing(fails):
 
 
 def test_failure_preserves_completed_counters_and_reports_failed():
-    state = {"covers_processed": 3, "covers_total": 10, "covers_downloaded": 2}
+    state = {
+        "covers_processed": 3,
+        "covers_total": 10,
+        "covers_downloaded": 2,
+        "last_error": "Earlier scan failed",
+    }
     _handle_cover_refresh_failure(state, RuntimeError("failed"))
     assert state["covers_processed"] == 3
     assert state["covers_total"] == 10
     assert state["covers_downloaded"] == 2
+    assert state["last_error"] == "Earlier scan failed"
+    assert state["covers_last_error"] == "failed"
     assert build_cover_progress_status(state)["covers_outcome"] == "failed"
 
 

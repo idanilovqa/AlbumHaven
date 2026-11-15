@@ -220,6 +220,18 @@ def test_album_track_matches_query_uses_romanized_track_variants():
     assert album_track_matches_query(album, "hatsukoi")
 
 
+def test_album_track_matches_query_matches_a_disc_subtitle():
+    album = SimpleNamespace(
+        tracks=[
+            SimpleNamespace(path="C:/Music/Band/Live/CD1/01 - Opener.flac", title="Opener", disc_subtitle="Moscow 2014"),
+            SimpleNamespace(path="C:/Music/Band/Live/CD2/01 - Encore.flac", title="Encore", disc_subtitle="V-ROX Festival 2015"),
+        ]
+    )
+
+    assert album_track_matches_query(album, "v-rox festival 2015")
+    assert not album_track_matches_query(album, "tallinn 2016")
+
+
 def test_album_track_matches_query_extracts_track_path_text_without_path_objects(monkeypatch):
     def fail_path(_value):
         raise AssertionError("track search should not instantiate Path for every track")

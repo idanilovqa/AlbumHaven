@@ -24,6 +24,7 @@
     next: 'm9 6 6 6-6 6',
     refresh: 'M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6',
     bolt: 'm13 2-9 12h7l-1 8 10-13h-7z',
+    folder: 'M5 19l2.76-7.35a1 1 0 0 1 .93-.65H21a1 1 0 0 1 .99 1.16l-1 5.21A2 2 0 0 1 19.03 19H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l3 3h7a2 2 0 0 1 2 2v2',
   });
   const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const validAttribute = name => /^[a-zA-Z][a-zA-Z0-9_.:-]*$/.test(name);
@@ -97,9 +98,13 @@
     const iconMarkup = options.icon
       ? renderIconSvg(options.icon, { className: `${iconClasses} ui-icon--${options.icon}` })
       : `<span class="${escape(iconClasses)}" aria-hidden="true"></span>`;
+    const badge = String(options.badge ?? '').trim();
+    if (badge.length > 3) throw new TypeError('ActionButton badge must be at most three characters.');
+    if (badge) actionOptions.className += ' action-button--badged';
+    const badgeMarkup = badge ? `<span class="action-button__badge" aria-hidden="true">${escape(badge)}</span>` : '';
     return renderButtonMarkup(
       actionOptions,
-      `<span class="ui-button__content action-button__content">${iconMarkup}</span>`,
+      `<span class="ui-button__content action-button__content">${iconMarkup}${badgeMarkup}</span>`,
     );
   }
 
@@ -127,7 +132,14 @@
     element.setAttribute('aria-disabled', String(element.disabled));
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, setDisabled };
+  // A button running its action is disabled and marked busy, which the shared CSS shows as a spinner.
+  function setBusy(element, busy) {
+    setDisabled(element, busy);
+    if (busy) element.setAttribute('aria-busy', 'true');
+    else element.removeAttribute('aria-busy');
+  }
+
+  const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, setDisabled, setBusy };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

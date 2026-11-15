@@ -47,6 +47,8 @@ function loadHelper(overrides = {}) {
   };
   Object.assign(context, overrides);
   vm.createContext(context);
+  const mainStatePath = path.join(path.dirname(helperPath), 'gallery-main-state.js');
+  vm.runInContext(fs.readFileSync(mainStatePath, 'utf8'), context, { filename: mainStatePath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, storage };
 }
@@ -430,3 +432,30 @@ for (const scoped of [
     assert.deepEqual(Array.from(context.buildDisplayGroups(groups), item => item.artist), ['Alice & Bob']);
   });
 }
+
+require('node:test')('selected slash-composite keeps its existing raw-credit grouping preference', () => {
+  const { context } = loadHelper();
+  context.state.view.selected_artist = 'Alice / Bob';
+  const groups = context.buildDisplayGroups([{ artist: 'Alice / Bob', albums: [
+    { key: 'joint', album_artist: 'Alice / Bob' },
+    { key: 'alternate', album_artist: 'Alice & Bob' },
+    { key: 'solo', album_artist: 'Alice' },
+  ] }]);
+  assert.deepEqual(Array.from(groups, group => group.artist), ['Alice / Bob', 'Alice', 'Alice & Bob']);
+});
+
+require('node:test')('owned split releases remain in selected artist discography beside distinct same-title releases', () => {
+  const { context } = loadHelper();
+  const solo = { key: 'composer::spirit', album_artist: 'Composer', name: 'Spirit', year: 2002, artist_relationship: 'owned' };
+  const split = { key: 'vocalist / composer::spirit', album_artist: 'Vocalist / Composer', name: 'Spirit', year: 2002, artist_relationship: 'owned', is_split_album: true };
+  const collaboration = { key: 'vocalist / composer::collaboration', album_artist: 'Vocalist / Composer', name: 'Collaboration', year: 2003, artist_relationship: 'owned' };
+  const featured = { key: 'vocalist / composer::guest', album_artist: 'Vocalist / Composer', name: 'Guest', year: 2004, artist_relationship: 'featured' };
+  const groups = context.buildSelectedArtistDisplayGroups(
+    [{ artist: 'Composer', albums: [solo, split, collaboration, featured] }],
+    [{ artist: 'Vocalist / Composer', albums: [split, collaboration, featured] }],
+    'Composer',
+  );
+  assert.deepEqual(Array.from(groups.primaryGroups[0].albums, (album) => album.key), [solo.key, split.key, featured.key]);
+  assert.deepEqual(Array.from(groups.familyGroups[0].albums, (album) => album.key), [split.key, collaboration.key]);
+  assert.equal(context.isGallerySplitAlbum(split), true);
+});

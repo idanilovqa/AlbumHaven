@@ -623,3 +623,50 @@ test('opening an already visible details action does not add scroll or recovery 
   assert.deepEqual(h.movements, []);
   assert.deepEqual(h.clicks, ['native-title-click']);
 });
+
+
+test('queried album absence uses full applied artist surface while positive targets stay compact', async () => {
+  const { GalleryPage } = await import(galleryPageUrl);
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const groups = [{ artist: 'Partner', albums: [{ key: 'shared', name: 'Shared Album' }] }];
+  const payload = { payload_tier: 'full', query: 'Lead', selected_artist: 'Partner',
+    gallery_scope: 'all', visible_library_categories: ['main_library'], related_filter_artists: [],
+    primary_filter_active: false, primary_artist_groups: groups };
+  const projection = { ...payload, surface: 'albums', locationQuery: 'Lead', locationArtist: 'Partner',
+    busy: false, pendingViewTransition: false, viewRevision: 1 };
+  const observation = { stateRevision: 1, activeRequestCount: 0, pendingPayloadReadCount: 0,
+    latestFullPayload: payload, canonicalScopeComplete: true };
+  let fullReads = 0;
+  let compactReads = 0;
+  const owner = Object.create(GalleryPage.prototype);
+  owner.productionViewObserver = { read: () => observation };
+  owner.page = {
+    url: () => 'http://localhost/?surface=albums&q=Lead&artist=Partner',
+    locator: () => ({ count: async () => 1, inputValue: async () => 'Lead' }),
+    evaluate: async () => assert.fail('Use the supplied applied projection readers'),
+  };
+  owner.readAppliedGalleryProjection = async () => { fullReads += 1; return projection; };
+  owner.readAppliedAlbumTargetProjection = async ({ artist }) => {
+    compactReads += 1;
+    return { ...projection, primary_artist_groups: artist === 'Partner' ? groups : [] };
+  };
+  owner.albumCard = { detailsButtonByArtistAndAlbum: (artist) => ({ count: async () => artist === 'Partner' ? 1 : 0 }) };
+  owner.libraryLoader = { isVisible: async () => false };
+  owner.artistHeadings = { allTextContents: async () => ['Partner'] };
+  const absent = { artist: 'Lead', album: 'Interview Album', query: 'Lead' };
+  const state = await owner.readAlbumTargetState(absent, { fullProjection: true });
+  assert.equal(state.canonicalApplied, true);
+  assert.equal(state.canonicalInventoryComplete, true);
+  assert.equal(state.canonicalMatch, false);
+  assert.equal(state.attachedMatch, false);
+  assert.equal(state.busy, false);
+  assert.equal(compactReads, 0);
+  await new GalleryActions(owner).expectAlbumAbsentFromSettledGallery(absent);
+  assert.equal(compactReads, 0, 'The negative assertion must inspect the complete applied surface');
+  assert.ok(fullReads >= 4);
+  const present = await owner.readAlbumTargetState({ artist: 'Partner', album: 'Shared Album', query: 'Lead' });
+  assert.equal(present.canonicalReadyMatch, true);
+  assert.equal(compactReads, 2, 'Positive target reads keep their compact path');
+  projection.busy = true;
+  assert.equal((await owner.readAlbumTargetState(absent, { fullProjection: true })).busy, true);
+});

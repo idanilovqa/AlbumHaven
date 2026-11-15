@@ -78,7 +78,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     basePort: 4333,
     targets: ['gallery-artwork-diversity'],
     generatorRepository: 'idanilovqa/album-haven-test-data',
-    generatorCommit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11',
+    generatorCommit: '38aa02ef034c6235362950946fdf15a4a9a65dc4',
     variantCount: 512,
     sourceMaxEdge: 960,
   },

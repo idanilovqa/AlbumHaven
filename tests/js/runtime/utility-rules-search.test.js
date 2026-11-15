@@ -50,6 +50,35 @@ for (const [key, query, expected] of [['version-exceptions', 'alpha', ['v1']], [
   });
 }
 for (const event of ['input', 'search']) {
+  test(`Problematic Files ${event} filters loaded rows while the complete list is pending`, () => {
+    const {context, elements, handlers} = setup();
+    context.state.utility.activeTab = 'problematic-files';
+    context.state.utility.problematicFilesComplete = false;
+    context.state.utility.problematicFiles = [
+      {key: 'alpha', name: 'Alpha Album'}, {key: 'beta', name: 'Beta Album'},
+    ];
+    context.state.utility.completeLoadPromise = new Promise(() => {});
+    context.waitForProblematicFilesComplete = () => {
+      assert.fail('Typing must not wait for the complete inventory');
+    };
+    context.renderUtilityModalContent = () => {
+      elements.list.innerHTML = context.getFilteredProblematicAlbums().map(album => album.name).join(',');
+    };
+    const serverSearches = [];
+    // Albums beyond the loaded rows come from the server search.
+    context.scheduleProblematicServerSearch = () => serverSearches.push(context.state.utility.searchQuery);
+    context.attachUtilityModalEvents();
+    elements.search.value = 'Beta';
+    handlers[event]();
+    context.flushSearchTimers();
+    assert.equal(elements.list.innerHTML, 'Beta Album');
+    assert.deepEqual(serverSearches, ['Beta']);
+    elements.search.value = '';
+    handlers[event]();
+    context.flushSearchTimers();
+    assert.match(elements.list.innerHTML, /Alpha Album/);
+    assert.match(elements.list.innerHTML, /Beta Album/);
+  });
   test(`R01 shared ${event} event updates Rules while preserving Problems search`, () => {
     const {context, elements, handlers} = setup();
     context.attachUtilityModalEvents();

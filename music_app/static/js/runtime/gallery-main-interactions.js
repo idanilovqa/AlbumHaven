@@ -29,11 +29,6 @@ function createAnchoredSurfaceController() {
   };
 }
 
-function shouldDismissArtistInfoOverlay(config = {}) {
-  if (config.reason === 'scroll') return !config.scrollInsideOverlay;
-  return ['outside-pointer', 'escape', 'repeat-anchor'].includes(config.reason);
-}
-
 function observeArtistFamilyPanelBounds({ panel, player } = {}) {
   if (!panel || !player) return { disconnect() {} };
   const update = () => {
@@ -78,13 +73,12 @@ function observeArtistFamilyPanelBounds({ panel, player } = {}) {
 function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   if (!surface || !anchor?.getBoundingClientRect) return;
   if (surface.matches?.('.artist-info-overlay') && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    ['top', 'left', 'right', 'max-width'].forEach(name => surface.style.removeProperty(name));
+    ['top', 'left', 'right', 'max-width', '--artist-info-panel-max-height', '--artist-info-body-max-height']
+      .forEach(name => surface.style.removeProperty(name));
     return;
   }
   const rect = anchor.getBoundingClientRect();
   surface.dataset.anchorEnvelope = align;
-  surface.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
-  surface.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
   surface.style.top = `${Math.round(rect.bottom - 1)}px`;
   if (align === 'left') {
     const galleryLeft = document.querySelector('[data-gallery-bar]')?.getBoundingClientRect().left ?? rect.left;
@@ -99,6 +93,113 @@ function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(surface, anchor);
 }
 
+function resolveCurrentGalleryAnchor(anchor, sectionKey = '') {
+  if (!anchor || anchor.isConnected !== false) return anchor;
+  const resolvedSectionKey = sectionKey
+    || anchor.closest?.('[data-virtual-section-key]')?.dataset.virtualSectionKey;
+  if (!resolvedSectionKey) return anchor;
+  const section = Array.from(document.querySelectorAll?.('[data-virtual-section-key]') || [])
+    .find(candidate => candidate.dataset.virtualSectionKey === resolvedSectionKey);
+  return section?.querySelector?.('[data-artist-info-trigger]') || anchor;
+}
+
+function resolveVisibleGalleryArtistInfoAnchor(active, scroll) {
+  if (!active?.key?.startsWith?.('artist:')) return active?.anchor || null;
+  const artist = active.key.slice('artist:'.length);
+  const resolved = resolveCurrentGalleryAnchor(active.anchor, active.anchorSectionKey);
+  const candidates = [resolved, ...Array.from(document.querySelectorAll?.('[data-artist-info-trigger]') || [])]
+    .filter((candidate, index, all) => all.indexOf(candidate) === index
+      && String(candidate?.dataset?.artist || '') === artist
+      && isGalleryArtistInfoAnchorVisible(candidate, scroll));
+  return candidates.find(candidate => candidate.closest?.('.family-artist-header'))
+    || candidates[0]
+    || null;
+}
+
+function isGalleryAnchorVisible(anchor, scroll) {
+  if (!anchor || anchor.isConnected === false) return false;
+  const bounds = anchor?.getBoundingClientRect?.();
+  if (!bounds) return false;
+  const viewport = scroll?.getBoundingClientRect?.();
+  const top = Number(viewport?.top || 0);
+  const windowBottom = Number(window.innerHeight);
+  const bottom = Math.min(
+    Number(viewport?.bottom || (Number.isFinite(windowBottom) ? windowBottom : Number.POSITIVE_INFINITY)),
+    Number.isFinite(windowBottom) ? windowBottom : Number.POSITIVE_INFINITY,
+  );
+  return Number(bounds.bottom) > top && Number(bounds.top) < bottom;
+}
+
+function isGalleryArtistInfoAnchorVisible(anchor, scroll) {
+  if (anchor?.closest?.('[data-gallery-bar-instance="gallery"]')) {
+    const bounds = anchor.getBoundingClientRect?.();
+    return Boolean(bounds) && Number(bounds.bottom) > 0 && Number(bounds.top) < window.innerHeight;
+  }
+  return isGalleryAnchorVisible(anchor, scroll);
+}
+
+function constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom) {
+  const body = surface?.querySelector?.('.artist-info-overlay__body');
+  const header = surface?.querySelector?.(':scope > header');
+  const anchorBounds = anchor?.getBoundingClientRect?.();
+  if (!body || !header || !anchorBounds || !Number.isFinite(viewportBottom)) return;
+  const panelHeight = Math.max(0, Math.floor(viewportBottom - Number(anchorBounds.bottom)));
+  surface.style.setProperty?.('--artist-info-panel-max-height', `${panelHeight}px`);
+  const bodyStyle = typeof getComputedStyle === 'function' ? getComputedStyle(body) : null;
+  const bodyChrome = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+    .reduce((total, property) => total + (parseFloat(bodyStyle?.[property]) || 0), 0);
+  const available = viewportBottom - Number(anchorBounds.bottom)
+    - Number(header.getBoundingClientRect?.().height || 0) - bodyChrome - 2;
+  surface.style.setProperty?.('--artist-info-body-max-height', `${Math.max(0, Math.floor(available))}px`);
+}
+
+function revealGalleryArtistInfoSurface(surface, anchor) {
+  if (!surface?.matches?.('.artist-info-overlay')
+      || (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) return 0;
+  const scroll = document.getElementById('albums-scroll');
+  if (!scroll) return 0;
+  const player = document.querySelector('[data-shell-slot="bottom_player"]');
+  const playerBounds = player?.getBoundingClientRect?.();
+  const viewportBottom = player && !player.hidden && Number(playerBounds?.height || 0) > 0
+    ? Math.min(window.innerHeight, Number(playerBounds.top))
+    : window.innerHeight;
+  surface.style?.removeProperty?.('--artist-info-panel-max-height');
+  surface.style?.removeProperty?.('--artist-info-body-max-height');
+  const requiredOffset = Math.max(0, Math.ceil(Number(surface.getBoundingClientRect?.().bottom || 0) - viewportBottom));
+  const anchorBounds = anchor?.getBoundingClientRect?.();
+  const scrollBounds = scroll.getBoundingClientRect?.();
+  const maximumOffset = anchorBounds && scrollBounds
+    ? Math.max(0, Math.floor(Number(anchorBounds.top) - Number(scrollBounds.top)))
+    : requiredOffset;
+  const offset = Math.min(requiredOffset, maximumOffset);
+  if (!offset) {
+    scroll.style?.removeProperty?.('--artist-info-reveal-space');
+    if (Number(surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+      constrainGalleryArtistInfoSurface(surface, anchor, viewportBottom);
+    }
+    return 0;
+  }
+  const currentRevealSpace = parseFloat(scroll.style?.getPropertyValue?.('--artist-info-reveal-space')) || 0;
+  const remainingScroll = Math.max(0,
+    Number(scroll.scrollHeight || 0) - Number(scroll.clientHeight || 0)
+    - Number(scroll.scrollTop || 0) - currentRevealSpace);
+  const revealSpace = Math.max(0, offset - remainingScroll);
+  if (revealSpace) scroll.style?.setProperty?.('--artist-info-reveal-space', `${Math.ceil(revealSpace)}px`);
+  else scroll.style?.removeProperty?.('--artist-info-reveal-space');
+  scroll.scrollTop += offset;
+  positionGalleryAnchoredSurface(surface, anchor, 'left');
+  requestAnimationFrame(() => {
+    const active = galleryMainSurfaceController?.current?.();
+    const currentAnchor = resolveCurrentGalleryAnchor(anchor, active?.anchorSectionKey);
+    if (active?.surface === surface) active.anchor = currentAnchor;
+    positionGalleryAnchoredSurface(surface, currentAnchor, 'left');
+    if (Number(surface.getBoundingClientRect?.().bottom || 0) > viewportBottom) {
+      constrainGalleryArtistInfoSurface(surface, currentAnchor, viewportBottom);
+    }
+  });
+  return offset;
+}
+
 function positionArtistFamilyPanelEnvelope(panel, anchor) {
   if (!panel || !anchor?.getBoundingClientRect) return;
   const rect = anchor.getBoundingClientRect();
@@ -106,12 +207,7 @@ function positionArtistFamilyPanelEnvelope(panel, anchor) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const panelTop = mobile ? rect.bottom - 1 : bar?.getBoundingClientRect?.().bottom;
   if (Number.isFinite(panelTop)) panel.style.top = `${Math.round(panelTop)}px`;
-  const top = Number.isFinite(panelTop) ? panelTop : panel.getBoundingClientRect?.().top;
-  panel.style.setProperty?.('--gallery-anchor-gap', `${Math.max(0, Math.round((top || rect.bottom) - rect.bottom))}px`);
   panel.dataset.anchorEnvelope = 'right';
-  panel.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
-  panel.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
-  panel.style.setProperty?.('--gallery-anchor-right', `${Math.max(0, Math.round(window.innerWidth - rect.right))}px`);
   if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(panel, anchor);
   galleryFamilyPanelObserver?.refresh?.();
 }
@@ -263,6 +359,78 @@ function ensureGalleryMainState() {
   return state.gallery.mainState;
 }
 
+function cacheGallerySourceTotals(categories, payload) {
+  if (typeof state === 'undefined' || !state?.gallery) return false;
+  const artistCount = Number(payload?.artist_count ?? payload?.artistCount);
+  const albumCount = Number(payload?.album_count ?? payload?.albumCount);
+  if (!Number.isFinite(artistCount) || !Number.isFinite(albumCount)) return false;
+  state.gallery.sourceTotalsByScope ||= {};
+  state.gallery.sourceTotalsByScope[gallerySourceScopeKey(categories)] = { artistCount, albumCount };
+  return true;
+}
+
+function cacheCurrentGallerySourceTotals() {
+  if (typeof state === 'undefined' || !state?.view) return false;
+  const categories = state.view.loaded_library_categories || state.view.visible_library_categories;
+  if (!Array.isArray(categories)) return false;
+  return cacheGallerySourceTotals(categories, state.view);
+}
+
+async function prefetchGallerySourceTotalsForAllScopes() {
+  if (typeof state === 'undefined' || !state?.gallery || !state?.view
+    || typeof fetch !== 'function') return false;
+  const currentRevision = Number(
+    state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
+  );
+  if (Number.isSafeInteger(state.gallery.sourceTotalsRevision)
+    && state.gallery.sourceTotalsRevision !== currentRevision) {
+    state.gallery.sourceTotalsByScope = {};
+  }
+  cacheCurrentGallerySourceTotals();
+  const expectedKeys = [
+    '', 'hoard', 'hoard|main_library', 'hoard|main_library|new_arrivals',
+    'hoard|new_arrivals', 'main_library', 'main_library|new_arrivals', 'new_arrivals',
+  ];
+  if (state.gallery.sourceTotalsRevision === currentRevision
+    && expectedKeys.every(key => state.gallery.sourceTotalsByScope?.[key])) return true;
+  if (state.gallery.pendingSourceTotalsRequest) return state.gallery.pendingSourceTotalsRequest;
+  const request = (async () => {
+    try {
+      const response = await fetch('/home-data?source_totals=1', {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return false;
+      const payload = await response.json();
+      const received = payload?.source_totals_by_scope;
+      const responseRevision = Number(payload?.inventory_mutation_revision);
+      const latestRevision = Number(
+        state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
+      );
+      if (!Number.isSafeInteger(responseRevision) || responseRevision !== latestRevision
+        || !received || !expectedKeys.every((key) => {
+        const total = received[key];
+        return Number.isFinite(Number(total?.artist_count))
+          && Number.isFinite(Number(total?.album_count));
+      })) return false;
+      state.gallery.sourceTotalsByScope = Object.fromEntries(expectedKeys.map((key) => [key, {
+        artistCount: Number(received[key].artist_count),
+        albumCount: Number(received[key].album_count),
+      }]));
+      state.gallery.sourceTotalsRevision = responseRevision;
+      updateGalleryMainChrome();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (state.gallery.pendingSourceTotalsRequest === request) {
+        state.gallery.pendingSourceTotalsRequest = null;
+      }
+    }
+  })();
+  state.gallery.pendingSourceTotalsRequest = request;
+  return request;
+}
+
 function syncGalleryMainStateFromView(previousView = {}, nextView = {}) {
   const mainState = ensureGalleryMainState();
   const selectionChanged = String(previousView.selected_artist || '') !== String(nextView.selected_artist || '');
@@ -345,8 +513,15 @@ function closeGalleryMainSurface(returnFocus = true, { immediate = false, reason
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
   active.closedReason = reason;
+  if (!immediate && active.surface.classList?.contains?.('is-mobile-artist-dialog') && typeof runBottomSheetExit === 'function'
+      && runBottomSheetExit(active.surface, () => {
+        if (galleryMainSurfaceController.current?.() === active) closeGalleryMainSurface(returnFocus, { immediate: true, reason });
+      }, { backdrop: document.querySelector?.('.mobile-artist-info-backdrop') })) return true;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
-  if (active.surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
+  if (active.surface.matches?.('.artist-info-overlay')) {
+    document.getElementById('albums-scroll')?.style?.removeProperty?.('--artist-info-reveal-space');
+    if (typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(active.surface, false);
+  }
   if (active.key === 'search-suggestions' && state.ui) {
     state.ui.recentSearchPopoverOpen = false;
     state.ui.recentSearchActiveIndex = -1;
@@ -404,10 +579,10 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   }, { anchor });
-  const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
   galleryMainSurfaceController.activate({ key, anchor, surface,
+    anchorSectionKey: anchor.closest?.('[data-virtual-section-key]')?.dataset.virtualSectionKey || null,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
-    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
+    openingQuery: String((typeof state === 'undefined' ? '' : state.view?.query) || '').trim() });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
   if (surface.matches?.('.artist-family-panel, .mobile-settings-drawer')) {
@@ -418,7 +593,10 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   surface.setAttribute?.('aria-hidden', 'false');
   if (surface.matches?.('.mobile-settings-drawer')) {
     surface.style.top = `${Math.max(0, Math.round(document.querySelector('#app-shell .app-bar').getBoundingClientRect().bottom))}px`;
-  } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(surface, anchor, align);
+  } else if (surface.matches?.('.gallery-anchored-menu, .artist-info-overlay')) {
+    positionGalleryAnchoredSurface(surface, anchor, align);
+    if (surface.matches?.('.artist-info-overlay')) revealGalleryArtistInfoSurface(surface, anchor);
+  }
   if (surface.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(surface, anchor);
   if (surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(surface, true);
   if (shouldFocusGalleryMainSurface(key)) focusGalleryMainSurface(surface);
@@ -437,7 +615,8 @@ function updateGalleryMainControls() {
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
-  if (galleryMainSurfaceController?.current?.()?.key === 'album-types'
+  // The compact family count is independent of the deferred track payload.
+  if (hasSelectedArtist || String(state.view.query || '').trim() || galleryMainSurfaceController?.current?.()?.key === 'album-types'
       || document.getElementById?.('gallery-album-types-menu')?.hidden === false) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
   }
@@ -453,8 +632,18 @@ function updateGalleryMainControls() {
     button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
     button.disabled = false;
   });
-  document.querySelectorAll('[data-gallery-split-albums]').forEach((button) => {
-    button.setAttribute('aria-pressed', mainState.showSplitAlbums === false ? 'false' : 'true');
+  const splitMode = mainState.splitAlbums;
+  // Shown only when the discography in view has a split album, or a non-default position needs undoing.
+  const hasSplitAlbums = splitMode !== 'show' || [state.view.primary_artist_groups, state.view.family_artist_groups, state.view.artist_groups]
+    .some((groups) => (Array.isArray(groups) ? groups : []).some((group) => (group?.albums || []).some((album) => isGallerySplitAlbum(album))));
+  document.querySelectorAll('[data-gallery-split-albums]').forEach((control) => {
+    const position = GALLERY_SPLIT_ALBUM_MODES.indexOf(splitMode);
+    control.hidden = !hasSplitAlbums;
+    control.dataset.switchPosition = String(position);
+    control.setAttribute('aria-valuenow', String(position));
+    control.setAttribute('aria-valuetext', GALLERY_SPLIT_ALBUM_LABELS[splitMode]);
+    const label = control.querySelector?.('[data-gallery-split-albums-label]');
+    if (label) label.textContent = GALLERY_SPLIT_ALBUM_LABELS[splitMode];
   });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
@@ -471,12 +660,49 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = Boolean(button.dataset.libraryWide === '1' && state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
-      libraryWide: button.dataset.libraryWide === '1',
-    }).length > 0;
+    // Library-wide Loose Tracks is a navigation destination: always pressable (an empty library shows its empty state).
+    const libraryWide = button.dataset.libraryWide === '1';
+    const selectedArtist = String(state.view?.selected_artist || '').trim();
+    const explicitArtist = Boolean(selectedArtist)
+      && String(state.view?.search_context?.selected_artist_source || '').trim() !== 'auto_top_match';
+    if (!libraryWide) {
+      button.hidden = !explicitArtist;
+      if (button.hidden) {
+        button.disabled = true;
+        button.setAttribute('aria-disabled', 'true');
+        button.dataset.searchMatch = 'false';
+        button.setAttribute('aria-description', '');
+        return;
+      }
+    }
+    const pendingArtist = String(state.ui?.pendingSidebarSelectedArtist || '').trim();
+    const artistSelectionPending = Boolean(pendingArtist && pendingArtist !== selectedArtist);
+    const artistFamily = !libraryWide && selectedArtist;
+    const familyCountReady = artistFamily
+      && !artistSelectionPending
+      && typeof hasHydratedArtistNonAlbumAvailability === 'function'
+      && hasHydratedArtistNonAlbumAvailability();
+    const scopePending = libraryWide
+      ? !hasHydratedLibraryNonAlbumTracks()
+      : Boolean(state.view?.non_album_tracks_deferred);
+    const enabled = libraryWide || (artistFamily
+      ? familyCountReady && Number(state.view.non_album_track_count) > 0
+      : scopePending || getVisibleNonAlbumTracks({ libraryWide }).length > 0);
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    const matches = !artistFamily
+      && typeof hasNonAlbumSearchMatches === 'function'
+      && hasNonAlbumSearchMatches({ libraryWide: libraryWide || !selectedArtist });
+    button.dataset.searchMatch = String(Boolean(matches));
+    button.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
   });
+  // On a phone, Loose Tracks is a tab of the Artists panel; it carries the same search dot.
+  const mobileLooseTracks = document.querySelector('.mobile-artists-mode-button[data-navigation-mode="collections"]');
+  if (mobileLooseTracks) {
+    const matches = typeof hasNonAlbumSearchMatches === 'function' && hasNonAlbumSearchMatches({ libraryWide: true });
+    mobileLooseTracks.dataset.searchMatch = String(Boolean(matches));
+    mobileLooseTracks.setAttribute('aria-description', matches ? 'Contains tracks matching your search' : '');
+  }
   const viewCluster = document.querySelector('[data-gallery-view-cluster]');
   if (viewCluster) {
     viewCluster.querySelectorAll('[data-gallery-view-choice]').forEach(button => {
@@ -500,10 +726,26 @@ function updateGalleryMainControls() {
 }
 
 function hydrateDeferredNonAlbumTracksForAlbumTypes() {
-  if (!state.view?.non_album_tracks_deferred || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
-  void hydrateDeferredNonAlbumTracks({ libraryWide: true }).catch(error => {
-    console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
-  });
+  const searching = Boolean(String(state.view?.query || '').trim());
+  const artistSelected = Boolean(String(state.view.selected_artist || '').trim());
+  const warn = error => console.warn('[AlbumHaven][Gallery] Failed to load non-album tracks.', error);
+  if (artistSelected) {
+    if (typeof hydrateArtistNonAlbumAvailability === 'function') {
+      void hydrateArtistNonAlbumAvailability().catch(warn);
+    }
+  }
+  if (artistSelected && !searching) {
+    return;
+  }
+  if ((!state.view?.non_album_tracks_deferred && !searching) || typeof hydrateDeferredNonAlbumTracks !== 'function') return;
+  void hydrateDeferredNonAlbumTracks({ libraryWide: searching || !artistSelected }).catch(warn);
+  // A search probes library-wide loose tracks for its match indicator; the open menu's artist
+  // button still needs that artist's own loose tracks to know whether it has any.
+  const menuOpen = galleryMainSurfaceController?.current?.()?.key === 'album-types'
+    || document.getElementById?.('gallery-album-types-menu')?.hidden === false;
+  if (searching && artistSelected && menuOpen && state.view.non_album_tracks_deferred) {
+    void hydrateDeferredNonAlbumTracks({ libraryWide: false }).catch(warn);
+  }
 }
 
 function buildGalleryFamilyPanelBody() {
@@ -574,16 +816,16 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
 function syncGalleryBarSearchVisibility() {
   const bar = document.querySelector?.('[data-gallery-bar-instance="gallery"]');
   if (!bar) return;
-  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) { bar.hidden = false; return; }
-  const draftQuery = String(state.ui?.searchDraftQuery || '').trim();
-  const committedQuery = String(state.view?.query || '').trim();
-  const selectedArtist = String(state.view?.selected_artist || '').trim();
-  bar.hidden = selectedArtist
-    ? Boolean(draftQuery) && draftQuery !== committedQuery
-    : Boolean(draftQuery || committedQuery);
+  bar.hidden = false;
 }
 
 function updateGalleryMainChrome() {
+  // A new search replaces the artist an open info panel describes; the panel stays open within its own search.
+  const activeSurface = galleryMainSurfaceController?.current?.();
+  if (activeSurface?.surface?.matches?.('.artist-info-overlay')
+      && (activeSurface.openingQuery ?? '') !== String(state.view.query || '').trim()) {
+    closeGalleryMainSurface(false);
+  }
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -593,7 +835,14 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  cacheCurrentGallerySourceTotals();
+  const summaryTotals = resolveGallerySummaryTotals(
+    state.view,
+    model.totals,
+    state.gallery.mainState,
+    model.groups,
+    state.gallery.sourceTotalsByScope,
+  );
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
     primaryArtist,
@@ -606,6 +855,7 @@ function updateGalleryMainChrome() {
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
+  const mobileSummary = bar.querySelector('[data-gallery-context-mobile-summary]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
@@ -615,6 +865,10 @@ function updateGalleryMainChrome() {
   if (metadata) {
     metadata.hidden = true;
     metadata.innerHTML = '';
+  }
+  if (mobileSummary) {
+    mobileSummary.hidden = true;
+    mobileSummary.innerHTML = '';
   }
   if (inlineDivider) inlineDivider.hidden = true;
   if (inlineTotal) {
@@ -627,20 +881,20 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
-    summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
+    summary.textContent = context.artistCount == null || context.albumCount == null
+      ? ''
+      : `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
-    // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
     name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
-    summary.hidden = true;
-    summary.textContent = '';
-    if (inlineTotal) {
-      inlineTotal.hidden = false;
-      inlineTotal.textContent = galleryMainPlural(context.albumCount, 'album');
-    }
+    summary.innerHTML = buildGalleryArtistSummaryHtml(context.albumCount, context.artist_musicbrainz);
     if (metadata) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
+    }
+    if (mobileSummary) {
+      mobileSummary.hidden = false;
+      mobileSummary.innerHTML = buildGalleryArtistMobileSummaryHtml(context.albumCount, context.artist_musicbrainz);
     }
     if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
@@ -648,6 +902,7 @@ function updateGalleryMainChrome() {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  syncGalleryBarNameFit(bar, name);
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -678,14 +933,39 @@ function updateGalleryMainChrome() {
   }
 }
 
-function transitionGalleryMain(action) {
+function transitionGalleryMain(action, options = {}) {
+  cacheCurrentGallerySourceTotals();
   const previousView = ensureGalleryMainState().view;
   const nextState = applyGalleryClientTransition({ state: state.gallery.mainState, action, location: window.location, history: window.history });
   // Loose-track payloads have no per-track source provenance. Refresh their
   // authoritative scope on both hide and show; scope mismatch blocks stale edits.
   const hydrationCategories = action.type === 'toggle-source'
     ? activeGallerySourceCategories(nextState) : null;
+  if (hydrationCategories) {
+    state.gallery.pendingSourceHydrationCategories = hydrationCategories;
+  }
+  const sourceTotalsCurrent = state.gallery.sourceTotalsRevision === Number(
+    state.status?.inventory_mutation_revision ?? state.view?.inventory_mutation_revision ?? 0,
+  );
+  if (action.type === 'toggle-source' && options.sourceTotalsResolved !== true
+    && (!sourceTotalsCurrent
+      || !state.gallery.sourceTotalsByScope?.[gallerySourceScopeKey(hydrationCategories)])) {
+    return Promise.resolve(prefetchGallerySourceTotalsForAllScopes())
+      .then((resolved) => {
+        if (resolved) return transitionGalleryMain(action, { sourceTotalsResolved: true });
+        if (gallerySourceScopesEqual(
+          state.gallery.pendingSourceHydrationCategories,
+          hydrationCategories,
+        )) state.gallery.pendingSourceHydrationCategories = null;
+        return false;
+      });
+  }
   state.gallery.mainState = nextState;
+  if (hydrationCategories && gallerySourceScopesEqual(
+    state.gallery.pendingSourceHydrationCategories,
+    hydrationCategories,
+  )) state.gallery.pendingSourceHydrationCategories = null;
+  if (action.type === 'toggle-source') prefetchGallerySourceTotalsForAllScopes();
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;
     persistCurrentGalleryDisplayPreferences(state.view);
@@ -707,7 +987,9 @@ function transitionGalleryMain(action) {
       preserveSidebarState: false,
       fallbackToAllArtistsWhenSelectionMissing: true,
       preserveGalleryBrowseLocationState: true,
-      skipPendingViewTransition: true,
+      // Loaded albums may not cover the new sources; load instead of flashing an empty Library.
+      showViewTransition: getFilteredGalleryMainModel().totals.albumCount === 0,
+      transitionDetail: 'Loading the selected sources...',
     });
   }
 }
@@ -747,6 +1029,7 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
 }
 
 function renderGalleryArtistInfo(anchor) {
+  if (!anchor) return null;
   const artist = String(anchor.dataset.artist || '').trim();
   const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
@@ -845,6 +1128,25 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// A click or drag release on the track picks the nearest position; elsewhere on the row it steps right, wrapping.
+// Owner (11-08): every click, on the knob, the track or the label, moves to the next position in the cycle
+// Show -> Separate -> Hide -> Show, so three clicks visit every position once.
+function resolveSplitAlbumsSwitchMode() {
+  const current = Math.max(0, GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums));
+  return GALLERY_SPLIT_ALBUM_MODES[(current + GALLERY_SPLIT_ALBUM_MODES.length - 1) % GALLERY_SPLIT_ALBUM_MODES.length];
+}
+
+function handleSplitAlbumsSwitchKeydown(event) {
+  if (!event.target?.closest?.('[data-gallery-split-albums]')) return false;
+  const current = GALLERY_SPLIT_ALBUM_MODES.indexOf(ensureGalleryMainState().splitAlbums);
+  const next = { ArrowLeft: current - 1, ArrowDown: current - 1, ArrowRight: current + 1, ArrowUp: current + 1, Home: 0, End: 2 }[event.key];
+  if (next === undefined) return false;
+  event.preventDefault();
+  const mode = GALLERY_SPLIT_ALBUM_MODES[Math.min(2, Math.max(0, next))];
+  if (mode !== GALLERY_SPLIT_ALBUM_MODES[current]) transitionGalleryMain({ type: 'set-split-albums', mode });
+  return true;
+}
+
 function handleGalleryMainClick(event) {
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const source = event.target.closest?.('[data-gallery-source]');
@@ -852,7 +1154,11 @@ function handleGalleryMainClick(event) {
   const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
   if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const splitAlbums = event.target.closest?.('[data-gallery-split-albums]');
-  if (splitAlbums) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-split-albums' }); return true; }
+  if (splitAlbums) {
+    event.preventDefault();
+    transitionGalleryMain({ type: 'set-split-albums', mode: resolveSplitAlbumsSwitchMode() });
+    return true;
+  }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -878,11 +1184,34 @@ function handleGalleryMainClick(event) {
     hydrateDeferredNonAlbumTracksForAlbumTypes();
     return true;
   }
+  const navigationMode = event.target.closest?.('[data-navigation-mode]');
+  if (navigationMode) {
+    event.preventDefault();
+    const pageOpen = document.getElementById('non-album-modal')?.hidden === false;
+    if (navigationMode.dataset.navigationMode === 'collections') {
+      if (!pageOpen || !state.ui.nonAlbumLibraryWide) openNonAlbumModal({ libraryWide: true });
+      if (typeof closeArtistsDrawer === 'function' && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) closeArtistsDrawer();
+    } else if (pageOpen) {
+      closeNonAlbumModal();
+    }
+    return true;
+  }
   const nonAlbum = event.target.closest?.('[data-open-non-album-tracks]');
   if (nonAlbum) {
     event.preventDefault();
-    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true') {
-      openNonAlbumModal({ libraryWide: nonAlbum.dataset.libraryWide === '1' });
+    const libraryWide = nonAlbum.dataset.libraryWide === '1';
+    const explicitArtist = Boolean(String(state.view?.selected_artist || '').trim())
+      && String(state.view?.search_context?.selected_artist_source || '').trim() !== 'auto_top_match';
+    if (!libraryWide && !explicitArtist) return true;
+    const artistScopeAvailable = libraryWide || (
+      typeof hasHydratedArtistNonAlbumAvailability === 'function'
+      && hasHydratedArtistNonAlbumAvailability()
+      && Number(state.view?.non_album_track_count) > 0
+    );
+    if (!nonAlbum.disabled && nonAlbum.getAttribute('aria-disabled') !== 'true' && artistScopeAvailable) {
+      openNonAlbumModal({
+        libraryWide,
+      });
     }
     return true;
   }
@@ -895,6 +1224,7 @@ function handleGalleryMainClick(event) {
 function initGalleryMain() {
   if (typeof installPanelSelectionBoundary === 'function') installPanelSelectionBoundary();
   ensureGalleryMainState();
+  prefetchGallerySourceTotalsForAllScopes();
   galleryMainSurfaceController = createAnchoredSurfaceController();
   const panel = document.querySelector('[data-artist-family-panel]');
   const player = document.querySelector('[data-shell-slot="bottom_player"]');
@@ -902,17 +1232,51 @@ function initGalleryMain() {
   galleryFamilyPanelObserver = observeArtistFamilyPanelBounds({ panel, player });
   const scroll = document.getElementById('albums-scroll');
   scroll?.addEventListener('scroll', () => {
-    const active = galleryMainSurfaceController?.current?.();
-    if (active?.key?.startsWith?.('artist:') && active.surface.getAttribute?.('aria-modal') !== 'true' && active.openingScrollPosition
-        && (scroll.scrollTop !== active.openingScrollPosition.top
-          || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false, { reason: 'gallery-scroll' });
     if (galleryMainScrollFrame) return;
-    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
+    galleryMainScrollFrame = requestAnimationFrame(() => {
+      galleryMainScrollFrame = 0;
+      updateGalleryMainChrome();
+      const settled = galleryMainSurfaceController?.current?.();
+      if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
+        const previousAnchor = settled.anchor;
+        const artist = settled.key.slice('artist:'.length);
+        const nextAnchor = resolveVisibleGalleryArtistInfoAnchor(settled, scroll);
+        if (nextAnchor !== previousAnchor && String(nextAnchor?.dataset?.artist || '') === artist
+            && isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
+          previousAnchor?.setAttribute?.('aria-expanded', 'false');
+          nextAnchor.setAttribute?.('aria-expanded', 'true');
+          settled.anchor = nextAnchor;
+        }
+        if (String(settled.anchor?.dataset?.artist || '') === artist
+            && isGalleryArtistInfoAnchorVisible(settled.anchor, scroll)) {
+          settled.surface.style?.removeProperty?.('--artist-info-panel-max-height');
+          settled.surface.style?.removeProperty?.('--artist-info-body-max-height');
+          positionGalleryAnchoredSurface(settled.surface, settled.anchor, 'left');
+        } else {
+          closeGalleryMainSurface(false);
+        }
+      }
+    });
   }, { passive: true });
+  window.addEventListener('album-haven:artist-tree-settled', updateGalleryMainChrome);
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();
     const active = galleryMainSurfaceController?.current?.();
+    if (active?.surface?.matches?.('.artist-info-overlay')
+        && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())) {
+      const anchor = resolveVisibleGalleryArtistInfoAnchor(active, document.getElementById('albums-scroll'));
+      if (!anchor) {
+        closeGalleryMainSurface(false);
+        return;
+      }
+      if (anchor !== active.anchor) {
+        active.anchor?.setAttribute?.('aria-expanded', 'false');
+        anchor.setAttribute?.('aria-expanded', 'true');
+        active.anchor = anchor;
+      }
+    }
     if (active?.surface?.matches?.('.gallery-anchored-menu, .artist-info-overlay')) positionGalleryAnchoredSurface(active.surface, active.anchor, active.key.startsWith('artist:') ? 'left' : 'right');
+    if (active?.surface?.matches?.('.artist-info-overlay')) revealGalleryArtistInfoSurface(active.surface, active.anchor);
     if (active?.surface?.matches?.('.artist-family-panel')) positionArtistFamilyPanelEnvelope(active.surface, active.anchor);
     if (active?.key === 'search-suggestions') positionSearchSuggestionsSurface(active.surface);
   });
@@ -979,6 +1343,7 @@ function initGalleryMain() {
     }, true);
   }
   document.addEventListener('keydown', (event) => {
+    if (handleSplitAlbumsSwitchKeydown(event)) return;
     if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
       event.preventDefault();
       closeGalleryMainSurface(true);
@@ -1004,4 +1369,34 @@ function createGalleryFamilyPaintController(toggle) {
     visit,
     end() { selected = null; visited.clear(); },
   };
+}
+
+// Non-artist mobile contexts may wrap long names. Artist headers first move controls
+// to the metadata row, then ellipsize only when the full title row still cannot fit.
+// Measure only when visible title content or window width changes, never on every scroll frame.
+function syncGalleryBarNameFit(bar, name) {
+  if (!bar?.classList || !name) return;
+  const contextKind = String(bar.dataset.galleryContextKind || '');
+  const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
+  const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';
+  const key = `${name.textContent}|${metadata}|${summary}|${window.innerWidth}|${bar.clientWidth}|${bar.querySelector?.('[data-artist-info-trigger]') ? 1 : 0}|${contextKind}`;
+  if (bar.dataset.galleryNameFitKey === key) return;
+  bar.dataset.galleryNameFitKey = key;
+  bar.classList.remove('is-name-wrapping');
+  bar.classList.remove('is-controls-below');
+  if (contextKind === 'artist' || contextKind === 'single-artist') {
+    if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-controls-below');
+    const genreContainer = bar.querySelector?.('.gallery-bar__artist-genres');
+    const genrePills = Array.from(bar.querySelectorAll?.('.gallery-bar__artist-genre') || []);
+    genrePills.forEach((pill) => { pill.hidden = false; });
+    const right = genreContainer?.getBoundingClientRect?.().right;
+    if (Number.isFinite(right)) {
+      genrePills.forEach((pill) => {
+        if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
+      });
+    }
+    return;
+  }
+  if (Number(window.innerWidth) > 900) return;
+  if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-name-wrapping');
 }

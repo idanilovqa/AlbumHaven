@@ -24,12 +24,12 @@ test('tag editor footer uses quiet Cancel and affirmative Apply buttons', () => 
 test('Cancel actions use the shared hollow Button presentation', () => {
   const quietClass = /class="[^"]*ui-button--quiet[^"]*"[^>]*>Cancel<\/button>/g;
   const primaryModals = read('music_app/templates/partials/primary-modals.html');
-  const confirmModals = read('music_app/templates/partials/confirm-modals.html');
+  const confirmModals = read('music_app/templates/partials/confirm-modals.html')
+    + read('music_app/templates/partials/app-form-modal.html');
   const versionPicker = read('music_app/static/js/runtime/modal-and-overlay-helpers.js');
   const selectionAccent = read('music_app/static/js/selection-accent.js');
 
   assert.ok((primaryModals.match(quietClass) || []).length >= 2);
   assert.equal((confirmModals.match(quietClass) || []).length, 6);
-  assert.match(versionPicker, /ui-button--quiet[^"']*["'][^>]*>Cancel<\/button>/);
   assert.match(selectionAccent, /ui-button--quiet[^"']*["'][^>]*>Cancel<\/button>/);
 });

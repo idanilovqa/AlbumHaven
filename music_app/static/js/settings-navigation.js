@@ -134,7 +134,7 @@
       window.NavigationTree.setSelection(nav, section);
     };
 
-    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false } = {}) {
+    async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false, home = false } = {}) {
       const url = urlFor(value);
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
@@ -157,7 +157,15 @@
         library.hidden = false;
         document.title = libraryTitle;
         updateHistory(libraryUrl, historyMode, libraryHistoryState);
-        if (hierarchy && typeof window.AlbumHavenReturnToGallery === 'function') {
+        // Home (the app logo) is the library's own Home action: search cleared and the
+        // tree reset, never the view Settings was opened from.
+        const libraryHome = home ? document.querySelector('a[data-library-home="1"]') : null;
+        if (libraryHome) {
+          libraryHome.click();
+          libraryUrl = window.location.href;
+          libraryHistoryState = window.history.state;
+          libraryTitle = document.title;
+        } else if (hierarchy && typeof window.AlbumHavenReturnToGallery === 'function') {
           window.AlbumHavenReturnToGallery();
           libraryUrl = window.location.href;
           libraryHistoryState = window.history.state;
@@ -234,7 +242,10 @@
       const url = urlFor(link.href);
       if (!url || (!isSettingsPath(url.pathname) && !(library && !host.hidden && url.pathname === '/'))) return;
       event.preventDefault();
-      void navigate(url.href, { hierarchy: link.hasAttribute('data-settings-parent') || url.pathname === '/' });
+      void navigate(url.href, {
+        hierarchy: link.hasAttribute('data-settings-parent') || url.pathname === '/',
+        home: link.classList.contains('app-bar-brand'),
+      });
     };
     const onSubmit = (event) => {
       const form = event.target;

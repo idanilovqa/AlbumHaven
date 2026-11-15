@@ -127,10 +127,11 @@ def _reset_cover_refresh_progress(library_state: dict[str, object], *, in_progre
     library_state["covers_total"] = 0
     library_state["covers_downloaded"] = 0
     library_state["covers_current_folder"] = ""
+    library_state["covers_last_error"] = None
 
 
 def _handle_cover_refresh_failure(library_state: dict[str, object], exc: Exception) -> None:
-    library_state["last_error"] = str(exc)
+    library_state["covers_last_error"] = str(exc)
     library_state["covers_in_progress"] = False
     library_state["covers_finished_monotonic"] = time.monotonic()
     library_state["covers_outcome"] = "failed"

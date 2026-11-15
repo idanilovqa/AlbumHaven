@@ -72,6 +72,7 @@ function normalizeLibrarySettingsPayload(raw) {
   const movePolicy = source.move_policy && typeof source.move_policy === 'object' ? source.move_policy : {};
   normalized.move_policy.preferred_main_write_root = String(movePolicy.preferred_main_write_root || '').trim();
   normalized.move_policy.move_new_arrivals_to = String(movePolicy.move_new_arrivals_to || '').trim();
+  normalized.metadata_corrections = source.metadata_corrections === 'write_tags' ? 'write_tags' : 'display_only';
   return normalized;
 }
 
@@ -216,7 +217,13 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
-  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings]')) { event.preventDefault(); return true; }
+  if (librarySettingsReadOnlyClient() && event.target.closest('[data-add-library-root], [data-remove-library-root], [data-browse-library-root], [data-library-policy-trigger], [id^="library-auto-move-"], [data-save-library-settings], [data-import-album-ratings], [data-library-metadata-corrections]')) { event.preventDefault(); return true; }
+  const correctionMode = event.target.closest('[data-library-metadata-corrections]');
+  if (correctionMode) {
+    if (correctionMode.disabled || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) { event.preventDefault(); return true; }
+    getLibrarySettingsDraft().metadata_corrections = correctionMode.getAttribute('data-library-metadata-corrections');
+    return true;
+  }
   const toggle = event.target.closest('[id^="library-auto-move-"]');
   if (toggle) {
     event.preventDefault();
@@ -489,13 +496,14 @@ function buildLibrarySettingsRootSection(category, title, description) {
   const canManage = !librarySettingsReadOnlyClient() && ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
   const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
   const rows = roots.map((root, index) => `<div class="library-settings-root-row">
-    <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
-      aria-label="${escapeHtml(title)} path ${index + 1}" placeholder="${escapeHtml(title)} folder"
-      data-library-root-field="path" data-library-root-list="${escapeHtml(category)}" data-library-root-index="${index}" ${canManage ? '' : 'disabled'}>
-      ${window.ButtonComponent.renderActionButton({ariaLabel: `Choose ${title} folder ${index + 1}`, iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !canBrowse,
-        attributes: {'data-browse-library-root': category, 'data-library-root-index': index}})}
-      ${window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
-        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}})}</div>
+    ${window.AlbumHavenPathInput.render({
+      value: root.path || '', ariaLabel: `${title} path ${index + 1}`, placeholder: `${title} folder`, disabled: !canManage, canBrowse,
+      browseLabel: `Choose ${title} folder ${index + 1}`,
+      inputAttributes: {'data-library-root-field': 'path', 'data-library-root-list': category, 'data-library-root-index': index},
+      browseAttributes: {'data-browse-library-root': category, 'data-library-root-index': index},
+      trailingHtml: window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
+        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}}),
+    })}
     </div>`).join('');
 
   return `
@@ -510,6 +518,31 @@ function buildLibrarySettingsRootSection(category, title, description) {
       <div class="library-settings-root-list">${rows}</div>
     </section>
   `;
+}
+
+const LIBRARY_DATA_CORRECTION_MODES = [
+  { value: 'display_only', label: 'Display only' },
+  { value: 'write_tags', label: 'Write in tags' },
+];
+
+function buildLibraryDataCorrectionsSection(draft) {
+  const actions = ensureLibrarySettingsState().allowedActions || {};
+  const disabled = librarySettingsReadOnlyClient() || actions['library.settings.manage'] !== true;
+  // The app then edits tags for the user, so choosing it needs that permission.
+  const writeDisabled = disabled || (actions['library.files.edit_tags'] !== true && draft.metadata_corrections !== 'write_tags');
+  const options = LIBRARY_DATA_CORRECTION_MODES.map(mode => `<label class="appearance-option ui-radio-option">
+      <input type="radio" name="library-metadata-corrections" value="${mode.value}" data-library-metadata-corrections="${mode.value}"
+        ${draft.metadata_corrections === mode.value ? 'checked' : ''} ${(mode.value === 'write_tags' ? writeDisabled : disabled) ? 'disabled' : ''}><span>${mode.label}</span>
+    </label>`).join('');
+  return `<section class="library-settings-section" aria-labelledby="library-data-corrections-heading">
+    <div class="library-settings-section-heading">
+      <div>
+        <h4 id="library-data-corrections-heading">Library Data Corrections</h4>
+        <p>Corrects text metadata across your whole library.</p>
+      </div>
+    </div>
+    <div class="library-settings-policy-grid" role="radiogroup" aria-labelledby="library-data-corrections-heading">${options}</div>
+  </section>`;
 }
 
 function buildUtilityLibrarySettingsDetail() {
@@ -549,6 +582,7 @@ function buildUtilityLibrarySettingsDetail() {
           ${buildLibraryMovePolicyRow('move_new_arrivals_to', draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Move New Arrivals to Hoard', 'Move to Hoard', 'hoard')}
         </div>
       </section>
+      ${buildLibraryDataCorrectionsSection(draft)}
       <section class="library-settings-section">
         <div class="library-settings-section-heading">
           <div>
@@ -576,37 +610,11 @@ async function browseLibraryRootDraft(category, index) {
       || owner.allowedActions?.['library.filesystem.browse'] !== true || owner.allowedActions?.['library.paths.read'] !== true) return false;
   const root = getLibrarySettingsDraft()[category]?.[index];
   if (!root) return false;
-  let selected = '', disposed = false, generation = 0, navigating = false;
-  const read = async path => {
-    const response = await fetch(`/library-settings/browse?path=${encodeURIComponent(path)}`, {headers: {Accept: 'application/json'}});
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to browse folders.');
-    return data;
-  };
   try {
-    const initial = await read('');
-    if (!current() || ensureLibrarySettingsState() !== owner) return false;
-    const render = data => `<p>${escapeHtml(data.path || 'Choose a configured location')}</p><div class="settings-folder-list">${data.parent_path ? window.ButtonComponent.renderButton({label: 'Parent folder', attributes: {'data-folder-path': data.parent_path}}) : ''}${(data.entries || []).map(entry => window.ButtonComponent.renderButton({label: entry.name, attributes: {'data-folder-path': entry.path}})).join('')}</div>`;
-    const result = await showAppFormDialog({ title: 'Choose library folder', contentHtml: render(initial), submitLabel: 'Choose folder', submitEnabled: false,
-      onMount: (content, dialog) => {
-        const syncNavigation = () => {
-          content.setAttribute?.('aria-busy', String(navigating));
-          dialog?.setSubmitEnabled(Boolean(selected) && !navigating);
-        };
-        const navigate = async event => {
-          const button = event.target.closest('[data-folder-path]'); if (!button) return;
-          event.preventDefault(); const requestGeneration = ++generation;
-          selected = ''; navigating = true; syncNavigation();
-          try { const data = await read(button.getAttribute('data-folder-path'));
-            if (disposed || requestGeneration !== generation || !current()) return;
-            selected = String(data.path || ''); content.innerHTML = render(data);
-          } catch (error) { if (!disposed && requestGeneration === generation && current()) showToast(error.message, 'error'); }
-          finally { if (!disposed && requestGeneration === generation && current()) { navigating = false; syncNavigation(); } }
-        };
-        content.addEventListener('click', navigate); owner.pickerCleanup = () => content.removeEventListener('click', navigate);
-      },
-      onClose: () => { disposed = true; owner.pickerCleanup?.(); delete owner.pickerCleanup; },
-      onSubmit: () => { if (navigating) throw new Error('Wait for the folder to finish loading.'); if (!selected) throw new Error('Choose a folder first.'); return selected; },
+    const result = await window.AlbumHavenPathInput.choose({
+      title: 'Choose library folder',
+      isCurrent: () => current() && ensureLibrarySettingsState() === owner,
+      onError: error => { if (current()) showToast(error.message, 'error'); },
     });
     if (!result || !current() || ensureLibrarySettingsState() !== owner || getLibrarySettingsDraft()[category]?.[index] !== root) return false;
     root.path = result; renderUtilityModalContent(); return true;

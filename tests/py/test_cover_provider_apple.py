@@ -739,6 +739,93 @@ def test_search_apple_candidates_defers_one_web_sweep_until_native_queries_are_e
     ]
 
 
+def test_search_apple_candidates_runs_one_web_fallback_for_cyrillic_and_transliterated_variants():
+    from music_app.services import cover_provider_apple as apple
+
+    web_queries: list[str] = []
+
+    candidates = apple.search_apple_candidates(
+        "ДДТ",
+        "Ремиксы",
+        None,
+        None,
+        "AlbumHavenTests/1.0",
+        allow_web_fallback=True,
+        build_query_variants=lambda *args: [
+            ("ДДТ", "Ремиксы", None, None),
+            ("DDT", "Remixes", None, None),
+        ],
+        match_score=lambda **kwargs: 0.0,
+        parse_year=lambda value: None,
+        similarity=lambda left, right: 1.0,
+        probe_candidate_metrics=lambda *args, **kwargs: None,
+        probe_match_candidates=lambda **kwargs: [],
+        collect_matches=lambda *args, **kwargs: ([], []),
+        collect_artist_lookup_matches=lambda *args, **kwargs: ([], []),
+        collect_web_matches=lambda query_artist, *args, **kwargs: web_queries.append(query_artist) or [],
+        extract_og_image=lambda html: None,
+        album_name_in_alt=lambda album, alt: True,
+    )
+
+    assert candidates == []
+    assert web_queries == ["ДДТ"]
+
+
+def test_apple_web_fallback_never_crawls_artist_catalog_and_caps_outbound_calls():
+    from music_app.services import cover_provider_apple as apple
+
+    requests: list[tuple[str, str]] = []
+    album_links = "".join(
+        f'<a href="https://music.apple.com/us/album/unrelated-{index}/{index}">Album</a>'
+        for index in range(12)
+    )
+
+    def fake_http_get_json(url, *_args, **_kwargs):
+        requests.append(("json", url))
+        return {
+            "results": [{
+                "artistName": "ДДТ",
+                "artistLinkUrl": "https://music.apple.com/us/artist/ddt/1",
+            }]
+        }
+
+    def fake_http_get_text(url, *_args, **_kwargs):
+        requests.append(("page", url))
+        if "/artist/" in url:
+            return album_links
+        return '<meta property="og:title" content="Unrelated by ДДТ on Apple Music">'
+
+    def fake_http_get_text_with_url(url, *_args, **_kwargs):
+        requests.append(("search", url))
+        return album_links, url
+
+    matches = apple.collect_apple_web_matches(
+        "ДДТ",
+        "ДДТ",
+        "Ремиксы",
+        None,
+        None,
+        "AlbumHavenTests/1.0",
+        enforce_year=False,
+        http_get_json=fake_http_get_json,
+        http_get_text=fake_http_get_text,
+        http_get_text_with_url=fake_http_get_text_with_url,
+        match_score=lambda **kwargs: 0.0,
+        parse_year=lambda value: None,
+        similarity=lambda left, right: 1.0,
+        extract_og_image=lambda html: None,
+        album_name_in_alt=lambda album, alt: False,
+        log_event=None,
+        logger=_logger(),
+    )
+
+    assert matches == []
+    assert len(requests) <= 5
+    assert not any("/artist/" in url for _kind, url in requests)
+    assert sum(kind == "search" for kind, _url in requests) <= 2
+    assert sum(kind == "page" for kind, _url in requests) <= 3
+
+
 def test_search_apple_candidates_reuses_identical_artist_search_response_across_fallbacks():
     from music_app.services import cover_provider_apple as apple
 

@@ -6,6 +6,13 @@ const { spawnSync } = require('node:child_process');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 
+test('search gate forwards its isolated PostgreSQL port to both browser runners', () => {
+  const source = fs.readFileSync(path.join(repositoryRoot, 'scripts/run-search-regressions.ps1'), 'utf8');
+  assert.match(source, /\[ValidateRange\(1, 65535\)\]\[int\]\$PostgresPort = 5432/u);
+  assert.match(source, /& powershell\.exe[^]*?-File \$functionalRunner[^]*?-PostgresPort \$PostgresPort/u);
+  assert.match(source, /& \$performanceRunner[^]*?-PostgresPort \$PostgresPort/u);
+});
+
 test('search gate binds all performance targets to the shard string parameter', {
   skip: process.platform !== 'win32',
 }, () => {

@@ -330,6 +330,8 @@ export class ProductionViewObserver {
       }
       const detail = readViewDataRequest(request, this.nextRequestSequence + 1);
       if (!detail) return;
+      // A live artist-tree refresh reads only the sidebar; the gallery keeps its authority.
+      if (request.headers?.()['x-album-haven-view-purpose'] === 'artist-tree') return;
       detail.documentGeneration = this.documentGeneration;
       detail.mutationGeneration = this.mutationGeneration;
       this.nextRequestSequence = detail.sequence;

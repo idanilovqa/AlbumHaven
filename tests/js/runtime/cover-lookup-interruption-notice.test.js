@@ -32,6 +32,8 @@ function loadContext() {
     buildSmallAlertHtml: ({ message }) => `<span class="small-alert">${message}</span>`,
     escapeHtml: value => String(value || ''),
   });
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '..', 'button-component.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, stored };
 }

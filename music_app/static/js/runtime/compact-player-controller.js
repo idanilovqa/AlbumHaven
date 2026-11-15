@@ -216,7 +216,7 @@ function syncDockedCompactPresentation(els = compactPlayerElements()) {
 
 function positionFloatingCompactPlayer() {
   if (!compactPlayerPosition) return;
-  compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition,
+  compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerPosition.x, y: compactPlayerPosition.y,
     playerWidth: 105, playerHeight: 105, viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
     leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
@@ -564,12 +564,8 @@ function initCompactPlayer() {
       let savedMode = 'expanded';
       try { savedMode = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
       applyCompactPlayerMode(savedMode, { persist: false });
-    } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
-        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
-      els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
-      els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
+    } else if (compactPlayerPresentation === 'floating') {
+      positionFloatingCompactPlayer();
     } else if (compactPlayerStyle === 'docked') {
       syncDockedCompactPresentation();
     }

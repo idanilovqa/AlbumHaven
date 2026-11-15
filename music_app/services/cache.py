@@ -644,6 +644,20 @@ def persist_structural_tag_edit_for_config(
     return result
 
 
+def persist_moved_album_inventory_for_config(
+    config: dict[str, object],
+    *,
+    root_id: str,
+    active_file_entries: dict[str, dict[str, object]],
+    moves: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    return _select_runtime_scan_cache_adapter(config).persist_moved_album_inventory(
+        root_id=root_id,
+        active_file_entries=active_file_entries,
+        moves=moves,
+    )
+
+
 def validate_structural_tag_edit_for_config(
     config: dict[str, object],
     *,

@@ -105,6 +105,31 @@ for (const savedMode of [null, 'expanded', 'compact']) {
   });
 }
 
+test('a floating player resize re-clamps only its x/y position, not the drag state', t => {
+  const { context, controls } = loadQueueController(t);
+  const events = new Map();
+  const properties = new Map();
+  const element = () => ({ dataset: {}, hidden: false, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } }, setAttribute() {}, addEventListener() {}, querySelector() { return null; } });
+  Object.assign(controls, { player: element(), expanded: element(), compact: element(), collapse: element(), expand: element() });
+  controls.player.style.setProperty = (key, value) => properties.set(key, value);
+  controls.previous.addEventListener = controls.next.addEventListener = () => {};
+  context.document = { documentElement: { ...element(), getAttribute: name => (name === 'data-compact-player-style' ? 'floating' : null) }, getElementById: () => null };
+  context.window = { setTimeout, clearTimeout, innerWidth: 1200, innerHeight: 800, localStorage: { getItem: () => 'compact', setItem() {} }, addEventListener: (name, callback) => events.set(name, callback) };
+  context.initCompactPlayer();
+  assert.equal(controls.player.dataset.compactPresentation, 'floating');
+  assert.deepEqual([properties.get('--compact-player-x'), properties.get('--compact-player-y')], ['12px', '687px']);
+
+  const clampInputs = [];
+  const clamp = context.clampCompactPlayerPosition;
+  context.clampCompactPlayerPosition = options => { clampInputs.push(Object.keys(options).sort()); return clamp(options); };
+  context.window.innerHeight = 500;
+  events.get('resize')();
+  assert.deepEqual([properties.get('--compact-player-x'), properties.get('--compact-player-y')], ['12px', '387px']);
+  assert.deepEqual(clampInputs, [[
+    'leftMargin', 'margin', 'playerHeight', 'playerWidth', 'viewportHeight', 'viewportWidth', 'x', 'y',
+  ]]);
+});
+
 for (const [name, initialIndex, offsets, expected] of [
   ['next', 0, [1, 1], ['B.flac', 'C.flac']],
   ['previous', 3, [-1, -1], ['C.flac', 'B.flac']],
@@ -399,8 +424,8 @@ test('floating controller keeps the player within the practical viewport edge', 
 
   assert.match(controller, /const FLOATING_COMPACT_PLAYER_MARGIN = 8/);
   assert.match(controller, /const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12/);
-  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 5);
-  assert.equal((controller.match(/leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN/g) || []).length, 4);
+  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 4);
+  assert.equal((controller.match(/leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN/g) || []).length, 3);
 });
 
 test('docked queue controls disable previous and next at their respective boundaries', () => {

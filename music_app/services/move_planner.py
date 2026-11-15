@@ -359,6 +359,26 @@ def _iter_child_directories(path: Path) -> list[Path]:
 
 
 def _find_child_directory(parent: Path, name: str) -> Path | None:
-    # Probe the one candidate instead of listing every artist folder.
+    # Probe the one candidate first; only a miss lists this one directory to
+    # match the name case-insensitively.
     candidate = parent / name
-    return candidate if candidate.is_dir() else None
+    if candidate.is_dir():
+        return parent / _on_disk_child_name(candidate)
+    normalized_name = name.casefold()
+    for child in _iter_child_directories(parent):
+        if child.name.casefold() == normalized_name:
+            return child
+    return None
+
+
+def _on_disk_child_name(candidate: Path) -> str:
+    # A case-insensitive filesystem matches the probe under any spelling;
+    # resolving reports the stored one. A link resolves elsewhere, so it keeps
+    # the probed name and the result stays under its library root.
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return candidate.name
+    if str(resolved.parent).casefold() != str(candidate.parent).casefold():
+        return candidate.name
+    return resolved.name

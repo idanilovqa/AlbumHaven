@@ -225,6 +225,30 @@ def test_move_planner_reuses_existing_artist_folder_before_preferred_write_root(
     assert payload["actions"]["move_to_library"]["target_root_id"] == "existing-main"
 
 
+def test_move_planner_reuses_artist_folder_under_its_on_disk_spelling(config):
+    arrivals_root = (Path(config["DATA_DIR"]) / "arrivals").resolve()
+    main_root = (Path(config["DATA_DIR"]) / "main").resolve()
+    existing_artist_folder = main_root / "BROADCAST"
+    existing_artist_folder.mkdir(parents=True)
+    track_path = arrivals_root / "Broadcast" / "Tender Buttons" / "01 - I Found the F.mp3"
+    track_path.parent.mkdir(parents=True)
+    track_path.write_bytes(b"track")
+    save_library_root_settings(config, {
+        "main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}],
+        "hoarding_library_roots": [],
+        "new_arrivals_roots": [{"id": "arrivals-1", "path": str(arrivals_root)}],
+        "move_policy": {"preferred_main_write_root": "main"},
+    })
+
+    move = build_move_availability_payload(
+        _make_album(track_paths=[str(track_path)]),
+        config,
+    )["actions"]["move_to_library"]
+
+    assert move["reuses_existing_artist_folder"] is True
+    assert move["destination_path"] == str(existing_artist_folder / "2004 - Tender Buttons")
+
+
 def test_move_planner_blocks_missing_year_metadata(config):
     arrivals_root = (Path(config["DATA_DIR"]) / "arrivals").resolve()
     hoard_root = (Path(config["DATA_DIR"]) / "hoard").resolve()

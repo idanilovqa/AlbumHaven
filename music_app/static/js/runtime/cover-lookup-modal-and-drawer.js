@@ -2060,10 +2060,10 @@ function renderCoverLookupDrawerScrollWindow() {
     return;
   }
   const visibleTasks = renderCoverLookupDrawerTaskWindow(body, tasks);
-  state.coverLookup.drawerRenderedTerminalSignatures = {
-    ...state.coverLookup.drawerRenderedTerminalSignatures,
-    ...buildCoverLookupDrawerTerminalSignatures(visibleTasks),
-  };
+  state.coverLookup.drawerRenderedTerminalSignatures = Object.assign(
+    state.coverLookup.drawerRenderedTerminalSignatures || {},
+    buildCoverLookupDrawerTerminalSignatures(visibleTasks),
+  );
 }
 
 async function clearCompletedCoverLookupTasks() {

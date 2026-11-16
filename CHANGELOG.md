@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.13 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. The stable promotion needs a commit whose complete PR pipeline passed; 0.11.12's pipeline could not finish after its admin merge.
+
 ## 0.11.12 - 2026-11-15
 
 - Gapless playback: when an album plays on into its next track, the near-silent MP3 decoder padding at the end of one track and the start of the next (MP3s without encoder gapless metadata) is removed, so the transition no longer pauses. Only edges at most 64 ms long, below -40 dBFS and at least 20 dB under the neighbouring audio are trimmed; seeks, loops, skips and moves into another album keep every sample. Web and Android behave the same.

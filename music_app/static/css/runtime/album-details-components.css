@@ -19,6 +19,11 @@
 .album-details-series { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
 .album-details-series > .section-split-label { margin: 0; padding: 0; }
 .album-details-series__link { text-align: left; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+/* Web: one line, "Series: <name>" (owner 2026-11-15). */
+.album-details-series--inline { display: block; }
+.album-details-series--inline + .album-details-series--inline { margin-top: 4px; }
+.album-details-series__label { color: var(--muted); }
+.album-details-series--inline .album-details-series__link { display: inline; }
 .album-details-source-marker { display: inline-grid; place-items: center; width: 24px; height: 24px; color: var(--muted); pointer-events: none; }
 .album-details-source-marker svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .album-details-source-marker--hoard { color: var(--library-source-hoard); }

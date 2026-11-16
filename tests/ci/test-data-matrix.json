@@ -9377,7 +9377,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/seriesView.spec.js",
-    "case": "1B: the SERIES block sits under the cover: label above an underlined series link",
+    "case": "1B: web album details show \"Series: <name>\" on one line under the cover; the name links to its gallery",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9386,7 +9386,7 @@
     "expectedContracts": [
       "musicbrainz-series-album-details-block"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9401,7 +9401,7 @@
     "expectedContracts": [
       "musicbrainz-series-album-details-block"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

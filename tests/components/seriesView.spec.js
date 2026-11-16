@@ -19,25 +19,27 @@ async function loadAlbumDetailsComponents(page) {
 
 const ALBUM = { musicbrainz_series: [{ mbid: '520f6fcd-251d-46cd-83a9-0bc725d42333', name: 'Colossus Projects' }] };
 
-test('1B: the SERIES block sits under the cover: label above an underlined series link', async ({ page }) => {
+test('1B: web album details show "Series: <name>" on one line under the cover; the name links to its gallery', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.setContent('<div id="track-modal"><div id="track-modal-cover" style="width:280px"><div class="cover" style="height:280px"></div></div><div id="track-modal-list"></div></div>');
   await loadAlbumDetailsComponents(page);
   await page.evaluate((album) => syncAlbumDetailsSeries(album, {
     cover: document.getElementById('track-modal-cover'), list: document.getElementById('track-modal-list'), mobile: false,
   }), ALBUM);
-  const block = page.locator('#track-modal-cover > [data-album-details-series]');
+  const block = page.locator('#track-modal-cover > [data-album-details-series="series"]');
   await expect(block).toBeVisible();
-  await expect(block.locator('.section-split-label')).toHaveText('Series');
+  await expect(block).toHaveText('Series: Colossus Projects');
+  await expect(block.locator('.section-split-label')).toHaveCount(0);
   const link = block.getByRole('button', { name: 'Colossus Projects' });
   await expect(link).toHaveAttribute('title', 'Show all albums in this series');
-  await expect(link).toHaveCSS('text-decoration-line', 'underline');
+  await expect(link).toHaveAttribute('data-open-series', '520f6fcd-251d-46cd-83a9-0bc725d42333');
   const cover = await page.locator('#track-modal-cover .cover').boundingBox();
-  const label = await block.locator('.section-split-label').boundingBox();
+  const label = await block.locator('.album-details-series__label').boundingBox();
   const linkBox = await link.boundingBox();
+  // One line under the cover: the label and its link share a line.
   expect(label.y).toBeGreaterThanOrEqual(cover.y + cover.height + 14 - 1);
-  expect(linkBox.y).toBeGreaterThanOrEqual(label.y + label.height);
-  expect(Math.abs(linkBox.x - label.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs((linkBox.y + linkBox.height / 2) - (label.y + label.height / 2))).toBeLessThanOrEqual(2);
+  expect(linkBox.x).toBeGreaterThan(label.x + label.width);
 });
 
 test('4A: on a phone the SERIES block follows the track table, and an album of no series shows none', async ({ page }) => {

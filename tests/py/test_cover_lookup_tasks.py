@@ -249,10 +249,8 @@ def test_task_list_terminalizes_stale_persisted_running_task(monkeypatch):
     )
     monkeypatch.setattr(
         task_service,
-        "upsert_cover_lookup_notification",
-        lambda config, task, *, persistence_revision: persisted.append(
-            (task, persistence_revision)
-        ),
+        "upsert_cover_lookup_notifications",
+        lambda config, tasks: persisted.extend(tasks),
     )
 
     summaries = task_service.list_cover_lookup_task_summaries(config={})
@@ -359,7 +357,7 @@ def test_notification_reconciliation_interrupts_stale_live_worker(monkeypatch, c
     )
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -378,7 +376,7 @@ def test_notification_reconciliation_interrupts_stale_live_worker(monkeypatch, c
 def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, cancel_event = create_cover_lookup_task(
@@ -399,7 +397,7 @@ def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
 def test_superseded_candidate_future_cannot_fail_active_cover_save(monkeypatch, config):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, cancel_event = create_cover_lookup_task(
@@ -426,7 +424,7 @@ def test_superseded_candidate_future_cannot_fail_active_cover_save(monkeypatch, 
 def test_failed_cover_save_future_reports_a_save_failure(monkeypatch, config):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -453,7 +451,7 @@ def test_failed_cover_save_future_reports_a_save_failure(monkeypatch, config):
 def test_failed_future_does_not_resurrect_cleared_terminal_task(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -494,7 +492,7 @@ def test_notification_reconciliation_keeps_recent_candidate_worker_alive(
     )
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -529,7 +527,7 @@ def test_notification_reconciliation_uses_newest_activity_timestamp(
     )
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -547,7 +545,7 @@ def test_notification_reconciliation_uses_newest_activity_timestamp(
 def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -569,7 +567,7 @@ def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
 def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -600,7 +598,7 @@ def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
 def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -1290,7 +1288,7 @@ def test_cleared_task_reclaims_tombstone_and_persistence_lock_after_last_future_
     from music_app.services import cover_lookup_tasks as task_service
 
     config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/test"
-    monkeypatch.setattr(task_service, "upsert_cover_lookup_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(task_service, "upsert_cover_lookup_notifications", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         task_service,
         "delete_cover_lookup_notifications",
@@ -1611,8 +1609,8 @@ def test_mark_action_taken_for_track_paths_waits_for_matching_active_task(monkey
     monkeypatch.setattr(task_service, "load_cover_lookup_notifications", lambda _config: tasks)
     monkeypatch.setattr(
         task_service,
-        "mark_cover_lookup_task_notification_action_taken",
-        lambda task_id, *, config: marked_ids.append(task_id) or {"id": task_id},
+        "mark_cover_lookup_tasks_notification_action_taken",
+        lambda task_ids, *, config: [marked_ids.append(task_id) or {"id": task_id} for task_id in task_ids],
     )
     reset_cover_lookup_runtime_state()
 

@@ -391,6 +391,21 @@ const DEFECTS = [
       + 'def _seeded_album_count(*, get_state):\n    st = get_state()\n    return sum(1 for album in st["albums"] if album)\n',
     expected: /^py:routes\/api_wave_c_asgi_routes\.py#recent_discovery_lookups: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:albums at music_app\/routes\/api_wave_c_asgi_routes\.py:\d+/,
   },
+  {
+    // The cover pass snapshot copied the whole file cache through
+    // `cache if selected is None else subset`: a conditional expression
+    // hid the registered collection from the scan.
+    id: 'BI-04 library-state collection chosen by a conditional expression',
+    language: 'py',
+    file: 'music_app/routes/api_wave_c_asgi_routes.py',
+    anchor: 'def discovery_lookup_detail(request: Request, lookup_ref: str) -> JSONResponse:\n',
+    replacement: 'def discovery_lookup_detail(request: Request, lookup_ref: str) -> JSONResponse:\n'
+      + '    _seeded_cover_snapshot(request.app.state.library_state, None)\n',
+    prelude: 'def _seeded_cover_snapshot(library_state, selected):\n'
+      + '    source = library_state.get("file_cache") or {} if selected is None else selected\n'
+      + '    return {path: dict(entry) for path, entry in source.items()}\n',
+    expected: /^py:routes\/api_wave_c_asgi_routes\.py#discovery_lookup_detail: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:file_cache at music_app\/routes\/api_wave_c_asgi_routes\.py:\d+/,
+  },
 ];
 
 function seededOverrides() {

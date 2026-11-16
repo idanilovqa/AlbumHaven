@@ -146,6 +146,9 @@ def _run_converging_waves(trigger_wave, library_state, executor, searches) -> No
 @pytest.mark.parametrize("interaction_id", [
     "py:services/cover_refresh_runtime.py#start_manual_cover_refresh_request",
     "py:services/cover_refresh_runtime.py#start_manual_cover_refresh",
+    # The batch worker the reservation runs, through its state.py wiring.
+    "py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request",
+    "py:services/state.py#refresh_unsuccessful_cover_artwork_for_state",
 ])
 def test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count(
     cover_state, tmp_path, monkeypatch, interaction_id,
@@ -169,7 +172,7 @@ def test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_p
             "start_background_refresh": lambda **_kwargs: pytest.fail("a published library needs no indexing"),
             "get_file_cache_snapshot": snapshot, "submit_cover_job": executor.submit, "defer_preparation": True,
         }
-        if interaction_id.endswith("#start_manual_cover_refresh_request"):
+        if not interaction_id.endswith("#start_manual_cover_refresh"):
             return runtime.start_manual_cover_refresh_request(refresh_unsuccessful_cover_artwork=refresh, **common)
         return runtime.start_manual_cover_refresh(
             build_cover_jobs=lambda file_cache, **kwargs: runtime.build_cover_jobs_for_snapshot(
@@ -243,8 +246,13 @@ def test_fetch_unsuccessful_covers_route_contract_only_reserves_the_batch_at_pro
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_fetch_covers_unsuccessful"))
 
 
+@pytest.mark.parametrize("interaction_id", [
+    "py:services/cover_refresh_runtime.py#refresh_cover_artwork_request",
+    # The whole-library pass context the background batch builds.
+    "py:services/cover_refresh_runtime.py#build_cover_refresh_context",
+])
 def test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count(
-    cover_state, tmp_path, monkeypatch,
+    cover_state, tmp_path, monkeypatch, interaction_id,
 ):
     from music_app.services import cover_refresh_planning
     from music_app.services import cover_refresh_runtime as runtime
@@ -298,9 +306,7 @@ def test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_p
         )
         return OperationCounts(builder_calls=planning_passes[0], queue_claims=len(searches))
 
-    measure_scale_pair(
-        run=run, **_registered("py:services/cover_refresh_runtime.py#refresh_cover_artwork_request"),
-    )
+    measure_scale_pair(run=run, **_registered(interaction_id))
 
 
 def test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_production_album_count(
@@ -372,3 +378,74 @@ def test_watcher_cover_refresh_drain_contract_reads_only_the_queued_album_at_pro
     measure_scale_pair(
         run=run, **_registered("py:services/state.py#_drain_watcher_cover_refresh_queue"),
     )
+
+
+@pytest.mark.parametrize("interaction_id", [
+    "py:services/state.py#refresh_cover_artwork_for_track_paths_for_state",
+    "py:services/cover_refresh_runtime.py#refresh_cover_artwork_for_track_paths_request",
+])
+def test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count(
+    cover_state, tmp_path, monkeypatch, interaction_id,
+):
+    """Fetch cover for one album plans, fetches, and republishes that album
+    alone: no file-cache or album-list walk at any library size."""
+    from PIL import Image
+
+    from music_app.services import cover_refresh_execution
+    from music_app.services import state as state_service
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_album_index import library_album_index, publish_library_albums
+
+    app, _executor, searches = cover_state
+    config, logger = app.state.config, app.state.logger
+    persisted: list[set[str]] = []
+
+    def persist_cover_selection(_config, track_paths, _cover_path, *, commit_guard, **_options):
+        # The Postgres cover-selection commit for the selected tracks.
+        persisted.append(set(track_paths))
+        return commit_guard(lambda: {"track_file_rows_updated": len(track_paths)})
+
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist_cover_selection)
+
+    class CountingAlbums(list):
+        counts = OperationCounts()
+
+        def __iter__(self):
+            for album in super().__iter__():
+                self.counts.candidate_rows += 1
+                yield album
+
+    def run(album_count: int) -> OperationCounts:
+        searches.clear()
+        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        library = {
+            path: {"path": path, "title": "One", "album": "Album", "album_artist": f"Artist {index:05d}"}
+            for index in range(album_count - 1)
+            for path in (f"/music/Artist {index:05d}/Album/01.mp3",)
+        }
+        # The selected album's folder holds a cover its cache entry does not know yet.
+        selected = _cover_library(tmp_path / f"selected-{album_count}", covered=0, missing=1)
+        (selected_path,) = selected
+        cover = Path(selected_path).with_name("cover.jpg")
+        Image.new("RGB", (1600, 1600), "red").save(cover)
+        library_state = app.state.library_state
+        library_state.update({"covers_in_progress": False, "scan_in_progress": False})
+        publish_library_albums(library_state, CountingAlbums(build_albums_from_file_cache({**library, **selected})))
+        file_cache = _CountingFileCache({**library, **selected})
+        library_state["file_cache"] = file_cache
+        counts = OperationCounts()
+        file_cache.counts = library_state["albums"].counts = counts
+
+        result = state_service.refresh_cover_artwork_for_track_paths_for_state(
+            library_state, config, logger, {selected_path}, force_search=True,
+        )
+        assert result["changed"] is True
+        assert persisted[-1] == {selected_path}
+        assert dict.get(file_cache, selected_path)["cover_path"] == str(cover)
+        (republished,) = library_album_index(library_state).albums_with_any_track([selected_path])
+        assert Path(republished.cover_path) == cover
+        assert list.__len__(library_state["albums"]) == album_count
+        counts.queue_claims = len(searches)
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction_id))

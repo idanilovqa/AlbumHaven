@@ -80,26 +80,30 @@ def save_cover_lookup_notifications(config: dict[str, object], tasks: list[dict[
     _cover_lookup_notifications_adapter(config).save_notifications(filtered_tasks)
 
 
-def upsert_cover_lookup_notification(
+def upsert_cover_lookup_notifications(
     config: dict[str, object],
-    task: dict[str, object],
-    *,
-    persistence_revision: int,
+    tasks: list[tuple[dict[str, object], int]],
 ) -> None:
-    if not isinstance(task, dict) or not str(task.get("id") or "").strip():
+    """Write each (task, persistence revision) in one store transaction."""
+    items = [
+        (task, revision)
+        for task, revision in tasks
+        if isinstance(task, dict) and str(task.get("id") or "").strip()
+    ]
+    if not items:
         return
     adapter = _cover_lookup_notifications_adapter(config)
-    upsert_notification = getattr(adapter, "upsert_notification", None)
-    if callable(upsert_notification):
-        upsert_notification(task, persistence_revision=persistence_revision)
+    upsert_notifications = getattr(adapter, "upsert_notifications", None)
+    if callable(upsert_notifications):
+        upsert_notifications(items)
         return
-    task_id = str(task.get("id") or "").strip()
+    task_ids = {str(task.get("id") or "").strip() for task, _revision in items}
     retained = [
         item
         for item in adapter.load_notifications()
-        if str(item.get("id") or "").strip() != task_id
+        if str(item.get("id") or "").strip() not in task_ids
     ]
-    adapter.save_notifications([*retained, task])
+    adapter.save_notifications([*retained, *(task for task, _revision in items)])
 
 
 def delete_cover_lookup_notifications(

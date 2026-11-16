@@ -91,12 +91,15 @@ def test_practice_artwork_resolves_only_owned_loop_cover_not_submitted_path(tmp_
         assert loop_id == "owned-loop"
         assert scope == {"account_id": 7, "library_id": 23}
         return {"cover_path": str(cover)} if owned else None
-    def resolve(config, raw_path):
+    roots = (tmp_path,)
+    def resolve(raw_path, root_paths):
         calls.append(raw_path)
         assert raw_path == str(cover)
+        assert root_paths is roots
         return cover
     monkeypatch.setattr("music_app.services.loops.get_loop", get_loop)
-    monkeypatch.setattr("music_app.services.library_roots.resolve_configured_media_path", resolve)
+    monkeypatch.setattr("music_app.services.library_roots.configured_library_root_paths_snapshot", lambda _config: roots)
+    monkeypatch.setattr("music_app.services.library_roots.resolve_media_path_within_roots", resolve)
     if owned:
         response = asyncio.run(browse_artwork_response(request))
         assert response.media_type == "image/png"

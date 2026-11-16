@@ -2888,10 +2888,11 @@ class PostgresLibraryBrowseRepository:
             self._load_problematic_file_rows(album_key=str(album_key or ""))
         )
         requested_keys = set(_problematic_album_key_candidates(str(album_key or "")))
-        for album in albums:
-            if str(album.get("key") or "") not in requested_keys:
-                continue
-            album["_suggestion_aliases"] = self._load_relation_alias_maps().get("alias_to_canonical", {})
+        matching_albums = [album for album in albums if str(album.get("key") or "") in requested_keys]
+        # One relation-alias read serves every matching album.
+        aliases = self._load_relation_alias_maps().get("alias_to_canonical", {}) if matching_albums else {}
+        for album in matching_albums:
+            album["_suggestion_aliases"] = aliases
             detail = _problematic_album_detail_payload(album)
             if detail is not None:
                 return detail

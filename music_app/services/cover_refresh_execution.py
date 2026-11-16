@@ -32,6 +32,7 @@ from music_app.services.cover_provider_candidates import (
     cover_candidate_to_lookup_match,
 )
 from music_app.services.cover_provider_outcomes_postgres import persist_cover_provider_outcomes
+from music_app.services.edit_state import rebuild_affected_albums_in_state
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_roots import library_root_cache_identity
@@ -438,6 +439,7 @@ def run_cover_jobs(
     negative_cache_ttl_seconds: float | None = None,
     job_workers: int = 1,
     allow_full_snapshot_persistence: bool = True,
+    republish_changed_albums_only: bool = False,
 ) -> dict[str, object]:
     library_state = get_state()
     changed = False
@@ -1058,6 +1060,14 @@ def run_cover_jobs(
     if changed:
         snapshot = None
         snapshot_options = {}
+
+        def republish_albums(entries: dict[str, dict[str, object]]) -> None:
+            if republish_changed_albums_only:
+                # A selected-album refresh rebuilds only the albums its jobs hold.
+                job_paths = {str(path) for job in jobs for path in job.get("track_paths") or []}
+                rebuild_affected_albums_in_state(library_state, entries, entries, job_paths, separate_release_keys)
+            else:
+                publish_library_albums(library_state, build_albums_from_file_cache(entries, separate_release_keys))
         if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
             adapter = select_scan_cache_adapter(config)
             snapshot_options = {
@@ -1097,7 +1107,7 @@ def run_cover_jobs(
                     snapshot = {path: dict(entry) for path, entry in current_entries.items()}
                     for path, selection in accepted_updates.items():
                         snapshot[path].update(selection)
-                publish_library_albums(library_state, build_albums_from_file_cache(current_entries, separate_release_keys))
+                republish_albums(current_entries)
 
         if snapshot is not None:
             def commit_snapshot(commit_action):
@@ -1107,9 +1117,7 @@ def run_cover_jobs(
                     result = commit_action()
                     for path, selection in accepted_updates.items():
                         library_state["file_cache"][path].update(selection)
-                    publish_library_albums(library_state, build_albums_from_file_cache(
-                        library_state["file_cache"], separate_release_keys,
-                    ))
+                    republish_albums(library_state["file_cache"])
                     return result
 
             # Preserve the legacy clearing path. Revision guards reject concurrent

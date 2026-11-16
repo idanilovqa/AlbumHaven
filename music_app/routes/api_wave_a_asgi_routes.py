@@ -1712,6 +1712,10 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None or not payload.get("confirmed"):
         return _json_response(({"ok": False, "error": "Repair was not confirmed"}, 400))
+    return await run_in_threadpool(_repair_album_response, request, payload, history_scope)
+
+
+def _repair_album_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     payload = _normalize_asgi_repair_album_payload(payload)
 
     album, album_error = _require_album_payload(payload)

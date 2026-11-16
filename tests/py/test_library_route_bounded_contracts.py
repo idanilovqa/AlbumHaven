@@ -772,10 +772,10 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     from music_app.services import cover_lookup_tasks
 
     notified: list[str] = []
-    # The Postgres notification store keeps the one task it is given.
+    # The Postgres notification store keeps the tasks it is given in one write.
     monkeypatch.setattr(
-        cover_lookup_tasks, "upsert_cover_lookup_notification",
-        lambda _config, task, **_kwargs: notified.append(str(task.get("id"))),
+        cover_lookup_tasks, "upsert_cover_lookup_notifications",
+        lambda _config, tasks: notified.extend(str(task.get("id")) for task, _revision in tasks),
     )
     match = {"id": "pasted-1", "image_url": "https://covers.example/front.jpg", "source": "manual", "width": 1200, "height": 1200}
     # Fetching the pasted pages is provider network work outside this contract.
@@ -866,8 +866,8 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
     from music_app.routes import api_wave_d_asgi_routes
     from music_app.services import cover_lookup_tasks, covers
 
-    # The Postgres notification store keeps the one task it is given.
-    monkeypatch.setattr(cover_lookup_tasks, "upsert_cover_lookup_notification", lambda *_args, **_kwargs: None)
+    # The Postgres notification store keeps the tasks it is given in one write.
+    monkeypatch.setattr(cover_lookup_tasks, "upsert_cover_lookup_notifications", lambda *_args, **_kwargs: None)
 
     class SnapshotRepository:
         """The Postgres candidate-snapshot store resolves the selected album."""
@@ -911,3 +911,139 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
         return counts
 
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_save_remote"))
+
+
+def _problematic_rows(track_count: int) -> list[dict[str, object]]:
+    """Inventory rows for `track_count` tracks, 12 per album; the first album
+    has a mis-decoded title."""
+    rows = []
+    for track_index in range(track_count):
+        album_index = track_index // 12
+        artist = "Broadcast" if album_index == 0 else f"Artist {album_index:05d}"
+        title = "Ã‰tÃ©" if track_index == 0 else f"Song {track_index}"
+        path = f"/library/{artist}/Tender Buttons/{track_index % 12 + 1:02d}.mp3"
+        rows.append({
+            "album_id": album_index + 1, "album_key": f"{artist.casefold()}::tender buttons",
+            "album_title": "Tender Buttons", "album_release_year": 2005, "album_cover_path": None,
+            "album_metadata": {"album_artist": artist, "artists": [artist]}, "artist_name": artist,
+            "track_id": track_index + 1, "track_key": f"track-{track_index}", "track_title": title,
+            "track_number": track_index % 12 + 1, "disc_number": 1, "duration_seconds": 90,
+            "file_private_path": path,
+            "file_entry": {"path": path, "album": "Tender Buttons", "album_artist": artist, "artist": artist,
+                           "title": title, "year": 2005, "track_number": track_index % 12 + 1, "disc_number": 1},
+            "ignored_repair_keys": [], "separate_release_keys": [], "duplicate_file_count": 1,
+        })
+    return rows
+
+
+@pytest.mark.parametrize("backend", ["in-memory", "postgres"])
+@pytest.mark.parametrize("route", [
+    ("py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail", "/utilities/problematic-files/broadcast::tender buttons", {}),
+    ("py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query", "/utilities/problematic-files/detail",
+     {"album_key": "broadcast::tender buttons"}),
+], ids=["path", "query"])
+def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count(
+    library_app, tmp_path, monkeypatch, route, backend,
+):
+    from music_app.routes import api_read_asgi_routes
+    from music_app.services import library_browse_postgres, problematic_albums
+
+    interaction_id, path, query = route
+    # The Postgres rule-state store holds no ignored repairs for this library.
+    monkeypatch.setattr(problematic_albums, "load_ignored_repair_keys", lambda _config: set())
+    current: dict[str, object] = {}
+    if backend == "postgres":
+        monkeypatch.setattr(
+            api_read_asgi_routes, "select_runtime_persistence_adapter",
+            lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="postgres"),
+        )
+        repository = library_browse_postgres.PostgresLibraryBrowseRepository
+
+        def load_problematic_file_rows(_self, album_key=None, **_options):
+            # The keyed Postgres read: `where album_key = %(album_key)s`.
+            selected = [row for row in current["rows"] if row["album_key"] == album_key]
+            current["counts"].candidate_rows += len(selected)
+            return [dict(row) for row in selected]
+
+        def load_relation_alias_maps(_self, **_options):
+            # One Postgres read of the relation alias maps per request.
+            current["counts"].sql_statements += 1
+            return {"alias_to_canonical": {}}
+
+        monkeypatch.setattr(repository, "_load_problematic_file_rows", load_problematic_file_rows)
+        monkeypatch.setattr(repository, "_load_relation_alias_maps", load_relation_alias_maps)
+
+    def run(track_count: int) -> OperationCounts:
+        if backend == "postgres":
+            counts = OperationCounts()
+            current.update(rows=_problematic_rows(track_count), counts=counts)
+        else:
+            _album_paths, counts = _repairable_library(library_app, tmp_path / f"library-{track_count}", track_count)
+        status, _headers, body = run_asgi_request(library_app, "GET", path, query=query)
+        assert status == 200, body
+        payload = decode_json(body)
+        assert payload["key"] == "broadcast::tender buttons"
+        assert len(payload["tracks"]) == 12
+        assert "Encoding problem" in payload["problem_reasons"]
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction_id))
+
+
+@pytest.mark.parametrize("interaction_id", [
+    "py:routes/api_read_asgi_routes.py#utilities_problematic_files",
+    "py:services/problematic_albums.py#_run_problematic_albums_prewarm",
+])
+def test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count(
+    library_app, tmp_path, monkeypatch, interaction_id,
+):
+    """The in-memory Problematic Files summary covers every album: one
+    deliberate whole-library pass per published library. Repeated requests and
+    prewarm triggers coalesce into that one pass and then converge on its
+    cached payload, however many arrive."""
+    from music_app.services import problematic_albums
+
+    builds = [0]
+    build = problematic_albums.build_problematic_albums_read_payload
+
+    def counted_build(**kwargs):
+        builds[0] += 1
+        return build(**kwargs)
+
+    monkeypatch.setattr(problematic_albums, "build_problematic_albums_read_payload", counted_build)
+    # The Postgres rule-state store holds no ignored repairs for this library.
+    monkeypatch.setattr(problematic_albums, "load_ignored_repair_keys", lambda _config: set())
+    submitted: list = []
+    monkeypatch.setattr(
+        problematic_albums, "_PROBLEMATIC_ALBUMS_PREWARM_EXECUTOR",
+        SimpleNamespace(submit=lambda function, *args, **kwargs: submitted.append((function, args, kwargs))),
+    )
+    config, logger = library_app.state.config, library_app.state.logger
+
+    def run(trigger_count: int) -> OperationCounts:
+        builds[0] = 0
+        submitted.clear()
+        # A freshly published library of 120 tracks in 28 albums.
+        _album_paths, counts = _repairable_library(library_app, tmp_path / f"library-{trigger_count}", 120)
+        state = library_app.state.library_state
+        state.update({"scan_in_progress": False, "covers_in_progress": False})
+        for _wave in range(2):
+            if interaction_id.endswith("#utilities_problematic_files"):
+                for _request in range(trigger_count):
+                    status, _headers, body = run_asgi_request(library_app, "GET", "/utilities/problematic-files")
+                    assert status == 200, body
+                    assert "broadcast::tender buttons" in {item["key"] for item in decode_json(body)["items"]}
+            else:
+                queued = [
+                    problematic_albums.queue_problematic_albums_prewarm(library_state=state, config=config, logger=logger)
+                    for _trigger in range(trigger_count)
+                ]
+                counts.queue_claims += sum(queued)
+                while submitted:
+                    function, args, kwargs = submitted.pop(0)
+                    function(*args, **kwargs)
+                assert problematic_albums.has_cached_problematic_albums_payload(state, config=config)
+        counts.builder_calls = builds[0]
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction_id))

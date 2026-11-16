@@ -346,3 +346,46 @@ def test_open_album_location_contract_probes_only_the_posted_album_at_production
         },
         growth=("stat_calls", 0),
     )
+
+
+def test_private_boundary_contract_resolves_restricted_artwork_from_the_root_snapshot_at_production_library_size(
+    asgi_app, tmp_path, monkeypatch,
+):
+    """The middleware runs on every request. A View-only member's artwork
+    request is answered there, from the cached root snapshot and the one
+    requested cover: no root-settings reload, no walk of the roots."""
+    from PIL import Image
+
+    from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
+
+    viewer = CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11, current_library_id=1,
+        library_relationships=(LibraryRelationship(1, "member", False),),
+        capability_grants=(CapabilityGrant("capability.view", "library", 1),),
+    )
+    asgi_app.state.current_actor_resolver = SimpleNamespace(resolve=lambda _token: viewer)
+
+    def run(album_count: int) -> OperationCounts:
+        music_dir = tmp_path / f"library-{album_count}"
+        _use_library(asgi_app, music_dir)
+        cover = _seed_library(music_dir, album_count)[0].with_name("cover.png")
+        Image.new("RGB", (40, 30), "teal").save(cover)
+
+        def request_artwork() -> int:
+            status, headers, body = run_asgi_request(asgi_app, "GET", "/cover", query={"path": str(cover)})
+            assert status == 200, body
+            # The browse rendition the boundary re-encodes, not the cover route's bytes.
+            assert dict(headers).get("x-content-type-options") == "nosniff"
+            assert Image.open(BytesIO(body)).size == (40, 30)
+            return status
+
+        return _measure_request(monkeypatch, request_artwork)
+
+    measure_scale_pair(
+        interaction_id="py:services/private_route_boundary.py#install_private_route_boundary.<locals>.require_private_authentication",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 3, "open_calls": 1, "sql_statements": 0},
+        growth=("stat_calls", 0),
+    )

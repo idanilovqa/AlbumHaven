@@ -158,6 +158,38 @@ def _certain_album(album, agreement, release, year) -> dict[str, object] | None:
     return None
 
 
+# A barcode search, an artist and title search, and two releases from each.
+_SEARCH_REQUESTS = 6
+_SEARCH_RELEASES = 2
+
+
+def search_certain_release(album: dict[str, object], *, artist_name: str, barcode: str | None,
+                           discogs: DiscogsMetadataClient) -> dict[str, object] | None:
+    """The Discogs release a local album certainly is, found by search (S8: a " / " album whose
+    MusicBrainz release links to no Discogs release): the MusicBrainz barcode first, then the
+    artist and title. A candidate counts only by the fallback's own rule (title, track titles
+    and track count, a whole release or one disc). None when nothing is certain or Discogs
+    does not answer."""
+    budget = _Budget(_SEARCH_REQUESTS)
+    names = (artist_name,)
+    # Discogs spells the apostrophe straight; local titles often carry the curly one (U+2019).
+    searches = ([{"barcode": barcode}] if barcode else []) + [
+        {"artist": artist_name, "title": str(album.get("title") or "").replace("’", "'")}]
+    try:
+        for search in searches:
+            found = _call(budget, discogs.search_releases, **search)
+            for candidate in ((found or {}).get("releases") or [])[:_SEARCH_RELEASES]:
+                looked_up = _call(budget, discogs.release, candidate["id"])
+                release = (looked_up or {}).get("release")
+                agreement = release and _agreement(str(album.get("title") or ""), release["title"], names)
+                certain = agreement and _certain_album(album, agreement, release, release.get("year"))
+                if certain:
+                    return certain
+    except _Failure:
+        return None
+    return None
+
+
 def _musicbrainz(method, *args):
     """A MusicBrainz outage retries the fallback; it never reads as "MusicBrainz lacks it"."""
     result = method(*args)

@@ -43,11 +43,20 @@ def _discogs_release_payload() -> dict[str, object]:
     return FIXTURE["discogs"]["/releases/663181"]
 
 
-def _discogs(calls: list[str] | None = None, *, fail: bool = False) -> DiscogsMetadataClient:
-    def get_json(path, _params):
+def _discogs(calls: list[str] | None = None, *, fail: bool = False,
+             searches: list[dict[str, object]] | None = None) -> DiscogsMetadataClient:
+    """Replays the fixture; a search answers the recorded entry whose parameters it sends."""
+    def get_json(path, params):
         if calls is not None:
-            calls.append(path)
-        return None if fail else FIXTURE["discogs"].get(path)
+            calls.append(path if path != "/database/search" else
+                         f"search {params.get('barcode') or (params.get('artist'), params.get('release_title'))}")
+        if fail:
+            return None
+        if path == "/database/search":
+            sent = {key: value for key, value in params.items() if key != "per_page"}
+            entries = FIXTURE["discogs_searches"] if searches is None else searches
+            return {"results": next((entry["results"] for entry in entries if entry["params"] == sent), [])}
+        return FIXTURE["discogs"].get(path)
     return DiscogsMetadataClient(get_json)
 
 
@@ -122,9 +131,17 @@ def test_a_slash_title_asks_discogs_unless_musicbrainz_names_its_media():
     assert not wants_discogs_sections("Live/Dead", {"media": [_medium(13)]})
 
 
+def _dissection_tracks() -> list[dict[str, object]]:
+    """The owner's files: one disc, tracks 1-13, local spellings with curly apostrophes."""
+    titles = [item["title"] for item in _discogs_release_payload()["tracklist"] if item["type_"] == "track"]
+    return [{"title": title.replace("'", "’"), "duration_seconds": 200, "disc_number": 1, "track_number": number}
+            for number, title in enumerate(titles, start=1)]
+
+
 class _Repository:
-    def __init__(self, title: str):
+    def __init__(self, title: str, tracks: list[dict[str, object]]):
         self.title = title
+        self.tracks = tracks
         self.recorded = None
 
     def claim_due_job(self, **_kwargs):
@@ -132,7 +149,7 @@ class _Repository:
 
     def load_context(self, **_kwargs):
         return [{"artist_mbid": "b5c6e1ad-4f5a-4b1a-9a1e-0123456789ab", "local_name": "Dissection",
-                 "albums": [{"id": 5, "title": self.title, "tracks": _tracks(13)}]}]
+                 "albums": [{"id": 5, "title": self.title, "tracks": self.tracks}]}]
 
     def record(self, *, outcomes, **_kwargs):
         self.recorded = outcomes
@@ -144,13 +161,14 @@ class _Repository:
         return []
 
 
-def _process(monkeypatch, *, title=DISSECTION_TITLE, media=None, discogs=None):
-    release = {"id": MB_RELEASE, "media": media or [_medium(13)]}
+def _process(monkeypatch, *, title=DISSECTION_TITLE, media=None, discogs=None, release_mbid=MB_RELEASE,
+             barcode=None, tracks=None):
+    release = {"id": release_mbid, "barcode": barcode, "media": media or [_medium(13)]}
     monkeypatch.setattr(release_identity, "resolve_album_releases", lambda context, client: {
-        "classification": "complete", "release_groups": {}, "releases": {MB_RELEASE: release},
-        "albums": [{"local_album_id": 5, "local_title": title, "state": "release", "release_mbid": MB_RELEASE,
+        "classification": "complete", "release_groups": {}, "releases": {release_mbid: release},
+        "albums": [{"local_album_id": 5, "local_title": title, "state": "release", "release_mbid": release_mbid,
                     "track_sections": musicbrainz_sections(local_discs(_tracks(13)), release)}]})
-    repository, mb_calls = _Repository(title), []
+    repository, mb_calls = _Repository(title, tracks or _tracks(13)), []
     MusicBrainzAlbumReleaseProcessor(repository=repository, client=_musicbrainz(mb_calls), discogs=discogs,
                                      now=lambda: NOW).process_next(worker_id="w")
     return repository.recorded[0]["albums"][0]["track_sections"], mb_calls
@@ -162,6 +180,47 @@ def test_dissection_resolves_end_to_end_through_the_musicbrainz_discogs_link(mon
     assert sections == DISSECTION_SECTIONS
     assert mb_calls == [f"/release/{MB_RELEASE}?inc=url-rels&fmt=json"]
     assert discogs_calls == ["/releases/663181"]
+
+
+# The sandbox6 match: release 458ab977 has one untitled medium and no Discogs link.
+SANDBOX_RELEASE = "458ab977-dfbb-4d44-bbf0-9bdcb426dc19"
+CURLY_TITLE = DISSECTION_TITLE.replace("'", "’")
+
+
+def _search(monkeypatch, *, barcode="0727361664626", searches=None):
+    calls = []
+    sections, mb_calls = _process(monkeypatch, title=CURLY_TITLE, release_mbid=SANDBOX_RELEASE, barcode=barcode,
+                                  tracks=_dissection_tracks(), discogs=_discogs(calls, searches=searches))
+    assert mb_calls == [f"/release/{SANDBOX_RELEASE}?inc=url-rels&fmt=json"]  # the link is asked first
+    return sections, calls
+
+
+def test_without_a_musicbrainz_link_the_barcode_search_finds_the_certain_release(monkeypatch):
+    sections, calls = _search(monkeypatch)
+    assert sections == DISSECTION_SECTIONS
+    assert calls == ["search 0727361664626", "/releases/663181"]
+
+
+def test_without_a_barcode_answer_the_artist_and_title_search_finds_it(monkeypatch):
+    # The 1995 eight-track album is listed first and rejected on its tracks.
+    sections, calls = _search(monkeypatch, barcode=None)
+    assert sections == DISSECTION_SECTIONS
+    assert calls == ["search ('Dissection', \"Storm of the Light's Bane / Where Dead Angels Lie\")",
+                     "/releases/1995001", "/releases/663181"]
+
+
+def test_a_search_that_finds_only_another_release_stores_no_sections(monkeypatch):
+    only_1995 = [{"params": entry["params"], "results": [{"id": 1995001, "title": "Storm Of The Light's Bane"}]}
+                 for entry in FIXTURE["discogs_searches"]]
+    sections, calls = _search(monkeypatch, searches=only_1995)
+    assert sections == []
+    assert calls.count("/releases/1995001") == 2 and "/releases/663181" not in calls
+
+
+def test_the_curly_apostrophe_title_is_searched_and_agrees_as_a_straight_one(monkeypatch):
+    # Covered end to end above (CURLY_TITLE and curly track titles); the sent title is straight.
+    _sections, calls = _search(monkeypatch, barcode=None)
+    assert "’" not in calls[0] and "Light's" in calls[0]
 
 
 def test_musicbrainz_medium_names_or_a_plain_title_never_ask_discogs(monkeypatch):

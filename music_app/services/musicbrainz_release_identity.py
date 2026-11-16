@@ -45,6 +45,7 @@ from music_app.services.musicbrainz_enrichment import (
     _match_tracks_alone,
     retry_delay,
 )
+from music_app.services.musicbrainz_discogs_fallback import search_certain_release
 from music_app.services.tracklist_sections import (
     discogs_sections,
     local_discs,
@@ -389,8 +390,9 @@ class MusicBrainzAlbumReleaseProcessor:
 
     def _add_discogs_sections(self, context: dict[str, object], outcome: dict[str, object]) -> None:
         """A certainly matched album titled "A / B" whose MusicBrainz release names no media
-        takes its sub-sections from the Discogs release MusicBrainz links to. A failed or
-        missing answer leaves it without sub-sections until its next re-check."""
+        takes its sub-sections from Discogs: the release MusicBrainz links to, else the
+        release a Discogs search certainly finds (barcode, then artist and title). A failed
+        or missing answer leaves it without sub-sections until its next re-check."""
         if self._discogs is None:
             return
         albums = {album.get("id"): album for album in context.get("albums") or [] if isinstance(album, dict)}
@@ -400,12 +402,19 @@ class MusicBrainzAlbumReleaseProcessor:
             if not release or not wants_discogs_sections(album.get("title"), release):
                 continue
             link = self._client.lookup_release_discogs_id(result["release_mbid"])
-            if not link.get("discogs_release_id"):
+            if link.get("classification") != "complete":
                 continue
-            found = self._discogs.release(link["discogs_release_id"])
-            if found.get("classification") == "complete":
-                result["track_sections"] = discogs_sections(local_discs(album.get("tracks") or []),
-                                                            found["release"]["tracks"])
+            if link.get("discogs_release_id"):
+                found = self._discogs.release(link["discogs_release_id"])
+                if found.get("classification") == "complete":
+                    result["track_sections"] = discogs_sections(local_discs(album.get("tracks") or []),
+                                                                found["release"]["tracks"])
+                continue
+            certain = search_certain_release(album, artist_name=str(context.get("local_name") or ""),
+                                             barcode=release.get("barcode"), discogs=self._discogs)
+            if certain:
+                # Only the matched disc's headings, when the album is one disc of the release.
+                result["track_sections"] = certain["track_sections"]
 
     def _size_new_series(self, observed_at) -> None:
         """A list or an award names far more albums than a real album series (owner

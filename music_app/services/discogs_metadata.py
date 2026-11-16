@@ -111,6 +111,19 @@ class DiscogsMetadataClient:
             {"id": int(item["id"]), "name": artist_name(item.get("title"))}
             for item in found["payload"].get("results") or [] if isinstance(item, dict) and item.get("id")]}
 
+    def search_releases(self, *, barcode: str | None = None, artist: str | None = None,
+                        title: str | None = None, limit: int = 5) -> JsonDict:
+        """Releases by barcode, or by artist and title (S8 sub-sections). Candidates only: a
+        release counts once its title, track titles and track count agree."""
+        found = self._get("/database/search", type="release", barcode=barcode or None, artist=artist or None,
+                          release_title=title or None, per_page=limit)
+        if found["classification"] != "complete":
+            return found
+        return {"classification": "complete", "releases": [
+            {"id": int(item["id"]), "title": str(item.get("title") or ""), "year": str(item.get("year") or "") or None}
+            for item in found["payload"].get("results") or [] if isinstance(item, dict)
+            and str(item.get("id") or "").isdigit()]}
+
     def artist(self, artist_id: int) -> JsonDict:
         found = self._get(f"/artists/{int(artist_id)}")
         if found["classification"] != "complete":

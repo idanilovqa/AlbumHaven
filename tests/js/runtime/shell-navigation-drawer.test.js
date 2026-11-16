@@ -939,3 +939,11 @@ for (const pendingArtist of ['', 'Latest Artist']) {
   frames.forEach((callback) => callback());
   assert.equal(documentElement.getAttribute('data-shell-motion'), null);
 }
+
+test('desktop Collapse button shares the "Artists" heading centre line', () => {
+  // Owner 2026-11-16: "the back fold button in navigation tree is not aligned with Artists".
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'), 'utf8');
+  const desktop = css.match(/@media \(min-width: 901px\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(desktop, /\.shell-navigation-rail-header\s*\{[^}]*height:\s*54px;[^}]*padding-bottom:\s*22px/);
+  assert.doesNotMatch(css, /\.shell-navigation-rail-header h2\s*\{[^}]*padding-bottom/);
+});

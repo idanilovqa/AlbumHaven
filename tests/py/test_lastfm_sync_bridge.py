@@ -283,7 +283,14 @@ def test_record_playback_session_complete_ignores_too_short_listens():
     assert harness.logged_events == []
 
 
-def test_measured_completion_keeps_preflight_configuration_failure_retryable(monkeypatch):
+@pytest.mark.parametrize(("error_kind", "expected"), [
+    # The request never left the server: sending it again cannot count it twice.
+    ("configuration_error", ("not_sent", True, "pending_retry")),
+    # A timeout or unreadable answer after the POST may have been recorded.
+    ("network_error", ("uncertain", False, "permanent_failure")),
+    ("malformed_response", ("uncertain", False, "permanent_failure")),
+])
+def test_measured_completion_retries_only_a_failure_last_fm_cannot_have_recorded(monkeypatch, error_kind, expected):
     from contextlib import nullcontext
 
     from music_app.services import lastfm_sync_bridge
@@ -306,13 +313,9 @@ def test_measured_completion_keeps_preflight_configuration_failure_retryable(mon
         stored.update(updates)
         return dict(stored)
 
-    def missing_server_credentials(_config, _payload, *, session):
+    def failing_submission(_config, _payload, *, session):
         assert session is not None
-        raise LastfmError(
-            "Last.fm API credentials are not configured on the server.",
-            retryable=True,
-            error_kind="configuration_error",
-        )
+        raise LastfmError("Last.fm submission failed.", retryable=True, error_kind=error_kind)
 
     payload = {
         **_complete_payload(),
@@ -335,12 +338,13 @@ def test_measured_completion_keeps_preflight_configuration_failure_retryable(mon
         is_meaningful_listen_session=is_meaningful_listen_session,
         append_listen_history_entry=append_entry,
         update_listen_history_entry=update_entry,
-        scrobble_track=missing_server_credentials,
+        scrobble_track=failing_submission,
         log_lastfm_scrobble_event=lambda *_args, **_kwargs: None,
     )
 
     assert status == 200
     assert response["scrobbled"] is False
-    assert stored["scrobble_submission_state"] == "not_sent"
-    assert stored["scrobble_retryable"] is True
-    assert stored["sync_problem"]["status"] == "pending_retry"
+    assert (
+        stored["scrobble_submission_state"], stored["scrobble_retryable"], stored["sync_problem"]["status"]
+    ) == expected
+    assert stored["scrobble_retry_count"] == 1

@@ -113,19 +113,32 @@ def test_plan_holds_a_listen_that_needs_reauthentication_until_reconnect():
     assert plan_pending_scrobble(entry, now=_NOW, reauthenticated=True).payload is not None
 
 
-@pytest.mark.parametrize(("error", "measured", "expected"), [
-    (LastfmError("Service Offline", code=11, retryable=True), True, (True, "not_sent")),
-    (LastfmError("Invalid session key", code=9, reauthentication_required=True), True, (True, "not_sent")),
-    (LastfmError("Network error contacting Last.fm", retryable=True, error_kind="network_error"), True,
+@pytest.mark.parametrize(("error", "expected"), [
+    (LastfmError("Service Offline", code=11, retryable=True), (True, "not_sent")),
+    (LastfmError("Invalid session key", code=9, reauthentication_required=True), (True, "not_sent")),
+    (LastfmError("Network error contacting Last.fm", retryable=True, error_kind="network_error"),
      (False, "uncertain")),
-    (LastfmError("Malformed", retryable=True, error_kind="malformed_response"), True, (False, "uncertain")),
-    (LastfmError("Invalid parameters", code=6), True, (False, "uncertain")),
-    (LastfmError("Network error contacting Last.fm", retryable=True, error_kind="network_error"), False,
-     (True, "not_sent")),
-    (LastfmError("Invalid parameters", code=6), False, (False, "uncertain")),
+    (LastfmError("Malformed", retryable=True, error_kind="malformed_response"), (False, "uncertain")),
+    (LastfmError("Invalid parameters", code=6), (False, "uncertain")),
 ])
-def test_failed_batch_is_resent_only_when_last_fm_cannot_have_recorded_a_measured_listen(error, measured, expected):
-    assert failed_batch_disposition(error, measured=measured) == expected
+def test_failed_batch_is_resent_only_when_last_fm_cannot_have_recorded_it(error, expected):
+    assert failed_batch_disposition(error) == expected
+
+
+@pytest.mark.parametrize("measured", [True, False])
+@pytest.mark.parametrize("error_kind", ["network_error", "malformed_response"])
+def test_a_timeout_or_unreadable_answer_after_the_post_is_never_resent(scrobble_ledger, measured, error_kind):
+    ledger, provider = scrobble_ledger(answer=lambda _payloads: LastfmError(
+        "Network error contacting Last.fm", retryable=True, error_kind=error_kind))
+    ledger.add_pending(2, measured=measured)
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    assert len(provider.calls) == 1
+    for entry in ledger.entries():
+        assert (entry["scrobble_submission_state"], entry["scrobble_retryable"]) == ("uncertain", False)
+        assert not listen_history.is_pending_scrobble_entry(entry)
 
 
 def test_attempt_result_counts_the_attempt():

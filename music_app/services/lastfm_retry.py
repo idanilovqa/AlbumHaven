@@ -311,9 +311,7 @@ def _submit_batch(
     except LastfmError as error:
         results = []
         for item, _payload in sending:
-            retryable, state = failed_batch_disposition(
-                error, measured=item.entry.get("measurement_version") == MEASURED_VERSION,
-            )
+            retryable, state = failed_batch_disposition(error)
             results.append(scrobble_attempt_updates(
                 item.entry, attempted_at=now, error=str(error), retryable=retryable,
                 reauthentication_required=error.reauthentication_required, submission_state=state,

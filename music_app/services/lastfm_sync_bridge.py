@@ -14,6 +14,7 @@ from music_app.services.measured_listen_history import (
     validate_playback_completion,
 )
 from music_app.services.lastfm_listen_sync import (
+    build_lastfm_sync_problem,
     build_playback_complete_entry,
     build_scrobble_result_updates,
     clear_pending_scrobble,
@@ -215,33 +216,11 @@ def record_playback_session_complete(
                 except LastfmError as exc:
                     error = str(exc)
                     reauthentication_required = exc.reauthentication_required
-                    retryable = bool(
-                        exc.reauthentication_required
-                        or (exc.retryable and exc.error_kind == "configuration_error")
-                        or (
-                            exc.retryable
-                            and exc.error_kind == "provider_error"
-                            and exc.code is not None
-                        )
-                    )
-                    submission_state = "not_sent" if retryable else "uncertain"
-                stored = update_listen_history_entry(config, stored["id"], {
-                    "scrobbled": scrobbled, "scrobble_error": error, "scrobble_retryable": retryable,
-                    "scrobble_reauthentication_required": reauthentication_required,
-                    "scrobble_submission_state": submission_state,
-                    "sync_problem": None if scrobbled else {
-                        "provider": "lastfm",
-                        "kind": "scrobble",
-                        "status": (
-                            "reauthentication_required"
-                            if reauthentication_required
-                            else "pending_retry"
-                            if retryable
-                            else "permanent_failure"
-                        ),
-                        "message": error,
-                    },
-                }, account_id=account_id, library_id=library_id) or stored
+                    retryable, submission_state = failed_batch_disposition(exc)
+                stored = update_listen_history_entry(config, stored["id"], scrobble_attempt_updates(
+                    stored, attempted_at=datetime.now(timezone.utc), error=error, retryable=retryable,
+                    reauthentication_required=reauthentication_required, submission_state=submission_state,
+                ), account_id=account_id, library_id=library_id) or stored
                 log_lastfm_scrobble_event(
                     "Last.fm scrobble succeeded" if scrobbled else "Last.fm scrobble failed",
                     level="info" if scrobbled else "warning", payload=payload, error=error,
@@ -317,18 +296,10 @@ def record_playback_session_complete(
             {
                 "scrobble_retryable": scrobble_retryable,
                 "scrobble_reauthentication_required": reauthentication_required,
-                "sync_problem": {
-                    "provider": "lastfm",
-                    "kind": "scrobble",
-                    "status": (
-                        "reauthentication_required"
-                        if reauthentication_required
-                        else "pending_retry"
-                        if scrobble_retryable
-                        else "permanent_failure"
-                    ),
-                    "message": scrobble_error,
-                },
+                "sync_problem": _scrobble_sync_problem(
+                    scrobble_error, retryable=scrobble_retryable,
+                    reauthentication_required=reauthentication_required,
+                ),
             }
         )
     stored_entry = update_listen_history_entry(
@@ -480,33 +451,30 @@ def scrobble_attempt_updates(
         "scrobble_reauthentication_required": bool(reauthentication_required),
     })
     if not accepted:
-        updates["sync_problem"] = {
-            "provider": "lastfm",
-            "kind": "scrobble",
-            "status": (
-                "reauthentication_required"
-                if reauthentication_required
-                else "pending_retry"
-                if should_retry
-                else "permanent_failure"
-            ),
-            "message": error,
-        }
+        updates["sync_problem"] = _scrobble_sync_problem(
+            error, retryable=should_retry, reauthentication_required=reauthentication_required,
+        )
     return updates
 
 
-def failed_batch_disposition(error: LastfmError, *, measured: bool) -> tuple[bool, str]:
-    """Whether listens in a batch whose call failed may be sent again, and their submission state.
+def _scrobble_sync_problem(error: str, *, retryable: bool, reauthentication_required: bool) -> JsonDict:
+    return build_lastfm_sync_problem(message=error, status=(
+        "reauthentication_required" if reauthentication_required
+        else "pending_retry" if retryable
+        else "permanent_failure"
+    ))
 
-    A measured listen is retried only when Last.fm answered with an error code or
-    the request never left the server; any other failure may have been recorded,
-    so its outcome stays uncertain and it is never sent twice."""
-    if measured:
-        retryable = bool(
-            error.reauthentication_required
-            or (error.retryable and error.error_kind == "configuration_error")
-            or (error.retryable and error.error_kind == "provider_error" and error.code is not None)
-        )
-    else:
-        retryable = bool(error.retryable or error.reauthentication_required)
+
+def failed_batch_disposition(error: LastfmError) -> tuple[bool, str]:
+    """Whether listens whose Last.fm call failed may be sent again, and their submission state.
+
+    A listen is retried only when Last.fm answered with an error code, the request
+    never left the server, or the account must reconnect. Any other failure (a
+    timeout or an unreadable answer after the POST) may have been recorded, so its
+    outcome stays uncertain and it is never sent twice."""
+    retryable = bool(
+        error.reauthentication_required
+        or (error.retryable and error.error_kind == "configuration_error")
+        or (error.retryable and error.error_kind == "provider_error" and error.code is not None)
+    )
     return retryable, "not_sent" if retryable else "uncertain"

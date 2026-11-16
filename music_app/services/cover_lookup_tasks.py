@@ -501,17 +501,17 @@ def list_cover_lookup_task_summaries(
     )
     if config is not None:
         now = datetime.now(timezone.utc)
-        recovered_items = [
-            _interrupt_stale_cover_lookup_task(item, now=now) for item in persisted_items
-        ]
-        interrupted_items = [
-            (recovered, 1)
-            for item, recovered in zip(persisted_items, recovered_items)
-            if recovered is not item
-        ]
-        if interrupted_items:
-            upsert_cover_lookup_notifications(dict(config), interrupted_items)
-        persisted_items = recovered_items
+        # The rows read here are compact summaries, not stored tasks: interrupt
+        # stale tasks in place, keeping each one's stored payload.
+        if any(
+            _interrupt_stale_cover_lookup_task(item, now=now) is not item
+            for item in persisted_items
+        ) and interrupt_stale_cover_lookup_notifications(
+            dict(config),
+            stale_before=now - _STALE_COVER_LOOKUP_TIMEOUT,
+            completed_at=now,
+        ):
+            persisted_items = load_cover_lookup_notification_summaries(dict(config))
     persisted_by_id = {
         str(item.get("id") or "").strip(): item
         for item in persisted_items

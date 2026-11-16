@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from concurrent.futures import Future
 from pathlib import Path
 from threading import Event, Thread, current_thread
@@ -229,38 +230,59 @@ def test_task_list_uses_compact_persisted_summaries(monkeypatch):
     ]
 
 
-def test_task_list_terminalizes_stale_persisted_running_task(monkeypatch):
-    from music_app.services import cover_lookup_tasks as task_service
+@pytest.fixture
+def notification_store(monkeypatch):
+    """The real Postgres notification adapter over an ops.cover_lookup_tasks double."""
+    from contextlib import contextmanager
 
+    from music_app.services import cover_lookup_notifications, cover_lookup_tasks_postgres
+
+    database = _NotificationStoreDatabase()
+    monkeypatch.setattr(cover_lookup_notifications, "select_runtime_persistence_adapter", lambda *_args: None)
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "Jsonb", None)
+
+    @contextmanager
+    def pooled_connection(_database_url, **_options):
+        yield database
+
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "_pooled_connection", pooled_connection)
+    reset_cover_lookup_runtime_state()
+    return {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated.invalid/cover-lookup-store"}, database
+
+
+def test_task_list_terminalizes_stale_persisted_running_task_and_keeps_its_stored_payload(notification_store):
+    config, database = notification_store
     stale_task = {
         "id": "orphaned-task",
         "status": "running",
         "artist": "Perelandra",
         "album": "Eden",
         "progress": 45,
+        "created_at": "2020-01-01T00:00:00+00:00",
         "updated_at": "2020-01-01T00:00:00+00:00",
-        "album_payload": {"key": "perelandra::eden"},
+        "album_payload": {"key": "perelandra::eden", "tracks": [{"path": "Perelandra/Eden/01.flac"}]},
+        "track_paths": ["Perelandra/Eden/01.flac"],
+        "possible_matches": [{"id": "caa-1", "art_kind": "cover", "url": "https://covers.example/1.jpg"}],
     }
-    persisted = []
-    monkeypatch.setattr(
-        task_service,
-        "load_cover_lookup_notification_summaries",
-        lambda config: [stale_task],
-    )
-    monkeypatch.setattr(
-        task_service,
-        "upsert_cover_lookup_notifications",
-        lambda config, tasks: persisted.extend(tasks),
-    )
+    task_service.upsert_cover_lookup_notifications(config, [(stale_task, 1)])
 
-    summaries = task_service.list_cover_lookup_task_summaries(config={})
+    summaries = task_service.list_cover_lookup_task_summaries(config=config)
 
+    assert summaries[0]["id"] == "orphaned-task"
     assert summaries[0]["status"] == "failed"
     assert summaries[0]["result_kind"] == "interrupted"
     assert summaries[0]["progress_label"] == "Interrupted"
     assert "stopped before it could finish" in summaries[0]["message"].casefold()
-    assert persisted[0][0]["id"] == "orphaned-task"
-    assert persisted[0][0]["notification_action_taken"] is False
+    stored = database.rows["orphaned-task"]
+    assert stored["status"] == "failed"
+    # Recovery changes only the status fields; the full task the summary omits survives.
+    assert {key: stored["payload"][key] for key in ("album_payload", "track_paths", "possible_matches", "progress")} == {
+        "album_payload": stale_task["album_payload"],
+        "track_paths": stale_task["track_paths"],
+        "possible_matches": stale_task["possible_matches"],
+        "progress": 100,
+    }
+    assert stored["payload"]["result_kind"] == "interrupted"
 
 
 def test_notification_count_reconciles_stale_persisted_tasks(monkeypatch):
@@ -1844,10 +1866,33 @@ class _Rows:
 
 class _NotificationStoreDatabase:
     """Stands in for ops.cover_lookup_tasks behind the real Postgres adapter: it
-    answers the bootstrap check, the summary read, and the per-task upsert."""
+    answers the bootstrap check, the compact summary read, the per-task upsert
+    and the in-place stale interrupt."""
+
+    # The summary read returns these task fields, never the full stored payload.
+    _SUMMARY_FIELDS = ("artist", "album", "progress", "progress_label", "message", "result_kind",
+                       "started_at", "updated_at", "finished_at")
 
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, object]] = {}
+
+    def _interrupt_stale(self, params):
+        completed_at, message, _completed, finished_at, _message, _families, statuses, stale_before = params
+        interrupted = []
+        for task_key, row in self.rows.items():
+            payload = row["payload"]
+            activity = max(
+                datetime.fromisoformat(str(payload[field]))
+                for field in ("candidate_updated_at", "updated_at", "started_at", "created_at")
+                if payload.get(field)
+            )
+            if row["status"] in statuses and activity <= stale_before:
+                row["status"] = "failed"
+                row["payload"] = {**payload, "status": "failed", "progress": 100, "progress_label": "Interrupted",
+                                  "result_kind": "interrupted", "finished_at": finished_at.isoformat(),
+                                  "message": message}
+                interrupted.append({"task_key": task_key})
+        return _Rows(interrupted)
 
     def __enter__(self):
         return self
@@ -1867,9 +1912,16 @@ class _NotificationStoreDatabase:
             task_key, status, *_rest, metadata = params
             self.rows[task_key] = {"status": status, "payload": dict(metadata["source_payload"])}
             return _Rows()
+        if "update ops.cover_lookup_tasks" in query:
+            return self._interrupt_stale(params)
         if "jsonb_strip_nulls" in query:
             return _Rows([
-                {"task_summary": {**row["payload"], "id": task_key, "status": row["status"]}}
+                {"task_summary": {
+                    **{field: row["payload"][field] for field in self._SUMMARY_FIELDS if field in row["payload"]},
+                    "id": task_key,
+                    "status": row["status"],
+                    "created_at": row["payload"].get("created_at"),
+                }}
                 for task_key, row in self.rows.items()
             ])
         raise AssertionError(f"unexpected cover lookup store statement: {query[:120]}")
@@ -1913,7 +1965,7 @@ def test_cover_lookup_notification_store_contract_opens_one_connection_per_call_
 
     small, large = run(5), run(500)
 
-    assert (small[0].pool_leases, small[1].pool_leases) == (1, 2)
+    assert (small[0].pool_leases, small[1].pool_leases) == (1, 3)
     assert_plateau([small[0].pool_leases, large[0].pool_leases], label="upsert connections")
-    # One summary read and one upsert of every interrupted task.
+    # One summary read, one in-place interrupt of every stale task, and one re-read.
     assert_plateau([small[1].pool_leases, large[1].pool_leases], label="stale recovery connections")

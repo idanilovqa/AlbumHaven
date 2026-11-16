@@ -772,10 +772,10 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     from music_app.services import cover_lookup_tasks
 
     notified: list[str] = []
-    # The Postgres notification store keeps the one task it is given.
+    # The Postgres notification store keeps the tasks it is given in one write.
     monkeypatch.setattr(
-        cover_lookup_tasks, "upsert_cover_lookup_notification",
-        lambda _config, task, **_kwargs: notified.append(str(task.get("id"))),
+        cover_lookup_tasks, "upsert_cover_lookup_notifications",
+        lambda _config, tasks: notified.extend(str(task.get("id")) for task, _revision in tasks),
     )
     match = {"id": "pasted-1", "image_url": "https://covers.example/front.jpg", "source": "manual", "width": 1200, "height": 1200}
     # Fetching the pasted pages is provider network work outside this contract.
@@ -866,8 +866,8 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
     from music_app.routes import api_wave_d_asgi_routes
     from music_app.services import cover_lookup_tasks, covers
 
-    # The Postgres notification store keeps the one task it is given.
-    monkeypatch.setattr(cover_lookup_tasks, "upsert_cover_lookup_notification", lambda *_args, **_kwargs: None)
+    # The Postgres notification store keeps the tasks it is given in one write.
+    monkeypatch.setattr(cover_lookup_tasks, "upsert_cover_lookup_notifications", lambda *_args, **_kwargs: None)
 
     class SnapshotRepository:
         """The Postgres candidate-snapshot store resolves the selected album."""
@@ -911,3 +911,4 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
         return counts
 
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_save_remote"))
+

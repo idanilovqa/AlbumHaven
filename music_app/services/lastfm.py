@@ -136,7 +136,20 @@ def lastfm_scrobbling_available(config: dict[str, Any], *, account_id) -> bool:
 
 
 def get_saved_lastfm_session(config: dict[str, Any], *, account_id=None) -> LastfmSession | None:
-    settings = load_lastfm_settings(config, account_id=account_id)
+    return _session_from_settings(load_lastfm_settings(config, account_id=account_id))
+
+
+def load_saved_lastfm_sessions(connection, account_ids) -> dict[int, LastfmSession]:
+    """The connected session of each account, read in one query on the caller's connection."""
+    from music_app.services.lastfm_account_settings import load_settings_for_accounts
+    sessions = {
+        account_id: _session_from_settings(settings)
+        for account_id, settings in load_settings_for_accounts(connection, account_ids).items()
+    }
+    return {account_id: session for account_id, session in sessions.items() if session is not None}
+
+
+def _session_from_settings(settings: dict[str, Any]) -> LastfmSession | None:
     username = str(settings.get("username") or "").strip()
     session_key = str(settings.get("session_key") or "").strip()
     connected_at = str(settings.get("connected_at") or "").strip()
@@ -446,6 +459,63 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         ignored_code=ignored_code,
         message=message,
     )
+
+
+LASTFM_SCROBBLE_BATCH_LIMIT = 50
+
+
+def scrobble_tracks(
+    config: dict[str, Any], payloads: list[dict[str, Any]], *, session: LastfmSession,
+) -> list[LastfmSubmissionOutcome]:
+    """Sends up to 50 validated scrobbles in one signed `track.scrobble` call.
+
+    Returns one outcome per payload, in order. Raises LastfmError when the call
+    as a whole fails, so no item has an outcome."""
+    if not 0 < len(payloads) <= LASTFM_SCROBBLE_BATCH_LIMIT:
+        raise ValueError(f"A Last.fm scrobble batch holds 1 to {LASTFM_SCROBBLE_BATCH_LIMIT} listens.")
+    params: dict[str, Any] = {"sk": session.session_key}
+    for index, payload in enumerate(payloads):
+        params.update({
+            f"artist[{index}]": str(payload.get("artist") or "").strip(),
+            f"track[{index}]": str(payload.get("track") or "").strip(),
+            f"timestamp[{index}]": int(payload.get("timestamp") or 0),
+            f"album[{index}]": str(payload.get("album") or "").strip(),
+            f"albumArtist[{index}]": str(payload.get("album_artist") or "").strip(),
+            f"duration[{index}]": int(payload.get("duration") or 0) or None,
+            f"trackNumber[{index}]": str(payload.get("track_number") or "").strip() or None,
+            f"chosenByUser[{index}]": 1,
+        })
+    root = _post_lastfm(config, "track.scrobble", params)
+    items = root.findall("./scrobbles/scrobble")
+    if len(items) != len(payloads):
+        raise LastfmError(
+            "Last.fm scrobble response did not include an outcome for every listen.",
+            retryable=True,
+            error_kind="malformed_response",
+        )
+    outcomes = []
+    for item in items:
+        ignored_message = item.find("ignoredmessage")
+        if ignored_message is None:
+            ignored_message = item.find("ignoredMessage")
+        raw_code = str(ignored_message.get("code") or "").strip() if ignored_message is not None else ""
+        try:
+            ignored_code = int(raw_code) if raw_code else 0
+        except ValueError as exc:
+            raise LastfmError(
+                "Last.fm scrobble response contained an invalid ignored code.",
+                retryable=True,
+                error_kind="malformed_response",
+            ) from exc
+        message = (ignored_message.text or "").strip() if ignored_message is not None else ""
+        if ignored_code:
+            outcomes.append(LastfmSubmissionOutcome(
+                sent=True, ignored=1, outcome="ignored", ignored_code=ignored_code,
+                message=message or "Last.fm ignored the scrobble.",
+            ))
+        else:
+            outcomes.append(LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted"))
+    return outcomes
 
 
 def get_lastfm_total_scrobbles(

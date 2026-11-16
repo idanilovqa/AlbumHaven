@@ -64,9 +64,10 @@ _WORKER_THREAD: threading.Thread | None = None
 _WORKER_APP_KEY = ""
 _WORKER_STOP_EVENT: threading.Event | None = None
 _WORKER_WAKE_EVENT: threading.Event | None = None
-# Requested passes by account, and each account's latest submission state. Both
-# are guarded by _WORKER_LOCK.
+# Requested passes by account, each account's running pass, and its latest
+# submission state. All are guarded by _WORKER_LOCK.
 _REQUESTS: dict[int, "_RetryRequest"] = {}
+_RUNNING: dict[int, "_RetryRequest"] = {}
 _SUBMISSIONS: dict[int, dict[str, str]] = {}
 # Set when a listen was left unsent: the worker checks for sendable listens at once.
 _CHECK_REQUESTED = False
@@ -98,6 +99,14 @@ class _RetryRequest:
             history_scope=self.history_scope or other.history_scope,
         )
 
+    def covers(self, other: "_RetryRequest") -> bool:
+        """Whether this pass already sends everything [other] asks for."""
+        return (
+            (self.library_ids is None or (other.library_ids is not None and other.library_ids <= self.library_ids))
+            and (self.reauthenticated or not other.reauthenticated)
+            and (self.bypass_backoff or not other.bypass_backoff)
+        )
+
 
 @dataclass
 class LastfmRetryPass:
@@ -127,7 +136,8 @@ def pending_scrobble_count(
 def request_lastfm_submission(scope: HistoryScope) -> str:
     """Submit: sends the library's pending scrobbles now, ignoring retry backoff.
 
-    Returns the account's submission state. While its pass runs, Submit starts nothing."""
+    Returns the account's submission state. While a pass that already covers the
+    library runs, Submit starts nothing."""
     return _queue_request(scope.account_id, _RetryRequest(
         library_ids=frozenset({scope.library_id}), bypass_backoff=True, history_scope=scope,
     ))
@@ -141,11 +151,12 @@ def request_lastfm_reconnect_retry(account_id: int) -> str:
 def _queue_request(account_id: int, request: _RetryRequest) -> str:
     """Queues a background pass for one account and wakes the worker; returns its state.
 
-    While the account's pass runs, a further request starts nothing, unless it
-    follows a reconnection, which is queued to run next."""
+    While the account's pass runs, a request it already covers starts nothing;
+    any other (another library, a reconnection) is queued to run next."""
     with _WORKER_LOCK:
         state = _SUBMISSIONS.get(account_id, {}).get("state")
-        if state == "running" and not request.reauthenticated:
+        running = _RUNNING.get(account_id)
+        if state == "running" and running is not None and running.covers(request):
             return state
         queued = _REQUESTS.get(account_id)
         _REQUESTS[account_id] = request if queued is None else queued.merge(request)
@@ -357,7 +368,7 @@ def _take_request() -> tuple[int, _RetryRequest] | None:
         if not _REQUESTS:
             return None
         account_id = next(iter(_REQUESTS))
-        request = _REQUESTS.pop(account_id)
+        request = _RUNNING[account_id] = _REQUESTS.pop(account_id)
         _SUBMISSIONS[account_id] = {"state": "running", "error": ""}
         return account_id, request
 
@@ -380,6 +391,7 @@ def _run_requested_pass(config: dict[str, Any], logger: Any, account_id: int, re
         # The account must never stay "running": any failure ends its pass as failed.
         summary, error = getattr(exc, "summary", summary), SUBMISSION_FAILED
     with _WORKER_LOCK:
+        _RUNNING.pop(account_id, None)
         if account_id in _REQUESTS:
             _SUBMISSIONS[account_id] = {"state": "queued", "error": ""}
         else:

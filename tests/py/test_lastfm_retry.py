@@ -43,6 +43,7 @@ def scrobble_ledger(monkeypatch):
     monkeypatch.setattr(lastfm_retry, "log_app_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(lastfm_retry, "_REQUESTS", {})
     monkeypatch.setattr(lastfm_retry, "_SUBMISSIONS", {})
+    monkeypatch.setattr(lastfm_retry, "_RUNNING", {})
 
     def install(counts: OperationCounts | None = None, *, answer=None) -> tuple[ScrobbleLedger, FakeLastfm]:
         ledger = ScrobbleLedger(counts)
@@ -312,6 +313,7 @@ def _submit_scope() -> HistoryScope:
 def test_submit_while_the_accounts_pass_runs_starts_nothing(monkeypatch):
     monkeypatch.setattr(lastfm_retry, "_REQUESTS", {})
     monkeypatch.setattr(lastfm_retry, "_SUBMISSIONS", {})
+    monkeypatch.setattr(lastfm_retry, "_RUNNING", {})
     wake = threading.Event()
     monkeypatch.setattr(lastfm_retry, "_WORKER_WAKE_EVENT", wake)
 
@@ -325,6 +327,29 @@ def test_submit_while_the_accounts_pass_runs_starts_nothing(monkeypatch):
     assert lastfm_retry.request_lastfm_reconnect_retry(ACCOUNT_ID) == "running"
     assert lastfm_retry._REQUESTS[ACCOUNT_ID].library_ids is None
     assert lastfm_retry._REQUESTS[ACCOUNT_ID].reauthenticated is True
+
+
+def test_submit_for_another_library_while_a_pass_runs_is_queued_to_run_next(monkeypatch):
+    monkeypatch.setattr(lastfm_retry, "_REQUESTS", {})
+    monkeypatch.setattr(lastfm_retry, "_SUBMISSIONS", {})
+    monkeypatch.setattr(lastfm_retry, "_RUNNING", {})
+    monkeypatch.setattr(lastfm_retry, "_WORKER_WAKE_EVENT", threading.Event())
+    other_library = HistoryScope(library_id=LIBRARY_ID + 1, account_id=ACCOUNT_ID, origin_kind="request")
+
+    lastfm_retry.request_lastfm_submission(_submit_scope())
+    lastfm_retry._take_request()
+    assert lastfm_retry.request_lastfm_submission(other_library) == "running"
+    assert lastfm_retry._REQUESTS[ACCOUNT_ID].library_ids == frozenset({LIBRARY_ID + 1})
+    assert lastfm_retry._REQUESTS[ACCOUNT_ID].history_scope == other_library
+    # When the running pass ends, the account stays queued and the next pass is library B's.
+    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles",
+                        lambda *_args, **_kwargs: lastfm_retry.LastfmRetryPass(summary={
+                            "pending_before": 0, "attempted": 0, "succeeded": 0, "failed": 0,
+                            "pending_after": 0}))
+    lastfm_retry._run_requested_pass(_CONFIG, None, ACCOUNT_ID, lastfm_retry._RUNNING[ACCOUNT_ID])
+    assert lastfm_retry.lastfm_submission_status(ACCOUNT_ID)["state"] == "queued"
+    assert lastfm_retry._take_request() == (ACCOUNT_ID, lastfm_retry._RetryRequest(
+        library_ids=frozenset({LIBRARY_ID + 1}), bypass_backoff=True, history_scope=other_library))
 
 
 class _WorkerProbe:

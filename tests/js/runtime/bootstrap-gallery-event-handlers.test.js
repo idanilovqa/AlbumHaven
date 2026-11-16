@@ -5919,10 +5919,13 @@ test('search reveal resets navigation and expands only a folded desktop Artists 
   };
   context.usesMobilePageLayout = () => false;
   context.document.getElementById = id => id === 'app-shell' ? { classList: { contains: name => name === 'is-artist-tree-folded' && folded } } : null;
-  context.toggleArtistTreeFold = () => { toggles += 1; folded = false; };
+  const toggleOptions = [];
+  context.toggleArtistTreeFold = (options) => { toggles += 1; toggleOptions.push(options); folded = false; };
   context.revealArtistTreeForSearch();
   context.revealArtistTreeForSearch();
   assert.equal(toggles, 1);
+  // Owner 2026-11-15: results must not render before the panel finishes opening.
+  assert.deepEqual(JSON.parse(JSON.stringify(toggleOptions)), [{ instant: true }]);
   assert.deepEqual(navigationModes, ['artists', 'artists']);
   assert.equal(context.state.ui.libraryNavigationMode, 'artists');
 });

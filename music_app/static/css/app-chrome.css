@@ -16,6 +16,7 @@
     --compact-player-width var(--compact-motion-duration) var(--compact-motion-easing);
 }
 :root[data-compact-player-motion="slow"] { --compact-motion-duration: 1400ms; }
+:root[data-shell-motion="instant"] { --compact-motion-duration: 0s; transition: none; }
 @media (prefers-reduced-motion: reduce) {
   :root, :root[data-compact-player-motion] { --compact-motion-duration: 1ms; --player-unfold-duration: 1ms; transition: none; }
 }

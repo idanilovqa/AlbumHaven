@@ -1584,7 +1584,7 @@ function revealArtistTreeForSearch() {
   }
   const shell = document.getElementById('app-shell');
   if (shell?.classList?.contains('is-artist-tree-folded') && typeof toggleArtistTreeFold === 'function') {
-    toggleArtistTreeFold();
+    toggleArtistTreeFold({ instant: true });
   }
 }
 

@@ -11774,6 +11774,12 @@ function parseCssTimeMs(value) {
   return text.endsWith('ms') ? amount : text.endsWith('s') ? amount * 1000 : 0;
 }
 
+function announceArtistTreeSettled() {
+  window.dispatchEvent(new CustomEvent(ARTIST_TREE_SETTLED_EVENT, {
+    detail: { folded: Boolean(state.ui.artistTreeFolded) },
+  }));
+}
+
 function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   cancelPendingArtistTreeResize?.();
 
@@ -11791,9 +11797,7 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
     settled = true;
     cleanup();
     onSettled?.();
-    window.dispatchEvent(new CustomEvent(ARTIST_TREE_SETTLED_EVENT, {
-      detail: { folded: Boolean(state.ui.artistTreeFolded) },
-    }));
+    announceArtistTreeSettled();
   };
   const handleTransitionEnd = (event) => {
     if (event.target === root && event.propertyName === '--compact-rail-width') finish();
@@ -11806,7 +11810,9 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   cancelPendingArtistTreeResize = cleanup;
 }
 
-function toggleArtistTreeFold() {
+// `instant` skips the rail animation: a search that opens the tree must not render its
+// first results at the folded width and then shift them while the rail grows.
+function toggleArtistTreeFold({ instant = false } = {}) {
   if (isArtistsDrawerMobileViewport() || !canUseArtistsDrawerForCurrentView()) return false;
   const activeGallerySurface = typeof galleryMainSurfaceController !== 'undefined'
     ? galleryMainSurfaceController?.current?.()
@@ -11828,7 +11834,9 @@ function toggleArtistTreeFold() {
     artistTreeFolded: state.ui.artistTreeFolded,
   };
   if (typeof persistShellLayoutPreferences === 'function') persistShellLayoutPreferences();
-  const isFolded = syncArtistTreeFoldVisibility({ transitioning: true });
+  const root = document.documentElement;
+  if (instant) root?.setAttribute?.('data-shell-motion', 'instant');
+  const isFolded = syncArtistTreeFoldVisibility({ transitioning: !instant });
   if (moveFocusWithinRail && isFolded) {
     navigationButton?.focus?.();
   }
@@ -11838,6 +11846,14 @@ function toggleArtistTreeFold() {
     if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };
+  if (instant) {
+    cancelPendingArtistTreeResize?.();
+    window.getComputedStyle?.(root)?.getPropertyValue?.('--compact-rail-width');
+    settleArtistTree();
+    announceArtistTreeSettled();
+    scheduleBrowserAnimationFrame(() => root?.removeAttribute?.('data-shell-motion'));
+    return isFolded;
+  }
   scheduleArtistTreeResizeAfterTransition(settleArtistTree);
   return isFolded;
 }
@@ -53110,7 +53126,7 @@ function revealArtistTreeForSearch() {
   }
   const shell = document.getElementById('app-shell');
   if (shell?.classList?.contains('is-artist-tree-folded') && typeof toggleArtistTreeFold === 'function') {
-    toggleArtistTreeFold();
+    toggleArtistTreeFold({ instant: true });
   }
 }
 

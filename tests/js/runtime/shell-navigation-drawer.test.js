@@ -895,3 +895,28 @@ for (const pendingArtist of ['', 'Latest Artist']) {
   assert.equal(opener.getAttribute('data-search-results'), null);
   assert.equal(opener.getAttribute('aria-description'), null);
 }
+
+{
+  // Owner 2026-11-15: a search that opens the folded tree must not render results at the
+  // folded width and then shift them while the rail animates open.
+  const {
+    context, drawerRail, expandedTree, compactNavigation, documentElement, pendingTimers, settledEvents,
+  } = loadHelper({ isMobile: false });
+  const frames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => { frames.push(callback); return frames.length; };
+  context.state.ui.artistTreeFolded = true;
+  context.syncArtistTreeFoldVisibility();
+
+  const folded = context.toggleArtistTreeFold({ instant: true });
+
+  assert.equal(folded, false);
+  assert.equal(drawerRail.classList.contains('is-transitioning'), false);
+  assert.equal(drawerRail.classList.contains('is-expanding'), false);
+  assert.equal(expandedTree.hidden, false);
+  assert.equal(compactNavigation.hidden, true);
+  assert.equal(settledEvents.length, 1, 'The open width is final before the search renders');
+  assert.equal([...pendingTimers.values()].filter(callback => callback.delay === 470).length, 0);
+  assert.equal(documentElement.getAttribute('data-shell-motion'), 'instant');
+  frames.forEach((callback) => callback());
+  assert.equal(documentElement.getAttribute('data-shell-motion'), null);
+}

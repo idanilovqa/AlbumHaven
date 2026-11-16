@@ -187,7 +187,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page :is(table, .album-track-table) { width: 100%; min-width: 0 !important; font-size: 12px; }
   .is-mobile-page :is(th, td) { padding: 10px 5px; }
   .is-mobile-page .album-details-editorial-copy { display: none; }
-  .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog, .non-album-modal-dialog) {
+  /* Loose Tracks is absent on purpose: its AlbumTrackTable resolves the same tokens as Album Details. */
+  .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog) {
     --appearance-panel-background: var(--appearance-main-surface, var(--app-surface));
   }
   .is-mobile-page .utility-modal-header, .is-mobile-page .utility-tabs { display: none; }

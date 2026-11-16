@@ -22777,7 +22777,7 @@ function buildCompactDataTable(config = {}) {
     : `<div role="row" class="compact-data-table-header">${columns
       .map((column) => (
         column.header === 'absent'
-          ? `<div data-cdt-column="${escapeHtml(column.key || '')}"${column.action ? ' data-cdt-action' : ''} aria-hidden="true"></div>`
+          ? `<div data-cdt-column="${escapeHtml(column.key || '')}"${column.action ? ' data-cdt-action' : ''}${mobile === 'grouped' && ['desktop', 'mobile'].includes(column.visibility) ? ` data-cdt-visibility="${column.visibility}"` : ''} aria-hidden="true"></div>`
           : buildCell(column, escapeHtml(column.label || ''), 'columnheader')
       ))
       .join('')}</div>`;

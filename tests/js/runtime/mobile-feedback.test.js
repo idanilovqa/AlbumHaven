@@ -1352,3 +1352,10 @@ test('library-wide Loose Tracks history names the collection and drops the Artis
   assert.equal(url.searchParams.has('family_display'), false);
   assert.deepEqual(url.searchParams.getAll('category'), ['hoard']);
 });
+
+test('the mobile page header uses the same mobile GalleryBar layout as the Gallery header', () => {
+  // Owner 2026-11-15: headers on Loose Tracks and every mobile page must sit like the Gallery header.
+  const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/index.html'), 'utf8');
+  assert.match(template, /gallery_bar\('', '', class_name='mobile-page-header', instance='page', mobile_layout='mobile-primary'/);
+  assert.match(template, /gallery_bar\('Gallery', [^)]*mobile_layout='mobile-primary'/);
+});

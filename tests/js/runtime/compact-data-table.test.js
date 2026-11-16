@@ -448,3 +448,18 @@ test('problematic mutation spinner stops animating for reduced motion while reta
     /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.problematic-mutation-spinner\s*\{[^}]*animation:\s*none/s,
   );
 });
+
+test('a grouped table hides a desktop-only absent header cell on phones like its body cells', () => {
+  // Owner FIX-TABLE-02: on mobile Loose Tracks "Length" wrapped under "#" because this placeholder took a cell.
+  const buildCompactDataTable = loadRenderer();
+  const html = buildCompactDataTable({
+    mobile: 'grouped',
+    columnsConfig: [
+      { key: 'number', label: '#' },
+      { key: 'problem', label: 'Problem', header: 'absent', action: true, visibility: 'desktop' },
+      { key: 'duration', label: 'Length', action: true },
+    ],
+    rows: [{ key: 'one', cells: { number: '1', problem: '', duration: '3:00' } }],
+  });
+  assert.match(String(html), /<div data-cdt-column="problem" data-cdt-action data-cdt-visibility="desktop" aria-hidden="true"><\/div>/);
+});

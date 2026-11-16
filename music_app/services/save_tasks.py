@@ -7,7 +7,7 @@ registry, async execution handoff, and finalization bookkeeping live here.
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import Future
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -23,6 +23,7 @@ from music_app.services.cache import (
     save_cache_to_disk_for_config,
 )
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.edit_state import affected_album_track_paths
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
@@ -308,13 +309,46 @@ def _rebase_committed_structural_entry_changes(
     return rebased_file_cache
 
 
-def _mark_structurally_inherited_cover_entries(
+def _live_file_cache_entries(
+    file_cache: Mapping[str, JsonDict],
+    baseline_file_cache: dict[str, JsonDict],
+    paths: Iterable[str],
+) -> dict[str, JsonDict]:
+    """The live entries of `paths`, a path the live cache lacks read from its
+    request baseline; the rest of the cache is never walked or copied."""
+    return {
+        path: entry
+        for path in paths
+        if (entry := file_cache.get(path, baseline_file_cache.get(path))) is not None
+    }
+
+
+def _merge_file_cache_entries(
+    library_state: dict[str, object],
+    entries: dict[str, JsonDict],
+) -> dict[str, JsonDict]:
+    """Merge committed entries into the live file cache in place, under the
+    caller's state-mutation guard, instead of republishing a copy of it."""
+    file_cache = library_state.get("file_cache")
+    if not isinstance(file_cache, dict):
+        file_cache = library_state["file_cache"] = {}
+    file_cache.update(entries)
+    # Non-album candidates are cached under the cache's identity, which an
+    # in-place merge keeps.
+    library_state.pop("_view_payload_non_album_candidate_cache", None)
+    return file_cache
+
+
+def _structurally_inherited_cover_entries(
     *,
-    file_cache: dict[str, JsonDict],
+    file_cache: Mapping[str, JsonDict],
+    candidate_paths: Iterable[str],
     previous_file_entries: dict[str, JsonDict],
     updated_file_entries: dict[str, JsonDict],
     changed_paths: set[str],
 ) -> dict[str, JsonDict]:
+    """The candidate entries that share a changed track's album and cover,
+    marked as inheriting that cover."""
     def cover_identity(entry: object) -> tuple[str, str, str] | None:
         if not isinstance(entry, dict):
             return None
@@ -333,14 +367,11 @@ def _mark_structurally_inherited_cover_entries(
         for entries in (previous_file_entries, updated_file_entries)
         if (identity := cover_identity(entries.get(path))) is not None
     }
-    marked_cache = dict(file_cache)
-    for path, entry in file_cache.items():
-        if cover_identity(entry) not in inherited_identities:
-            continue
-        marked_entry = dict(entry)
-        marked_entry["cover_inherited_from_structural_edit"] = True
-        marked_cache[path] = marked_entry
-    return marked_cache
+    return {
+        path: {**entry, "cover_inherited_from_structural_edit": True}
+        for path in candidate_paths
+        if cover_identity(entry := file_cache.get(path)) in inherited_identities
+    }
 
 
 def _normalize_empty_exception_rebase_entries(
@@ -581,16 +612,14 @@ def _finalize_save_task(
                 complete_scoped_persistence()
             durable_boundary_crossed = True
         else:
-            preflight_state = get_state()
-            preflight_file_cache = dict(
-                preflight_state.get("file_cache", {}) or {}
-            )
-            for path, baseline_entry in operation_baseline.items():
-                preflight_file_cache.setdefault(path, dict(baseline_entry))
             _rebase_non_cover_cache_entry_changes(
                 baseline_file_cache=operation_baseline,
                 changed_entries=changed_entries,
-                latest_file_cache=preflight_file_cache,
+                latest_file_cache=_live_file_cache_entries(
+                    get_state().get("file_cache") or {},
+                    operation_baseline,
+                    changed_paths,
+                ),
             )
             persistence_options = (
                 {"before_commit": before_persistence_commit}
@@ -657,12 +686,13 @@ def _finalize_save_task(
 
     def refresh_runtime_state() -> None:
         st = get_state()
-        live_file_cache = dict(st.get("file_cache", {}) or {})
-        for path, baseline_entry in operation_baseline.items():
-            live_file_cache.setdefault(path, dict(baseline_entry))
         rebase_baseline = operation_baseline
         rebase_changes = changed_entries
-        rebase_latest = live_file_cache
+        rebase_latest = _live_file_cache_entries(
+            st.get("file_cache") or {},
+            operation_baseline,
+            changed_paths,
+        )
         if scoped_postgres_exception_only:
             rebase_baseline = _normalize_empty_exception_rebase_entries(
                 operation_baseline
@@ -671,15 +701,17 @@ def _finalize_save_task(
                 changed_entries
             )
             rebase_latest = _normalize_empty_exception_rebase_entries(
-                live_file_cache,
+                rebase_latest,
                 paths=set(changed_entries),
             )
-        current_file_cache = _rebase_non_cover_cache_entry_changes(
-            baseline_file_cache=rebase_baseline,
-            changed_entries=rebase_changes,
-            latest_file_cache=rebase_latest,
+        current_file_cache = _merge_file_cache_entries(
+            st,
+            _rebase_non_cover_cache_entry_changes(
+                baseline_file_cache=rebase_baseline,
+                changed_entries=rebase_changes,
+                latest_file_cache=rebase_latest,
+            ),
         )
-        st["file_cache"] = current_file_cache
         if not scoped_postgres_exception_only:
             try:
                 rebuild_affected_albums_in_state(
@@ -957,7 +989,6 @@ def finalize_structural_tag_edit_save_task(
                     committed_separate_release_key
                 )
             st["separate_release_keys"] = current_separate_release_keys
-            current_file_cache = dict(st.get("file_cache", {}) or {})
             operation_baseline = {
                 path: dict(previous_file_cache[path])
                 for path in changed_paths
@@ -968,21 +999,37 @@ def finalize_structural_tag_edit_save_task(
                 for path in changed_paths
                 if isinstance(updated_file_cache.get(path), dict)
             }
-            for path, baseline_entry in operation_baseline.items():
-                current_file_cache.setdefault(path, dict(baseline_entry))
-            current_file_cache = _rebase_committed_structural_entry_changes(
-                baseline_file_cache=operation_baseline,
-                changed_entries=changed_entries,
-                latest_file_cache=current_file_cache,
+            current_file_cache = _merge_file_cache_entries(
+                st,
+                _rebase_committed_structural_entry_changes(
+                    baseline_file_cache=operation_baseline,
+                    changed_entries=changed_entries,
+                    latest_file_cache=_live_file_cache_entries(
+                        st.get("file_cache") or {},
+                        operation_baseline,
+                        changed_paths,
+                    ),
+                ),
             )
             if persistence_result.get("cover_inherited_from_structural_edit") is True:
-                current_file_cache = _mark_structurally_inherited_cover_entries(
-                    file_cache=current_file_cache,
-                    previous_file_entries=previous_file_cache,
-                    updated_file_entries=updated_file_cache,
-                    changed_paths=changed_paths,
+                _merge_file_cache_entries(
+                    st,
+                    _structurally_inherited_cover_entries(
+                        file_cache=current_file_cache,
+                        # The albums the tracks left and joined, before they
+                        # are rebuilt below.
+                        candidate_paths=affected_album_track_paths(
+                            st,
+                            previous_file_cache,
+                            current_file_cache,
+                            changed_paths,
+                            current_separate_release_keys,
+                        ),
+                        previous_file_entries=previous_file_cache,
+                        updated_file_entries=updated_file_cache,
+                        changed_paths=changed_paths,
+                    ),
                 )
-            st["file_cache"] = current_file_cache
             required_relation_fields = (
                 structural_edit_fields | {"artist"}
                 if relation_projection_edit_fields is None

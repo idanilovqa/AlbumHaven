@@ -1661,8 +1661,9 @@ def test_structural_cover_inheritance_marks_only_affected_album_identities():
         },
     }
 
-    marked = save_tasks_module._mark_structurally_inherited_cover_entries(
+    marked = save_tasks_module._structurally_inherited_cover_entries(
         file_cache=cache,
+        candidate_paths=set(cache),
         previous_file_entries=previous,
         updated_file_entries=updated,
         changed_paths={selected},
@@ -1670,7 +1671,7 @@ def test_structural_cover_inheritance_marks_only_affected_album_identities():
 
     assert marked[selected]["cover_inherited_from_structural_edit"] is True
     assert marked[sibling]["cover_inherited_from_structural_edit"] is True
-    assert "cover_inherited_from_structural_edit" not in marked[unrelated]
+    assert unrelated not in marked
 
 
 def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(tmp_path):

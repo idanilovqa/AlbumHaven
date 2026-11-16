@@ -261,6 +261,10 @@ export class GalleryPage extends BasePage {
     this.artistHeadings = page.locator(this.artistHeadingSelector);
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
+    // The device copy (instant return): its marker says whether the page came from the server or the
+    // copy, and the notice shows while the copy is read-only.
+    this.appCopyMarker = page.locator('meta[name="album-haven-app-copy"]');
+    this.appCopyOfflineNotice = page.locator('#app-copy-offline-notice');
     this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
     this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');

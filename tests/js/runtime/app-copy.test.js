@@ -265,3 +265,26 @@ test('in a browser, a page the worker did not load is saved the first time it is
 
   assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
 });
+
+test('IAR-W01: in a browser a page from the copy is read-only from its first paint until the server answers', async () => {
+  let answer;
+  const { client, notice, env, settle } = setup({
+    androidShell: false, marker: 'cache', answer: () => new Promise((resolve) => { answer = resolve; }),
+  });
+  assert.equal(client.isReadOnly(), true);
+  assert.equal(notice.hidden, false);
+
+  answer({ ok: true, status: 200, type: 'basic', json: async () => ({ account: 'acct-a' }) });
+  await settle();
+
+  assert.equal(client.isReadOnly(), false);
+  assert.equal(notice.hidden, true);
+  assert.deepEqual(env.readOnlyCalls, [true, false]);
+});
+
+test('the Android app shows its copy without the notice while the server answers', async () => {
+  const { client, notice } = setup({ androidShell: true, marker: 'cache', answer: () => new Promise(() => {}) });
+
+  assert.equal(client.isReadOnly(), false);
+  assert.equal(notice.hidden, true);
+});

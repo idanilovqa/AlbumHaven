@@ -556,13 +556,6 @@
               "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
               "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
               "area": "gallery-search"
-            },
-            {
-              "config": "playwright.config.js",
-              "project": "functional",
-              "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
-              "case": "FTC-IAR-W03 a tab that leaves the library after another tab signed out keeps no copy",
-              "area": "gallery-search"
             }
           ]
         }

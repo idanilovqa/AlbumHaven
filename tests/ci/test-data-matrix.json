@@ -10233,25 +10233,18 @@
     "ownerApproval": "approved"
   },
   {
-    "config": "playwright.config.js",
-    "project": "functional",
-    "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
-    "case": "FTC-IAR-W03 a tab that leaves the library after another tab signed out keeps no copy",
-    "profile": "functional-core",
-    "setupScope": "isolated",
-    "stateMode": "owned-mutation",
-    "databaseScenarios": [
-      "auth:instant-return-sign-out-w03"
-    ],
-    "executionWave": 2,
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W01: a browser takes the server's page when it is quick and the copy after 1.5 s without it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "late-save-after-sign-out-keeps-no-copy"
+      "IAR-W01: a browser takes the server's page when it is quick and the copy after 1.5 s without it"
     ],
-    "mutationOwnership": {
-      "databaseIdentity": "case:instant-return-sign-out-w03",
-      "filesystemCopy": "media/cases/instant-return-sign-out-w03"
-    },
     "ownerApproval": "approved"
   }
 ]

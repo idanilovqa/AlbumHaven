@@ -1,7 +1,8 @@
 // The Android app's copy of the last view in a real browser: the shipped service worker and page
 // client on a real origin, with a small server standing in for Album Haven and a fake shell port.
 // IAR-001 (a start from the copy), IAR-005 (offline read-only and recovery without a reload),
-// IAR-006 (signed out deletes the copy) and IAR-007 (the seven-day limit).
+// IAR-006 (signed out deletes the copy) and IAR-007 (the seven-day limit); in an ordinary browser,
+// IAR-W01 (the server first; the copy after 1.5 s without it).
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -12,10 +13,11 @@ const client = fs.readFileSync(path.join(root, 'music_app/static/js/app-copy.js'
 const worker = fs.readFileSync(path.join(root, 'music_app/static/js/app-copy-worker.js'));
 
 function startServer() {
-  const server = { renders: 0, signedIn: true, account: 'acct-a' };
-  server.http = http.createServer((request, response) => {
+  const server = { renders: 0, signedIn: true, account: 'acct-a', delayMs: 0 };
+  server.http = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/') {
+      if (server.delayMs) await new Promise(resolve => setTimeout(resolve, server.delayMs));
       if (!server.signedIn) {
         response.writeHead(303, { Location: '/login', 'Cache-Control': 'no-store' });
         response.end();
@@ -46,6 +48,7 @@ function startServer() {
       return;
     }
     if (url.pathname === '/app-copy/account') {
+      if (server.delayMs) await new Promise(resolve => setTimeout(resolve, server.delayMs));
       response.writeHead(server.signedIn ? 200 : 401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       response.end(JSON.stringify(server.signedIn ? { account: server.account } : { detail: 'Authentication required.' }));
       return;
@@ -79,7 +82,7 @@ async function adoptShell(page) {
 }
 
 async function copyCount(page) {
-  return page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('album-haven-app-copy-v1:')).length);
+  return page.evaluate(async () => (await caches.keys()).filter(name => name.startsWith('album-haven-app-copy-v2:')).length);
 }
 
 test.describe('app copy service worker', () => {
@@ -96,7 +99,7 @@ test.describe('app copy service worker', () => {
     // The first page under the worker is fetched as a copy request and kept.
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 2');
-    expect(await copyCount(page)).toBe(1);
+    await expect.poll(() => copyCount(page)).toBe(1);
 
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 2');
@@ -109,6 +112,7 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     await context.setOffline(true);
 
     await page.reload();
@@ -129,6 +133,7 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     server.signedIn = false;
 
     await page.reload();
@@ -141,21 +146,23 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     server.account = 'acct-b';
 
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 3');
     await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('data-account', 'acct-b');
-    expect(await page.evaluate(async () => caches.keys())).toEqual(['album-haven-app-copy-v1:acct-b']);
+    await expect.poll(() => page.evaluate(async () => caches.keys())).toEqual(['album-haven-app-copy-v2:acct-b']);
   });
 
   test('IAR-007: a copy older than seven days is not shown', async ({ page }) => {
     await page.goto(`${server.origin}/`);
     await adoptShell(page);
     await page.reload();
+    await expect.poll(() => copyCount(page)).toBe(1);
     // allow-read-only-measurement-evaluate: ages the kept copy's record by eight days.
     await page.evaluate(async () => {
-      const cache = await caches.open('album-haven-app-copy-v1:acct-a');
+      const cache = await caches.open('album-haven-app-copy-v2:acct-a');
       const metaUrl = new URL('/__app-copy__/meta', location.origin).href;
       const meta = await (await cache.match(metaUrl)).json();
       for (const kept of Object.values(meta.pages)) kept.savedAt -= 8 * 24 * 60 * 60 * 1000;
@@ -165,5 +172,30 @@ test.describe('app copy service worker', () => {
     await page.reload();
     await expect(renderHeading(page)).toHaveText('Render 3');
     await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
+  });
+
+  test("IAR-W01: a browser takes the server's page when it is quick and the copy after 1.5 s without it", async ({ page }) => {
+    // No Android shell: the page registers the browser worker once it has loaded.
+    await page.goto(`${server.origin}/`);
+    await expect.poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.scriptURL || ''))
+      .toMatch(/\/app-copy-worker\.js\?mode=web$/);
+    await page.reload();
+    await expect(renderHeading(page)).toHaveText('Render 2');
+    await expect.poll(() => copyCount(page)).toBe(1);
+
+    // A quick server still answers every start.
+    await page.reload();
+    await expect(renderHeading(page)).toHaveText('Render 3');
+    await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
+
+    // A server that does not answer within 1.5 s: the kept page, read-only with its notice.
+    server.delayMs = 6000;
+    const started = Date.now();
+    await page.reload();
+    await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'cache');
+    const waited = Date.now() - started;
+    expect(waited).toBeGreaterThanOrEqual(1400);
+    expect(waited).toBeLessThan(4000);
+    await expect(page.locator('#app-copy-offline-notice')).toBeVisible();
   });
 });

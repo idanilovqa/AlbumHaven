@@ -157,6 +157,8 @@
     });
     if (inBrowser) window.addEventListener('pagehide', saveInBrowser);
     window.addEventListener('online', () => { if (readOnly) void confirmAccount(); });
+    // A browser shows its copy only when the server did not answer in time, so the copy starts read-only.
+    if (startedFromCopy && inBrowser) setReadOnly(true);
     if (startedFromCopy) void confirmAccount();
 
     return { startedFromCopy, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer };

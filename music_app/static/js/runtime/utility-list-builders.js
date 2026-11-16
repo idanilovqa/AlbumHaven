@@ -542,6 +542,7 @@ function buildProblematicAlbumDetail(album) {
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
+    ${album.musicbrainz_correction ? buildMusicBrainzCorrectionHtml(album) : ''}
   `;
 }
 

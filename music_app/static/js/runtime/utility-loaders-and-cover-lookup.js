@@ -239,6 +239,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
     return currentAlbum;
   }
+  // An album listed only for its data correction is its own detail.
+  if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(currentAlbum)) {
+    return currentAlbum;
+  }
   if (currentAlbum?.detail_load_failed === true && !force) {
     return null;
   }
@@ -1167,6 +1171,7 @@ function loadActiveUtilityTab(force = false) {
     renderUtilityModalContent();
     return null;
   }
+  if (state.utility.activeTab === 'edits-queue') return loadUtilityEditsQueue(force);
   return loadProblematicFiles(force);
 }
 

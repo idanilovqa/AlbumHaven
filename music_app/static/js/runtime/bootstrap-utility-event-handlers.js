@@ -8,6 +8,7 @@ function waitForUtilityTabPaint() {
 async function handleUtilityBootstrapClick(event) {
   if (typeof handleMusicBrainzArtistProblemEvent === 'function' && handleMusicBrainzArtistProblemEvent(event)) return;
   if (typeof handleMusicBrainzLookupEvent === 'function' && handleMusicBrainzLookupEvent(event)) return;
+  if (typeof handleMusicBrainzCorrectionEvent === 'function' && handleMusicBrainzCorrectionEvent(event)) return;
   const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
   if (folderLoadButton) {
     event.preventDefault();
@@ -101,6 +102,8 @@ async function handleUtilityBootstrapClick(event) {
       if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
         loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
       }
+    } else if (state.utility.activeTab === 'edits-queue') {
+      loadUtilityEditsQueue(true);
     } else if (!['appearance', 'android'].includes(state.utility.activeTab)) {
       const navigationToken = {};
       state.utility.problematicNavigationActiveToken = navigationToken;

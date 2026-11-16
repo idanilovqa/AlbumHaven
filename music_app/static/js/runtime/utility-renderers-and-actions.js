@@ -175,6 +175,10 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
     return;
   }
+  if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzCorrectionProblemDetail(selectedAlbum);
+    return;
+  }
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
@@ -875,6 +879,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityAppearance();
   } else if (activeTab === 'android') {
     renderUtilityAndroid();
+  } else if (activeTab === 'edits-queue') {
+    renderUtilityEditsQueue();
   } else {
     renderProblematicFiles(options);
   }

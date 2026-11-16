@@ -9481,6 +9481,66 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "D1: a data correction entry shows its label, the change table and Add to queue, without Apply changes",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-data-correction-entry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "E1: the Edits Queue is one page: Data Correction list, Auto submit bulks off, Bulk Correction visibly disabled",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-data-correction"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "E2: the MusicBrainz Look Up tab lists queued look ups with when they start, in the same list",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-lookups"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "I1: album details show the a.k.a. title dimmed, at the title size, after the title and before the year",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-alternative-album-title"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/mobileGalleryHeaderTruncation.spec.js",
     "case": "mobile gallery header truncates long artist names without truncating artist separators",
     "profile": null,

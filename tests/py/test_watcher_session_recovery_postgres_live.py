@@ -78,11 +78,21 @@ def watcher_session_database():
                 (MIGRATION.name,),
             ).fetchone()
             assert applied is not None, "migration 0120 was not applied"
+            username = f"watcher-session-{uuid4().hex}"
             owner_id = int(
                 connection.execute(
-                    "select account_id from app.bootstrap_owners "
-                    "where owner_key = 'local-bootstrap-owner'"
-                ).fetchone()["account_id"]
+                    "insert into app.accounts (display_name, username_display, "
+                    "username_normalized, contact_email, contact_email_normalized, "
+                    "account_kind, is_active) "
+                    "values (%s, %s, %s, %s, %s, 'managed', true) returning id",
+                    (
+                        username,
+                        username,
+                        username,
+                        f"{username}@example.invalid",
+                        f"{username}@example.invalid",
+                    ),
+                ).fetchone()["id"]
             )
         yield SimpleNamespace(
             setup_url=setup_url,

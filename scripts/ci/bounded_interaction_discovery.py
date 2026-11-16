@@ -4,8 +4,11 @@ Discovery proves coverage, not boundedness. Entrypoints are routes, background
 owners found by name, and every thread or executor target. Direct filesystem
 enumeration in an interactive entrypoint is rejected outright; filesystem/media
 work reached through helpers is reported so the registry can demand a runtime
-contract; and any interactive path that reaches a registered library-scale
-operation is rejected at any depth.
+contract; any interactive path that reaches a registered library-scale
+operation is rejected at any depth; an `async def` route, websocket or
+middleware whose event-loop call chain reaches blocking I/O is rejected
+(BI-08); and a database connection opened per loop item is rejected in an
+interactive path and needs a contract elsewhere (BI-05).
 
 The traversal is exhaustive: every (function, looped) pair reachable from an
 entrypoint is analyzed once, so no call chain is left unexamined and no depth
@@ -25,6 +28,8 @@ from pathlib import Path
 
 SCAN_ROOT = "music_app"
 ENTRYPOINT_ROOTS = ("music_app/routes", "music_app/services")
+# The app factory installs middleware and routes as closures.
+DECORATED_ENTRYPOINT_ROOTS = (*ENTRYPOINT_ROOTS, "music_app/__init__.py")
 ROUTE_METHODS = {"get", "post", "put", "patch", "delete"}
 BACKGROUND_TERMS = (
     ("watch", "watcher"),
@@ -53,6 +58,27 @@ PROBE_METHODS = {
     "open": "Path.open",
 }
 MEDIA_CALLS = {"MutagenFile": "mutagen.File"}
+# Blocking families on the ASGI event loop (BI-08), by import-qualified name.
+DATABASE_CONNECTS = frozenset({
+    "psycopg.connect", "psycopg.Connection.connect", "psycopg2.connect", "psycopg_pool.ConnectionPool",
+})
+BLOCKING_CALLS = {
+    **{name: "database" for name in DATABASE_CONNECTS},
+    **{f"subprocess.{name}": "subprocess" for name in ("run", "Popen", "call", "check_call", "check_output")},
+    "time.sleep": "sleep",
+    "urllib.request.urlopen": "http",
+    **{f"{client}.{verb}": "http" for client in ("requests", "httpx") for verb in ("get", "post", "put", "patch", "delete", "head", "request", "stream")},
+    "httpx.Client": "http",
+    "PIL.Image.open": "image",
+}
+# DB-API calls on a connection, cursor or pool, counted in modules that import
+# a database driver: the import is the evidence the receiver is one.
+DATABASE_METHODS = frozenset({"execute", "executemany", "fetchone", "fetchall", "fetchmany", "getconn", "connection"})
+DATABASE_DRIVERS = ("psycopg", "psycopg2", "psycopg_pool")
+FILESYSTEM_WRITE_METHODS = {"write_text": "Path.write_text", "write_bytes": "Path.write_bytes"}
+# Calls whose callable runs on another thread: the event loop is free while it
+# runs. `executor.submit(fn).result()` waits for it and is not a hand-off.
+OFFLOADING_CALLS = frozenset({"run_in_threadpool", "to_thread", "run_sync", "run_in_executor", "submit"})
 # Dispatchers whose callable runs before the caller continues: the callable is
 # the first argument, or the second for `loop.run_in_executor(executor, fn)`.
 SYNCHRONOUS_DISPATCH = {"run_in_threadpool": 0, "to_thread": 0, "run_in_executor": 1}
@@ -66,6 +92,10 @@ PROTOCOL_METHODS = frozenset({
     "fetchone", "flush", "is_set", "open", "put", "read", "readline", "release", "result", "rollback", "run",
     "send", "start", "submit", "wait", "write",
 })
+# Builtin container and string methods: on a receiver of unknown type such a
+# call (`rows.append(row)`) is the builtin, even when one app class defines the
+# same name, so it is never resolved to app code.
+CONTAINER_METHODS = frozenset(name for kind in (dict, list, set, str, bytes) for name in dir(kind) if not name.startswith("_"))
 
 
 @dataclass
@@ -88,6 +118,10 @@ class Module:
     functions: dict[str, Definition] = field(default_factory=dict)
     methods: dict[str, dict[str, Definition]] = field(default_factory=dict)
     imports: dict[str, tuple[str, str | None]] = field(default_factory=dict)
+    # `self.<attribute> = <function> or <function>` bindings, per class: the
+    # names a method call through that attribute may run.
+    bound_callables: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    class_bases: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -130,9 +164,16 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
             module.functions[node.name] = Definition(relative, node.name, node, module.name)
         elif isinstance(node, ast.ClassDef):
             methods = module.methods.setdefault(node.name, {})
+            module.class_bases[node.name] = [base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "") for base in node.bases]
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     methods[item.name] = Definition(relative, f"{node.name}.{item.name}", item, module.name, node.name)
+                    for statement in ast.walk(item):
+                        if isinstance(statement, ast.Assign):
+                            for target in statement.targets:
+                                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
+                                    names = [value.id for value in ast.walk(statement.value) if isinstance(value, ast.Name)]
+                                    module.bound_callables.setdefault(node.name, {}).setdefault(target.attr, []).extend(names)
     # Function-local imports are merged into module scope: resolution only needs
     # to know which module a name came from, and local imports never shadow it.
     for node in _iter_statements(tree.body):
@@ -140,6 +181,9 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
             for alias in node.names:
                 if alias.asname:
                     module.imports[alias.asname] = (alias.name, None)
+                else:
+                    head = alias.name.split(".")[0]
+                    module.imports.setdefault(head, (head, None))
         elif isinstance(node, ast.ImportFrom):
             source_module = node.module or ""
             if node.level:
@@ -193,12 +237,18 @@ class Index:
                     method = module.methods.get(owner.class_name, {}).get(attr)
                     if method:
                         return [method]
+                    bound = module.bound_callables.get(owner.class_name, {}).get(attr, [])
+                    found = [item for name in bound if (item := self.module_function(module.name, name))]
+                    if found:
+                        return found
                 imported = module.imports.get(value.id)
                 if imported:
                     target_module = imported[0] if imported[1] is None else f"{imported[0]}.{imported[1]}"
                     found = self.module_function(target_module, attr)
                     if found:
                         return [found]
+            if attr in CONTAINER_METHODS:
+                return []
             candidates = self.methods_by_name.get(attr, [])
             return [] if len(candidates) > 1 and attr in PROTOCOL_METHODS else candidates
         return []
@@ -213,10 +263,11 @@ ITERATING_LAMBDA_CONSUMERS = {"sorted", "sort", "min", "max", "map", "filter", "
 
 
 def _is_constant_literal(node: ast.AST) -> bool:
-    """A literal tuple, list or set of constants, or ``range`` over constants."""
+    """A tuple, list or set display without unpacking (a fixed number of
+    items), or ``range`` over constants."""
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
         return bool(node.args) and not node.keywords and all(isinstance(arg, ast.Constant) for arg in node.args)
-    return isinstance(node, (ast.Tuple, ast.List, ast.Set)) and all(isinstance(item, ast.Constant) for item in node.elts)
+    return isinstance(node, (ast.Tuple, ast.List, ast.Set)) and not any(isinstance(item, ast.Starred) for item in node.elts)
 
 
 def _loop_source(node: ast.AST) -> ast.AST | None:
@@ -250,7 +301,9 @@ _FACTS: dict[int, BodyFacts] = {}
 def _facts(definition: Definition) -> BodyFacts:
     """Calls that execute when the definition runs, each marked when it runs in a loop.
 
-    Nested defs and deferred lambdas run only when something calls them.
+    Nested defs and deferred lambdas run only when something calls them. A
+    block that ends the loop (`break`) runs at most once per enclosing loop, and
+    one that leaves the function (`return`, `raise`) at most once per call.
     """
     cached = _FACTS.get(id(definition.node))
     if cached is not None:
@@ -259,17 +312,18 @@ def _facts(definition: Definition) -> BodyFacts:
     nested: dict[str, Definition] = {}
     has_while = False
     lambda_loops: dict[int, bool] = {}
-    stack = [(child, False) for child in ast.iter_child_nodes(definition.node)]
-    evaluated_once: dict[int, bool] = {}
+    # Each node carries the number of repeating loops around it in this body.
+    stack = [(child, 0) for child in ast.iter_child_nodes(definition.node)]
+    evaluated_once: dict[int, int] = {}
     while stack:
-        node, in_loop = stack.pop()
-        in_loop = evaluated_once.pop(id(node), in_loop)
+        node, depth = stack.pop()
+        depth = evaluated_once.pop(id(node), depth)
         if isinstance(node, ast.Lambda):
             if id(node) not in lambda_loops:
                 continue
-            in_loop = in_loop or lambda_loops[id(node)]
+            depth += int(lambda_loops[id(node)])
         if isinstance(node, ast.Call):
-            calls.append((node, in_loop))
+            calls.append((node, depth > 0))
             consumer = _call_name(node)[1]
             awaited_submit = _awaited_submit(node)
             synchronous = [node] if consumer in ITERATING_LAMBDA_CONSUMERS or consumer in SYNCHRONOUS_DISPATCH else []
@@ -289,18 +343,26 @@ def _facts(definition: Definition) -> BodyFacts:
             )
         if isinstance(node, NESTED_SCOPES):
             continue
-        child_in_loop = in_loop or (isinstance(node, LOOP_NODES) and not _iterates_literal(node))
+        if isinstance(node, (ast.Return, ast.Raise)):
+            child_depth = 0
+        else:
+            child_depth = depth + int(isinstance(node, LOOP_NODES) and not _iterates_literal(node))
         # The iterable of a `for` (or of a comprehension's first `for`) is
         # evaluated once, before the loop repeats anything.
         source = _loop_source(node)
         if source is not None:
-            evaluated_once[id(source)] = in_loop
+            evaluated_once[id(source)] = depth
         for name in node._fields:
             value = getattr(node, name, None)
             if isinstance(value, list):
-                stack.extend((item, child_in_loop) for item in value if isinstance(item, ast.AST))
+                block_depth = child_depth
+                if value and isinstance(value[-1], ast.Break):
+                    block_depth = max(child_depth - 1, 0)
+                elif value and isinstance(value[-1], (ast.Return, ast.Raise)):
+                    block_depth = 0
+                stack.extend((item, block_depth) for item in value if isinstance(item, ast.AST))
             elif isinstance(value, ast.AST):
-                stack.append((value, child_in_loop))
+                stack.append((value, child_depth))
     calls.sort(key=lambda item: (item[0].lineno, item[0].col_offset))
     facts = BodyFacts(calls, nested, has_while)
     _FACTS[id(definition.node)] = facts
@@ -354,6 +416,48 @@ def _callable_target(node: ast.AST) -> ast.AST | None:
 ENUMERATIONS = frozenset({*ENUMERATION_CALLS.values(), *ENUMERATION_METHODS.values()})
 
 
+def _qualified_name(node: ast.AST, module: Module) -> str:
+    """The dotted name a call target refers to, with its leading name resolved
+    through the module's imports (`from psycopg import connect` -> `psycopg.connect`)."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return ""
+    imported = module.imports.get(node.id)
+    head = node.id
+    if imported:
+        head = imported[0] if imported[1] is None else f"{imported[0]}.{imported[1]}"
+    return ".".join([head, *reversed(parts)])
+
+
+def _imports_database_driver(module: Module) -> bool:
+    return any(source.split(".")[0] in DATABASE_DRIVERS for source, _ in module.imports.values())
+
+
+def _database_connect(node: ast.Call, module: Module) -> str | None:
+    """A new database connection or pool: the psycopg call that opens it."""
+    name = _qualified_name(node.func, module)
+    return name if name in DATABASE_CONNECTS else None
+
+
+def _blocking_operation(node: ast.Call, module: Module) -> tuple[str, str] | None:
+    """(family, operation) for a call that blocks its thread until I/O completes."""
+    name = _qualified_name(node.func, module)
+    if name in BLOCKING_CALLS:
+        return BLOCKING_CALLS[name], name
+    operation = _filesystem_operation(node)
+    if operation is not None:
+        return ("media" if operation == "mutagen.File" else "filesystem"), operation
+    if isinstance(node.func, ast.Attribute):
+        if node.func.attr in FILESYSTEM_WRITE_METHODS:
+            return "filesystem", FILESYSTEM_WRITE_METHODS[node.func.attr]
+        if node.func.attr in DATABASE_METHODS and _imports_database_driver(module):
+            return "database", f"db.{node.func.attr}"
+    return None
+
+
 def _filesystem_operation(node: ast.Call) -> str | None:
     base, name = _call_name(node)
     attribute = isinstance(node.func, ast.Attribute)
@@ -372,11 +476,24 @@ def _filesystem_operation(node: ast.Call) -> str | None:
     return None
 
 
-def _direct_hazards(definition: Definition, looped: bool) -> list[dict[str, object]]:
+def _direct_hazards(definition: Definition, looped: bool, module: Module | None = None) -> list[dict[str, object]]:
     """Directory enumeration always counts. A single stat/open/media parse of a
-    selected file is bounded; the same probe repeated per item is not."""
+    selected file is bounded; the same probe repeated per item is not. A new
+    database connection opened per item (BI-05) is an N+1 connection storm."""
     hazards = []
     for node, in_loop in _facts(definition).calls:
+        connect = _database_connect(node, module) if module is not None else None
+        if connect is not None and (in_loop or looped):
+            hazards.append({
+                "rule": "BI-05",
+                "operation": f"database-connect-per-item:{connect}",
+                "path": definition.path,
+                "function": definition.qualname,
+                "line": node.lineno,
+                "enumeration": False,
+                "per_item_connect": True,
+            })
+            continue
         operation = _filesystem_operation(node)
         if operation is None:
             continue
@@ -396,23 +513,15 @@ def _direct_hazards(definition: Definition, looped: bool) -> list[dict[str, obje
 
 # Library-state scans. The in-memory library state holds the whole library in
 # registered collections (`library_state["albums"]`); a loop, comprehension, or
-# copy over one of them is library-sized work. A receiver is library state only
-# by evidence: a parameter or variable named `library_state`, or a variable
-# bound from `_library_state(...)` or a `.library_state` attribute. One local
-# alias (`albums = library_state.get("albums", [])`) is followed.
+# copy over one of them is library-sized work. A receiver is library state by
+# evidence through the call graph, whatever it is named (see
+# LibraryStateEvidence). One local alias (`albums = st.get("albums", [])`) is
+# followed.
 COPYING_CALLS = {"list", "sorted", "tuple", "set", "dict", "frozenset", "enumerate", "reversed"}
 VIEW_METHODS = {"values", "items", "keys", "copy"}
 
 
-def _is_library_state(node: ast.AST, state_names: set[str]) -> bool:
-    if isinstance(node, ast.Name):
-        return node.id in state_names
-    if isinstance(node, ast.Attribute):
-        return node.attr == "library_state"
-    return isinstance(node, ast.Call) and _call_name(node)[1] == "_library_state"
-
-
-def _library_collection(node: ast.AST, state_names: set[str], aliases: dict[str, str], collections: set[str]) -> str | None:
+def _library_collection(node: ast.AST, is_state, aliases: dict[str, str], collections: set[str]) -> str | None:
     """The registered collection an expression reads, through copies and views."""
     while True:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in COPYING_CALLS and node.args:
@@ -420,60 +529,172 @@ def _library_collection(node: ast.AST, state_names: set[str], aliases: dict[str,
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in VIEW_METHODS and not node.args:
             node = node.func.value
         elif isinstance(node, ast.BoolOp):
-            found = [_library_collection(value, state_names, aliases, collections) for value in node.values]
+            found = [_library_collection(value, is_state, aliases, collections) for value in node.values]
             return next((item for item in found if item), None)
         else:
             break
     if isinstance(node, ast.Name):
         return aliases.get(node.id)
     key = None
-    if isinstance(node, ast.Subscript) and _is_library_state(node.value, state_names):
+    if isinstance(node, ast.Subscript) and is_state(node.value):
         key = node.slice
     elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args:
-        if _is_library_state(node.func.value, state_names):
+        if is_state(node.func.value):
             key = node.args[0]
     if isinstance(key, ast.Constant) and key.value in collections:
         return str(key.value)
     return None
 
 
-def _library_state_scans(definition: Definition, collections: set[str]) -> list[dict[str, object]]:
-    if not collections:
-        return []
-    node = definition.node
-    state_names = {"library_state"} & set(_parameter_names(definition))
-    statements = [item for item in ast.walk(node) if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name)]
-    for statement in statements:
-        if _is_library_state(statement.value, set()) or statement.targets[0].id == "library_state":
-            state_names.add(statement.targets[0].id)
-    aliases: dict[str, str] = {}
-    for statement in statements:
-        collection = _library_collection(statement.value, state_names, {}, collections)
-        if collection:
-            aliases[statement.targets[0].id] = collection
-    hazards = []
-    seen = set()
-    for item in ast.walk(node):
-        sources = []
-        if isinstance(item, (ast.For, ast.AsyncFor)):
-            sources = [item.iter]
-        elif isinstance(item, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
-            sources = [generator.iter for generator in item.generators]
-        elif isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and item.func.id in COPYING_CALLS and item.args:
-            sources = [item.args[0]]
-        for source in sources:
-            collection = _library_collection(source, state_names, aliases, collections)
-            if collection and (source.lineno, collection) not in seen:
-                seen.add((source.lineno, collection))
-                hazards.append({
-                    "rule": "BI-04",
-                    "operation": f"library-state-scan:{collection}",
-                    "path": definition.path,
-                    "function": definition.qualname,
-                    "line": source.lineno,
-                    "enumeration": False,
-                })
-    return hazards
+_OWN_NODES: dict[int, list[ast.AST]] = {}
+
+
+def _own_nodes(definition: Definition) -> list[ast.AST]:
+    """The definition's nodes outside nested functions and classes."""
+    if id(definition.node) in _OWN_NODES:
+        return _OWN_NODES[id(definition.node)]
+    pending = list(ast.iter_child_nodes(definition.node))
+    found = []
+    while pending:
+        node = pending.pop()
+        found.append(node)
+        if not isinstance(node, NESTED_SCOPES):
+            pending.extend(ast.iter_child_nodes(node))
+    _OWN_NODES[id(definition.node)] = found
+    return found
+
+
+class LibraryStateEvidence:
+    """Which values are the app's library state, proven through the call graph.
+
+    Evidence is a `.library_state` attribute (`request.app.state.library_state`);
+    a call of a getter that returns library state (`_library_state(request)`,
+    found by its returns); a parameter or local bound from such a value
+    (`st = get_state()`); a getter parameter whose call sites pass a getter or a
+    lambda returning library state (`get_state=lambda: _library_state(request)`);
+    and a parameter whose call sites pass library state or one of its registered
+    collections (`updated_file_cache=st["file_cache"]`). The facts are solved to
+    a fixpoint over every call site.
+    """
+
+    def __init__(self, modules: list[Module], index: Index, collections: set[str]):
+        self.index = index
+        self.collections = collections
+        self.getters: set[int] = set()
+        self.state_params: dict[int, set[str]] = {}
+        self.getter_params: dict[int, set[str]] = {}
+        self.collection_params: dict[int, dict[str, str]] = {}
+        definitions = list(_all_definitions(modules)) if collections else []
+        returns = {id(item.node): [node.value for node in _own_nodes(item) if isinstance(node, ast.Return) and node.value is not None] for item in definitions}
+        changed = True
+        while changed:
+            changed = False
+            for definition in definitions:
+                is_state = self._state_predicate(definition)
+                if id(definition.node) not in self.getters and any(is_state(value) for value in returns[id(definition.node)]):
+                    self.getters.add(id(definition.node))
+                    changed = True
+                resolve = _resolver(definition, index)
+                aliases = self.aliases(definition, is_state)
+                for node, _ in _facts(definition).calls:
+                    for target in resolve(node.func):
+                        for parameter in _parameter_names(target):
+                            argument = _argument_for(node, target, parameter)
+                            if argument is None:
+                                continue
+                            if is_state(argument):
+                                changed |= self._add(self.state_params, target, parameter)
+                            elif self._is_getter(argument, definition, is_state):
+                                changed |= self._add(self.getter_params, target, parameter)
+                            elif collection := _library_collection(argument, is_state, aliases, collections):
+                                known = self.collection_params.setdefault(id(target.node), {})
+                                if parameter not in known:
+                                    known[parameter] = collection
+                                    changed = True
+
+    @staticmethod
+    def _add(facts: dict[int, set[str]], target: Definition, parameter: str) -> bool:
+        known = facts.setdefault(id(target.node), set())
+        if parameter in known:
+            return False
+        known.add(parameter)
+        return True
+
+    def _calls_getter(self, node: ast.Call, definition: Definition) -> bool:
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in self.getter_params.get(id(definition.node), set()):
+            return True
+        return any(id(target.node) in self.getters for target in _resolver(definition, self.index)(func))
+
+    def _state_predicate(self, definition: Definition):
+        """`is_state(expr)` for expressions inside `definition`."""
+        # A `library_state` parameter or local keeps counting as evidence
+        # where its callers cannot be resolved.
+        names = self.state_params.get(id(definition.node), set()) | ({"library_state"} & set(_parameter_names(definition)))
+
+        def is_state(node: ast.AST) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id in names
+            if isinstance(node, ast.Attribute):
+                return node.attr == "library_state"
+            return isinstance(node, ast.Call) and (_call_name(node)[1] == "_library_state" or self._calls_getter(node, definition))
+
+        # Assignments in nested functions count too: closures read them.
+        assignments = sorted(
+            (node for node in ast.walk(definition.node) if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)),
+            key=lambda node: node.lineno,
+        )
+        for assignment in assignments:
+            if is_state(assignment.value) or assignment.targets[0].id == "library_state":
+                names.add(assignment.targets[0].id)
+        return is_state
+
+    def _is_getter(self, node: ast.AST, definition: Definition, is_state) -> bool:
+        if isinstance(node, ast.Lambda):
+            return is_state(node.body)
+        if isinstance(node, ast.Name) and node.id in self.getter_params.get(id(definition.node), set()):
+            return True
+        return isinstance(node, (ast.Name, ast.Attribute)) and any(
+            id(target.node) in self.getters for target in _resolver(definition, self.index)(node)
+        )
+
+    def aliases(self, definition: Definition, is_state) -> dict[str, str]:
+        aliases = dict(self.collection_params.get(id(definition.node), {}))
+        for node in ast.walk(definition.node):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                collection = _library_collection(node.value, is_state, {}, self.collections)
+                if collection:
+                    aliases[node.targets[0].id] = collection
+        return aliases
+
+    def scans(self, definition: Definition) -> list[dict[str, object]]:
+        if not self.collections:
+            return []
+        is_state = self._state_predicate(definition)
+        aliases = self.aliases(definition, is_state)
+        hazards = []
+        seen = set()
+        for item in ast.walk(definition.node):
+            sources = []
+            if isinstance(item, (ast.For, ast.AsyncFor)):
+                sources = [item.iter]
+            elif isinstance(item, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                sources = [generator.iter for generator in item.generators]
+            elif isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and item.func.id in COPYING_CALLS and item.args:
+                sources = [item.args[0]]
+            for source in sources:
+                collection = _library_collection(source, is_state, aliases, self.collections)
+                if collection and (source.lineno, collection) not in seen:
+                    seen.add((source.lineno, collection))
+                    hazards.append({
+                        "rule": "BI-04",
+                        "operation": f"library-state-scan:{collection}",
+                        "path": definition.path,
+                        "function": definition.qualname,
+                        "line": source.lineno,
+                        "enumeration": False,
+                    })
+        return hazards
 
 
 def _resolver(definition: Definition, index: Index):
@@ -489,11 +710,11 @@ def _resolver(definition: Definition, index: Index):
     return resolve
 
 
-def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool]]:
+def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool, int]]:
     found = []
     resolve = _resolver(definition, index)
     for node, in_loop in _facts(definition).calls:
-        found.extend((target, in_loop) for target in resolve(node.func))
+        found.extend((target, in_loop, node.lineno) for target in resolve(node.func))
         _, name = _call_name(node)
         position = SYNCHRONOUS_DISPATCH.get(name)
         dispatched = node.args[position] if position is not None and len(node.args) > position else None
@@ -501,8 +722,149 @@ def _callees(definition: Definition, index: Index) -> list[tuple[Definition, boo
         if submit is not None and submit.args:
             dispatched = submit.args[0]
         if dispatched is not None:
-            found.extend((target, in_loop) for target in resolve(_callable_target(dispatched)))
+            found.extend((target, in_loop, node.lineno) for target in resolve(_callable_target(dispatched)))
     return found
+
+
+def _loop_calls(definition: Definition, index: Index) -> list[tuple[ast.Call, list[Definition]]]:
+    """Calls that run on the caller's thread, each with the definitions it runs.
+
+    A callable handed to a thread (`run_in_threadpool`, `asyncio.to_thread`,
+    `anyio.to_thread.run_sync`, `loop.run_in_executor`, `executor.submit`) runs
+    elsewhere: neither it nor a lambda passed with it is followed, unless
+    `.result()` waits for the submitted work.
+    """
+    resolve = _resolver(definition, index)
+    calls = [node for node, _ in _facts(definition).calls]
+    waited = {id(submit): submit for node in calls if (submit := _awaited_submit(node)) is not None and submit.args}
+    offloaded: set[int] = set()
+    for node in calls:
+        if _call_name(node)[1] in OFFLOADING_CALLS and id(node) not in waited:
+            offloaded.add(id(node))
+            for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+                if isinstance(argument, ast.Lambda):
+                    offloaded.update(id(item) for item in ast.walk(argument.body) if isinstance(item, ast.Call))
+    found = []
+    for node in calls:
+        if id(node) in offloaded:
+            continue
+        targets = resolve(node.func)
+        # A callable argument the callee calls through its parameter
+        # (`revert(config, load_keys=load_ignored_keys)`) runs here too.
+        for target in list(targets):
+            for parameter in _called_parameters(target):
+                argument = _argument_for(node, target, parameter)
+                if argument is not None:
+                    targets.extend(resolve(_callable_target(argument)))
+        found.append((node, targets))
+    found.extend((submit, resolve(_callable_target(submit.args[0]))) for submit in waited.values())
+    return found
+
+
+def _called_parameters(definition: Definition) -> set[str]:
+    parameters = set(_parameter_names(definition))
+    return {node.func.id for node, _ in _facts(definition).calls if isinstance(node.func, ast.Name) and node.func.id in parameters}
+
+
+def _awaited_call_ids(definition: Definition) -> set[int]:
+    pending = list(ast.iter_child_nodes(definition.node))
+    awaited = set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, NESTED_SCOPES):
+            continue
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            awaited.add(id(node.value))
+        pending.extend(ast.iter_child_nodes(node))
+    return awaited
+
+
+class EventLoopAnalysis:
+    """Blocking work an `async def` runs on the event loop (BI-08).
+
+    Uvicorn runs every `async def` route, websocket and middleware on the one
+    event-loop thread, so a synchronous call made there (not awaited and not
+    handed to a thread) stalls every other request until it returns. The chain
+    of such calls is followed through sync helpers to a blocking operation: a
+    database connection or DB-API call, filesystem or media I/O, a subprocess,
+    `time.sleep`, synchronous HTTP, a PIL image open, or registered
+    library-scale work. A coroutine called from the chain runs on the loop too
+    and is followed as part of it.
+    """
+
+    def __init__(self, index: Index, library_scale: set[str]):
+        self.index = index
+        self.library_scale = library_scale
+        self._witnesses: dict[int, tuple[str, str, str, int, list[str]] | None] = {}
+
+    def _direct_operation(self, definition: Definition) -> tuple[str, str, int] | None:
+        if definition.key in self.library_scale:
+            return "library-scale", definition.key, definition.node.lineno
+        module = self.index.modules[definition.module]
+        for node, _ in _facts(definition).calls:
+            found = _blocking_operation(node, module)
+            if found is not None:
+                return (*found, node.lineno)
+        return None
+
+    def witness(self, start: Definition) -> tuple[str, str, str, int, list[str]] | None:
+        """The nearest blocking operation a synchronous call of `start` runs:
+        (family, operation, path, line, chain of definitions after `start`)."""
+        if id(start.node) in self._witnesses:
+            return self._witnesses[id(start.node)]
+        queue = deque([(start, [])])
+        seen = {id(start.node)}
+        found = None
+        while queue:
+            current, via = queue.popleft()
+            direct = self._direct_operation(current)
+            if direct is not None:
+                found = (direct[0], direct[1], current.path, direct[2], via)
+                break
+            for _, targets in _loop_calls(current, self.index):
+                for target in targets:
+                    if isinstance(target.node, ast.AsyncFunctionDef) or id(target.node) in seen:
+                        continue
+                    seen.add(id(target.node))
+                    queue.append((target, [*via, target.qualname]))
+        self._witnesses[id(start.node)] = found
+        return found
+
+    def hazards(self, entry: dict[str, object], root: Definition) -> list[dict[str, object]]:
+        if not isinstance(root.node, ast.AsyncFunctionDef):
+            return []
+        found = []
+        queue = deque([(root, [])])
+        seen = {id(root.node)}
+        while queue:
+            current, via = queue.popleft()
+            awaited = _awaited_call_ids(current)
+            module = self.index.modules[current.module]
+            for node, targets in _loop_calls(current, self.index):
+                blocking = []
+                if id(node) not in awaited and (direct := _blocking_operation(node, module)) is not None:
+                    blocking.append((*direct, current.path, node.lineno, []))
+                for target in targets:
+                    if isinstance(target.node, ast.AsyncFunctionDef):
+                        if id(target.node) not in seen:
+                            seen.add(id(target.node))
+                            queue.append((target, [*via, target.qualname]))
+                    elif (witness := self.witness(target)) is not None:
+                        family, operation, path, line, chain = witness
+                        blocking.append((family, operation, path, line, [target.qualname, *chain]))
+                for family, operation, path, line, chain in blocking[:1]:
+                    found.append({
+                        "rule": "BI-08",
+                        "operation": f"event-loop-blocking:{family}:{operation}@{path}:{line}",
+                        "path": current.path,
+                        "function": current.qualname,
+                        "line": node.lineno,
+                        "entrypoint": entry["key"],
+                        "depth": "indirect" if via or chain else "direct",
+                        "via": [*via, *chain],
+                        "reject": True,
+                    })
+        return found
 
 
 def _all_definitions(modules: list[Module]):
@@ -605,6 +967,10 @@ def _route_triggers(node: ast.AST) -> list[str]:
         route = decorator.args[0].value
         if method in ROUTE_METHODS:
             triggers.append(f"{method.upper()} {route}")
+        elif method == "websocket":
+            triggers.append(f"WEBSOCKET {route}")
+        elif method == "middleware":
+            triggers.append(f"MIDDLEWARE {route}")
         elif method == "api_route":
             methods = ["GET"]
             for keyword in decorator.keywords:
@@ -622,16 +988,37 @@ def _background_kind(name: str) -> str | None:
     return None
 
 
+def _middleware_class_triggers(definition: Definition, module: Module) -> list[str]:
+    """`dispatch` of a `BaseHTTPMiddleware` subclass, or an ASGI middleware's
+    `async def __call__(self, scope, receive, send)`."""
+    if not definition.class_name or not isinstance(definition.node, ast.AsyncFunctionDef):
+        return []
+    name = definition.node.name
+    if name == "__call__" and _parameter_names(definition)[1:4] == ["scope", "receive", "send"]:
+        return ["MIDDLEWARE asgi"]
+    if name == "dispatch":
+        bases = module.class_bases.get(definition.class_name, [])
+        if "BaseHTTPMiddleware" in bases:
+            return ["MIDDLEWARE dispatch"]
+    return []
+
+
 def _entrypoints(module: Module) -> list[tuple[dict[str, object], Definition]]:
+    """Decorated routes, websockets and middleware at any nesting (an app
+    factory installs them as closures), and, in route and service modules,
+    background owners found by name among top-level functions and methods."""
     found = []
-    definitions = list(module.functions.values()) + [
-        definition for methods in module.methods.values() for definition in methods.values()
-    ]
-    for definition in definitions:
+    top_level = {
+        id(definition.node)
+        for definition in [*module.functions.values(), *(item for methods in module.methods.values() for item in methods.values())]
+    }
+    for definition in _all_definitions([module]):
         node = definition.node
-        for trigger in _route_triggers(node):
-            found.append((_entry(definition, "route", trigger, node.lineno), definition))
-        if _route_triggers(node):
+        triggers = [*_route_triggers(node), *_middleware_class_triggers(definition, module)]
+        for trigger in triggers:
+            kind = "middleware" if trigger.startswith("MIDDLEWARE ") else "route"
+            found.append((_entry(definition, kind, trigger, node.lineno), definition))
+        if triggers or id(node) not in top_level or not module.path.startswith(ENTRYPOINT_ROOTS):
             continue
         kind = _background_kind(node.name)
         if kind is None:
@@ -646,7 +1033,7 @@ def _entrypoints(module: Module) -> list[tuple[dict[str, object], Definition]]:
 def _all_entrypoints(modules: list[Module], index: Index) -> list[tuple[dict[str, object], Definition]]:
     """Routes and name-matched background owners, plus any thread or executor
     target not already discovered under its own name."""
-    found = [item for module in modules if module.path.startswith(ENTRYPOINT_ROOTS) for item in _entrypoints(module)]
+    found = [item for module in modules if module.path.startswith(DECORATED_ENTRYPOINT_ROOTS) for item in _entrypoints(module)]
     known = {id(definition.node) for _, definition in found}
     launchers = _launcher_parameters(modules, index)
     for module in modules:
@@ -686,6 +1073,7 @@ def analyze_python_repository(
     overrides: dict[str, str] | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     _FACTS.clear()
+    _OWN_NODES.clear()
     modules = load_modules(root, overrides)
     index = Index(modules)
     library_scale = set(library_scale_operations)
@@ -694,13 +1082,20 @@ def analyze_python_repository(
     hazards: list[dict[str, object]] = []
     hazard_cache: dict[tuple[int, bool], list[dict[str, object]]] = {}
     callee_cache: dict[int, list[tuple[Definition, bool]]] = {}
+    event_loop = EventLoopAnalysis(index, library_scale)
+    library_state = LibraryStateEvidence(modules, index, collections)
     for entry, definition in _all_entrypoints(modules, index):
         entrypoints.append(entry)
-        interactive = entry["kind"] == "route"
-        queue = deque([(definition, [], False)])
+        interactive = entry["kind"] in {"route", "middleware"}
+        hazards.extend(event_loop.hazards(entry, definition))
+        queue = deque([(definition, [], None)])
         seen = set()
         while queue:
-            current, via, looped = queue.popleft()
+            # `loop` is the call site (path, line, function), inside a loop
+            # body, through which the current definition runs once per item
+            # (None outside any loop).
+            current, via, loop = queue.popleft()
+            looped = loop is not None
             if (id(current.node), looped) in seen:
                 continue
             seen.add((id(current.node), looped))
@@ -723,23 +1118,48 @@ def analyze_python_repository(
                 continue
             cache_key = (id(current.node), looped)
             if cache_key not in hazard_cache:
-                hazard_cache[cache_key] = [*_direct_hazards(current, looped), *_library_state_scans(current, collections)]
+                hazard_cache[cache_key] = [
+                    *_direct_hazards(current, looped, index.modules[current.module]),
+                    *library_state.scans(current),
+                ]
             for hazard in hazard_cache[cache_key]:
-                record = {key: value for key, value in hazard.items() if key != "enumeration"}
+                record = {key: value for key, value in hazard.items() if key not in {"enumeration", "per_item_connect"}}
+                if hazard.get("per_item_connect"):
+                    # Reported at the loop that repeats the connection: the
+                    # place to load once and pass the result down.
+                    loop_path, loop_line, loop_function = loop or (hazard["path"], hazard["line"], hazard["function"])
+                    record.update({
+                        "operation": f"{hazard['operation']}@{hazard['path']}:{hazard['line']}",
+                        "path": loop_path,
+                        "line": loop_line,
+                        "function": loop_function,
+                    })
+                # A route rejects direct enumeration, and a connection opened per
+                # item at any depth: one request must not open N connections.
+                rejected = (depth == "direct" and bool(hazard["enumeration"])) or bool(hazard.get("per_item_connect"))
                 hazards.append({
                     **record,
                     "entrypoint": entry["key"],
                     "depth": depth,
                     "via": via,
-                    "reject": interactive and depth == "direct" and bool(hazard["enumeration"]),
+                    "reject": interactive and rejected,
                 })
             if id(current.node) not in callee_cache:
                 callee_cache[id(current.node)] = _callees(current, index)
-            for callee, call_in_loop in callee_cache[id(current.node)]:
-                queue.append((callee, [*via, callee.qualname], looped or call_in_loop))
+            for callee, call_in_loop, line in callee_cache[id(current.node)]:
+                callee_loop = loop or ((current.path, line, current.qualname) if call_in_loop else None)
+                queue.append((callee, [*via, callee.qualname], callee_loop))
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
-        hazard["key"] = f"{hazard['entrypoint']}:{hazard['rule']}:{hazard['operation']}@{hazard['path']}#{hazard['function']}"
+        site = f"{hazard['path']}#{hazard['function']}"
+        if hazard["rule"] == "BI-05":
+            # One N+1 per loop, whichever connection it reaches first.
+            hazard["key"] = f"{hazard['entrypoint']}:BI-05:database-connect-per-item@{site}:{hazard['line']}"
+        else:
+            hazard["key"] = f"{hazard['entrypoint']}:{hazard['rule']}:{hazard['operation']}@{site}"
+        if hazard["rule"] == "BI-08":
+            # Each blocking call site is its own fix.
+            hazard["key"] += f":{hazard['line']}"
         unique.setdefault(hazard["key"], hazard)
     entrypoints.sort(key=lambda item: (item["key"], item["line"]))
     deduped: dict[str, dict[str, object]] = {}

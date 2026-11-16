@@ -23,6 +23,7 @@ function workClassFor(item) {
     return item.kind === 'event' && HIGH_FREQUENCY_EVENTS.has(item.trigger) ? 'delta' : 'constant';
   }
   if (item.kind === 'route') return item.trigger.startsWith('GET ') ? 'page' : 'affected-set';
+  if (item.kind === 'middleware') return 'constant';
   if (['watcher', 'reconciler'].includes(item.kind)) return 'affected-set';
   return 'background-batch';
 }
@@ -35,6 +36,7 @@ function rulesFor(item) {
     return ['BI-09'];
   }
   if (item.kind === 'route') return item.trigger.startsWith('GET ') ? ['BI-04', 'BI-13'] : ['BI-04', 'BI-14'];
+  if (item.kind === 'middleware') return ['BI-03', 'BI-08'];
   if (['watcher', 'reconciler'].includes(item.kind)) return ['BI-07', 'BI-14'];
   return ['BI-07', 'BI-08'];
 }

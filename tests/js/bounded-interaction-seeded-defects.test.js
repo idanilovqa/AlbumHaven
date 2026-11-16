@@ -336,6 +336,61 @@ const DEFECTS = [
     prelude: 'import threading\n\n\ndef _seeded_rebuild_library():\n    return None\n',
     expected: /^unregistered entrypoint py:music_app\/routes\/api_read_asgi_routes\.py#_seeded_rebuild_library:background:thread$/,
   },
+  {
+    // The incident: an async route ran the file-backed Home build on the event
+    // loop, so no other request was served for ~10 s on a 163k-file library.
+    id: 'BI-08 Home builder called directly inside async def home_data',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: '@router.get("/home-data")\ndef home_data(request: Request) -> JSONResponse:',
+    replacement: '@router.get("/home-data")\nasync def home_data(request: Request) -> JSONResponse:',
+    expected: /^rejected BI-08 event-loop-blocking:\w+:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#home_data:route:GET \/home-data via build_home_payload > /,
+  },
+  {
+    id: 'BI-08 async route that builds the Home payload directly on the event loop',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: '    scope = await history_scope_for_request(request)\n    try:\n        fields = ',
+    replacement: '    scope = await history_scope_for_request(request)\n'
+      + '    build_home_payload(query_args=_AsgiQueryArgs(request.query_params), config=_app_config(request), logger=_app_logger(request), library_state=_library_state(request), client_surface_class="desktop")\n'
+      + '    try:\n        fields = ',
+    expected: /^rejected BI-08 event-loop-blocking:\w+:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#utilities_log_history:route:GET \/utilities\/log-history via build_home_payload > /,
+  },
+  {
+    id: 'BI-08 async route reaching psycopg connect through a sync helper chain',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def album_notes_create_reserved() -> JSONResponse:\n',
+    replacement: 'async def album_notes_create_reserved() -> JSONResponse:\n    _seeded_note_count()\n',
+    prelude: 'import psycopg as _seeded_psycopg\n\n\ndef _seeded_note_count():\n    return _seeded_note_rows("postgresql://seeded")\n\n\n'
+      + 'def _seeded_note_rows(database_url):\n    with _seeded_psycopg.connect(database_url) as connection:\n        return connection.execute("select 1").fetchall()\n',
+    expected: /^rejected BI-08 event-loop-blocking:database:psycopg\.connect@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_notes_create_reserved:route:POST \/album-notes via _seeded_note_count > _seeded_note_rows$/,
+  },
+  {
+    id: 'BI-05 root settings reloaded through a new connection per requested path',
+    language: 'py',
+    file: 'music_app/routes/api_wave_c_asgi_routes.py',
+    anchor: 'def news_center_preferences(request: Request) -> JSONResponse:\n',
+    replacement: 'def news_center_preferences(request: Request) -> JSONResponse:\n'
+      + '    [_seeded_track_root(_app_config(request), path) for path in request.query_params.getlist("path")]\n',
+    prelude: 'from music_app.services.library_roots import load_library_root_settings as _seeded_load_roots\n\n\n'
+      + 'def _seeded_track_root(config, path):\n    return _seeded_load_roots(config)\n',
+    expected: /^rejected BI-05 database-connect-per-item:\S+ at music_app\/routes\/api_wave_c_asgi_routes\.py:\d+ from py:music_app\/routes\/api_wave_c_asgi_routes\.py#news_center_preferences:route:GET \/news-center\/preferences via _seeded_track_root > /,
+  },
+  {
+    // The repair route scanned every album through `st = get_state()`: the
+    // receiver is library state by evidence (a getter returning
+    // `request.app.state.library_state`), not by its name.
+    id: 'BI-04 library-state scan through an injected getter and a renamed receiver',
+    language: 'py',
+    file: 'music_app/routes/api_wave_c_asgi_routes.py',
+    anchor: 'def recent_discovery_lookups(request: Request) -> JSONResponse:\n',
+    replacement: 'def recent_discovery_lookups(request: Request) -> JSONResponse:\n'
+      + '    _seeded_album_count(get_state=lambda: _seeded_state(request))\n',
+    prelude: 'def _seeded_state(request):\n    return request.app.state.library_state\n\n\n'
+      + 'def _seeded_album_count(*, get_state):\n    st = get_state()\n    return sum(1 for album in st["albums"] if album)\n',
+    expected: /^py:routes\/api_wave_c_asgi_routes\.py#recent_discovery_lookups: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:albums at music_app\/routes\/api_wave_c_asgi_routes\.py:\d+/,
+  },
 ];
 
 function seededOverrides() {

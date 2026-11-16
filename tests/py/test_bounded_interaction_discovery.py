@@ -479,3 +479,153 @@ def album(paths):
     assert [(item["entrypoint"].split("#")[1], item["operation"]) for item in hazards] == [
         ("album:route:GET /album", "Path.stat"),
     ]
+
+
+def _hazards(root: Path, rule: str, **kwargs) -> list[dict[str, object]]:
+    analysis = discovery.analyze_python_repository(root, **kwargs)
+    return [hazard for hazard in analysis["hazards"] if hazard["rule"] == rule]
+
+
+def test_event_loop_blocking_follows_sync_helpers_to_a_database_connect(tmp_path: Path):
+    _write(tmp_path, "music_app/services/store.py", """
+import psycopg
+
+def load_rows(url):
+    return _open(url)
+
+def _open(url):
+    return psycopg.connect(url)
+""")
+    _write(tmp_path, "music_app/routes/home.py", """
+from music_app.services.store import load_rows
+
+def build_home(url):
+    return {"rows": load_rows(url)}
+
+@router.get('/home')
+async def home(request):
+    return build_home(request.app.state.url)
+""")
+    [hazard] = _hazards(tmp_path, "BI-08")
+    assert hazard["reject"] is True
+    assert hazard["operation"] == "event-loop-blocking:database:psycopg.connect@music_app/services/store.py:8"
+    assert (hazard["path"], hazard["line"]) == ("music_app/routes/home.py", 9)
+    assert hazard["via"] == ["build_home", "load_rows", "_open"]
+
+
+def test_event_loop_blocking_ignores_offloaded_awaited_and_plain_def_work(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/clean.py", """
+import asyncio
+import time
+from starlette.concurrency import run_in_threadpool
+
+def slow():
+    time.sleep(1)
+
+def label(value):
+    return str(value).strip()
+
+async def fetch_json(request):
+    return await request.json()
+
+@router.get('/offloaded')
+async def offloaded(request):
+    await run_in_threadpool(slow)
+    await asyncio.to_thread(lambda: slow())
+    await asyncio.get_running_loop().run_in_executor(None, slow)
+    await asyncio.sleep(0.1)
+    return label(await fetch_json(request))
+
+@router.get('/threadpool')
+def threadpool_route(request):
+    slow()
+""")
+    assert _hazards(tmp_path, "BI-08") == []
+
+
+def test_event_loop_blocking_follows_awaited_coroutines_and_callable_arguments(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/chain.py", """
+from pathlib import Path
+
+def read_keys(config):
+    return Path(config["path"]).read_text()
+
+def revert(config, *, load_keys):
+    return load_keys(config)
+
+async def resolve(config):
+    return revert(config, load_keys=read_keys)
+
+@app.middleware('http')
+async def boundary(request, call_next):
+    await resolve(request.app.state.config)
+    return await call_next(request)
+""")
+    [hazard] = _hazards(tmp_path, "BI-08")
+    assert hazard["entrypoint"] == "py:music_app/routes/chain.py#boundary:middleware:MIDDLEWARE http"
+    assert hazard["function"] == "resolve"
+    assert hazard["operation"].startswith("event-loop-blocking:filesystem:Path.read_text@")
+    assert hazard["via"] == ["resolve", "read_keys"]
+
+
+def test_connection_per_loop_item_is_rejected_in_a_route_and_reported_at_the_loop(tmp_path: Path):
+    _write(tmp_path, "music_app/services/roots.py", """
+import psycopg
+
+def load_settings(config):
+    with psycopg.connect(config["url"]) as connection:
+        return connection.execute("select 1").fetchall()
+
+def resolve_path(config, raw_path):
+    return (load_settings(config), raw_path)
+
+def resolve_once(config, raw_paths):
+    settings = load_settings(config)
+    return [(settings, raw_path) for raw_path in raw_paths]
+
+def first_match(config, raw_paths):
+    for raw_path in raw_paths:
+        if raw_path:
+            return resolve_path(config, raw_path)
+    return None
+""")
+    _write(tmp_path, "music_app/routes/tracks.py", """
+from music_app.services.roots import first_match, resolve_once, resolve_path
+
+@router.post('/tracks')
+def tracks(request, paths):
+    resolved = [resolve_path(request.app.state.config, path) for path in paths]
+    return resolved, resolve_once(request.app.state.config, paths), first_match(request.app.state.config, paths)
+""")
+    [hazard] = _hazards(tmp_path, "BI-05")
+    assert hazard["reject"] is True
+    assert (hazard["path"], hazard["line"], hazard["function"]) == ("music_app/routes/tracks.py", 6, "tracks")
+    assert hazard["operation"] == "database-connect-per-item:psycopg.connect@music_app/services/roots.py:5"
+
+
+def test_library_state_receivers_are_found_through_getters_and_call_sites(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/repair.py", """
+def _library_state(request):
+    return request.app.state.library_state
+
+def rebuild(*, get_state):
+    st = get_state()
+    return [album for album in st["albums"]]
+
+def reindex(updated_file_cache):
+    return list(updated_file_cache.values())
+
+def unrelated(st):
+    return [album for album in st["albums"]]
+
+@router.post('/repair')
+def repair(request):
+    rebuild(get_state=lambda: _library_state(request))
+    reindex(_library_state(request)["file_cache"])
+    unrelated({"albums": []})
+""")
+    scans = _hazards(tmp_path, "BI-04", library_state_collections=["albums", "file_cache"])
+    assert sorted((hazard["function"], hazard["operation"]) for hazard in scans) == [
+        ("rebuild", "library-state-scan:albums"),
+        ("reindex", "library-state-scan:file_cache"),
+    ]

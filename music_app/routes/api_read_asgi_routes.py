@@ -49,7 +49,7 @@ from music_app.services.album_identity_lineage_postgres import (
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
-    is_library_browse_postgres_available,
+    is_library_browse_postgres_available, problematic_files_complete_list_revision,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.private_track_search import build_private_track_search_contract
@@ -568,6 +568,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         "inventory_mutation_revision": int(
             library_state.get("inventory_mutation_revision") or 0
         ),
+        "problematic_files_list_revision": problematic_files_complete_list_revision(),
     }
 
 
@@ -1462,7 +1463,10 @@ def utilities_problematic_files(
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         if limit is not None and not q.strip():
             try:
-                payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
+                payload = repository.build_problematic_files_page(
+                    limit=limit, cursor=cursor,
+                    rebuild_outdated=_request_flag_value(request.headers.get("x-album-haven-problematic-viewing")),
+                )
             except ValueError as error:
                 return JSONResponse({"error": str(error)}, status_code=422)
             _project_missing_album_actions_for_request(request, payload)
@@ -1477,6 +1481,7 @@ def utilities_problematic_files(
                         q,
                         limit=limit or 50,
                         cursor=cursor,
+                        rebuild_outdated=_request_flag_value(request.headers.get("x-album-haven-problematic-viewing")),
                     )
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)

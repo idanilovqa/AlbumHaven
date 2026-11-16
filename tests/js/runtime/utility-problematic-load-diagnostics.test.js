@@ -371,6 +371,33 @@ test('reopening Problematic Files preserves the current query', () => {
   assert.equal(context.state.utility.searchQuery, 'art');
 });
 
+test('only an opened Problematic Files tab asks the server to replace an outdated stored list', async () => {
+  const overlay = { hidden: true };
+  const requests = [];
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const { context } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url, options = {}) {
+      requests.push([String(url), options.headers?.['X-Album-Haven-Problematic-Viewing'] || '']);
+      return json({ complete: true, projection_cache_status: 'stale', items: [{ key: 'a', name: 'A', detail_loaded: false }] });
+    },
+  });
+
+  // A background reload (after a tag edit) with Settings closed never starts a server rebuild.
+  await context.loadProblematicFiles(true, { render: false });
+  assert.deepEqual(requests, [['/utilities/problematic-files?limit=50', '']]);
+  assert.equal(context.state.utility.problematicListOutdated, true);
+
+  // Opening the tab reloads that outdated list once, now as a viewing request.
+  overlay.hidden = false;
+  await context.loadActiveUtilityTab(false);
+  assert.deepEqual(requests.at(-1), ['/utilities/problematic-files?limit=50', '1']);
+  assert.equal(context.state.utility.problematicListOutdated, false);
+  const count = requests.length;
+  await context.loadActiveUtilityTab(false);
+  assert.equal(requests.length, count, 'a viewed list is not reloaded again on reopen');
+});
+
 test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
   const overlay = { hidden: true };
   const requested = [];

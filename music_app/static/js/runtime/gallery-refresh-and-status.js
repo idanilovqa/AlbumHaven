@@ -2423,7 +2423,11 @@ async function pollStatus() {
     if (inventoryAdvanced) state.ui.pendingArtistTreeRefresh = true;
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
-    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
+    // A tab answered from the outdated stored list reloads once the server's complete list lands.
+    const problematicListReplaced = knownStatus.problematic_files_list_revision !== undefined
+      && Number(normalizedStatus.problematic_files_list_revision || 0)
+        > Number(knownStatus.problematic_files_list_revision || 0);
+    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged || problematicListReplaced)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }
     const requestedRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0);

@@ -22483,7 +22483,11 @@ async function pollStatus() {
     if (inventoryAdvanced) state.ui.pendingArtistTreeRefresh = true;
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
-    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
+    // A tab answered from the outdated stored list reloads once the server's complete list lands.
+    const problematicListReplaced = knownStatus.problematic_files_list_revision !== undefined
+      && Number(normalizedStatus.problematic_files_list_revision || 0)
+        > Number(knownStatus.problematic_files_list_revision || 0);
+    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged || problematicListReplaced)) {
       utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
     }
     const requestedRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0);
@@ -32220,9 +32224,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     let boundedPayloadCommitted = false;
     let previousSummaryItems = [];
     try {
-      const fetchSummary = async (url) => {
+      const fetchSummary = async (url, viewing = false) => {
         const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetch(url, { headers: { Accept: 'application/json' } });
+        const response = await fetch(url, { headers: problematicFilesRequestHeaders(viewing) });
         requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
         responseStatus = Number(response.status || 0);
         const parseStartedAt = getProblematicUtilityNow();
@@ -32295,8 +32299,11 @@ async function loadProblematicFiles(force = false, options = {}) {
           refreshChangedSelection };
       };
 
-      let data = await fetchSummary('/utilities/problematic-files?limit=50');
+      const viewing = problematicFilesTabOnScreen() || options.render === 'when-open';
+      let data = await fetchSummary('/utilities/problematic-files?limit=50', viewing);
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      state.utility.problematicListOutdated = !viewing
+        && ['stale', 'revalidated'].includes(String(data?.projection_cache_status || ''));
       let committedSelection = commitSummary(
         data,
         options.preserveSelectedDetail === true || data.complete === false,
@@ -32513,6 +32520,17 @@ async function loadProblematicPagesUntilLocalQueryMatch(query) {
     : [];
 }
 
+// An open tab may ask the server to replace an outdated stored list; background reloads never do.
+function problematicFilesTabOnScreen() {
+  return typeof getUtilityModalElements === 'function' && isUtilityModalOpen();
+}
+
+function problematicFilesRequestHeaders(viewing) {
+  return viewing
+    ? { Accept: 'application/json', 'X-Album-Haven-Problematic-Viewing': '1' }
+    : { Accept: 'application/json' };
+}
+
 // Search the server so every album is covered, including matches beyond the
 // bounded local inventory.
 function scheduleProblematicServerSearch() {
@@ -32568,7 +32586,7 @@ async function searchProblematicFilesOnServer(query) {
   let data;
   try {
     const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50`, {
-      headers: { Accept: 'application/json' },
+      headers: problematicFilesRequestHeaders(problematicFilesTabOnScreen()),
     });
     if (!response.ok) return;
     data = await response.json();
@@ -33691,7 +33709,8 @@ function loadActiveUtilityTab(force = false) {
   }
   const freshPrefetch = state.utility.loaded
     && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
-  return loadProblematicFiles(force && !freshPrefetch);
+  // A list loaded in the background from an outdated stored copy reloads once it is opened.
+  return loadProblematicFiles((force && !freshPrefetch) || state.utility.problematicListOutdated === true);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {

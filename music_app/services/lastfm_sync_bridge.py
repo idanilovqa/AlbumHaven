@@ -465,16 +465,24 @@ def _scrobble_sync_problem(error: str, *, retryable: bool, reauthentication_requ
     ))
 
 
+# Statuses that mean Last.fm did not process the request; 500 and 504 may follow a recorded scrobble.
+_UNPROCESSED_HTTP_STATUSES = frozenset({408, 425, 429, 502, 503})
+
+
 def failed_batch_disposition(error: LastfmError) -> tuple[bool, str]:
     """Whether listens whose Last.fm call failed may be sent again, and their submission state.
 
-    A listen is retried only when Last.fm answered with an error code, the request
-    never left the server, or the account must reconnect. Any other failure (a
-    timeout or an unreadable answer after the POST) may have been recorded, so its
-    outcome stays uncertain and it is never sent twice."""
+    A listen is retried when Last.fm answered with an error code or a status that
+    means it did not process the request (rate limited, unavailable), the request
+    never fully left the server (network down, Last.fm unreachable), or the account
+    must reconnect. Any other failure (a timeout or an unreadable answer after the
+    POST) may have been recorded, so its outcome stays uncertain and it is never
+    sent twice."""
     retryable = bool(
         error.reauthentication_required
+        or not error.request_sent
         or (error.retryable and error.error_kind == "configuration_error")
         or (error.retryable and error.error_kind == "provider_error" and error.code is not None)
+        or (error.retryable and error.http_status in _UNPROCESSED_HTTP_STATUSES)
     )
     return retryable, "not_sent" if retryable else "uncertain"

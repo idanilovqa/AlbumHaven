@@ -44,6 +44,8 @@ class LastfmError(RuntimeError):
         reauthentication_required: bool = False,
         error_kind: str = "provider_error",
         retry_after_seconds: int | None = None,
+        http_status: int | None = None,
+        request_sent: bool = True,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -52,6 +54,9 @@ class LastfmError(RuntimeError):
         self.error_kind = error_kind
         # Set when Last.fm rate-limited the request: how long to wait before sending it again.
         self.retry_after_seconds = retry_after_seconds
+        self.http_status = http_status
+        # False only when the request failed before Last.fm could have received all of it.
+        self.request_sent = bool(request_sent)
 
 
 @dataclass(frozen=True)
@@ -216,6 +221,7 @@ def _lastfm_error_from_body(
     retry_after: str | None = None,
 ) -> LastfmError:
     error = _lastfm_error_from_parsed_body(body, fallback=fallback, http_status=http_status)
+    error.http_status = http_status
     if error.code == _RATE_LIMIT_ERROR_CODE or http_status == 429:
         text = str(retry_after or "").strip()
         error.retry_after_seconds = int(text) if text.isdigit() else _RATE_LIMIT_RETRY_AFTER_SECONDS
@@ -299,11 +305,14 @@ def _post_lastfm(config: dict[str, Any], method: str, params: dict[str, Any]) ->
             retry_after=exc.headers.get("Retry-After") if exc.headers else None,
         ) from exc
     except URLError as exc:
+        # urlopen raises URLError only while connecting or sending, so Last.fm never
+        # received the complete request (a failure while reading the answer is below).
         reason = str(exc.reason or "Network error contacting Last.fm").strip()
         raise LastfmError(
             reason or "Network error contacting Last.fm",
             retryable=True,
             error_kind="network_error",
+            request_sent=False,
         ) from exc
     except (OSError, HTTPException) as exc:
         # A timeout or dropped connection while the answer is read.

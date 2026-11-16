@@ -120,6 +120,14 @@ def test_plan_holds_a_listen_that_needs_reauthentication_until_reconnect():
      (False, "uncertain")),
     (LastfmError("Malformed", retryable=True, error_kind="malformed_response"), (False, "uncertain")),
     (LastfmError("Invalid parameters", code=6), (False, "uncertain")),
+    # Network down or Last.fm unreachable: the request never fully left the server.
+    (LastfmError("Connection refused", retryable=True, error_kind="network_error", request_sent=False),
+     (True, "not_sent")),
+    # Last.fm answered that it did not process the request.
+    (LastfmError("Rate limited", retryable=True, http_status=429), (True, "not_sent")),
+    (LastfmError("Unavailable", retryable=True, http_status=503), (True, "not_sent")),
+    (LastfmError("Internal error", retryable=True, http_status=500), (False, "uncertain")),
+    (LastfmError("Gateway timeout", retryable=True, http_status=504), (False, "uncertain")),
 ])
 def test_failed_batch_is_resent_only_when_last_fm_cannot_have_recorded_it(error, expected):
     assert failed_batch_disposition(error) == expected
@@ -139,6 +147,30 @@ def test_a_timeout_or_unreadable_answer_after_the_post_is_never_resent(scrobble_
     for entry in ledger.entries():
         assert (entry["scrobble_submission_state"], entry["scrobble_retryable"]) == ("uncertain", False)
         assert not listen_history.is_pending_scrobble_entry(entry)
+
+
+@pytest.mark.parametrize("measured", [True, False])
+def test_listens_held_by_an_outage_are_sent_once_when_last_fm_is_reachable_again(scrobble_ledger, measured):
+    outage = {"active": True}
+
+    def answer(_payloads):
+        if outage["active"]:
+            return LastfmError("Network is unreachable", retryable=True, error_kind="network_error",
+                               request_sent=False)
+        return [LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted") for _payload in _payloads]
+
+    ledger, provider = scrobble_ledger(answer=answer)
+    ledger.add_pending(2, measured=measured)
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+    assert all(listen_history.is_pending_scrobble_entry(entry) for entry in ledger.entries())
+
+    outage["active"] = False
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    assert len(provider.calls) == 2
+    assert [entry["scrobble_submission_state"] for entry in ledger.entries()] == ["accepted", "accepted"]
 
 
 def test_attempt_result_counts_the_attempt():

@@ -250,6 +250,21 @@ def test_a_read_timeout_is_a_retryable_network_error(monkeypatch, allow_lastfm_l
 
     assert caught.value.retryable is True
     assert caught.value.error_kind == "network_error"
+    assert caught.value.request_sent is True
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_an_unreachable_last_fm_is_a_request_that_was_never_sent(monkeypatch, allow_lastfm_loopback_transport):
+    def refuse(*_args, **_kwargs):
+        raise lastfm.URLError(ConnectionRefusedError("Connection refused"))
+
+    monkeypatch.setattr(lastfm, "urlopen", refuse)
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.update_now_playing(_config(allow_lastfm_loopback_transport), _payload(),
+                                  session=LastfmSession("listener", "fake-session", "now"))
+
+    assert (caught.value.retryable, caught.value.request_sent) == (True, False)
 
 
 def test_disconnected_scrobble_is_an_explicit_no_send(monkeypatch):

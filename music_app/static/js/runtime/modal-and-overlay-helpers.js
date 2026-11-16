@@ -707,13 +707,13 @@ function buildCustomCollectionHeaderArtworkMarkup(collectionName, artwork = null
   return `<span class="custom-collection-header-art gallery-bar__leading" data-custom-collection-header-art="${escapeHtml(name)}"${hasArtwork ? ' hidden' : ''}>${hasArtwork ? '' : buildCustomCollectionArtworkMarkup(name)}</span>`;
 }
 
-function buildCustomCollectionDetailMarkup(items, collectionName, artwork = null) {
+function buildCustomCollectionDetailMarkup(items, collectionName, artwork = null, { tracksHtml = '' } = {}) {
   const name = String(collectionName || '').trim();
   const hasArtwork = Boolean(String(artwork?.image_url || '').trim());
   const artbox = hasArtwork ? buildCustomCollectionArtworkMarkup(name, artwork) : '';
-  const tracks = items.length
+  const tracks = tracksHtml || (items.length
     ? buildNonAlbumTrackSectionsMarkup(items, { collectionName: name })
-    : '<div class="utility-empty-state">No tracks are assigned to this collection.</div>';
+    : '<div class="utility-empty-state">No tracks are assigned to this collection.</div>');
   return `<div class="custom-collection-detail track-modal-body"><div class="custom-collection-detail__art track-modal-cover"${hasArtwork ? '' : ' hidden'}>${artbox}</div><div class="custom-collection-detail__tracks track-modal-main">${tracks}</div></div>`;
 }
 
@@ -737,21 +737,42 @@ function renderCurrentCustomCollectionArtwork(collectionName) {
   if (typeof scheduleMobileAlbumThumbnail === 'function') scheduleMobileAlbumThumbnail();
 }
 
-async function loadCustomCollectionArtwork(collectionName) {
-  const name = String(collectionName || '').trim();
-  if (!name) return null;
-  const request = ++customCollectionArtworkRequest;
+async function fetchCustomCollectionArtwork(name) {
   const response = await fetch(
     `/api/custom-collections/artwork?collection_name=${encodeURIComponent(name)}`,
     { headers: { Accept: 'application/json' } },
   );
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load collection artwork.');
-  if (request !== customCollectionArtworkRequest) return data.artwork || null;
   state.ui.customCollectionArtworkByName ||= {};
   state.ui.customCollectionArtworkByName[name] = data.artwork || null;
-  renderCurrentCustomCollectionArtwork(name);
   return data.artwork || null;
+}
+
+async function loadCustomCollectionArtwork(collectionName) {
+  const name = String(collectionName || '').trim();
+  if (!name) return null;
+  const request = ++customCollectionArtworkRequest;
+  const artwork = await fetchCustomCollectionArtwork(name);
+  if (request === customCollectionArtworkRequest) renderCurrentCustomCollectionArtwork(name);
+  return artwork;
+}
+
+// Owner 2026-11-16: a collection with artwork must open with its big artbox already in place, not a small
+// placeholder that is replaced after the page shifts. The tree knows every collection name, so their artwork
+// (and its image) loads in the background before any is opened.
+const CUSTOM_COLLECTION_ARTWORK_PREFETCH_LIMIT = 50;
+
+async function prefetchCustomCollectionArtwork(names) {
+  for (const name of (Array.isArray(names) ? names : []).slice(0, CUSTOM_COLLECTION_ARTWORK_PREFETCH_LIMIT)) {
+    if (!name || Object.prototype.hasOwnProperty.call(state.ui.customCollectionArtworkByName || {}, name)) continue;
+    try {
+      const artwork = await fetchCustomCollectionArtwork(name);
+      if (artwork?.image_url && typeof Image === 'function') new Image().src = artwork.image_url;
+    } catch {
+      // The page loads the artwork itself when the collection opens.
+    }
+  }
 }
 
 async function saveCustomCollectionArtworkFile(collectionName, file) {
@@ -1004,8 +1025,12 @@ function openNonAlbumModal(options = {}) {
     });
   }
   const populated = looseTracks.length > 0;
+  // A collection whose artwork is already known paints its final layout while its rows load.
+  const loadingMarkup = collectionName && collectionArtwork?.image_url
+    ? buildCustomCollectionDetailMarkup([], collectionName, collectionArtwork, { tracksHtml: buildNonAlbumTrackLoadingMarkup() })
+    : buildNonAlbumTrackLoadingMarkup();
   els.table.innerHTML = hydrationPending || populated
-    ? buildNonAlbumTrackLoadingMarkup()
+    ? loadingMarkup
     : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;

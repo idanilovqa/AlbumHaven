@@ -116,6 +116,9 @@ function loadCustomCollectionCatalog() {
     const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
     state.ui.libraryLooseTracksCount = looseTracksCount;
     customCollectionCatalog = { key, collections, request: null };
+    if (typeof prefetchCustomCollectionArtwork === 'function') {
+      void prefetchCustomCollectionArtwork(collections.map(({ name }) => name));
+    }
     return collections;
   })();
   customCollectionCatalog.request = { key, promise };

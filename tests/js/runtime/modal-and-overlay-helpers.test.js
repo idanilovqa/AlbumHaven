@@ -2814,3 +2814,32 @@ for (const mobile of [false, true]) {
     assert.deepEqual(calls, mobile ? ['in-place'] : ['in-place', 'closed']);
   });
 }
+
+test('collections with artwork open in their final layout: artwork is known before they open', async () => {
+  // Owner 2026-11-16: "table left aligned, artbox in the header, then it blinks removes artbox, table shifts to
+  // the right to have a big artbox before it ... Would be great if such a collection just loads with big artbox
+  // in place, header in place, and table that just loads internal data".
+  const { context } = loadHelper();
+  const requested = [];
+  context.fetch = async (url) => {
+    requested.push(String(url));
+    const name = new URL(String(url), 'http://localhost').searchParams.get('collection_name');
+    return { ok: true, status: 200, json: async () => ({ ok: true, artwork: name === 'Night'
+      ? { image_url: '/api/custom-collections/artwork/image?collection_name=Night&revision=1' } : null }) };
+  };
+  const images = [];
+  context.Image = class { set src(value) { images.push(value); } };
+  context.state.ui.customCollectionArtworkByName = { Known: null };
+
+  await context.prefetchCustomCollectionArtwork(['Night', 'Plain', 'Known']);
+
+  assert.equal(requested.length, 2, 'already known collections are not asked again');
+  assert.equal(context.state.ui.customCollectionArtworkByName.Night.image_url.includes('Night'), true);
+  assert.equal(context.state.ui.customCollectionArtworkByName.Plain, null);
+  assert.deepEqual(images, ['/api/custom-collections/artwork/image?collection_name=Night&revision=1']);
+  const loading = context.buildCustomCollectionDetailMarkup([], 'Night', context.state.ui.customCollectionArtworkByName.Night,
+    { tracksHtml: '<div class="loading-table"></div>' });
+  assert.match(loading, /custom-collection-detail__art track-modal-cover">[^]*<img/);
+  assert.match(loading, /custom-collection-detail__tracks track-modal-main"><div class="loading-table"><\/div>/);
+  assert.match(context.buildCustomCollectionHeaderArtworkMarkup('Night', context.state.ui.customCollectionArtworkByName.Night), /hidden/);
+});

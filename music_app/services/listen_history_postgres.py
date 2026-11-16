@@ -132,7 +132,7 @@ class PostgresListenHistoryAdapter:
                   and scrobble_status is distinct from 'scrobbled'
                 order by played_at, id
             """, (_MEASURED_SOURCE,)).fetchall()
-            rows = [*rows, *measured_rows]
+            rows.extend(measured_rows)
         result = []
         for row in rows:
             item = _listen_history_item_from_row(row)

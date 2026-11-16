@@ -156,34 +156,16 @@ def record_pending_scrobble(
     error: str,
 ) -> None:
     normalized_listen_id = str(listen_id or "").strip()
-    if not normalized_listen_id:
-        return
-    sync_state = load_lastfm_sync_state(config)
-    pending_scrobbles = dict(sync_state.get("pending_scrobbles") or {})
-    sync_problems = dict(sync_state.get("sync_problems") or {})
-    pending_scrobbles[normalized_listen_id] = {
-        "retry_count": max(0, int(retry_count or 0)),
-        "last_error": str(error or "").strip(),
-        "track_ref": str(entry.get("track_ref") or entry.get("path") or "").strip(),
-    }
-    sync_problems[normalized_listen_id] = build_lastfm_sync_problem(message=error)
-    sync_state["pending_scrobbles"] = pending_scrobbles
-    sync_state["sync_problems"] = sync_problems
-    save_lastfm_sync_state(config, sync_state)
+    if normalized_listen_id:
+        record_retry_results(config, pending_changes={normalized_listen_id: {
+            **entry, "scrobble_retry_count": retry_count, "scrobble_error": error,
+        }}, summary=None)
 
 
 def clear_pending_scrobble(config: dict[str, object], *, listen_id: str) -> None:
     normalized_listen_id = str(listen_id or "").strip()
-    if not normalized_listen_id:
-        return
-    sync_state = load_lastfm_sync_state(config)
-    pending_scrobbles = dict(sync_state.get("pending_scrobbles") or {})
-    sync_problems = dict(sync_state.get("sync_problems") or {})
-    pending_scrobbles.pop(normalized_listen_id, None)
-    sync_problems.pop(normalized_listen_id, None)
-    sync_state["pending_scrobbles"] = pending_scrobbles
-    sync_state["sync_problems"] = sync_problems
-    save_lastfm_sync_state(config, sync_state)
+    if normalized_listen_id:
+        record_retry_results(config, pending_changes={normalized_listen_id: None}, summary=None)
 
 
 def record_retry_results(

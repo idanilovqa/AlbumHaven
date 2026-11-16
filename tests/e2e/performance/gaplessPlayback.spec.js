@@ -443,11 +443,17 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
         trackTitle: incomingTrack.title,
       });
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
-      // Untrimmed, the incoming window would hold only the successor's leading decoder padding.
-      assertAudibleBoundaryCapture(expect, boundary.boundaryCapture, {
-        outgoing: outgoingTrack.expectedSampleSign,
-        incoming: incomingTrack.expectedSampleSign,
-      });
+      // A trim stops at the first sample at or above -40 dBFS, so the last frame heard before the
+      // boundary and the first after it are real audio; untrimmed, both would be decoder padding.
+      // (A tone's MP3 rings as it starts, so the window's mean sign proves nothing here.)
+      const capture = boundary.boundaryCapture;
+      assertAudibleBoundaryCapture(expect, capture);
+      const louder = (side, index) => Math.max(
+        Math.abs(Number(capture[side].left[index])),
+        Math.abs(Number(capture[side].right[index])),
+      );
+      expect(louder('outgoing', Number(capture.outgoing.frames) - 1)).toBeGreaterThanOrEqual(0.01);
+      expect(louder('incoming', 0)).toBeGreaterThanOrEqual(0.01);
       const padding = (await readGaplessPlaybackDiagnostics(page)).boundaryPadding;
       expect(padding?.suffix).toMatchObject({ streamId: outgoingStreamId, confident: true });
       expect(padding?.prefix).toMatchObject({ streamId: incomingOpen.streamId, confident: true });

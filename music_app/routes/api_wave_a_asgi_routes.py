@@ -513,9 +513,8 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             separate_release_keys,
         ),
         build_relation_views=lambda albums, config: rebuild_relation_views(albums, config),
-        schedule_cache_updates_save=lambda cache_path, payload, baseline, **save_options: schedule_cache_updates_save_for_config(
+        schedule_cache_updates_save=lambda payload, baseline, **save_options: schedule_cache_updates_save_for_config(
             config,
-            cache_path,
             payload,
             baseline_file_cache=baseline,
             **save_options,

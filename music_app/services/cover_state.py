@@ -365,7 +365,6 @@ def apply_cover_selection_for_tracks(
     library_state: dict[str, object],
     track_paths: set[str],
     schedule_cache_updates_save,
-    cache_path,
     find_updated_albums,
     find_problematic_album,
     cover_path: Path | None = None,
@@ -480,7 +479,6 @@ def apply_cover_selection_for_tracks(
 
     if persist_cache_update:
         schedule_cache_updates_save(
-            cache_path,
             {
                 path_str: updated_file_cache[path_str]
                 for path_str in changed_paths

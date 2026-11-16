@@ -360,13 +360,11 @@ class _CacheUpdate:
 
 def save_cache_updates_to_disk_for_config(
     config: dict[str, object],
-    cache_path: Path,
     changed_entries: dict[str, dict[str, object]],
     *,
     baseline_file_cache: dict[str, dict[str, object]] | None = None,
     before_commit: Callable[[object], object] | None = None,
 ) -> dict[str, object] | None:
-    del cache_path
     if not changed_entries:
         return None
     return _persist_cache_updates(
@@ -659,7 +657,6 @@ def validate_structural_tag_edit_for_config(
 
 def schedule_cache_updates_save_for_config(
     config: dict[str, object],
-    cache_path: Path,
     changed_entries: dict[str, dict[str, object]],
     *,
     baseline_file_cache: dict[str, dict[str, object]] | None = None,
@@ -671,7 +668,6 @@ def schedule_cache_updates_save_for_config(
     Saves coalesce per database: one publication runs while every save queued
     meanwhile joins a single trailing publication.
     """
-    del cache_path
     snapshot = {
         str(path_str): dict(entry)
         for path_str, entry in changed_entries.items()

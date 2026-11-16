@@ -5024,7 +5024,6 @@ def test_asgi_bridge_artist_edit_schedules_the_targeted_save_with_its_request_ba
 
     def fake_schedule(
         config,
-        cache_path,
         changed_entries,
         *,
         baseline_file_cache,
@@ -5032,7 +5031,6 @@ def test_asgi_bridge_artist_edit_schedules_the_targeted_save_with_its_request_ba
         scheduled.append(
             {
                 "config": config,
-                "cache_path": cache_path,
                 "changed_entries": dict(changed_entries),
                 "baseline_file_cache": dict(baseline_file_cache),
             }
@@ -5044,7 +5042,6 @@ def test_asgi_bridge_artist_edit_schedules_the_targeted_save_with_its_request_ba
             set(kwargs["relation_projection_edit_fields"])
         )
         kwargs["schedule_cache_updates_save"](
-            app.config["CACHE_PATH"],
             {"track-1.flac": {"path": "track-1.flac", "album_artist": "New Artist"}},
             {"track-1.flac": {"path": "track-1.flac", "album_artist": "Old Artist"}},
         )
@@ -5068,7 +5065,6 @@ def test_asgi_bridge_artist_edit_schedules_the_targeted_save_with_its_request_ba
     assert scheduled == [
         {
             "config": app.config,
-            "cache_path": app.config["CACHE_PATH"],
             "changed_entries": {
                 "track-1.flac": {
                     "path": "track-1.flac",

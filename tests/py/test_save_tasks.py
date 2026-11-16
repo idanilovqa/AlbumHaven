@@ -280,7 +280,7 @@ def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
         "file_cache": {},
         "relation_views": {"existing": True},
     }
-    scheduled_payloads: list[tuple[object, dict[str, object]]] = []
+    scheduled_payloads: list[dict[str, object]] = []
     log_entries: list[dict[str, object]] = []
     rebuild_calls: list[tuple[set[str], set[str]]] = []
     legacy_relation_build_calls: list[list[object]] = []
@@ -308,8 +308,8 @@ def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(save_tasks_module, "library_root_cache_identity", lambda config: "identity-1")
 
-    def schedule_save(cache_path, payload, _baseline):
-        scheduled_payloads.append((cache_path, payload))
+    def schedule_save(payload, _baseline):
+        scheduled_payloads.append(payload)
         return persistence_future
 
     def legacy_relation_builder(albums, _config):
@@ -350,9 +350,7 @@ def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
     assert legacy_relation_build_calls == []
     assert state_payload["relation_views"] == committed_relation_state["relation_views"]
     assert state_payload["relations_last_built"] == 55.0
-    assert scheduled_payloads == [
-        (config["CACHE_PATH"], {"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}}),
-    ]
+    assert scheduled_payloads == [{"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}}]
     assert log_entries == [{"action": "Library save completed", "artist": "Test Artist"}]
     assert payload["status"] == "completed"
     assert payload["requires_view_refresh"] is True
@@ -385,7 +383,7 @@ def test_finalize_save_task_merges_only_changed_entries_into_live_state(tmp_path
             dict(updated)
         ),
         build_relation_views=lambda albums, config: {},
-        schedule_cache_updates_save=lambda cache_path, payload, _baseline: None,
+        schedule_cache_updates_save=lambda payload, _baseline: None,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
@@ -442,7 +440,7 @@ def test_finalize_save_task_three_way_merges_changed_entry_with_live_cover(
     scheduled_payloads: list[dict[str, dict[str, object]]] = []
     persisted_entries: list[dict[str, object]] = []
 
-    def schedule_request_delta(_cache_path, payload, baseline):
+    def schedule_request_delta(payload, baseline):
         scheduled_payloads.append(
             {
                 path: dict(entry)
@@ -578,7 +576,7 @@ def test_finalize_relation_rebuild_preserves_cover_selected_after_initial_rebase
             }
         )
 
-    def publish_request_delta(_cache_path, payload, baseline):
+    def publish_request_delta(payload, baseline):
         rebased = save_tasks_module._rebase_non_cover_cache_entry_changes(
             baseline_file_cache=baseline,
             changed_entries=payload,
@@ -809,7 +807,7 @@ def test_finalize_save_task_uses_direct_callbacks_without_framework_context(tmp_
             True,
         ),
         build_relation_views=legacy_relation_builder,
-        schedule_cache_updates_save=lambda _cache_path, _payload, _baseline: persistence_future,
+        schedule_cache_updates_save=lambda _payload, _baseline: persistence_future,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
@@ -852,7 +850,7 @@ def test_finalize_save_task_keeps_non_structural_changes_without_view_refresh(tm
         get_state=lambda: state_payload,
         rebuild_affected_albums_in_state=lambda *args, **kwargs: None,
         build_relation_views=lambda albums, config: {"rebuilt": True},
-        schedule_cache_updates_save=lambda cache_path, payload, _baseline: None,
+        schedule_cache_updates_save=lambda payload, _baseline: None,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [{"key": "album-1"}],
@@ -900,13 +898,12 @@ def test_finalize_save_task_installs_relation_views_from_single_guarded_save(
     persistence_future: Future[dict[str, object]] = Future()
     persistence_future.set_result(committed_relation_state)
     scheduled_saves: list[
-        tuple[Path, dict[str, dict[str, object]], dict[str, dict[str, object]]]
+        tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]
     ] = []
 
-    def schedule_guarded_save(cache_path, changed_entries, baseline):
+    def schedule_guarded_save(changed_entries, baseline):
         scheduled_saves.append(
             (
-                cache_path,
                 {path: dict(entry) for path, entry in changed_entries.items()},
                 {path: dict(entry) for path, entry in baseline.items()},
             )
@@ -947,7 +944,6 @@ def test_finalize_save_task_installs_relation_views_from_single_guarded_save(
 
     assert scheduled_saves == [
         (
-            config["CACHE_PATH"],
             {"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}},
             {},
         )
@@ -1001,7 +997,7 @@ def test_scoped_postgres_exception_finalizer_avoids_global_cache_publication(
                 "scoped Postgres exception edits must not rebuild global relation views"
             )
         ),
-        schedule_cache_updates_save=lambda _cache_path, payload, _baseline: scheduled_payloads.append(
+        schedule_cache_updates_save=lambda payload, _baseline: scheduled_payloads.append(
             dict(payload)
         ),
         append_log_history=lambda *_args, **_kwargs: None,
@@ -1257,7 +1253,7 @@ def test_finalize_save_task_marks_task_failed_when_rebuild_raises(tmp_path):
         get_state=lambda: {"albums": [], "file_cache": {}, "relation_views": {}},
         rebuild_affected_albums_in_state=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
         build_relation_views=lambda albums, config: {},
-        schedule_cache_updates_save=lambda cache_path, payload, _baseline: None,
+        schedule_cache_updates_save=lambda payload, _baseline: None,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
@@ -1287,7 +1283,6 @@ def test_finalize_save_task_waits_for_durable_cache_write_before_completing(tmp_
     success_events: list[tuple[str, str]] = []
 
     def schedule_cache_updates_save(
-        _cache_path,
         _changed_entries,
         _baseline_file_cache,
     ):
@@ -1338,7 +1333,7 @@ def test_finalize_save_task_fails_when_durable_cache_write_fails(tmp_path):
         task_id,
         **_durable_save_finalize_kwargs(
             tmp_path,
-            schedule_cache_updates_save=lambda _cache_path, _changed_entries, _baseline: durable_write,
+            schedule_cache_updates_save=lambda _changed_entries, _baseline: durable_write,
         ),
     )
 
@@ -1358,7 +1353,7 @@ def test_finalize_save_task_reports_completed_with_warnings_after_durable_write(
 
     finalize_kwargs = _durable_save_finalize_kwargs(
         tmp_path,
-        schedule_cache_updates_save=lambda _cache_path, _changed_entries, _baseline: durable_write,
+        schedule_cache_updates_save=lambda _changed_entries, _baseline: durable_write,
     )
     finalize_kwargs.update(
         append_log_history=lambda *_args, **_kwargs: (_ for _ in ()).throw(

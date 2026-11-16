@@ -217,7 +217,7 @@ def recovery_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: SnapshotAdapter())
     monkeypatch.setattr(
         cache, "save_cache_updates_to_disk_for_config",
-        lambda _config, _cache_path, changed_entries, **_kwargs: state.persisted.append(set(changed_entries)),
+        lambda _config, changed_entries, **_kwargs: state.persisted.append(set(changed_entries)),
     )
 
     def seed_inventory(track_count: int) -> None:

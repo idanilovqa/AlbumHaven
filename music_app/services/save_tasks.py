@@ -627,7 +627,6 @@ def _finalize_save_task(
                 else {}
             )
             persistence_future = schedule_cache_updates_save(
-                config["CACHE_PATH"],
                 changed_entries,
                 operation_baseline,
                 **persistence_options,

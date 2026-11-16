@@ -453,13 +453,12 @@ def test_apply_cover_selection_for_tracks_updates_cache_and_media_state(tmp_path
             }
         },
     }
-    scheduled_updates: list[tuple[Path, dict[str, dict[str, object]]]] = []
+    scheduled_updates: list[dict[str, dict[str, object]]] = []
 
     updated_albums, updated_problematic = apply_cover_selection_for_tracks(
         library_state=library_state,
         track_paths={str(track_path)},
-        schedule_cache_updates_save=lambda cache_path, changed_entries: scheduled_updates.append((cache_path, changed_entries)),
-        cache_path=(tmp_path / "cache.json").resolve(),
+        schedule_cache_updates_save=scheduled_updates.append,
         find_updated_albums=lambda track_paths: [{"key": "album-1", "track_paths": sorted(track_paths)}],
         find_problematic_album=lambda track_paths: {"key": "problem-1", "track_paths": sorted(track_paths)},
         cover_path=next_cover,
@@ -481,12 +480,9 @@ def test_apply_cover_selection_for_tracks_updates_cache_and_media_state(tmp_path
     assert track.cover_path == str(next_cover)
     assert track.remote_cover_album_url == "https://music.example/album/1"
     assert scheduled_updates == [
-        (
-            (tmp_path / "cache.json").resolve(),
-            {
-                str(track_path): library_state["file_cache"][str(track_path)],
-            },
-        )
+        {
+            str(track_path): library_state["file_cache"][str(track_path)],
+        },
     ]
 
 

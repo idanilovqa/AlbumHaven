@@ -354,7 +354,7 @@ def test_runtime_cache_update_publishes_only_the_changed_entries_and_leaves_rela
     changed_entry = {**_cache_entry(changed_track), "title": "Changed", "library_root_id": "main"}
 
     result = cache_module.save_cache_updates_to_disk_for_config(
-        _POSTGRES_CONFIG, tmp_path / "unused.json", {str(changed_track): changed_entry},
+        _POSTGRES_CONFIG, {str(changed_track): changed_entry},
     )
 
     assert adapter.loaded_paths == [{str(changed_track)}]
@@ -366,7 +366,6 @@ def test_runtime_cache_update_publishes_only_the_changed_entries_and_leaves_rela
     assert result == {"inventory_mutation_revision": 5, "affected_album_keys": ["artist::album"], "projection_mode": "stale"}
     # The stale relation projection is rebuilt by the background gallery refresh.
     assert targeted_adapter.installed["refreshes"] == 1
-    assert not (tmp_path / "unused.json").exists()
 
 
 def test_runtime_cache_update_propagates_postgres_inventory_load_error(tmp_path, targeted_adapter):
@@ -380,7 +379,6 @@ def test_runtime_cache_update_propagates_postgres_inventory_load_error(tmp_path,
     with pytest.raises(RuntimeError, match="Postgres inventory unavailable"):
         cache_module.save_cache_updates_to_disk_for_config(
             _POSTGRES_CONFIG,
-            tmp_path / "must-not-exist.json",
             {str(tmp_path / "track.mp3"): _cache_entry(tmp_path / "track.mp3")},
         )
 
@@ -410,7 +408,6 @@ def test_queued_title_update_preserves_newer_authoritative_cover(tmp_path, targe
 
     cache_module.save_cache_updates_to_disk_for_config(
         _POSTGRES_CONFIG,
-        tmp_path / "unused.json",
         {track_path: {
             "path": track_path, "cover_path": incidental_queued_cover_path,
             "cover_revision": "incidental-queued-revision", "title": "New Title", "play_count": 1,
@@ -682,7 +679,6 @@ def test_queued_cache_update_repeated_revision_conflict_fails_after_one_rebase(t
     with pytest.raises(ScanCachePublicationSuperseded, match="forced queued-writer conflict 2"):
         cache_module.save_cache_updates_to_disk_for_config(
             _POSTGRES_CONFIG,
-            tmp_path / "unused.json",
             {track_path: {"path": track_path, "play_count": 1, "library_root_id": "main"}},
         )
 
@@ -732,7 +728,7 @@ def test_scheduled_cache_update_rebases_onto_a_cover_committed_before_the_worker
     adapter = targeted_adapter({track_path: stale_entry})
 
     future = cache_module.schedule_cache_updates_save_for_config(
-        _POSTGRES_CONFIG, tmp_path / "unused.json", {track_path: {**stale_entry, "play_count": 1}},
+        _POSTGRES_CONFIG, {track_path: {**stale_entry, "play_count": 1}},
     )
 
     # With no request baseline, the enqueue loads only the changed entry.
@@ -766,7 +762,6 @@ def test_scheduled_title_update_uses_request_baseline_when_cover_changed_before_
 
     future = cache_module.schedule_cache_updates_save_for_config(
         _POSTGRES_CONFIG,
-        tmp_path / "unused.json",
         {track_path: {**request_baseline[track_path], "title": "New Title"}},
         baseline_file_cache=request_baseline,
     )
@@ -786,7 +781,7 @@ def test_scheduled_cache_delta_preserves_structural_inventory_changed_before_wor
     adapter = targeted_adapter({track_path: entry})
 
     future = cache_module.schedule_cache_updates_save_for_config(
-        _POSTGRES_CONFIG, tmp_path / "unused.json", {track_path: {**entry, "play_count": 1}},
+        _POSTGRES_CONFIG, {track_path: {**entry, "play_count": 1}},
     )
     adapter.inventory_mutation_revision = 1
     adapter.file_cache[track_path]["album"] = "Renamed Album"
@@ -808,7 +803,6 @@ def test_scheduled_cache_update_runs_intent_completion_inside_the_publication_tr
 
     future = cache_module.schedule_cache_updates_save_for_config(
         _POSTGRES_CONFIG,
-        tmp_path / "unused.json",
         {track_path: {**entry, "title": "Changed"}},
         baseline_file_cache={track_path: entry},
         before_commit=completed.append,
@@ -843,7 +837,7 @@ def test_rapid_scheduled_saves_coalesce_into_one_running_and_one_trailing_public
 
     def schedule(changed, baseline, hook):
         futures.append(cache_module.schedule_cache_updates_save_for_config(
-            _POSTGRES_CONFIG, tmp_path / "unused.json", changed, baseline_file_cache=baseline, before_commit=hook,
+            _POSTGRES_CONFIG, changed, baseline_file_cache=baseline, before_commit=hook,
         ))
 
     def arrive_while_the_first_publication_runs(_store):
@@ -875,7 +869,7 @@ def test_a_failing_save_in_a_trailing_batch_does_not_fail_the_saves_merged_with_
 
     def schedule(path, changed, baseline, hook=None):
         return cache_module.schedule_cache_updates_save_for_config(
-            _POSTGRES_CONFIG, tmp_path / "unused.json", {path: changed}, baseline_file_cache={path: baseline}, before_commit=hook,
+            _POSTGRES_CONFIG, {path: changed}, baseline_file_cache={path: baseline}, before_commit=hook,
         )
 
     def failing_hook(_connection):
@@ -1161,7 +1155,7 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
 
         def schedule(changed, baseline, hook):
             futures.append(cache_module.schedule_cache_updates_save_for_config(
-                config, tmp_path / "unused.json", changed, baseline_file_cache=baseline, before_commit=hook,
+                config, changed, baseline_file_cache=baseline, before_commit=hook,
             ))
 
         with count_filesystem_and_media(monkeypatch, counts):

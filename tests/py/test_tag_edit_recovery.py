@@ -359,7 +359,7 @@ def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
     assert structural_calls == []
     assert len(generic_calls) == 1
     args, kwargs = generic_calls[0]
-    assert args[2] == {track_path: resolved_entry}
+    assert args[1] == {track_path: resolved_entry}
     assert kwargs["baseline_file_cache"] == {track_path: previous_entry}
 
 
@@ -439,7 +439,7 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         assert structural_calls == []
         assert len(generic_calls) == 1
         args, call = generic_calls[0]
-        assert args[2] == {track_path: resolved_entry}
+        assert args[1] == {track_path: resolved_entry}
         assert call["baseline_file_cache"] == {track_path: previous_entry}
     assert callable(call["before_commit"])
 

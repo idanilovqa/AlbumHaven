@@ -151,12 +151,10 @@ def apply_cover_selection_for_tracks(
     return apply_cover_selection_service(
         library_state=resolved_state,
         track_paths=track_paths,
-        schedule_cache_updates_save=lambda cache_path, payload: schedule_cache_updates_save_for_config(
+        schedule_cache_updates_save=lambda payload: schedule_cache_updates_save_for_config(
             resolved_config,
-            cache_path,
             payload,
         ),
-        cache_path=resolved_config["CACHE_PATH"],
         find_updated_albums=find_updated_albums,
         find_problematic_album=find_problematic_album,
         cover_path=cover_path,

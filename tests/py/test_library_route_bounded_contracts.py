@@ -595,7 +595,7 @@ class _EditTagsDatabase:
         self.persisted_paths.append(set(paths))
         self.statement(written=len(paths))
 
-    def schedule_cache_updates_save(self, _config, _cache_path, changed_entries, *, baseline_file_cache=None, before_commit=None):
+    def schedule_cache_updates_save(self, _config, changed_entries, *, baseline_file_cache=None, before_commit=None):
         from concurrent.futures import Future
 
         self.commit(changed_entries, set(changed_entries), before_commit)

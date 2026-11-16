@@ -329,7 +329,6 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
         else:
             save_cache_updates_to_disk_for_config(
                 config,
-                config["CACHE_PATH"],
                 changed_entries,
                 baseline_file_cache=file_cache,
                 before_commit=repository_hook,

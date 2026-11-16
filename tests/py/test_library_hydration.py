@@ -341,7 +341,7 @@ def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Pat
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: scheduled.append((config, cache_path, changed_entries)),
+        lambda config, changed_entries: scheduled.append((config, changed_entries)),
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",
@@ -516,7 +516,7 @@ def test_hydrate_library_state_from_disk_skips_file_prewarm_when_library_browse_
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: None,
+        lambda config, changed_entries: None,
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",
@@ -599,7 +599,7 @@ def test_hydrate_library_state_from_disk_skips_relation_rebuild_when_relations_a
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: None,
+        lambda config, changed_entries: None,
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",
@@ -675,7 +675,7 @@ def test_hydrate_library_state_from_disk_reuses_persisted_relation_views(tmp_pat
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.schedule_cache_updates_save_for_config",
-        lambda config, cache_path, changed_entries: None,
+        lambda config, changed_entries: None,
     )
     monkeypatch.setattr(
         "music_app.services.library_hydration.save_cache_to_disk_for_config",

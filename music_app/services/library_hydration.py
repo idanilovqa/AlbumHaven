@@ -410,7 +410,7 @@ def hydrate_library_state_from_disk(
         set(library_state.get("separate_release_keys") or set()),
     ))
     if changed_entries and not saved_sanitized_snapshot:
-        schedule_cache_updates_save_for_config(config, config["CACHE_PATH"], changed_entries)
+        schedule_cache_updates_save_for_config(config, changed_entries)
     if ensure_relations and ensure_relation_views is not None and _relations_missing(library_state):
         ensure_relation_views(library_state, config)
     library_browse_selection = select_runtime_persistence_adapter("library_browse", config)

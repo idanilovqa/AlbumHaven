@@ -1256,7 +1256,8 @@ html .cover-lookup-drawer {
   --appearance-content-action-hover-background: var(--appearance-item-action-hover-background);
   --appearance-content-action-pressed: var(--appearance-item-action-pressed);
 }
-:root :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content']) {
+/* Loose Tracks is deliberately absent: its page and AlbumTrackTable resolve the same tokens as Album Details. */
+:root :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content']) {
   --appearance-ink: var(--appearance-content-ink);
   --appearance-muted: var(--appearance-content-muted);
   --appearance-focus-outline: var(--appearance-content-focus-outline);
@@ -1296,10 +1297,10 @@ html .cover-lookup-drawer {
   --search-field-border: var(--appearance-line);
 }
 :root .is-mobile-page .utility-tab { --trigger-anchor-background: var(--appearance-card); }
-:root .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog, .non-album-modal-dialog) { --appearance-panel-background: var(--appearance-main-surface); }
+:root .is-mobile-page > :is(.utility-modal-dialog, .cover-lookup-modal-dialog) { --appearance-panel-background: var(--appearance-main-surface); }
 
 :root[data-appearance-palette='parchment-pine'] { --appearance-content-muted: var(--appearance-content-ink); }
 
 :root[data-appearance-mode='light'], :root[data-appearance-palette='parchment-pine'] { --appearance-content-color-scheme: light; }
 
-:root[data-appearance-item-selected] :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .is-mobile-page > .non-album-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content'], .mobile-settings-drawer) { --selection-body-background: var(--appearance-item-selected); }
+:root[data-appearance-item-selected] :is(.is-mobile-page > .utility-modal-dialog, .is-mobile-page > .cover-lookup-modal-dialog, .trigger-anchor-surface[data-trigger-anchor-context='content'], .mobile-settings-drawer) { --selection-body-background: var(--appearance-item-selected); }

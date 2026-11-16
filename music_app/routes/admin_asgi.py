@@ -200,7 +200,7 @@ async def update_preview_storage(request: Request) -> Response:
                 await run_in_threadpool(
                     validate_custom_root,
                     payload["path"],
-                    configured_library_root_paths_snapshot(_app_config(request)),
+                    await run_in_threadpool(configured_library_root_paths_snapshot, _app_config(request)),
                 )
             )
         except ValueError as exc:

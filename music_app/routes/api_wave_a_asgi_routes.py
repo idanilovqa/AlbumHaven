@@ -487,10 +487,6 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         if intent_repository is not None
         else None
     )
-    rebuild_relation_projection = bool(
-        set(kwargs.get("changed_field_names") or ())
-        & _RELATION_PROJECTION_EDIT_FIELDS
-    ) and not scoped_postgres_exception_only
     if find_albums_by_track_paths is None:
         find_albums_by_track_paths = _default_albums_by_track_paths_finder(get_state_provider)
     if find_problematic_album_by_track_paths is None:
@@ -528,7 +524,6 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             cache_path,
             payload,
             baseline_file_cache=baseline,
-            rebuild_relation_projection=rebuild_relation_projection,
             **save_options,
         ),
         append_log_history=append_history,

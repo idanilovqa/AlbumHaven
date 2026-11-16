@@ -5013,7 +5013,7 @@ def test_asgi_bridge_clear_exception_restores_postgres_album_membership(
     assert persisted[0]["rebuild_relation_projection"] is False
 
 
-def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
+def test_asgi_bridge_artist_edit_schedules_the_targeted_save_with_its_request_baseline(
     app,
     monkeypatch,
 ):
@@ -5028,7 +5028,6 @@ def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
         changed_entries,
         *,
         baseline_file_cache,
-        rebuild_relation_projection,
     ):
         scheduled.append(
             {
@@ -5036,7 +5035,6 @@ def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
                 "cache_path": cache_path,
                 "changed_entries": dict(changed_entries),
                 "baseline_file_cache": dict(baseline_file_cache),
-                "rebuild_relation_projection": rebuild_relation_projection,
             }
         )
         return None
@@ -5083,7 +5081,6 @@ def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
                     "album_artist": "Old Artist",
                 }
             },
-            "rebuild_relation_projection": True,
         }
     ]
     assert relation_projection_edit_fields == [set(asgi_routes._RELATION_PROJECTION_EDIT_FIELDS)]

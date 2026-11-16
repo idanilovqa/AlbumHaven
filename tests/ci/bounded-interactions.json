@@ -11279,17 +11279,38 @@
       "id": "py:services/cache.py#save_cache_updates_to_disk_for_config",
       "action": "Persist changed scan-cache entries on an executor",
       "entrypoints": [
-        "py:music_app/services/cache.py#save_cache_updates_to_disk_for_config:background:executor"
+        "py:music_app/services/cache.py#_save_queued_cache_updates:background:executor"
       ],
       "owners": [
-        "music_app/services/cache.py"
+        "music_app/services/cache.py",
+        "music_app/services/scan_cache_persistence.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "builder_calls": 0,
+        "returned_rows": 92,
+        "sql_statements": 60,
+        "stat_calls": 0,
+        "filesystem_enumerations": 0,
+        "invalidations": 2,
+        "generation_changes": 2
+      },
+      "growth": {
+        "metric": "returned_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cache_persistence_seams.py::test_queued_cache_update_contract_publishes_only_the_edited_album_and_coalesces_rapid_saves_at_production_track_count",
+      "testIdentity": "test_queued_cache_update_contract_publishes_only_the_edited_album_and_coalesces_rapid_saves_at_production_track_count",
+      "rollback": "Revert fix(cache) targeted coalesced scan-cache saves with its contract; that restores the full-snapshot republish with an inline relation rebuild, which the guard rejects."
     },
     {
       "id": "py:services/cache.py#schedule_cache_updates_save_for_config",

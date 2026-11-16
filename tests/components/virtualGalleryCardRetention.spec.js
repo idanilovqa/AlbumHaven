@@ -14,7 +14,7 @@ async function mountCacheFixture(page) {
       containerEl: document.getElementById('artist-groups'),
       albumCardNodeCache: new Map(), _renderGeneration: 1, _preserveExistingChildrenGeneration: -1,
     });
-    window.cardMarkup = (key, covered = true) => `<article class="album-card" data-gallery-card-key="${key}" data-gallery-card-render-key="${key}"><div class="cover">${covered ? '<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%222%22 height=%222%22/%3E" data-production-cover-src="/cover?path=fixture">' : '<span>No cover</span>'}</div></article>`;
+    window.cardMarkup = (key, covered = true) => `<article class="album-card" data-gallery-card-key="${key}" data-gallery-card-render-key="${key}"><div class="cover">${covered ? '<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%222%22 height=%222%22/%3E" data-production-cover-src="/cover/fixture">' : '<span>No cover</span>'}</div></article>`;
     window.record = (key, cards) => ({ key, html: `<section><div class="artist-rows">${cards}</div></section>` });
     window.decodeMounted = () => Promise.all([...grid.containerEl.querySelectorAll('img')].map(image => image.decode()));
   });

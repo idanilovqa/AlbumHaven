@@ -477,7 +477,10 @@ function normalizeStreamingContinuityOptions(options = {}) {
     .includes(options.kind) ? options.kind : 'queued-next';
   const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
   const endSeconds = Math.max(startSeconds, Number(options.endSeconds) || 0);
-  return { kind, startSeconds, endSeconds };
+  if (kind !== 'queued-next') return { kind, startSeconds, endSeconds };
+  return {
+    kind, startSeconds, endSeconds, consecutiveAlbumBoundary: options.consecutiveAlbumBoundary === true,
+  };
 }
 
 function streamingContinuityIdentity(track, options) {
@@ -1537,6 +1540,15 @@ function handleStreamingWorkletMessage(message) {
       },
       'processor-protocol-reject',
     );
+    return;
+  }
+  if (message.type === 'boundary-padding') {
+    const { edge, streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident } = message;
+    engine.diagnostics.boundaryPadding = {
+      ...engine.diagnostics.boundaryPadding,
+      [edge]: { streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident },
+    };
+    publishStreamingDiagnostics();
     return;
   }
   if (message.type === 'buffered-seek-reserved') {
@@ -2984,7 +2996,19 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
   }
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
-    return engine.roles.continuity;
+    const prepared = engine.roles.continuity;
+    // A queue that changed under the prepared successor may change whether it is consecutive.
+    if (normalized.kind === 'queued-next'
+        && prepared.continuityOptions.consecutiveAlbumBoundary !== normalized.consecutiveAlbumBoundary) {
+      prepared.continuityOptions = normalized;
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: engine.generation,
+        active: true,
+        consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
+      });
+    }
+    return prepared;
   }
   if (engine.pendingPromotion) {
     engine.pendingContinuityTrack = track;
@@ -3020,6 +3044,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
       type: 'expect-continuity',
       generation: engine.generation,
       active: true,
+      consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
     });
   }
   if (normalized.kind !== 'queued-next') {

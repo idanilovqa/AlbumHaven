@@ -193,7 +193,7 @@ test(
         const cover = galleryActions.albumCoverByName(ALBUM);
         await coverLookupActions.readDisplayedImageEvidence(cover, 'owned album cover');
         const productionSource = await cover.getAttribute('data-production-cover-src');
-        expect(productionSource).toContain('/cover?');
+        expect(productionSource).toContain('/cover/');
         await generateVariants(page, productionSource, Array.from({ length: 160 }, (_, index) => 80 + index));
 
         const albumCacheRoot = path.join(fixture.albumDirectory, '.album-haven');

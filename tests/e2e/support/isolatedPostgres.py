@@ -741,6 +741,38 @@ def grant_runtime_role_privileges(
             );
           end loop;
 
+          -- Column-only grants (for example UPDATE (kind) on library.cover_references).
+          for privilege in
+            select
+              allowed.privilege_type,
+              relation.oid::regclass as object_name,
+              attribute.attname as column_name
+            from pg_catalog.pg_class relation
+            join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
+            join pg_catalog.pg_attribute attribute on attribute.attrelid=relation.oid
+              and attribute.attnum>0 and not attribute.attisdropped and attribute.attacl is not null
+            cross join (
+              values ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')
+            ) allowed(privilege_type)
+            where namespace.nspname not like 'pg\\_%' escape '\\'
+              and namespace.nspname <> 'information_schema'
+              and relation.relkind in ('r','p','v','m','f')
+              and not has_table_privilege(
+                'album_haven_app', relation.oid, allowed.privilege_type
+              )
+              and has_column_privilege(
+                'album_haven_app', relation.oid, attribute.attnum, allowed.privilege_type
+              )
+          loop
+            execute format(
+              'grant %s (%I) on table %s to %I',
+              privilege.privilege_type,
+              privilege.column_name,
+              privilege.object_name,
+              {runtime_role}
+            );
+          end loop;
+
           for privilege in
             select allowed.privilege_type, relation.oid::regclass as object_name
             from pg_catalog.pg_class relation

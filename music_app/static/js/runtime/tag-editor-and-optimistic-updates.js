@@ -1671,7 +1671,7 @@ function hideVersionContextMenu() {
 
 function buildTrackModalCoverVisualHtml({
   albumName,
-  localCoverPath,
+  localCoverRef,
   remoteCoverUrl,
 }) {
   return `
@@ -1679,7 +1679,7 @@ function buildTrackModalCoverVisualHtml({
       <span class="cover-placeholder" aria-hidden="true"></span>
       <img
         alt="Album cover for ${escapeHtml(albumName)}"
-        data-cover-path="${escapeHtml(localCoverPath)}"
+        data-cover-ref="${escapeHtml(localCoverRef)}"
         data-remote-cover-url="${escapeHtml(remoteCoverUrl)}"
         data-cover-visual-state="pending"
         aria-hidden="true"
@@ -2011,9 +2011,9 @@ function renderTrackModalRelease(album) {
       )
       ? existingCoverImage
       : null;
-    const localCoverPathRaw = String(album?.cover_path || '').trim();
+    const localCoverRefRaw = String(album?.cover_ref || '').trim();
     const remoteCoverUrlRaw = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
-    const localCoverPath = escapeHtml(localCoverPathRaw);
+    const localCoverRef = escapeHtml(localCoverRefRaw);
     const remoteCoverUrl = escapeHtml(remoteCoverUrlRaw);
     const lightboxGalleryAttribute = state.ui?.trackModalCoverLightboxGallery === false
       ? ''
@@ -2050,7 +2050,7 @@ function renderTrackModalRelease(album) {
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
         }
-        reusableCoverImage.setAttribute('data-cover-path', localCoverPathRaw);
+        reusableCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
         reusableCoverImage.setAttribute('data-remote-cover-url', remoteCoverUrlRaw);
         reusableCoverImage.setAttribute('alt', `Album cover for ${String(album?.name || '')}`);
         visual.appendChild(reusableCoverImage);
@@ -2059,7 +2059,7 @@ function renderTrackModalRelease(album) {
       } else {
         coverImageSlot.outerHTML = buildTrackModalCoverVisualHtml({
           albumName: String(album?.name || ''),
-          localCoverPath: localCoverPathRaw,
+          localCoverRef: localCoverRefRaw,
           remoteCoverUrl: remoteCoverUrlRaw,
         });
         modalCoverImage = els.cover.querySelector('.track-modal-cover-visual img');
@@ -2337,7 +2337,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         artist: track.artist || track.album_artist || '',
         albumArtist: track.album_artist || album?.album_artist || '',
         album: track.album || album?.name || '',
-        coverPath: track.cover_path || album?.cover_path || '',
+        coverRef: track.cover_ref || album?.cover_ref || '',
         durationSeconds: Number(track.duration_seconds) || 0,
         duration: currentTimeDisplay || duration,
         originalDuration: duration,
@@ -2359,7 +2359,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   });
   if (typeof buildAlbumTrackTableHtml !== 'function') {
     return componentGroups.flatMap((group) => group.tracks).map((track) => (
-      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverRef)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
   const hasMainAndBonusDiscs = componentGroups.some((group) => group.isBonus)
@@ -2390,7 +2390,7 @@ function buildPlayerTrackPayload(track, album = null) {
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
     album: track.album || '',
-    coverPath: track.cover_path || '',
+    coverRef: track.cover_ref || '',
     durationSeconds: Number(track.duration_seconds) || 0,
     year: String(album?.display_year || album?.year || track.year || '').trim(),
   };
@@ -2523,6 +2523,18 @@ function peekNextQueuedTrack() {
     return resolveNextPlaybackContextQueue(queue)?.tracks?.[0] || null;
   }
   return queue.tracks[nextIndex];
+}
+
+// Natural playback into `track` crosses a consecutive album boundary only when `track` is the very
+// next entry of the current album's queue; a continuation into another album never qualifies.
+function isConsecutiveAlbumSuccessor(track) {
+  const queue = state.player.playbackQueue;
+  if (!track || !queue?.albumRef || !Array.isArray(queue.tracks)) return false;
+  const currentPath = String(state.player.current?.path || '');
+  const currentIndex = currentPath
+    ? queue.tracks.findIndex((item) => String(item.path || '') === currentPath)
+    : -1;
+  return currentIndex >= 0 && queue.tracks[currentIndex + 1] === track;
 }
 
 function getNextQueuedTrack() {

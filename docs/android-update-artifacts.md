@@ -18,6 +18,9 @@ directory by the deployment synchronizer; see `docs/android-release-signing.md`.
 | `ALBUM_HAVEN_ANDROID_SANDBOX_SIGNING_CERT_SHA256` | The same for the Sandbox app (`org.albumhaven.app.sandbox`). |
 | `ALBUM_HAVEN_ANDROID_SANDBOX_ALLOW_SOFTWARE_ATTESTATION` | `1` lets a sandbox server accept software-backed Sandbox keys, for emulators and debug testing only. Off by default; never applies to Stable. |
 | `ALBUM_HAVEN_ANDROID_ATTESTATION_STATUS_FILE` | Optional local copy of Google's attestation status list. When set but unreadable, attestation fails closed. |
+| `ALBUM_HAVEN_ANDROID_SANDBOX_INDEX` | Sandbox servers only: the synchronizer's metadata-only index of every sandbox's build, which the Sandbox app's build picker reads. Unset serves none. |
+| `ALBUM_HAVEN_ANDROID_REBUILD_TOKEN` | Sandbox servers only: a fine-grained GitHub token limited to the application repository with Actions read and write only, used by the owner's one-tap rebuild. Unset offers the copyable command instead. Never set on production. |
+| `ALBUM_HAVEN_ANDROID_REBUILD_REPOSITORY` | The `owner/name` repository the rebuild dispatches `android-promote.yml` in. |
 
 Certificate digests are public values, not secrets: they are the same as the
 manifest's `signingCertificateSha256`. Download links are signed with a key
@@ -69,6 +72,22 @@ cookie; POSTs also carry the session CSRF header. The route action is
    The link stops working when it expires, the device key is removed or no longer
    allowed by the configuration, or the account is deactivated. The manifest's `apkUrl` remains the immutable logical
    URL.
+
+5. Sandbox servers also serve `GET /artifacts/android/sandbox/index.json`, signed
+   like the manifest: for each sandbox, its origin and published build (version
+   code and name, source commit, branch, label, size, minimum Android API, bridge
+   range and publish time), with no APK name, URL or hash. The app shows it as the
+   build picker, and installs a build only from the sandbox that serves it, after
+   switching there and signing in when needed.
+6. `POST /artifacts/android/sandbox/rebuild/{1-99}`, signed, with an empty body,
+   is the owner's rebuild (action `system.android_sandbox_rebuild`, bootstrap owner
+   only). The server reads that sandbox's commit, branch and label from the index,
+   never from the request, and dispatches `android-promote.yml` on `main` for it,
+   so the build returns under a newer version code that installs in place. It
+   answers 202 `{"sandbox","sourceCommit","requestedAt"}`, or `rebuild_unavailable`
+   (503: no token or index), `no_build` (404), `rebuild_running` (409: a promotion
+   for that sandbox is queued or running), `too_many_rebuilds` (429: six per hour
+   per server) or `dispatch_failed` (502).
 
 Refusals are JSON `{"detail","code"}`: `signed_out` (401 from the boundary),
 `invalid_request` (400: malformed JSON, channel or chain, or a non-empty exchange body),

@@ -20,6 +20,7 @@ import org.albumhaven.shell.BuildConfig
 import org.albumhaven.shell.OriginPolicy
 import org.albumhaven.shell.R
 import org.albumhaven.shell.ShellApplication
+import org.albumhaven.shell.ShellChannel
 import org.albumhaven.shell.ShellPreferences
 import org.albumhaven.shell.downloadManagerOrNull
 import org.albumhaven.shell.enqueueDownload
@@ -31,6 +32,14 @@ import java.util.concurrent.Executors
 /** The process's one [Updater], or null when this build has no compiled update certificate. */
 object Updates {
     private var instance: Updater? = null
+
+    /**
+     * One artifact client for the updater and the build picker, so their signed requests run one at
+     * a time and never attest two device keys for the same origin at once.
+     */
+    private var ports: AndroidUpdatePorts? = null
+
+    private fun ports(app: Context, policy: UpdatePolicy) = ports ?: AndroidUpdatePorts(app, policy).also { ports = it }
 
     /** Read for every check, so artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox. */
     fun policy(context: Context) = UpdatePolicy(
@@ -49,14 +58,27 @@ object Updates {
         val app = context.applicationContext
         val policy = policy(app)
         if (!policy.enabled) return null
-        return Updater({ policy(app) }, AndroidUpdatePorts(app, policy), PreferencesUpdateStore(app)).also { instance = it }
+        return Updater({ policy(app) }, ports(app, policy), PreferencesUpdateStore(app)).also { instance = it }
     }
 
     /** For the install receiver, which must never create an updater of its own. */
     fun current(): Updater? = instance
+
+    private var picker: BuildPicker? = null
+
+    /** The sandbox app's build picker; null on stable, or without a compiled update certificate. Main thread only. */
+    fun picker(context: Context): BuildPicker? {
+        picker?.let { return it }
+        val app = context.applicationContext
+        val policy = policy(app)
+        if (!policy.enabled || policy.channel != ShellChannel.SANDBOX) return null
+        val preferences = ShellPreferences(app)
+        return BuildPicker({ policy(app) }, { preferences.selectedSandboxSlot }, ports(app, policy), PreferencesUpdateStore(app))
+            .also { picker = it }
+    }
 }
 
-private class PreferencesUpdateStore(context: Context) : UpdateStore {
+private class PreferencesUpdateStore(context: Context) : UpdateStore, RebuildStore {
     private val preferences = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
 
     // Written synchronously: the package replacement that follows ends this process.
@@ -68,9 +90,14 @@ private class PreferencesUpdateStore(context: Context) : UpdateStore {
         get() = preferences.getString(KEY_STAGED, null)
         set(value) = preferences.edit(commit = true) { if (value == null) remove(KEY_STAGED) else putString(KEY_STAGED, value) }
 
+    override var pendingRebuilds: String?
+        get() = preferences.getString(KEY_REBUILDS, null)
+        set(value) = preferences.edit { if (value == null) remove(KEY_REBUILDS) else putString(KEY_REBUILDS, value) }
+
     private companion object {
         const val KEY_CHECKED = "last_checked_at_ms"
         const val KEY_STAGED = "staged_manifest"
+        const val KEY_REBUILDS = "pending_rebuilds"
     }
 }
 
@@ -79,7 +106,7 @@ private class PreferencesUpdateStore(context: Context) : UpdateStore {
  * directory; the file is then moved into no-backup internal storage while it is hashed, and only
  * that private copy is inspected and installed.
  */
-private class AndroidUpdatePorts(private val context: Context, private val policy: UpdatePolicy) : UpdatePorts {
+private class AndroidUpdatePorts(private val context: Context, private val policy: UpdatePolicy) : UpdatePorts, BuildPickerPorts {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private val app = context.applicationContext as ShellApplication
@@ -114,6 +141,20 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
         io.execute {
             val result = http.fetchManifest(url)
+            main.post { done(result) }
+        }
+    }
+
+    override fun fetchIndex(url: String, done: (FetchResult) -> Unit) {
+        io.execute {
+            val result = http.fetchManifest(url, SandboxIndex.MAX_INDEX_BYTES)
+            main.post { done(result) }
+        }
+    }
+
+    override fun requestRebuild(origin: String, sandbox: Int, done: (RebuildResult) -> Unit) {
+        io.execute {
+            val result = http.requestRebuild(origin, sandbox)
             main.post { done(result) }
         }
     }

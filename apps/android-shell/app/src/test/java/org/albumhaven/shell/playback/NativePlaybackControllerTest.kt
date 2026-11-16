@@ -875,6 +875,25 @@ class NativePlaybackControllerTest {
         assertEquals(listOf(Run(2, 0, second.frames), Run(4, 0, third.frames)), harness.sinks.last().runs())
     }
 
+    @Test
+    fun onlyANaturalEndIntoTheNextTrackOfTheSameAlbumLosesItsDecoderPadding() {
+        // Each track: 1 200 silent frames, its content level, then 1 500 near-silent frames.
+        fun padded(tag: Int, level: Float) = SyntheticTrack(tag = tag, frames = 2L * RATE) { frame ->
+            if (frame < 1_200) 0f else if (frame < 2L * RATE - 1_500) level else 0.0001f
+        }
+        val albumFirst = padded(5, 0.25f)
+        val albumSecond = padded(6, 0.5f)
+        val nextAlbum = padded(7, 0.75f)
+        val harness = ControllerHarness(albumFirst, albumSecond, nextAlbum)
+        val items = listOf(harness.item(albumFirst), harness.item(albumSecond), harness.item(nextAlbum).copy(queueGroup = 1))
+        harness.controller.loadQueue(QueueLoad(1, items, 0, 0, null, autoplay = true))
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED }
+
+        val written = harness.sinks.last().writtenLeft()
+        assertEquals(written.lastIndexOf(0.25f) + 1, written.indexOf(0.5f))
+        assertEquals(1_500 + 1_200, written.indexOf(0.75f) - written.lastIndexOf(0.5f) - 1)
+    }
+
     /** The sink operations from the step that applied [command], and what the snapshot said right after it. */
     private fun ControllerHarness.applyNow(command: () -> Unit): Pair<List<String>, NativePlaybackSnapshot> {
         val before = sinks.last().operations.size

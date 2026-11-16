@@ -1532,6 +1532,37 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
   assert.deepEqual(scheduled, [nextTrack]);
 });
 
+test('natural queued-next scheduling carries the queue owner consecutive-album qualification', async () => {
+  const outgoing = { path: 'C:\\Music\\Album\\01.flac', durationSeconds: 30 };
+  const incoming = { path: 'C:\\Music\\Album\\02.flac', durationSeconds: 30 };
+  const third = { path: 'C:\\Music\\Other\\01.flac', durationSeconds: 30 };
+  const queue = [incoming, third];
+  const scheduled = [];
+  const { context } = loadHelper({
+    state: {
+      player: { current: outgoing, loopActive: false, loopStart: 0, loopEnd: 30, waveform: { renderToken: 0 } },
+      utility: { loops: [], loopsLoaded: false, selectedLoopId: '', selectedLoopGroupKey: '', selectedLoopDetailMode: '', activeTab: '' },
+    },
+    peekNextQueuedTrack: () => queue[0] || null,
+    getNextQueuedTrack: () => queue.shift() || null,
+    isConsecutiveAlbumSuccessor: (track) => track === incoming,
+    async scheduleStreamingContinuity(track, options) {
+      scheduled.push({ path: track.path, options: { ...options } });
+    },
+  });
+
+  await context.handleStreamingPlaybackFirstFrame({ generation: 1, streamId: 7, trackPath: outgoing.path });
+  await context.handleStreamingPlaybackBoundary({
+    generation: 1, outgoingStreamId: 7, incomingStreamId: 8,
+    outgoingTrackPath: outgoing.path, incomingTrackPath: incoming.path,
+  });
+
+  assert.deepEqual(scheduled, [
+    { path: incoming.path, options: { kind: 'queued-next', startSeconds: 0, consecutiveAlbumBoundary: true } },
+    { path: third.path, options: { kind: 'queued-next', startSeconds: 0, consecutiveAlbumBoundary: false } },
+  ]);
+});
+
 test('changing tracks clears an outgoing timeline drag preview', () => {
   const { context } = loadHelper();
   context.state.player.timelineDragging = true;
@@ -1728,7 +1759,7 @@ test('enabling and disabling an A/B loop swaps one continuity role then restores
   })), [
     { path: current.path, options: { kind: 'whole-track-repeat', startSeconds: 0, endSeconds: 30 } },
     { path: current.path, options: { kind: 'short-loop', startSeconds: 10, endSeconds: 14 } },
-    { path: queued.path, options: { kind: 'queued-next', startSeconds: 0 } },
+    { path: queued.path, options: { kind: 'queued-next', startSeconds: 0, consecutiveAlbumBoundary: false } },
   ]);
   assert.deepEqual(loopMessages, [[false, 10, 14]], 'the engine schedule owns active loop configuration');
   assert.equal(audio.playCalls, 0, 'bottom-player loops never return to native playback');
@@ -2284,7 +2315,7 @@ test('shared player click awaits accepted streaming-start command before current
     title: 'Song 1',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const nextTrack = {
     src: '/track?path=song2.flac',
@@ -2292,7 +2323,7 @@ test('shared player click awaits accepted streaming-start command before current
     title: 'Song 2',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const finalTrack = {
     src: '/track?path=song3.flac',
@@ -2300,7 +2331,7 @@ test('shared player click awaits accepted streaming-start command before current
     title: 'Song 3',
     artist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const audio = new FakeAudioElement({
     currentTime: 41,
@@ -2397,7 +2428,7 @@ test('queued album track click dispatches streaming start without touching nativ
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 245,
   };
   const queuedTrack = {
@@ -2407,7 +2438,7 @@ test('queued album track click dispatches streaming start without touching nativ
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
   };
   const playTrackButton = new FakeElement({
     tagName: 'BUTTON',
@@ -2418,7 +2449,7 @@ test('queued album track click dispatches streaming start without touching nativ
       'data-track-artist': selectedTrack.artist,
       'data-track-album-artist': selectedTrack.albumArtist,
       'data-track-album': selectedTrack.album,
-      'data-track-cover': selectedTrack.coverPath,
+      'data-track-cover': selectedTrack.coverRef,
       'data-track-duration-seconds': String(selectedTrack.durationSeconds),
     },
   });
@@ -2503,7 +2534,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 60,
   };
   const queuedTrack = {
@@ -2513,7 +2544,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
     artist: 'Artist',
     albumArtist: 'Artist',
     album: 'Album',
-    coverPath: '',
+    coverRef: '',
     durationSeconds: 60,
   };
   const album = { title: 'Album' };
@@ -2530,7 +2561,7 @@ test('album-row click awaits prepared-start acceptance before installing one fir
       'data-track-artist': selectedTrack.artist,
       'data-track-album-artist': selectedTrack.albumArtist,
       'data-track-album': selectedTrack.album,
-      'data-track-cover': selectedTrack.coverPath,
+      'data-track-cover': selectedTrack.coverRef,
       'data-track-duration-seconds': String(selectedTrack.durationSeconds),
     },
   });
@@ -3181,7 +3212,7 @@ async function verifySaveCurrentLoopUsesAppDialog() {
             title: 'Song',
             artist: 'Artist',
             album: 'Album',
-            coverPath: '',
+            coverRef: '',
           },
           loopActive: true,
           loopStart: 10,

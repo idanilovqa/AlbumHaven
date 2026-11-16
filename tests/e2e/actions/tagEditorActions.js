@@ -778,13 +778,8 @@ export class TagEditorActions {
         `Tag edit was not terminally failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
       );
     }
-    const preservesDraft = payload.failure_stage === 'persistence'
-      && payload.edit_outcome === 'failed_rolled_back';
-    if (preservesDraft) {
-      await expect(this.tagEditor.overlay).toBeVisible({ timeout });
-    } else {
-      await expect(this.tagEditor.overlay).toBeHidden({ timeout });
-    }
+    // Owner decision (2026-11-15): a failed save keeps the editor closed, even when fully rolled back.
+    await expect(this.tagEditor.overlay).toBeHidden({ timeout });
     await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
     await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
     await expect(this.tagEditor.repairAlertMessage).toContainText(

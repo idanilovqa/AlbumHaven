@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 
 /** Non-secret shell selection; survives app updates and process death. */
-class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
+class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore, BatteryPromptStore {
     private val preferences = context.getSharedPreferences("shell", Context.MODE_PRIVATE)
 
     override val selectedSandboxSlot: Int?
@@ -62,6 +62,10 @@ class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
         return true
     }
 
+    override val batteryPromptAnswered: Boolean get() = preferences.getBoolean(KEY_BATTERY_ANSWERED, false)
+
+    override fun answerBatteryPrompt() = preferences.edit(commit = true) { putBoolean(KEY_BATTERY_ANSWERED, true) }
+
     override fun copySavedAt(origin: String): Long? =
         preferences.getLong(KEY_COPY_SAVED_AT + origin, 0L).takeIf { it > 0L }
 
@@ -87,6 +91,7 @@ class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
         private const val KEY_COPY_FORGET = "app_copy_forget"
         private const val KEY_PENDING_SLOT = "pending_build_sandbox"
         private const val KEY_PENDING_CODE = "pending_build_version_code"
+        private const val KEY_BATTERY_ANSWERED = "battery_prompt_answered"
     }
 }
 

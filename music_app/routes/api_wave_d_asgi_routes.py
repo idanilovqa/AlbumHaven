@@ -1148,7 +1148,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         allow_preferred_path_rebind=bool(task_payload),
         prepare=prepare_cover_lookup,
     )
-    log_app_event(
+    await run_in_threadpool(
+        log_app_event,
         config,
         logger,
         "Cover lookup task queued",
@@ -1979,7 +1980,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
     cleaned_urls = _clean_string_list(raw_urls)
     if not cleaned_urls:
         return _json_response(({"ok": False, "error": "Paste at least one URL"}, 400))
-    log_app_event(
+    await run_in_threadpool(
+        log_app_event,
         config,
         logger,
         "Manual cover link extraction requested",
@@ -2002,7 +2004,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         target_year=int((album or {}).get("year")) if isinstance((album or {}).get("year"), int) else None,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
     )
-    log_app_event(
+    await run_in_threadpool(
+        log_app_event,
         config,
         logger,
         "Manual cover link extraction completed",
@@ -2190,7 +2193,8 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
             defer_preparation=True,
         )
     except Exception as exc:
-        log_app_event(
+        await run_in_threadpool(
+            log_app_event,
             config,
             logger,
             "Cover art bulk update failed",

@@ -2167,8 +2167,8 @@ def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
 
     events = []
     monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", populated)
-    monkeypatch.setattr(web_asgi, "log_app_event",
-                        lambda _config, _logger, action, **fields: events.append((action, fields)))
+    monkeypatch.setattr(web_asgi, "log_app_message",
+                        lambda _logger, action, **fields: events.append((action, fields)))
     status, _, _ = _run_asgi_request(_make_asgi_app(app), "GET", "/")
     assert status == 200
     event = next(fields for action, fields in events if action == "Index request completed")

@@ -456,14 +456,14 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
         retry_summary["pending_after"] = pending_before
     except Exception:
         error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="pending_count_read",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="pending_count_read",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
     if not lastfm_api_enabled(config):
         error = "Last.fm API credentials are not configured on the server."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="api_configuration",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="api_configuration",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 503))
     try:
@@ -472,14 +472,14 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
         )
     except Exception:
         error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="account_session_read",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="account_session_read",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
     if session is None:
         error = "Last.fm account is not connected."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="account_connection",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="account_connection",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 409))
     # The retry worker sends the scrobbles in batches; the page follows the pending count.
@@ -618,7 +618,8 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
         )
     except LastfmError as exc:
         try:
-            log_app_event(
+            await run_in_threadpool(
+                log_app_event,
                 config,
                 logger,
                 "Last.fm connection failed",
@@ -642,7 +643,8 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except Exception as exc:
         try:
-            log_app_event(
+            await run_in_threadpool(
+                log_app_event,
                 config,
                 logger,
                 "Last.fm connection failed",
@@ -737,7 +739,8 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     try:
         result = await run_in_threadpool(scrobble_track, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
-        _log_lastfm_scrobble_event(
+        await run_in_threadpool(
+            _log_lastfm_scrobble_event,
             config,
             logger,
             "Last.fm scrobble failed",
@@ -747,7 +750,8 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
          history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     response_payload = _lastfm_submission_response(result, success_key="scrobbled")
-    _log_lastfm_scrobble_event(
+    await run_in_threadpool(
+        _log_lastfm_scrobble_event,
         config,
         logger,
         "Last.fm scrobble succeeded" if response_payload.get("scrobbled", True) else "Last.fm scrobble not submitted",

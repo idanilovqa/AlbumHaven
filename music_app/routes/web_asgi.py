@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import QueryParams
 
 from music_app.routes.appearance_asgi import load_appearance_context
-from music_app.services.app_logging import log_app_event
+from music_app.services.app_logging import log_app_message
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
     display_cover_variant_cache_roots,
@@ -1098,8 +1098,8 @@ async def index(request: Request) -> Response:
             raise
         started_background_refresh = True
     total_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
-    log_app_event(
-        config,
+    # Application log only: a history write would open a connection on the event loop.
+    log_app_message(
         route_logger,
         "Index request completed",
         level="info",

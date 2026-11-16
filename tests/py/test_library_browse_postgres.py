@@ -18907,3 +18907,21 @@ def test_problematic_projection_uses_cue_corrected_track_position():
     assert track["disc_number"] == 2
     assert track["track_number"] == 7
 
+
+
+def test_searched_library_loose_tracks_filter_the_stored_list_by_the_search_rule():
+    # Owner 2026-11-16: a searched collection reload took 5-7 s per request through the search route; a
+    # search now filters the stored Loose Tracks list, matching collection names too.
+    from music_app.services.library_browse_postgres import _filter_loose_tracks_by_query
+
+    tracks = [
+        {"path": "D:/Music/Loose/Dragonland - Live.mp3", "title": "Live", "artist": "Dragonland"},
+        {"path": "D:/Music/Loose/other.mp3", "title": "Lambada", "artist": "Kaoma",
+         "exception_type": "Custom Collection", "custom_collection_name": "Женя машина"},
+        {"path": "D:/Music/Loose/third.mp3", "title": "Song", "artist": "Nobody"},
+    ]
+
+    assert [t["title"] for t in _filter_loose_tracks_by_query(tracks, "dragonland")] == ["Live"]
+    assert [t["title"] for t in _filter_loose_tracks_by_query(tracks, "машина")] == ["Lambada"]
+    assert _filter_loose_tracks_by_query(tracks, "") == tracks
+    assert _filter_loose_tracks_by_query(tracks, "zzz-no-match") == []

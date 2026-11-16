@@ -263,23 +263,17 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
-// The library-wide request is the current browse scope without the open
-// artist or family selection, so every artist page shares one library result.
-// A search keeps its own view request: its loose tracks are query-scoped.
-// A search's library-wide Loose Tracks depend only on these: never on the
-// artist the search auto-selects, so the request can start with the search.
-const LIBRARY_NON_ALBUM_SEARCH_PARAMS = new Set(['surface', 'q', 'gallery_scope', 'category']);
-
+// The library-wide request is the current browse scope without the open artist or family selection, so
+// every artist page shares one library result. A search adds only its query: the server filters the stored
+// Loose Tracks list with the Gallery's search rule, never building a search page (owner 2026-11-16: a
+// searched collection took 5-7 s per request through the search route).
 function buildLibraryNonAlbumSearchUrl(sourceUrl) {
   const source = new URL(sourceUrl, 'http://localhost');
-  const url = new URL(source.pathname, 'http://localhost');
-  for (const [key, value] of source.searchParams.entries()) {
-    if (LIBRARY_NON_ALBUM_SEARCH_PARAMS.has(key)) url.searchParams.append(key, value);
-  }
-  url.searchParams.set('omit_sidebar', '1');
-  url.searchParams.set('include_non_album', '1');
-  url.searchParams.set('include_library_wide_non_album', '1');
-  return url;
+  return buildLibraryNonAlbumRequestUrl({
+    query: source.searchParams.get('q') || '',
+    visible_library_categories: source.searchParams.getAll('category'),
+    gallery_scope: source.searchParams.get('gallery_scope') || '',
+  });
 }
 
 let libraryNonAlbumSearchPrefetch = null;
@@ -308,11 +302,11 @@ function fetchLibraryNonAlbumPayload(url) {
 }
 
 function buildLibraryNonAlbumRequestUrl(view = state.view || {}, { withQuery = true } = {}) {
-  const searching = withQuery && Boolean(String(view.query || '').trim());
-  if (searching) return buildLibraryNonAlbumSearchUrl(buildApiUrl(view, { omitSidebar: true }));
   // Loose Tracks alone: the all-artists view-data response also carried the whole gallery
   // (67 MB, minutes cold, on a full library) for a few hundred tracks.
   const url = new URL('/library/loose-tracks', 'http://localhost');
+  const query = withQuery ? String(view.query || '').trim() : '';
+  if (query) url.searchParams.set('q', query);
   (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
   if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
   const inventoryRevision = Number(state.status?.inventory_mutation_revision);

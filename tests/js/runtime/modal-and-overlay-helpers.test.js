@@ -1237,8 +1237,15 @@ test('a search starts its Loose Tracks request with the search and the indicator
   // The search request itself (no artist yet) starts the prefetch.
   context.prefetchLibraryNonAlbumSearch('/view-data?surface=albums&q=neal&category=main_library&gallery_scope=all');
   assert.equal(requested.length, 1);
+  // Owner 2026-11-16: the searched list is the stored Loose Tracks filtered by the query, never a search page.
+  const prefetched = new URL(requested[0], 'http://localhost');
+  assert.equal(prefetched.pathname, '/library/loose-tracks');
+  assert.equal(prefetched.searchParams.get('q'), 'neal');
+  assert.equal(prefetched.searchParams.get('artist'), null);
   // The committed view auto-selected an artist; the indicator reuses the request.
-  context.state.view = { query: 'neal', selected_artist: 'Neal Morse' };
+  context.state.view = {
+    query: 'neal', selected_artist: 'Neal Morse', visible_library_categories: ['main_library'], gallery_scope: 'all',
+  };
   context.buildApiUrl = (view) => `/view-data?surface=albums&q=${encodeURIComponent(view.query || '')}`
     + `&artist=${encodeURIComponent(view.selected_artist || '')}&category=main_library&gallery_scope=all`;
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });

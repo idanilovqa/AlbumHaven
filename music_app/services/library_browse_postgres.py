@@ -663,6 +663,7 @@ class PostgresLibraryBrowseRepository:
                     view_state.get("visible_library_categories") or []
                 ),
             )
+            tracks = _filter_loose_tracks_by_query(tracks, params.get("q"))
             return {
                 "library_non_album_tracks": tracks,
                 "non_album_tracks_deferred": False,
@@ -4365,6 +4366,30 @@ def _non_album_entry_is_in_artist_scope(
         for part in Path(str(path or "")).parts[:-1]
     } - {""}
     return bool(artist_keys & visible_artist_keys or path_parts & visible_path_parts)
+
+
+def _filter_loose_tracks_by_query(tracks: list[dict[str, object]], query: object) -> list[dict[str, object]]:
+    """A search's library-wide Loose Tracks: the stored list filtered by the search route's loose-track rule
+    (artist, album, title, year, exception type, path), plus the Custom Collection name."""
+    from music_app.services.view_search import normalize_search_text, search_terms_match_fields, split_search_terms
+
+    query_terms = split_search_terms(str(query or ""))
+    if not query_terms:
+        return tracks
+    import ntpath
+
+    fields = (
+        "album_artist", "artist", "tag_artist", "album", "title", "year",
+        "exception_type", "custom_collection_name",
+    )
+
+    def search_fields(track: dict[str, object]) -> list[str]:
+        values = [str(track.get(field) or "") for field in fields]
+        # Without the drive letter: a one-letter "d" word would match every search starting with "d".
+        values.append(ntpath.splitdrive(str(track.get("path") or ""))[1])
+        return [normalize_search_text(value) for value in values if value.strip()]
+
+    return [track for track in tracks if search_terms_match_fields(query_terms, search_fields(track))]
 
 
 def _filter_non_album_snapshot_tracks(

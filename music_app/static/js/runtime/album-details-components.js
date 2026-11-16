@@ -44,7 +44,10 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artist = escapeHtml(config.artist || '');
-  const album = escapeHtml(config.album || 'Album');
+  // Owner 2026-11-15 (I): "Title (a.k.a. Other title)", dimmed, after the title and before the year.
+  const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
+  const album = `${escapeHtml(config.album || 'Album')}${alternatives.length
+    ? ` <span class="album-details-header__aka">(a.k.a. ${escapeHtml(alternatives.join(', '))})</span>` : ''}`;
   const year = escapeHtml(config.year || '');
   const releaseType = escapeHtml(config.releaseType || 'ALBUM');
   const tags = Array.isArray(config.tags) ? config.tags.filter(Boolean) : [];

@@ -8,6 +8,7 @@
 }
 .album-details-header__identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .album-details-header__primary { margin: 0; min-width: 0; font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-details-header__aka { color: var(--muted); font-weight: 400; }
 .album-details-header__secondary,
 .album-details-header__tags { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.74rem; }
 .album-details-header__release-type,

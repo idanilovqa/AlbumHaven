@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from os.path import basename, normcase
 import re
+import unicodedata
 from threading import Event, Lock
 from time import perf_counter, thread_time
 from types import SimpleNamespace
@@ -8257,10 +8258,14 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
     rows = connection.execute(
         """
         select decision.state, decision.release_group_mbid::text, decision.release_mbid::text,
-               decision.main_disc_count, decision.main_disc_source, decision.track_artists
+               decision.main_disc_count, decision.main_disc_source, decision.track_artists,
+               album.title as local_title, release.title as release_title, release_group.title as group_title
         from library.local_albums album
         join library.local_album_musicbrainz_releases decision
           on decision.library_id = album.library_id and decision.album_key = album.album_key
+        left join integration.musicbrainz_releases release on release.mbid = decision.release_mbid
+        left join integration.musicbrainz_release_groups release_group
+          on release_group.mbid = decision.release_group_mbid
         where album.id = %(album_id)s and decision.state <> 'unresolved'
         """,
         {"album_id": album_id},
@@ -8280,7 +8285,28 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
         # Discs after this number are bonus discs; absent keeps the local guess.
         "last_main_disc_number": discs[count - 1] if 0 < count <= len(discs) and count < len(discs) else None,
         "track_artists": [item for item in track_artists or [] if isinstance(item, Mapping) and item.get("artist")],
+        "alternative_titles": _alternative_album_titles(
+            row.get("local_title"), (row.get("release_title"), row.get("group_title"))),
     }
+
+
+def _title_form(value: object) -> str:
+    """A title without case, accents, spacing or punctuation."""
+    decomposed = unicodedata.normalize("NFKD", str(value or "")).casefold()
+    return "".join(character for character in decomposed if character.isalnum())
+
+
+def _alternative_album_titles(local_title: object, titles: Iterable[object]) -> list[str]:
+    """Other names of the album (owner 2026-11-15, I: "Title (a.k.a. Other title)"): the
+    matched release's and release group's titles that are not the local title spelled
+    differently, nor the local title with or without an edition suffix ("… (Live)")."""
+    local = _title_form(local_title)
+    alternatives: dict[str, str] = {}
+    for title in titles:
+        text, form = str(title or "").strip(), _title_form(title)
+        if form and local and form not in local and local not in form:
+            alternatives.setdefault(form, text)
+    return list(alternatives.values())
 
 
 _SERIES_TYPE_LABELS = {"Release group series": "Album series", "Release series": "Album series"}

@@ -143,6 +143,48 @@ test.describe('desktop library navigation inactivity', () => {
     await expect(rail).not.toHaveClass(/is-library-mode-rail-hidden/);
   });
 
+  test('FTC-GALLERY-NAV-038 keeps the hidden view rail closed at the left edge while a modal covers the gallery', {
+    tag: '@area:gallery-search',
+  }, async ({ page, galleryActions }) => {
+    // Owner 2026-11-16: "when some kind of modal opened and the gallery/main window is in the background
+    // overlay, moving a mouse/cursor to the left side of the screen SHOULD NOT trigger side bar expanding".
+    await page.clock.install({ time: Date.now() });
+    await page.goto('/login');
+    await page.getByLabel('Username').fill(PERFORMANCE_AUTH_USERNAME);
+    await page.getByLabel('Password', { exact: true }).fill(PERFORMANCE_AUTH_PASSWORD);
+    await Promise.all([
+      page.waitForResponse(response => response.request().isNavigationRequest() && response.ok()),
+      page.getByRole('button', { name: 'Sign in' }).click(),
+    ]);
+    await galleryActions.waitForGalleryReady();
+
+    const rail = page.locator('#shell-navigation-rail');
+    const viewBar = rail.locator('.library-navigation-mode-rail');
+    const tree = page.locator('#sidebar-list');
+    const albumDetails = page.locator('#track-modal');
+    await page.mouse.move(700, 300);
+    await page.clock.fastForward(30_001);
+    await expect(viewBar).toBeHidden();
+    const hiddenTreeLeft = await tree.evaluate(element => element.getBoundingClientRect().left);
+
+    await page.locator('#albums-scroll .album-card .album-open-trigger').first().click();
+    await expect(albumDetails).toBeVisible();
+    await page.mouse.move(0, 300);
+    await page.mouse.move(1, 500);
+    await page.mouse.move(0, 700);
+    await page.clock.fastForward(1_000);
+    await expect(viewBar).toBeHidden();
+    await expect(rail).toHaveClass(/is-library-mode-rail-hidden/);
+    expect(await tree.evaluate(element => element.getBoundingClientRect().left)).toBe(hiddenTreeLeft);
+    await expect(albumDetails).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(albumDetails).toBeHidden();
+    await page.mouse.move(700, 300);
+    await page.mouse.move(1, 300);
+    await expect(viewBar).toBeVisible();
+  });
+
   test('FTC-NON-ALBUM-018 ends Loose Tracks range selection after release outside the table', {
     tag: '@area:gallery-search',
   }, async ({ page, galleryActions }) => {

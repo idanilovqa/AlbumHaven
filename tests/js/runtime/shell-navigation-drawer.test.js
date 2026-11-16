@@ -359,6 +359,28 @@ test('desktop library mode rail hides after 30 seconds idle, then reveals at the
   );
 });
 
+test('a modal over the gallery keeps the left edge from expanding the side panel', () => {
+  // Owner 2026-11-16: "when some kind of modal opened ... moving a mouse/cursor to the left side of the
+  // screen SHOULD NOT trigger side bar expanding".
+  const { context, drawerRail, modeRailAnchor, pendingTimers, rootStyles, body } = loadHelper({ isMobile: false });
+  context.syncArtistsDrawerVisibility();
+  drawerRail.dispatchEvent({ type: 'pointerenter', target: drawerRail });
+  [...pendingTimers.values()].find(callback => callback.delay === 30000)();
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true);
+
+  body.classList.add('modal-open');
+  context.document.dispatchEvent({ type: 'pointermove', clientX: 0, clientY: 400 });
+  context.document.dispatchEvent({ type: 'pointermove', clientX: 1, clientY: 700 });
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true);
+  assert.equal(modeRailAnchor.hidden, false);
+  assert.equal(rootStyles.get('--compact-rail-width'), '261px');
+
+  body.classList.remove('modal-open');
+  context.document.dispatchEvent({ type: 'pointermove', clientX: 1, clientY: 700 });
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), false, 'without a modal the edge still reveals');
+  assert.equal(rootStyles.get('--compact-rail-width'), '320px');
+});
+
 test('folded desktop navigation keeps the library mode rail visible', () => {
   const { context, drawerRail, modeRailAnchor, pendingTimers } = loadHelper({
     isMobile: false, artistTreeFolded: true,

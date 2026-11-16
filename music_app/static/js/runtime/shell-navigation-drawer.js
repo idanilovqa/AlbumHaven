@@ -66,6 +66,8 @@ function installMobileLibraryModeRailGestures() {
     if (
       !Number.isFinite(event.clientX)
       || event.clientX > 1
+      // A modal over the gallery owns the pointer: the edge never expands the panel behind it (owner 2026-11-16).
+      || document.body?.classList?.contains?.('modal-open')
       || isArtistsDrawerMobileViewport()
       || state.ui.artistTreeFolded
       || !rail.classList?.contains?.('is-library-mode-rail-hidden')

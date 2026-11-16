@@ -532,6 +532,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-038 keeps the hidden view rail closed at the left edge while a modal covers the gallery",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
               "case": "FTC-GALLERY-032 hydrates version tracks and preserves table playback, selection and fixed modal identity",
               "area": "album-details"

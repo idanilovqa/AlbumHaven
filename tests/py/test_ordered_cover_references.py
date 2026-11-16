@@ -86,7 +86,7 @@ def test_remote_optional_metadata_round_trips_without_coercion():
     assert project_selected_cover_metadata(original) == original
 
 
-@pytest.mark.parametrize("bad_set", [None, {}, "image", (), [], [local()] * 4,
+@pytest.mark.parametrize("bad_set", [None, {}, "image", (), [local()] * 4,
     [None], ["path"], [local(), remote("local-1")]])
 def test_rejects_invalid_set_shape_size_or_duplicate_selection_id(bad_set):
     with pytest.raises(ValueError):
@@ -296,3 +296,30 @@ def test_adapter_empty_album_ids_does_not_open_database():
 
     adapter = PostgresScanCacheAdapter({}, connect=forbidden_connect)
     assert adapter.load_cover_selections(set()) == {}
+
+
+def test_an_empty_saved_selection_is_the_explicit_no_cover_choice():
+    # Owner 2026-11-16: Cover Look Up may save no cover; the album then shows no artwork.
+    from music_app.services.ordered_cover_references import project_selected_cover_metadata
+    from music_app.services.ordered_cover_selection import (
+        current_cover_reference, primary_projection, validate_save_request,
+    )
+
+    saved = project_selected_cover_metadata({"selected_covers": [], "selected_covers_revision": 3})
+    assert saved["selected_covers"] == [] and saved["selected_covers_revision"] == 3
+    with pytest.raises(ValueError):
+        project_selected_cover_metadata({"selected_covers": []})
+    assert current_cover_reference(
+        cover_path="C:/Music/Album/cover.jpg",
+        metadata={"selected_covers": [], "selected_covers_revision": 3},
+    ) is None
+    cover_path, projection = primary_projection([])
+    assert cover_path is None
+    assert projection["cover_selection_origin"] == "user"
+    assert projection["cover_selection_provenance"] == "explicit"
+    assert projection["remote_cover_url"] is None
+    request = validate_save_request(
+        expected_album_id=7, expected_revision=3,
+        mutation_id="1b4e28ba-2fa1-11d2-883f-0016d3cca427", references=[],
+    )
+    assert request["mutation_id"] == "1b4e28ba-2fa1-11d2-883f-0016d3cca427"

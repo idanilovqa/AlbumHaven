@@ -72,7 +72,7 @@ def test_legacy_is_explicitly_loaded_empty_without_fabricating_primary(legacy):
 
 
 @pytest.mark.parametrize("change", [
-    {"selected_covers": []}, {"selected_covers": None}, {"selected_covers": [{"kind": "local"}]},
+    {"selected_covers": None}, {"selected_covers": [{"kind": "local"}]},
     {"selected_covers_revision": -1}, {"selected_covers_revision": True},
     {"selected_covers": saved_metadata()["selected_covers"] * 2},
     {"selected_covers_last_request": {"mutation_id": "invalid", "request_hash": "secret"}},

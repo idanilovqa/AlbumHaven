@@ -89,8 +89,24 @@ require('node:test')('numbered selection caps at three and renumbers after remov
     JSON.parse(JSON.stringify(context.state.coverLookup.modal.orderedCoverSelections.map((item) => item.key))),
     [booklet.key],
   );
-  assert.equal(context.applyCoverLookupSelectionIntent(booklet), false);
-  assert.equal(context.state.coverLookup.modal.orderedCoverSelections.length, 1);
+  // Owner 2026-11-16: no cover is a valid choice, so the last ticked cover can be unticked too.
+  assert.equal(context.applyCoverLookupSelectionIntent(booklet), true);
+  assert.equal(context.state.coverLookup.modal.orderedCoverSelections.length, 0);
+});
+
+require('node:test')('a single ticked cover unticks on click, and the empty choice can be saved once loaded', () => {
+  const context = loadRuntime();
+  const modal = context.state.coverLookup.modal;
+  context.applyCoverLookupSelectionIntent(local('front'));
+  assert.equal(context.applyCoverLookupSelectionIntent(local('front')), true);
+  assert.equal(modal.orderedCoverSelections.length, 0);
+  modal.orderedCoverBaseline = JSON.stringify([{ selection_id: 'one' }]);
+  modal.orderedSelectionLoaded = false;
+  assert.equal(context.hasChangedOrderedCoverSelection([]), false, 'nothing to clear before the saved selection loads');
+  modal.orderedSelectionLoaded = true;
+  assert.equal(context.hasChangedOrderedCoverSelection([]), true);
+  modal.orderedCoverBaseline = '[]';
+  assert.equal(context.hasChangedOrderedCoverSelection([]), false, 'already no cover');
 });
 
 require('node:test')('loading saved covers keeps server order and opaque save references', async () => {

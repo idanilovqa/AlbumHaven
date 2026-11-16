@@ -31,8 +31,8 @@ def validate_save_request(*, expected_album_id, expected_revision, mutation_id, 
         mutation_id = str(UUID(mutation_id))
     except ValueError as exc:
         raise ValueError("A mutation UUID is required.") from exc
-    if not isinstance(references, list) or not 1 <= len(references) <= 3:
-        raise ValueError("Select one to three covers.")
+    if not isinstance(references, list) or not 0 <= len(references) <= 3:
+        raise ValueError("Select up to three covers, or none.")
     selectors = set()
     for reference in references:
         if not isinstance(reference, dict):
@@ -81,7 +81,8 @@ def current_cover_reference(*, cover_path, metadata):
     """
     saved = project_selected_cover_metadata(metadata)
     if saved:
-        return dict(saved["selected_covers"][0])
+        # An explicit "no cover" selection has no current primary.
+        return dict(saved["selected_covers"][0]) if saved["selected_covers"] else None
     if cover_path:
         item = {"kind": "local", "path": cover_path}
     elif isinstance(metadata, Mapping) and metadata.get("remote_cover_url"):
@@ -185,7 +186,8 @@ def prepare_selection(*, metadata, expected_revision, request, references, confi
 
 
 def primary_projection(selection):
-    primary = selection[0]
+    """The album's published primary; an empty selection publishes the explicit "no cover" choice."""
+    primary = selection[0] if selection else {"kind": "none"}
     projection = {"cover_selection_origin": "user", "cover_selection_provenance": "explicit",
                   "cover_revision": None, "cover_selection_repair_previous": None,
                   "local_cover_width": None, "local_cover_height": None}

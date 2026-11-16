@@ -962,9 +962,7 @@ function syncCoverLookupSaveButton() {
   const hasPastedSelection = Boolean(pendingPastedImageId);
   const orderedSelections = Array.isArray(state.coverLookup.modal.orderedCoverSelections)
     ? state.coverLookup.modal.orderedCoverSelections : [];
-  const hasOrderedSelection = orderedSelections.length > 0
-    && orderedCoverSelectionSignature(orderedSelections)
-      !== String(state.coverLookup.modal.orderedCoverBaseline || '[]');
+  const hasOrderedSelection = hasChangedOrderedCoverSelection(orderedSelections);
   const allowLegacySelection = state.coverLookup.modal.orderedSelectionLoaded !== true;
   saveButton.hidden = false;
   saveButton.disabled = localMutationPending || Boolean(state.coverLookup.modal.saving)
@@ -1027,10 +1025,11 @@ function applyCoverLookupSelectionIntent(entry, options = {}) {
     return true;
   }
 
+  // Owner 2026-11-16: no cover is a valid choice, so clicking the only ticked cover unticks it.
   if (!modal.orderedSelectionMode) {
-    modal.orderedCoverSelections = [{ key, reference: { ...entry.reference } }];
+    modal.orderedCoverSelections = index === 0 && current.length === 1
+      ? [] : [{ key, reference: { ...entry.reference } }];
   } else if (index >= 0) {
-    if (current.length === 1) return false;
     modal.orderedCoverSelections = current.filter((_item, itemIndex) => itemIndex !== index);
   } else {
     if (current.length >= 3) return false;
@@ -1157,6 +1156,14 @@ function orderedCoverSelectionEntry(reference) {
   return { key, reference: { selection_id: selectionId } };
 }
 
+// A changed ordered selection can be saved, including an empty one: the explicit "no cover" choice, which
+// exists only once the album's saved selection has loaded (owner 2026-11-16).
+function hasChangedOrderedCoverSelection(selections) {
+  const modal = state.coverLookup.modal;
+  if (!selections.length && modal.orderedSelectionLoaded !== true) return false;
+  return orderedCoverSelectionSignature(selections) !== String(modal.orderedCoverBaseline || '[]');
+}
+
 function orderedCoverSelectionSignature(selections) {
   return JSON.stringify((Array.isArray(selections) ? selections : []).map((item) => item.reference));
 }
@@ -1275,7 +1282,7 @@ async function saveOrderedCoverSelection() {
   const albumId = orderedCoverAlbumId(album);
   const selections = Array.isArray(modal.orderedCoverSelections)
     ? modal.orderedCoverSelections : [];
-  if (!albumId || !selections.length || modal.saving) return false;
+  if (!albumId || modal.saving || !hasChangedOrderedCoverSelection(selections)) return false;
   const mutationId = String(modal.orderedCoverMutationId || crypto.randomUUID());
   const previousSlots = Array.isArray(album.selected_covers)
     ? album.selected_covers.map((slot) => ({ ...slot })) : [];
@@ -1306,6 +1313,12 @@ async function saveOrderedCoverSelection() {
     }));
     applyOrderedCoverSlotsToAlbum(album, saved, data.selected_covers_revision);
     album.selected_covers_album_id = albumId;
+    if (!saved.length && typeof refreshCoverLookupAlbumArtwork === 'function') {
+      // The explicit "no cover" choice: the album shows no artwork at once, not after a reload.
+      refreshCoverLookupAlbumArtwork(album, [{
+        ...album, cover_path: null, cover_revision: null, remote_cover_url: null, remote_cover_thumbnail_url: null,
+      }]);
+    }
     modal.orderedCoversRevision = album.selected_covers_revision;
     modal.orderedCoverSelections = selections.map((entry, index) => ({
       key: entry.key,
@@ -4666,9 +4679,7 @@ async function saveCoverFromLookup() {
     ? state.coverLookup.modal.orderedCoverSelections : [];
   if (
     !String(state.coverLookup.modal.pendingPastedImageId || '')
-    && orderedSelections.length
-    && orderedCoverSelectionSignature(orderedSelections)
-      !== String(state.coverLookup.modal.orderedCoverBaseline || '[]')
+    && hasChangedOrderedCoverSelection(orderedSelections)
   ) {
     await saveOrderedCoverSelection();
     return;

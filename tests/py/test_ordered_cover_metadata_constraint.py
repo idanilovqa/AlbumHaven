@@ -79,7 +79,8 @@ def invalid(name, value):
     INVALID_CASES.append(pytest.param(value, id=name))
 
 
-for index, value in enumerate([None, {}, "a", [], [local()] * 4, [None], ["a"]]):
+# An empty list with a revision is the owner's explicit "no cover" choice (0184), not a malformed set.
+for index, value in enumerate([None, {}, "a", [local()] * 4, [None], ["a"]]):
     invalid(f"set-shape-{index}", {"selected_covers": value, "selected_covers_revision": 0})
 invalid("revision-missing", {"selected_covers": [local()]})
 for index, value in enumerate([None, True, False, -1, 1.0, "1", [], {}]):

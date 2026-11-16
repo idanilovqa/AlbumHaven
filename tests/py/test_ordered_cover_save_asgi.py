@@ -169,7 +169,7 @@ def test_tv_client_is_denied_even_with_write_grant(api):
     assert not any(name == "save" for name, _ in api.calls)
 
 
-@pytest.mark.parametrize("references", [[], [{"selection_id": "x"}] * 4,
+@pytest.mark.parametrize("references", [[{"selection_id": "x"}] * 4,
     [{"kind": "remote", "url": "https://arbitrary.example.test/image.jpg"}],
     [{"kind": "local", "path": "/foreign.jpg", "selection_id": "forged"}]])
 def test_malformed_or_overlimit_selectors_never_reach_repository(api, references):

@@ -68,7 +68,8 @@ def publish_ordered_cover_selection_for_tracks(
     No image inspection or persistence occurs here, including for a saved source
     that is currently missing. The database remains the ordered-list authority.
     """
-    primary = selection[0]
+    # An empty selection publishes the explicit "no cover" choice: no local or remote primary.
+    primary = selection[0] if selection else {"kind": "none"}
     remote = primary if primary["kind"] == "remote" else {}
     apply_cover_selection_service(
         library_state=library_state, track_paths=track_paths,

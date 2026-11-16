@@ -1448,7 +1448,7 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
     try:
         validate_save_request(expected_album_id=album_id, **payload)
     except ValueError:
-        return JSONResponse({"ok": False, "error": "Select one to three valid cover references with a revision and mutation UUID."}, status_code=422)
+        return JSONResponse({"ok": False, "error": "Select up to three valid cover references (or none) with a revision and mutation UUID."}, status_code=422)
 
     config = _app_config(request)
     library_state = _library_state(request)
@@ -1519,7 +1519,7 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
     except OrderedCoverSelectionConflict:
         return JSONResponse({"ok": False, "error": "The album or cover selection changed. Reload before saving again."}, status_code=409)
     except InvalidOrderedCoverSelection:
-        return JSONResponse({"ok": False, "error": "Select one to three distinct cover references."}, status_code=422)
+        return JSONResponse({"ok": False, "error": "Select up to three distinct cover references."}, status_code=422)
     except (ValueError, FileNotFoundError):
         return JSONResponse({"ok": False, "error": "An album or cover source is unavailable."}, status_code=404)
     except CoverMutationCommitUncertainError:

@@ -81,8 +81,10 @@ def project_selected_cover_metadata(metadata: object) -> dict[str, object]:
         return {}
     items = metadata["selected_covers"]
     revision = metadata.get("selected_covers_revision")
-    if not isinstance(items, list) or not 1 <= len(items) <= 3:
-        raise ValueError("A saved cover selection must contain one to three references.")
+    # An empty saved list is the owner's explicit "no cover" choice (2026-11-16): the album shows no artwork
+    # even when image files exist, until a cover is selected again. It is never inferred.
+    if not isinstance(items, list) or not 0 <= len(items) <= 3:
+        raise ValueError("A saved cover selection must contain zero to three references.")
     if type(revision) is not int or revision < 0:
         raise ValueError("A saved cover selection requires a nonnegative revision.")
 

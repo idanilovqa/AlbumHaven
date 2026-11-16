@@ -40,9 +40,9 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   const albumsOffline = await visibleAlbumNames(galleryActions.galleryPage);
   expect(albumsOffline.length).toBeGreaterThan(0);
   expect(albumsOffline).toEqual(albumsOnline.slice(0, albumsOffline.length));
-  // Changes are off: the album menu has no Edit Tags while the server cannot be reached.
+  // Changes are off: the album menu's Edit Tags cannot be used while the server cannot be reached.
   await galleryActions.openAlbumContextMenu(albumsOnline[0]);
-  await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeHidden();
+  await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeDisabled();
   await galleryActions.dismissAlbumContextMenu();
   expect(elapsed, `saved view took ${elapsed} ms`).toBeLessThanOrEqual(UNREACHABLE_VIEW_BUDGET_MS);
 
@@ -53,6 +53,6 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   expect(await page.evaluate(() => window.__iarSamePage)).toBe(true);
   expect(await visibleAlbumNames(galleryActions.galleryPage)).toEqual(albumsOnline);
   await galleryActions.openAlbumContextMenu(albumsOnline[0]);
-  await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeVisible();
+  await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeEnabled();
   await galleryActions.dismissAlbumContextMenu();
 });

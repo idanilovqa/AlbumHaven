@@ -5963,3 +5963,29 @@ for (const query of ['Devin', '']) {
     assert.equal(context.state.ui.artistsDrawerOpen, Boolean(query));
   });
 }
+
+test('clearing a search keeps the selected artist and shows all artists in the tree again', () => {
+  // Owner 2026-11-16: after clearing "alien: complete" the gallery kept Jerry Goldsmith (correct) but the tree
+  // stayed at one artist: "you should KEEP the selected artist. But the tree itself should show ALL ARTISTS".
+  const { context } = createContext();
+  const full = [{ artist: '10cc', count: 5 }, { artist: 'Jerry Goldsmith', count: 17 }, { artist: 'Rhapsody', count: 1 }];
+  context.state.view.query = 'alien: complete';
+  context.state.view.selected_artist = 'Jerry Goldsmith';
+  context.state.view.artists_sidebar = [{ artist: 'Jerry Goldsmith', count: 1 }];
+  context.state.ui.preSearchView = { artists_sidebar: full, selected_artist: '' };
+  context.buildClearedSearchView = () => ({ ...context.state.view, query: '', selected_artist: 'Jerry Goldsmith', surface: { active: 'albums' } });
+  context.withActiveGallerySources = (view) => view;
+  context.readReusableRootBrowseViewForClearedSearch = () => null;
+  context.isMountedSelectedGalleryComplete = () => false;
+  context.tryRestoreClearedSearchView = () => false;
+  const fetched = [];
+  context.fetchAndRender = (url) => fetched.push(String(url));
+  let sidebarRenders = 0;
+  context.renderSidebar = () => { sidebarRenders += 1; };
+
+  context.commitGallerySearchQuery('');
+
+  assert.equal(fetched.length, 1);
+  assert.equal(context.state.view.artists_sidebar.length, 3, 'the full tree is back');
+  assert.ok(sidebarRenders >= 1);
+});

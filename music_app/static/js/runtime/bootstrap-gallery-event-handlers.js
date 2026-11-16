@@ -1753,6 +1753,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     ) ? 'canonical_root' : 'interactive';
   }
   if (!String(normalizedQuery || '').trim() && String(state.view.query || '').trim()) {
+    // The full tree saved when the search started: a cleared search shows all artists again (owner 2026-11-16).
+    const preSearchSidebar = Array.isArray(state.ui.preSearchView?.artists_sidebar)
+      ? state.ui.preSearchView.artists_sidebar : null;
     const next = withActiveGallerySources(buildClearedSearchView(), state.gallery.mainState);
     const reusableRootBrowseView = readReusableRootBrowseViewForClearedSearch(next);
     const retainsSelectedArtist = Boolean(String(next?.selected_artist || '').trim());
@@ -1817,6 +1820,11 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
         });
       } else {
         fetchAndRender(buildApiUrl(next), true);
+        // That gallery request carries no tree, so the search's filtered list would stay.
+        if (preSearchSidebar?.length) {
+          state.view.artists_sidebar = buildRestoredSearchSidebar(preSearchSidebar, next.selected_artist);
+          renderSidebar();
+        }
       }
     }
     return;

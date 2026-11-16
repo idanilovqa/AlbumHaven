@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from threading import Event, Thread
 from types import ModuleType
@@ -1304,6 +1305,48 @@ def test_asgi_home_data_uses_asgi_state_without_flask_bridge(app, asgi_app, monk
     assert logged_calls == [(payload, 30.0)]
 
 
+def _assert_off_event_loop() -> None:
+    with pytest.raises(RuntimeError):
+        asyncio.get_running_loop()
+
+
+def test_asgi_home_data_builds_the_payload_off_the_event_loop(asgi_app, monkeypatch):
+    # The incident: an async /home-data built the payload on the event loop and
+    # the server answered nothing else for ~10 s. A slow builder must leave the
+    # loop free (the ASGI test client fails any request blocking it > 250 ms).
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    def slow_build_home_payload(**_kwargs) -> dict[str, object]:
+        _assert_off_event_loop()
+        time.sleep(0.3)
+        return {"kind": "home"}
+
+    _memory_home_data_route(monkeypatch, asgi_read_routes)
+    monkeypatch.setattr(asgi_read_routes, "build_home_payload", slow_build_home_payload)
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/home-data")
+
+    assert status == 200
+    assert _decode_json(body)["kind"] == "home"
+
+
+def test_asgi_saved_loops_read_runs_off_the_event_loop(asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    def slow_load_loops(_config, **_scope) -> list[dict[str, object]]:
+        _assert_off_event_loop()
+        time.sleep(0.3)
+        return []
+
+    monkeypatch.setattr(asgi_read_routes, "load_loops", slow_load_loops)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/utilities/loops")
+
+    assert status == 200
+    assert _decode_json(body)["loops"] == []
+
+
 def _recording_hydrate_executor(monkeypatch, state_service):
     queued: list[tuple[object, tuple, dict]] = []
 
@@ -1410,17 +1453,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_calls: list[dict[str, object]] = []
-    threadpool_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-    threadpool_active = False
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        nonlocal threadpool_active
-        threadpool_calls.append((function, args, kwargs))
-        threadpool_active = True
-        try:
-            return function(*args, **kwargs)
-        finally:
-            threadpool_active = False
 
     def fake_build_home_payload(**_kwargs) -> dict[str, object]:
         return {
@@ -1439,7 +1471,7 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             assert config is app.config
 
         def build_root_sidebar_payload(self, *, query_params=None):
-            assert threadpool_active is True
+            _assert_off_event_loop()
             repository_calls.append(
                 {
                     "gallery_display": query_params.get("gallery_display"),
@@ -1461,12 +1493,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
     monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
-    )
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1505,11 +1531,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert len(threadpool_calls) == 1
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[0]
-    assert threadpool_function.__name__ == "build_root_sidebar_payload"
-    assert threadpool_args == ()
-    assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
 
 
 def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_sidebar(
@@ -1520,11 +1541,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_queries: list[dict[str, object]] = []
-    threadpool_functions: list[str] = []
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        threadpool_functions.append(function.__name__)
-        return function(*args, **kwargs)
 
     def fake_build_home_payload(**kwargs) -> dict[str, object]:
         assert kwargs["query_args"].get("omit_sidebar") == "1"
@@ -1543,6 +1559,7 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             raise AssertionError("omit_sidebar must not build the full Postgres sidebar payload")
 
         def build_root_counts_payload(self, *, query_params=None):
+            _assert_off_event_loop()
             repository_queries.append(
                 {
                     "omit_sidebar": query_params.get("omit_sidebar"),
@@ -1559,12 +1576,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
-    )
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1600,7 +1611,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert threadpool_functions == ["build_root_counts_payload"]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):

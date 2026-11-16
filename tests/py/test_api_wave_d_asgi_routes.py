@@ -1730,6 +1730,10 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
                 return 42
             raise AssertionError(track_paths)
 
+        def resolve_album_ids_for_track_path_sets(self, track_path_sets):
+            # One connection for every split choice, never one per album.
+            return [self.resolve_album_id_for_track_paths(track_paths=paths) for paths in track_path_sets]
+
     class BrowseRepository:
         def __init__(self, _config):
             pass

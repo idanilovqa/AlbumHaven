@@ -831,7 +831,7 @@ validatorTest('gallery startup projections share one early app process before is
   const sharedReaderNames = waves[0].invocations
     .filter((invocation) => invocation.baselineMode === 'shared-setup')
     .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case));
-  assert.equal(sharedReaderNames.length, 32);
+  assert.equal(sharedReaderNames.length, 34);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -978,7 +978,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual-1', { cases: 32, waves: [1, 2] }],
-    ['gallery-search-visual-2', { cases: 35, waves: [1, 2, 3, 4] }],
+    ['gallery-search-visual-2', { cases: 39, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],

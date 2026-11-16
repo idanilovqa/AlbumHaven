@@ -372,6 +372,21 @@ test('a cover seen online shows offline under its reference, whatever version th
   assert.equal((await kept.arrayBuffer()).byteLength, 7);
 });
 
+test('IAR-009: a page that still names a cover by file path is never kept', async () => {
+  const legacy = () => new Response(
+    '<!doctype html><html><head><meta name="album-haven-app-copy" content="network" data-account="acct-a"></head>'
+    + '<body><img src="/cover?path=C%3A%5CMusic%5Ccover.jpg&amp;size=480"></body></html>',
+    { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-cache', [COPY_HEADER]: 'acct-a', [VERSION_HEADER]: 'v1' } },
+  );
+  const { caches, handle } = setup({ respond: legacy });
+
+  const response = await handle(navigation('/'));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await storedPathLeaks(caches), []);
+  assert.equal(caches.stores.get(`${CACHE_PREFIX}acct-a`), undefined);
+});
+
 test('legacy path cover URLs are left to the network and never stored', async () => {
   const { caches, worker, handle, settled } = setup({ respond: libraryServer() });
   await handle(navigation('/'));

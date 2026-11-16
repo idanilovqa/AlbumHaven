@@ -35,6 +35,8 @@
   const COVER_URL = /\/cover\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$)[^"'\s<>]*/g;
   const PATH_FIELDS = /("(?:cover_path|music_dir)":\s*)"(?:[^"\\]|\\.)*"/g;
   const PATH_ATTRIBUTES = /(data-cover-path=)"[^"]*"/g;
+  // A cover named by its file path; the server stopped sending these, and a page with one is not kept.
+  const PATH_COVER_URL = /\/cover\?path=/;
   const NETWORK_MARKER = '<meta name="album-haven-app-copy" content="network"';
   const COPY_MARKER = '<meta name="album-haven-app-copy" content="cache"';
   const SIGN_IN_PAGES = /^\/(?:login|accept-invitation|password-reset|password-recovery)(?:\/|$)/;
@@ -144,6 +146,7 @@
     // [page.running]: the page is the one starting now, so its version's assets stay while it runs.
     async function keepPage(url, response, page, fetchedIn) {
       const text = await response.text();
+      if (PATH_COVER_URL.test(text)) return;
       await exclusive(async () => {
         if (fetchedIn !== generation) return;
         const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));

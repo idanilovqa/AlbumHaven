@@ -9416,7 +9416,7 @@
     "expectedContracts": [
       "musicbrainz-series-sidebar-button"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

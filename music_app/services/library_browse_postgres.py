@@ -2037,10 +2037,9 @@ class PostgresLibraryBrowseRepository:
 
     def build_series_payload(self, *, query_params: Mapping[str, object] | None = None) -> dict[str, object]:
         """The Series view (Delivery 2, S6): one MusicBrainz series' local albums, whatever
-        their album artist, or with ``series=all`` every real series as its own group; plus
-        the Series tree of real series, counted from the same albums. A list or award
-        ("Featured In") opens the same view by its MBID; the tree leaves it out until its
-        own design is approved. The artist tree stays the client's own."""
+        their album artist, or with ``series=all`` every series as its own group; plus the
+        Series tree, counted from the same albums. Real series and lists or awards ("Featured
+        In") share the view and the tree. The artist tree stays the client's own."""
         params = query_params or {}
         requested = str(params.get("series") or "").strip().casefold()
         try:
@@ -2053,13 +2052,14 @@ class PostgresLibraryBrowseRepository:
         grouped: dict[str, list[Mapping[str, object]]] = {}
         for row in rows:
             grouped.setdefault(str(row["series_mbid"]), []).append(row)
-        real = {mbid for mbid, series_rows in grouped.items() if series_rows[0]["series_kind"] == "series"}
+        # Provisional (owner 2026-11-15, until mockup batch 2 settles the grouping): the tree
+        # lists real series and Featured In together, by name.
         sidebar = [{"mbid": mbid, "name": series_rows[0]["series_name"],
                     "count": len({row["album_id"] for row in series_rows})}
-                   for mbid, series_rows in grouped.items() if mbid in real]
+                   for mbid, series_rows in grouped.items()]
         artist_groups = []
         for mbid, series_rows in grouped.items():
-            if mbid != series_mbid and not (series_mbid is None and mbid in real):
+            if series_mbid is not None and mbid != series_mbid:
                 continue
             series = _series_projection(series_rows[0])
             order = {row["album_id"]: index for index, row in enumerate(series_rows)}

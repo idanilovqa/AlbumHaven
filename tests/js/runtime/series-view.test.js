@@ -109,6 +109,18 @@ test('2: the Series tree uses the artist tree items: All series, then each serie
   assert.match(items.join(''), /data-nav="1"/);
 });
 
+test('3A: a Featured In series is a selectable tree item that opens its gallery', () => {
+  const featured = 'd5471f85-4b54-45da-9de7-c9ad9843c4bd';
+  const html = viewHelpers().buildSeriesSidebarHtml({
+    selected_series: featured,
+    series_sidebar: [{ mbid: COLOSSUS, name: 'Colossus Projects', count: 4 },
+      { mbid: featured, name: 'Rolling Stone: The 100 Greatest Metal Albums of All Time', count: 2 }],
+  });
+  const item = [...html.matchAll(/<a [^>]*>/g)].map((match) => match[0]).find((tag) => tag.includes(featured));
+  assert.match(item, /class="artist-link active navigation-tree-item is-selected"/);
+  assert.match(item, new RegExp(`href="/\\?surface=albums&amp;series=${featured}" data-nav="1"`));
+});
+
 test('the Series view is part of the page and data URLs only without a search or an artist', () => {
   const { buildUrl, buildApiUrl, parseUrlStateFromUrl } = viewHelpers();
   assert.equal(parseUrlStateFromUrl(`/?surface=albums&series=${COLOSSUS}`, 'http://localhost').selected_series, COLOSSUS);

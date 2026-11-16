@@ -262,7 +262,8 @@ def test_a_series_view_lists_its_albums_chronologically_with_the_number_breaking
     assert payload["album_count"] == 4
     assert payload["series_sidebar"] == [
         {"mbid": COLEZO, "name": "COLEZO! TWIN", "count": 1},
-        {"mbid": COLOSSUS, "name": "Colossus Projects", "count": 4}]
+        {"mbid": COLOSSUS, "name": "Colossus Projects", "count": 4},
+        {"mbid": METAL_LIST, "name": "Rolling Stone: The 100 Greatest Metal Albums of All Time", "count": 2}]
 
 
 def test_all_series_shows_every_series_and_an_unknown_series_shows_nothing(monkeypatch):
@@ -271,7 +272,8 @@ def test_all_series_shows_every_series_and_an_unknown_series_shows_nothing(monke
     payload = browse.build_series_payload(query_params={"series": "all"})
     assert (payload["selected_series"], payload["series"]) == ("all", None)
     assert [(group["artist"], len(group["albums"])) for group in payload["artist_groups"]] == [
-        ("COLEZO! TWIN", 1), ("Colossus Projects", 4)]
+        ("COLEZO! TWIN", 1), ("Colossus Projects", 4),
+        ("Rolling Stone: The 100 Greatest Metal Albums of All Time", 2)]
     assert payload["artist_groups"][1]["series"]["type_label"] == "Album series"
     missing = browse.build_series_payload(query_params={"series": "00000000-0000-4000-8000-000000000000"})
     assert (missing["series"], missing["artist_groups"], missing["album_count"]) == (None, [], 0)
@@ -344,17 +346,28 @@ def test_the_owners_kind_always_wins_and_a_hidden_series_shows_nowhere(monkeypat
     assert "Dante's Inferno" not in {row["album_title"] for row in browse._load_search_rows("colossus", VIEW_STATE)}
 
 
-def test_featured_in_opens_the_same_view_but_stays_out_of_the_series_tree(monkeypatch):
+def test_featured_in_is_in_the_series_tree_and_opens_its_gallery_but_a_hidden_series_is_not(monkeypatch):
     setup_url, _albums = _seed_library(monkeypatch)
     browse = _browse(setup_url)
     featured = browse.build_series_payload(query_params={"series": METAL_LIST})
     assert (featured["series"]["kind"], featured["series"]["type_label"]) == ("featured_in", "Featured In")
     assert [album["name"] for album in featured["artist_groups"][0]["albums"]] == [
         "Kalevala", "Iliad, A Grand Piano Extravaganza"]
+    # Owner 2026-11-15 (3A): the Series tree lists Featured In too, selectable (provisional
+    # single list until mockup batch 2).
     every = browse.build_series_payload(query_params={"series": "all"})
-    assert METAL_LIST not in {item["mbid"] for item in every["series_sidebar"]}
-    assert "Rolling Stone: The 100 Greatest Metal Albums of All Time" not in {
-        group["artist"] for group in every["artist_groups"]}
+    assert {"mbid": METAL_LIST, "name": "Rolling Stone: The 100 Greatest Metal Albums of All Time",
+            "count": 2} in every["series_sidebar"]
+    # An owner's "hidden" keeps a series out of the tree and its gallery.
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update integration.musicbrainz_series set owner_kind = 'hidden' where mbid = %s",
+                           (METAL_LIST,))
+    hidden = browse.build_series_payload(query_params={"series": "all"})
+    assert METAL_LIST not in {item["mbid"] for item in hidden["series_sidebar"]}
+    assert browse.build_series_payload(query_params={"series": METAL_LIST})["artist_groups"] == []
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update integration.musicbrainz_series set owner_kind = null where mbid = %s",
+                           (METAL_LIST,))
     # Search matches both kinds by name.
     assert {row["album_title"] for row in browse._load_search_rows("metal albums", VIEW_STATE)} == {
         "Kalevala", "Iliad, A Grand Piano Extravaganza"}

@@ -340,6 +340,12 @@ function handleGalleryBootstrapClick(event) {
     if (opensMobileHome && typeof prepareMobileGalleryNavigation === 'function') {
       prepareMobileGalleryNavigation();
     }
+    // The logo is the library landing page: the side panel returns to the Artists tree at All artists,
+    // whichever tree was showing (owner 2026-11-16).
+    if (isLibraryHome && state.ui.libraryNavigationMode === 'custom-collections'
+        && typeof setLibraryNavigationMode === 'function') {
+      void setLibraryNavigationMode('artists');
+    }
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);

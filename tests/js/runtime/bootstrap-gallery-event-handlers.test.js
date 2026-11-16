@@ -1682,6 +1682,22 @@ test('library-home navigation clears active search state before opening All arti
   assert.deepEqual(calls.buildApiUrlOptions.at(-1), {});
 });
 
+for (const mobile of [false, true]) {
+  test(`${mobile ? 'phone' : 'desktop'}: the logo returns the side panel to the Artists tree`, () => {
+    // Owner 2026-11-16: the logo reloaded the gallery top "but left the side bar at loose tracks".
+    const { context } = createContext({ useProductionBuildApiUrl: true });
+    context.usesMobilePageLayout = () => mobile;
+    context.state.ui.libraryNavigationMode = 'custom-collections';
+    const modes = [];
+    context.setLibraryNavigationMode = (mode) => { modes.push(mode); context.state.ui.libraryNavigationMode = mode; };
+
+    context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+    assert.deepEqual(modes, ['artists']);
+    assert.equal(context.state.ui.pendingSidebarAllArtistsActive, !mobile);
+  });
+}
+
 test('library-home navigation opens Home on mobile instead of All artists', () => {
   const { context, calls } = createContext({ useProductionBuildApiUrl: true });
   context.usesMobilePageLayout = () => true;

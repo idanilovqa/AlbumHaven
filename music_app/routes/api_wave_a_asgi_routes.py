@@ -1855,11 +1855,12 @@ async def utilities_remove_duplicate_copy(request: Request) -> JSONResponse:
     ):
         return _json_response(_invalid_payload_response("Invalid duplicate-copy removal request"))
     try:
+        removal = DuplicateCopyRemovalService({
+            **_app_config(request),
+            **request.app.state.auth_policy_config,
+        })
         result = await run_in_threadpool(
-            DuplicateCopyRemovalService({
-                **_app_config(request),
-                **request.app.state.auth_policy_config,
-            }).remove,
+            removal.remove,
             library_id=request.state.current_actor.current_library_id,
             **values,
         )
@@ -1880,6 +1881,7 @@ async def utilities_remove_duplicate_copy(request: Request) -> JSONResponse:
         level="info",
         album_key=values["album_key"],
         retired_file_count=int(result.get("retired_file_count") or 0),
+        phase_ms=getattr(removal, "last_phase_ms", None),
     )
     return JSONResponse(
         {"ok": True, "result": result},

@@ -3,6 +3,7 @@
 import hmac
 from pathlib import Path
 import shutil
+from time import perf_counter
 from uuid import uuid4
 
 from music_app.services.duplicate_copy_preview import (
@@ -101,9 +102,20 @@ class DuplicateCopyRemovalService:
             album_key=album_key,
             copy_ref=copy_ref,
         )
+        # Per-step timings for the owner's "why is it so slow" (2026-11-16); logged with the result.
+        phase_ms = self.last_phase_ms = {}
+        started = mark = perf_counter()
+
+        def lap(name):
+            nonlocal mark
+            now = perf_counter()
+            phase_ms[name] = round((now - mark) * 1000, 1)
+            mark = now
+
         prepared = self._prepare(**preview_values)
         if not self._matches_confirmation(prepared, confirmation_ref):
             _conflict()
+        lap("prepare")
         all_paths = {
             str(row["private_path"])
             for row in (*prepared.selected_rows, *prepared.survivor_rows)
@@ -113,11 +125,13 @@ class DuplicateCopyRemovalService:
         )
         if reservation is None:
             _conflict()
+        lap("reserve")
         staged = None
         try:
             prepared = self._prepare(**preview_values)
             if not self._matches_confirmation(prepared, confirmation_ref):
                 _conflict()
+            lap("prepare_again")
             source = prepared.album_root
             staged = source.with_name(f".albumhaven-delete-{uuid4().hex}")
             if staged.exists() or not source.is_dir():
@@ -126,6 +140,7 @@ class DuplicateCopyRemovalService:
                 source.replace(staged)
             except OSError:
                 _conflict()
+            lap("stage_folder")
             confirmation = ConfirmedDuplicateCopyRemoval(
                 library_id=library_id,
                 selected_files=tuple(_generation(row) for row in prepared.selected_rows),
@@ -154,12 +169,15 @@ class DuplicateCopyRemovalService:
             except BaseException as publication_error:
                 self._restore(source, staged, publication_error)
                 raise
+            lap("retire_rows")
             try:
                 self._remove_tree(staged)
             except OSError as cleanup_error:
                 raise DuplicateCopyRemovalCleanupPending(
                     "The duplicate copy was retired, but final folder cleanup is still pending."
                 ) from cleanup_error
+            lap("delete_folder")
+            phase_ms["total"] = round((perf_counter() - started) * 1000, 1)
             return result
         finally:
             reservation.release()

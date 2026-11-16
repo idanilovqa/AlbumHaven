@@ -86,7 +86,9 @@ def save_library_root_settings(config: dict[str, object], raw_payload: object, *
         from music_app.services.scoped_library_roots import save_scoped_roots
         with _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK:
             result = save_scoped_roots(PostgresLibraryRootSettingsStore(config), raw_payload, library_id=library_id, media_host_library_id=media_host_library_id)
-            _store_configured_root_paths_snapshot(config, result)
+            # The process-wide snapshot holds the bootstrap library's roots, never a
+            # scoped library's; drop it so the next reader reloads the global roots.
+            config.pop(_CONFIGURED_ROOT_PATHS_SNAPSHOT_KEY, None)
             return result
     from music_app.services.persistence_selection import select_runtime_persistence_adapter
 

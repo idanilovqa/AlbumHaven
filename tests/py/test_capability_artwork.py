@@ -112,3 +112,56 @@ def test_practice_artwork_resolves_only_owned_loop_cover_not_submitted_path(tmp_
             asyncio.run(browse_artwork_response(request))
         assert error.value.status_code == 404
         assert not calls
+
+
+def test_scoped_root_save_keeps_view_only_artwork_on_global_roots(tmp_path, monkeypatch):
+    import asyncio
+    from fastapi import FastAPI, Request
+    from music_app.services import library_roots
+    from music_app.services.allowed_actions import AllowedActions
+    from music_app.services.capability_artwork import browse_artwork_response
+
+    global_root = (tmp_path / "Global").resolve()
+    scoped_root = (tmp_path / "Scoped").resolve()
+    for root in (global_root, scoped_root):
+        root.mkdir()
+        Image.new("RGB", (2, 2), "red").save(root / "cover.png")
+
+    class FakeStore:
+        def __init__(self, _config):
+            pass
+
+        def load_settings(self):
+            return {"version": 1, "main_library_roots": [{"id": "main", "path": str(global_root)}],
+                    "hoarding_library_roots": [], "new_arrivals_roots": [], "move_policy": {}}
+
+    def save_scoped(_store, _payload, **_scope):
+        return {"version": 1, "main_library_roots": [{"id": "main", "path": str(scoped_root)}],
+                "hoarding_library_roots": [], "new_arrivals_roots": [], "move_policy": {}}
+
+    monkeypatch.setattr(library_roots, "PostgresLibraryRootSettingsStore", FakeStore)
+    monkeypatch.setattr("music_app.services.scoped_library_roots.save_scoped_roots", save_scoped)
+    monkeypatch.setattr("music_app.services.policy_asgi.allowed_actions_for_request",
+                        lambda *_args, **_kwargs: AllowedActions(()))
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+              "PERSISTENCE_BACKENDS": {"library_roots": "postgres"}}
+    library_roots.load_library_root_settings(config)
+
+    library_roots.save_library_root_settings(
+        config, {"main_library_roots": [{"id": "main", "path": str(scoped_root)}]},
+        library_id=88, media_host_library_id=88)
+
+    assert library_roots.configured_library_root_paths_snapshot(config) == (global_root,)
+    app = FastAPI()
+    app.state.config = config
+
+    def artwork(path):
+        request = Request({"type": "http", "method": "GET", "path": "/cover", "scheme": "https",
+            "query_string": f"path={path}".encode(), "headers": [], "client": ("127.0.0.1", 1234),
+            "server": ("music.test", 443), "app": app, "state": {}})
+        return asyncio.run(browse_artwork_response(request))
+
+    assert artwork(global_root / "cover.png").media_type == "image/png"
+    with pytest.raises(HTTPException) as error:
+        artwork(scoped_root / "cover.png")
+    assert error.value.status_code == 404

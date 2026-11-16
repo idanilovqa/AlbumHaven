@@ -470,16 +470,17 @@ async def _serialize_cover_gallery_from_asgi(
     refresh_persisted_cover_state: bool = False,
 ) -> dict[str, object]:
     config = _app_config(request)
-    file_cache = _library_state(request).get("file_cache", {}) or {}
+    library_file_cache = _library_state(request).get("file_cache", {}) or {}
+    # The gallery reads only the selected tracks' entries, never the library cache.
+    file_cache = {path: library_file_cache[path] for path in track_paths if path in library_file_cache}
     paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - set(file_cache)
     if paths_to_load and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
-        selected_entries = await run_in_threadpool(
+        file_cache.update(await run_in_threadpool(
             PostgresLibraryBrowseRepository(config).build_cover_state_entries_by_paths,
             paths_to_load,
-        )
-        file_cache = {**file_cache, **selected_entries}
+        ))
     serialized_task_payload = serialize_cover_lookup_task_payload(
         dict(task_payload) if isinstance(task_payload, Mapping)
         else cover_lookup_result(task_id) if task_id
@@ -1379,7 +1380,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         updated_albums = [
             _authoritative_local_cover_album_payload(selected_album, authoritative_cover, cover_revision)
             for selected_album in find_albums_by_track_paths_in_state(
-                selected_inventory_state.get("albums", []), authoritative_track_paths
+                selected_inventory_state, authoritative_track_paths
             )
         ]
     if runtime_refresh_error is not None:
@@ -2027,10 +2028,7 @@ async def utilities_fetch_cover(request: Request) -> JSONResponse:
             mode="manual",
          history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 500))
-    updated_albums = find_albums_by_track_paths_in_state(
-        library_state.get("albums", []) if isinstance(library_state, dict) else [],
-        requested_track_paths or set(),
-    )
+    updated_albums = find_albums_by_track_paths_in_state(library_state, requested_track_paths or set())
     album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
     updated_problematic_album = (
         build_problematic_album_detail_payload(

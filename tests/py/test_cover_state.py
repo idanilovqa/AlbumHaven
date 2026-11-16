@@ -15,12 +15,19 @@ from music_app.services.covers import Image, image_dimensions
 
 
 def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelated_tracks():
+    from music_app.services.library_album_index import publish_library_albums
+
+    published = False
+
     class UnrelatedAlbum:
         key = "other::album"
 
         @property
         def tracks(self):
-            raise AssertionError("Unrelated album tracks must not be scanned")
+            # The publisher indexes every album; a request never walks them.
+            if published:
+                raise AssertionError("Unrelated album tracks must not be scanned")
+            return [SimpleNamespace(path="N:/Music/Other/Album/01.mp3")]
 
     target = SimpleNamespace(
         key="artist::target album",
@@ -29,9 +36,12 @@ def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelate
             SimpleNamespace(path="N:/Music/Artist/Target/02.mp3"),
         ],
     )
+    library_state: dict[str, object] = {}
+    publish_library_albums(library_state, [UnrelatedAlbum(), target])
+    published = True
 
     assert resolve_authoritative_album_track_paths(
-        {"albums": [UnrelatedAlbum(), target]},
+        library_state,
         {"N:/Music/Artist/Target/01.mp3"},
         album_key="artist::target album",
     ) == {

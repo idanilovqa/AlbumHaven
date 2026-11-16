@@ -331,7 +331,6 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, file
                 changed_entries,
                 baseline_file_cache=file_cache,
                 before_commit=repository_hook,
-                rebuild_relation_projection=True,
             )
         file_cache.update(changed_entries)
 

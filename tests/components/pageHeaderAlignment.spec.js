@@ -9,7 +9,8 @@ const backIcon = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" st
 const markup = `
   <main class="shell-main-surface" style="display:block">
     <header class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" data-gallery-bar-layout="mobile-primary">
-      <div class="gallery-bar__context"><div class="gallery-bar__title"><button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button><span data-gallery-context-name>Gallery</span></div><span class="gallery-bar__summary" data-gallery-context-summary>6105 artists · 14755 albums</span></div>
+      <button class="action-button mobile-bar-action" id="mobile-library-button" aria-label="Open library navigation"></button>
+      <div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>Gallery</span></div><span class="gallery-bar__summary" data-gallery-context-summary>6105 artists · 14755 albums</span></div>
       <div class="gallery-bar__actions"><button class="gallery-action-button" aria-label="View">V</button></div>
     </header>
     <header class="gallery-bar page-gallery-bar" data-gallery-bar data-gallery-bar-instance="page" data-gallery-bar-layout="mobile-primary">

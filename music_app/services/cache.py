@@ -760,3 +760,22 @@ def _log_cache_update_failure(future) -> None:
             "Queued scan-cache update failed without overwriting newer inventory state",
             exc_info=(type(error), error, error.__traceback__),
         )
+
+
+def _temp_diag_wrap(function, label):  # TEMP-DIAG (not for merge)
+    import functools as _functools, logging as _logging, threading as _threading, time as _time
+
+    @_functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        logger = _logging.getLogger("music_app")
+        started = _time.time()
+        logger.info("TEMP-DIAG %s start epoch_ms=%d thread=%s rebuild=%s", label, int(started * 1000), _threading.current_thread().name, kwargs.get("rebuild_relation_projection"))
+        try:
+            return function(*args, **kwargs)
+        finally:
+            logger.info("TEMP-DIAG %s end epoch_ms=%d elapsed_ms=%d", label, int(_time.time() * 1000), int((_time.time() - started) * 1000))
+
+    return wrapped
+
+
+save_cache_updates_to_disk_for_config = _temp_diag_wrap(save_cache_updates_to_disk_for_config, "cache-save")

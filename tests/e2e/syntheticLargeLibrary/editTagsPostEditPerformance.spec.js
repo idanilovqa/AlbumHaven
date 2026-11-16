@@ -652,12 +652,22 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         await galleryRegressions.openArtistTreeContextMenu(TREE_ARTIST);
         await expect(galleryRegressions.scrollToArtistAction).toBeVisible();
 
+        // TEMP-DIAG (not for merge)
+        const tempRequests = [];
+        const tempEpochStart = Date.now();
+        const onTempRequest = (request) => { if (/view-data|album-details/.test(request.url())) tempRequests.push({ at: Date.now() - tempEpochStart, phase: 'start', url: request.url().replace(/^https?:\/\/[^/]+/, '').slice(0, 160) }); };
+        const onTempFinished = (request) => { if (/view-data|album-details/.test(request.url())) { const timing = request.timing(); tempRequests.push({ at: Date.now() - tempEpochStart, phase: 'done', wait: Math.round(timing.responseStart - timing.requestStart) }); } };
+        page.on('request', onTempRequest);
+        page.on('requestfinished', onTempFinished);
         const jumpStartedAt = performance.now();
         await galleryRegressions.scrollToArtistAction.click();
         await expect.poll(async () => (
           Object.values(await galleryRegressions.readArtistJumpPlacement(TREE_ARTIST)).every(Boolean)
         ), { timeout: 60000 }).toBe(true);
         metrics.artistJumpAlignedMs = performance.now() - jumpStartedAt;
+        page.off('request', onTempRequest);
+        page.off('requestfinished', onTempFinished);
+        console.log('TEMP-JUMP', JSON.stringify({ epochStart: tempEpochStart, jumpMs: Math.round(metrics.artistJumpAlignedMs), requests: tempRequests }));
       });
 
       await stepLogger.step('Measure root pagination after the long session', async () => {

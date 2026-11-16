@@ -694,3 +694,8 @@ def build_postgres_relation_views(
         "alias_to_canonical": alias_views["alias_to_canonical"],
         "canonical_to_aliases": alias_views["canonical_to_aliases"],
     }
+
+
+from music_app.services.cache import _temp_diag_wrap as _temp_diag_wrap  # TEMP-DIAG (not for merge)
+
+build_postgres_relation_views = _temp_diag_wrap(build_postgres_relation_views, "relation-build")

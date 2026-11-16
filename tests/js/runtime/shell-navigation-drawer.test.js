@@ -994,3 +994,19 @@ test('folding reassembles the panel: buttons travel, the edge moves, text fades'
   assert.doesNotMatch(css, /\.is-expanding \.shell-navigation-compact \{[^}]*animation:/);
   assert.match(source, /function animateLibraryViewButtons\(/);
 });
+
+{
+  // Owner 2026-11-16: unfolding is one movement. The compact view buttons also switch the tree, whose
+  // re-render re-synced the panel and cancelled the expanding state, so the buttons vanished mid-motion.
+  const { context, drawerRail, compactNavigation, documentElement } = loadHelper({ isMobile: false });
+  context.state.ui.artistTreeFolded = true;
+  context.syncArtistTreeFoldVisibility();
+  context.toggleArtistTreeFold();
+  assert.equal(drawerRail.classList.contains('is-expanding'), true);
+  context.syncArtistTreeFoldVisibility();
+  assert.equal(drawerRail.classList.contains('is-expanding'), true, 'a re-sync keeps the motion');
+  assert.equal(compactNavigation.hidden, false);
+  documentElement.dispatchEvent({ type: 'transitionend', target: documentElement, propertyName: '--compact-rail-width' });
+  assert.equal(drawerRail.classList.contains('is-expanding'), false);
+  assert.equal(compactNavigation.hidden, true);
+}

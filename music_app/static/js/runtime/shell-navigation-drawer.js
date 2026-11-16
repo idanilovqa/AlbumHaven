@@ -332,7 +332,9 @@ function syncArtistTreeFoldVisibility(options = {}) {
       : rail?.dataset?.shellDefaultCollapsed === 'true';
   }
   const isFolded = Boolean(canFold && state.ui.artistTreeFolded);
-  const isTransitioning = Boolean(canFold && options.transitioning);
+  // A re-sync while the fold motion runs (the compact view buttons also switch the tree, which re-renders it)
+  // keeps the motion; only its settle ends it. Cancelling it mid-way made the buttons vanish (owner 2026-11-16).
+  const isTransitioning = Boolean(canFold && (options.transitioning ?? cancelPendingArtistTreeResize !== null));
   const isExpanding = Boolean(isTransitioning && !isFolded);
   // While folding, the expanded content stays on screen to fade out behind the moving edge.
   const isCollapsing = Boolean(isTransitioning && isFolded);

@@ -11766,7 +11766,9 @@ function syncArtistTreeFoldVisibility(options = {}) {
       : rail?.dataset?.shellDefaultCollapsed === 'true';
   }
   const isFolded = Boolean(canFold && state.ui.artistTreeFolded);
-  const isTransitioning = Boolean(canFold && options.transitioning);
+  // A re-sync while the fold motion runs (the compact view buttons also switch the tree, which re-renders it)
+  // keeps the motion; only its settle ends it. Cancelling it mid-way made the buttons vanish (owner 2026-11-16).
+  const isTransitioning = Boolean(canFold && (options.transitioning ?? cancelPendingArtistTreeResize !== null));
   const isExpanding = Boolean(isTransitioning && !isFolded);
   // While folding, the expanded content stays on screen to fade out behind the moving edge.
   const isCollapsing = Boolean(isTransitioning && isFolded);
@@ -53406,6 +53408,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     ) ? 'canonical_root' : 'interactive';
   }
   if (!String(normalizedQuery || '').trim() && String(state.view.query || '').trim()) {
+    // The full tree saved when the search started: a cleared search shows all artists again (owner 2026-11-16).
+    const preSearchSidebar = Array.isArray(state.ui.preSearchView?.artists_sidebar)
+      ? state.ui.preSearchView.artists_sidebar : null;
     const next = withActiveGallerySources(buildClearedSearchView(), state.gallery.mainState);
     const reusableRootBrowseView = readReusableRootBrowseViewForClearedSearch(next);
     const retainsSelectedArtist = Boolean(String(next?.selected_artist || '').trim());
@@ -53470,6 +53475,11 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
         });
       } else {
         fetchAndRender(buildApiUrl(next), true);
+        // That gallery request carries no tree, so the search's filtered list would stay.
+        if (preSearchSidebar?.length) {
+          state.view.artists_sidebar = buildRestoredSearchSidebar(preSearchSidebar, next.selected_artist);
+          renderSidebar();
+        }
       }
     }
     return;

@@ -28,6 +28,7 @@ class FakeClaimApi : PlaybackClaimApi {
     val tracks = mutableListOf<ClaimTrack>()
     var acquireResponse: () -> ClaimResponse = { ClaimResponse.Granted("token-${++issued}") }
     var renewResponse: (String) -> ClaimResponse = { ClaimResponse.Granted(it) }
+    var releaseAnswered = true
     private var issued = 0
 
     override fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse {
@@ -37,8 +38,9 @@ class FakeClaimApi : PlaybackClaimApi {
         return if (claimToken == null) acquireResponse() else renewResponse(claimToken)
     }
 
-    override fun release(clientId: String, claimToken: String) {
+    override fun release(clientId: String, claimToken: String): Boolean {
         calls += "release:$claimToken"
+        return releaseAnswered
     }
 }
 
@@ -103,11 +105,15 @@ class ControllerHarness(
     /** False keeps a new socket connecting until the test opens it through [listener]. */
     var openOnConnect = true
 
+    /** True fails every new socket at once, as with no network (airplane mode). */
+    var refuseConnect = false
+
     val controller = NativePlaybackController(
         transports = { socketListener ->
             connects += 1
             listener = socketListener
-            if (openOnConnect) socketListener.onOpen()
+            if (refuseConnect) socketListener.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+            else if (openOnConnect) socketListener.onOpen()
             object : PcmTransport {
                 override fun send(text: String) = server.receive(text)
                 override fun close() {
@@ -737,14 +743,18 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun anUnreachableServerLosesTheClaimWhenTheLeaseRunsOut() {
-        val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
+    fun anUnreachableServerNeverStopsPlaybackAndOnlyAnotherDeviceTakingOverDoes() {
+        // Owner decision 2026-11-15: losing the network never stops playback, past the lease too.
+        val long = SyntheticTrack(tag = 3, frames = 120L * RATE)
         val harness = ControllerHarness(long, realTime = true)
         harness.claims.renewResponse = { ClaimResponse.Unreachable }
         harness.load(1, long)
-        harness.runUntil { harness.ownership().contains("lost") }
+        harness.runUntil { harness.now >= 2 * PlaybackClaimOwner.LEASE_MS }
+        assertEquals(emptyList<String>(), harness.ownership().filter { it == "lost" })
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
 
-        assertTrue(harness.now in PlaybackClaimOwner.LEASE_MS..PlaybackClaimOwner.LEASE_MS + 100)
+        harness.claims.renewResponse = { ClaimResponse.Conflict }
+        harness.runUntil { harness.ownership().contains("lost") }
         assertEquals(NativePlaybackState.PAUSED, harness.state())
     }
 
@@ -1168,6 +1178,64 @@ class NativePlaybackControllerTest {
 
         assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
         assertEquals(2, harness.connects)
+        assertTrue(harness.sinks.last() === sink)
+        assertEquals(listOf(Run(3, 0, long.frames)), sink.runs())
+    }
+
+    /**
+     * Owner report (2026-11-15): with Wi-Fi off the phone stopped at once. The first lost socket
+     * detached, but its immediate reconnect failed too, and that second close failed the engine.
+     */
+    @Test
+    fun aNetworkThatStaysDownPlaysTheReceivedAudioAndReconnectsWithBackoff() {
+        val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
+        val harness = ControllerHarness(long, realTime = true, encoded = true)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 3 * RATE }
+        val sink = harness.sinks.last()
+        val operations = sink.operations.size
+
+        harness.refuseConnect = true
+        harness.server.disconnect()
+        harness.listener!!.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        val cutAt = harness.now
+        harness.runUntil { harness.now >= cutAt + 10_000 || harness.events.any { it is NativePlaybackEvent.Error } }
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        // Immediately, then after 0.5, 1, 2 and 4 seconds: about five failed attempts in ten seconds.
+        assertTrue("reconnects during the outage: ${harness.connects - 1}", harness.connects - 1 in 4..6)
+        assertEquals(emptyList<String>(), harness.ownership().filter { it == "lost" || it == "released" })
+
+        harness.refuseConnect = false
+        harness.server.reconnect()
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED || harness.events.any { it is NativePlaybackEvent.Error } }
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertFalse(sink.operations.drop(operations).any { it == "flush" })
+        assertTrue(harness.sinks.last() === sink)
+        assertEquals(listOf(Run(3, 0, long.frames)), sink.runs())
+    }
+
+    @Test
+    fun aSocketLostAgainRightAfterTheSpliceOpensReopensItFromTheSameFrame() {
+        val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
+        val harness = ControllerHarness(long, realTime = true, encoded = true)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 3 * RATE }
+        val sink = harness.sinks.last()
+
+        harness.server.disconnect()
+        harness.listener!!.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        harness.server.reconnect()
+        harness.runUntil { harness.connects == 2 }
+        harness.step()
+        // The new socket dies before the rest of the song arrives on it.
+        harness.server.disconnect()
+        harness.listener!!.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        harness.server.reconnect()
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED || harness.events.any { it is NativePlaybackEvent.Error } }
+
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertEquals(3, harness.connects)
         assertTrue(harness.sinks.last() === sink)
         assertEquals(listOf(Run(3, 0, long.frames)), sink.runs())
     }

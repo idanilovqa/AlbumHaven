@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Only another device taking over playback stops it.
+
 ## 0.11.12 - 2026-11-15
 
 - Gapless playback: when an album plays on into its next track, the near-silent MP3 decoder padding at the end of one track and the start of the next (MP3s without encoder gapless metadata) is removed, so the transition no longer pauses. Only edges at most 64 ms long, below -40 dBFS and at least 20 dB under the neighbouring audio are trimmed; seeks, loops, skips and moves into another album keep every sample. Web and Android behave the same.

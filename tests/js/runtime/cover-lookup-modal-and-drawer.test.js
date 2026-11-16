@@ -7381,6 +7381,20 @@ require('node:test')('a local card keeps its image address when it becomes the s
   assert.equal(selected, before, 'becoming the selection must not reload the card image');
 });
 
+require('node:test')('a detached card image finishing its load never throws', () => {
+  const context = loadHelper({
+    getAlbumRequestKey: value => String(value?.key || ''),
+    buildCoverUrl: coverPath => `/cover?path=${encodeURIComponent(coverPath)}`,
+    escapeHtml: value => String(value ?? ''),
+  });
+  context.state.coverLookup.modal = { album: { key: 'a' }, localCovers: [], otherArt: [], pastedImages: [] };
+  const markup = context.buildCoverLookupCard({ path: 'N:/A/cover.jpg', filename: 'cover.jpg' }, 'local');
+  const onload = markup.match(/<img class="cover-lookup-art-preview-image"[^>]*onload="([^"]+)"/)?.[1];
+  assert.ok(onload);
+  assert.doesNotThrow(() => new Function(onload).call({ parentElement: null }),
+    'a retained image replaces the incoming one, which may still finish loading while detached');
+});
+
 require('node:test')('optimistic pasted LOCAL cover gets its final server ranking before inventory refresh', () => {
   const album = {
     key: 'fleet-foxes-pasted',

@@ -6534,6 +6534,52 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#followLastfmScrobbleSubmission",
+      "action": "Poll the pending Last.fm scrobble count while the server submits queued scrobbles in the background",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#followLastfmScrobbleSubmission:timer:setTimeout",
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#pollLastfmScrobbleSubmission:request:fetch",
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#pollLastfmScrobbleSubmission:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-12",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/utilities/integrations/lastfm/scrobbles"
+        ],
+        "forbidden": [
+          "/utilities/integrations/lastfm/scrobbles/submit",
+          "/utilities/integrations",
+          "/view-data"
+        ]
+      },
+      "cardinalities": {
+        "small": 20,
+        "production": 5000
+      },
+      "budgets": {
+        "requests": 10,
+        "timers": 10,
+        "renderCommits": 5
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/utility-integration-settings.test.js",
+      "testIdentity": "bounded interaction: following a background Last.fm submission does constant work per poll at 5,000 pending scrobbles",
+      "performanceTargets": [],
+      "rollback": "Revert the queued Submit and its progress poller; Submit then waits for the request that sends every pending scrobble."
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadLastfmScrobbleSummary",
       "action": "fetch requests installed by loadLastfmScrobbleSummary",
       "entrypoints": [
@@ -9674,14 +9720,33 @@
         "py:music_app/routes/api_wave_b_asgi_routes.py#utilities_lastfm_scrobbles_submit:route:POST /utilities/integrations/lastfm/scrobbles/submit"
       ],
       "owners": [
-        "music_app/routes/api_wave_b_asgi_routes.py"
+        "music_app/routes/api_wave_b_asgi_routes.py",
+        "music_app/services/lastfm_retry.py"
       ],
       "rules": [
         "BI-04",
+        "BI-05",
+        "BI-08",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 5000
+      },
+      "budgets": {
+        "provider_calls": 0,
+        "sql_statements": 2,
+        "worker_wakes": 1
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_api_wave_b_asgi_routes.py::test_lastfm_scrobble_submit_route_contract_queues_the_pass_with_constant_work_at_5000_pending",
+      "testIdentity": "test_lastfm_scrobble_submit_route_contract_queues_the_pass_with_constant_work_at_5000_pending",
+      "rollback": "Reverting makes Submit send every pending scrobble inside the request: 5,000 Last.fm calls and 5,000 database connections at 5,000 queued scrobbles, which the provider_calls budget rejects."
     },
     {
       "id": "py:routes/api_wave_b_asgi_routes.py#utilities_lastfm_settings",
@@ -9690,14 +9755,33 @@
         "py:music_app/routes/api_wave_b_asgi_routes.py#utilities_lastfm_settings:route:POST /utilities/integrations/lastfm"
       ],
       "owners": [
-        "music_app/routes/api_wave_b_asgi_routes.py"
+        "music_app/routes/api_wave_b_asgi_routes.py",
+        "music_app/services/lastfm_retry.py"
       ],
       "rules": [
         "BI-04",
+        "BI-05",
+        "BI-08",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 5000
+      },
+      "budgets": {
+        "provider_calls": 1,
+        "sql_statements": 7,
+        "worker_wakes": 1
+      },
+      "growth": {
+        "metric": "sql_statements",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_api_wave_b_asgi_routes.py::test_lastfm_settings_route_contract_connects_and_queues_the_retry_with_constant_work_at_5000_pending",
+      "testIdentity": "test_lastfm_settings_route_contract_connects_and_queues_the_retry_with_constant_work_at_5000_pending",
+      "rollback": "Reverting makes connecting Last.fm send every waiting scrobble inside the request; at 5,000 queued scrobbles the connect makes thousands of Last.fm calls, which the provider_calls budget rejects."
     },
     {
       "id": "py:routes/api_wave_c_asgi_routes.py#create_discovery_lookup",
@@ -12485,19 +12569,38 @@
     },
     {
       "id": "py:services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker",
-      "action": "Retry pending Last.fm scrobbles in periodic passes",
+      "action": "Send waiting Last.fm scrobbles on their own in batches of 50: at start-up, when a listen is left unsent or Submit asks, and after each capped, jittered backoff until none waits; idle on one query",
       "entrypoints": [
         "py:music_app/services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker:background:thread"
       ],
       "owners": [
-        "music_app/services/lastfm_retry.py"
+        "music_app/services/lastfm_retry.py",
+        "music_app/services/listen_history_postgres.py",
+        "music_app/services/lastfm_sync_bridge.py"
       ],
       "rules": [
+        "BI-05",
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 5000
+      },
+      "budgets": {
+        "provider_calls": 101,
+        "transactions": 202,
+        "sql_statements": 413
+      },
+      "growth": {
+        "metric": "provider_calls",
+        "largeMinusSmallMax": 99
+      },
+      "command": "python -m pytest tests/py/test_lastfm_retry.py::test_lastfm_retry_worker_contract_recovers_from_an_outage_in_batches_of_fifty_and_idles_on_one_query",
+      "testIdentity": "test_lastfm_retry_worker_contract_recovers_from_an_outage_in_batches_of_fifty_and_idles_on_one_query",
+      "rollback": "Reverting returns the worker to one Last.fm call and one database connection per pending scrobble on a fixed 30-minute pass that scans all listen history even when nothing waits; at 5,000 queued scrobbles the pass makes 5,000 provider calls and the provider_calls budget fails."
     },
     {
       "id": "py:services/library_album_index.py#publish_library_albums",

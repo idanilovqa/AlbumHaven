@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import uuid
 import math
@@ -155,13 +156,43 @@ def update_listen_history_entry(config: dict, entry_id: str, updates: dict[str, 
 def load_pending_scrobble_entries(
     config: dict,
     *,
-    limit: int = 25,
+    limit: int | None = 25,
     eligible: Callable[[PendingListenEntry], bool] | None = None,
+    connection=None,
 ):
-    adapter = _listen_history_adapter(config)
-    if eligible is None:
-        return adapter.load_pending_entries(limit=limit)
-    return adapter.load_pending_entries(limit=limit, eligible=eligible)
+    return _listen_history_adapter(config).load_pending_entries(
+        limit=limit, eligible=eligible, connection=connection,
+    )
+
+
+def has_sendable_scrobbles(config: dict) -> bool:
+    """Whether any account with a connected Last.fm session has a listen waiting to be sent,
+    answered by one query that stops at the first such listen."""
+    with _listen_history_adapter(config)._connect_to_database() as connection:
+        row = connection.execute("""
+            select exists (
+                select 1 from integration.listen_history h
+                join integration.lastfm_sessions k on k.account_id = h.account_id and k.is_active
+                where h.source_family = any(%s)
+                  and h.scrobble_status is distinct from 'scrobbled'
+                  and h.metadata->'source_payload'->>'scrobble_eligible' = 'true'
+                  and coalesce(h.metadata->'source_payload'->>'scrobbled', 'false') != 'true'
+                  and coalesce(h.metadata->'source_payload'->>'scrobble_retryable', 'true') = 'true'
+                  and coalesce(h.metadata->'source_payload'->>'scrobble_retry_exhausted', 'false') != 'true'
+                  and coalesce(h.metadata->'source_payload'->>'scrobble_reauthentication_required', 'false') != 'true'
+                  and coalesce(h.metadata->'source_payload'->>'scrobble_submission_state', '')
+                      not in ('attempting', 'sent', 'uncertain', 'accepted')
+            ) as has_sendable_scrobbles
+        """, (list(LASTFM_SCROBBLE_SOURCE_FAMILIES),)).fetchone()
+    return bool(row["has_sendable_scrobbles"])
+
+
+@contextmanager
+def listen_history_connection(config: dict):
+    """One listen-history connection whose explicit transactions each commit when they end."""
+    with _listen_history_adapter(config)._connect_to_database() as connection:
+        connection.autocommit = True
+        yield connection
 
 
 def build_measured_playback_statistics(config, *, account_id, library_id):

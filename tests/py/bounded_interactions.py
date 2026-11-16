@@ -42,6 +42,11 @@ class OperationCounts:
     serialized_bytes: int = 0
     unrelated_reads: int = 0
     unrelated_writes: int = 0
+    # Calls to an external provider such as Last.fm, database transactions committed,
+    # and wake-ups sent to a background worker.
+    provider_calls: int = 0
+    transactions: int = 0
+    worker_wakes: int = 0
 
     def count(self, field_name: str, amount: int | float = 1) -> None:
         if field_name not in _FIELD_NAMES:

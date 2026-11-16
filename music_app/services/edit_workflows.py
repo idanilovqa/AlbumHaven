@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections import ChainMap
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +23,7 @@ RepairBuilder = Callable[[JsonDict], dict[str, str]]
 AliasRepairBuilder = Callable[[JsonDict, dict[str, str] | None], dict[str, str]]
 RepairWorker = Callable[[str, dict[str, str]], tuple[str, bool, list[str]]]
 CacheEntryUpdater = Callable[[Path, JsonDict, dict[str, str]], JsonDict]
-AlbumDictBuilder = Callable[[FileCache, FileCache, TrackPathSet, TrackPathSet, set[str]], list[JsonDict]]
+AlbumDictBuilder = Callable[[Mapping[str, JsonDict], Mapping[str, JsonDict], TrackPathSet, TrackPathSet, set[str]], list[JsonDict]]
 AlbumMatcher = Callable[[TrackPathSet], list[JsonDict]]
 ProblematicAlbumMatcher = Callable[[TrackPathSet], JsonDict | None]
 AlbumStateRebuilder = Callable[[StateDict, FileCache, FileCache, TrackPathSet, set[str]], None]
@@ -319,7 +320,8 @@ def handle_repair_album_request(
     file_cache = st.get("file_cache", {}) or {}
     relation_views = st.get("relation_views", {}) or {}
     alias_to_canonical = relation_views.get("alias_to_canonical", {}) or {}
-    updated_file_cache = dict(file_cache)
+    # Only the repaired tracks' entries change; the library cache is never copied.
+    updated_entries: FileCache = {}
     repair_jobs: list[tuple[str, JsonDict, dict[str, str]]] = []
     skipped_files: list[str] = []
     seen_paths: set[str] = set()
@@ -360,7 +362,7 @@ def handle_repair_album_request(
         update_cache_entry_after_repairs=update_cache_entry_after_repairs,
         append_log_history=append_log_history,
         log_app_event=log_app_event,
-        updated_file_cache=updated_file_cache,
+        updated_file_cache=updated_entries,
         action_name="Tag repair failed",
         failure_prefix="Failed to repair",
         edit_write_workers=edit_write_workers,
@@ -393,7 +395,7 @@ def handle_repair_album_request(
     requires_view_refresh = bool(separate_release_keys_to_save or (changed_field_names & structural_edit_fields))
     updated_albums = build_affected_album_dicts(
         file_cache,
-        updated_file_cache,
+        ChainMap(updated_entries, file_cache),
         requested_track_paths,
         changed_paths or requested_track_paths,
         separate_release_keys,
@@ -405,8 +407,8 @@ def handle_repair_album_request(
             task_id=task_id,
             config=config,
             logger=logger,
-            updated_file_cache=dict(updated_file_cache),
-            previous_file_cache=dict(file_cache),
+            updated_file_cache=dict(updated_entries),
+            previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},
             changed_paths=set(changed_paths),
             requested_track_paths=set(requested_track_paths),
             separate_release_keys=set(separate_release_keys),

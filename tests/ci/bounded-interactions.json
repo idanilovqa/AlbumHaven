@@ -9098,14 +9098,35 @@
         "py:music_app/routes/api_wave_a_asgi_routes.py#utilities_repair_album:route:POST /utilities/repair-album"
       ],
       "owners": [
-        "music_app/routes/api_wave_a_asgi_routes.py"
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/routes/api_problematic_albums.py",
+        "music_app/services/edit_state.py",
+        "music_app/services/edit_workflows.py",
+        "music_app/services/library_album_index.py"
       ],
       "rules": [
         "BI-04",
         "BI-14"
       ],
-      "workClass": "affected-set",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "candidate_rows": 0,
+        "membership_rows": 0,
+        "filesystem_enumerations": 0,
+        "stat_calls": 1
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_repair_album_route_contract_reads_only_the_repaired_album_at_production_track_count",
+      "testIdentity": "test_repair_album_route_contract_reads_only_the_repaired_album_at_production_track_count",
+      "rollback": "Revert fix(repair) selected-set album rebuild and problematic lookup with its contract; that restores the whole-cache scans and full album merge-sort on the request."
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#utilities_save_task",

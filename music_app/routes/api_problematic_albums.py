@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+
+from music_app.services.library_album_index import library_album_index
 
 
 ProblemReasonBuilder = Callable[[str, str], str | None]
@@ -276,7 +278,10 @@ def build_problematic_albums_payload(
     get_album_duplicate_sources: DuplicateSourceChecker,
     image_dimensions: ImageDimensionsReader,
     poor_art_min_edge: int,
+    track_paths: Iterable[str] | None = None,
 ) -> dict[str, object]:
+    """Problematic album summaries for the whole library, or only for the
+    albums holding any of `track_paths`, read by track path."""
     cfg = _require_config(config)
     st = state_getter()
     file_cache = st.get("file_cache", {}) or {}
@@ -286,8 +291,9 @@ def build_problematic_albums_payload(
     separate_release_keys = load_separate_release_keys(cfg)
     st["separate_release_keys"] = separate_release_keys
     problematic = []
+    albums = st.get("albums", []) if track_paths is None else library_album_index(st).albums_with_any_track(track_paths)
 
-    for album in st.get("albums", []):
+    for album in albums:
         context = _collect_problematic_album_context(
             album,
             file_cache=file_cache,

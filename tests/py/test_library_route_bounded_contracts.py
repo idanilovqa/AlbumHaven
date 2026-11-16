@@ -432,3 +432,124 @@ def test_cover_gallery_mark_seen_route_contract_probes_only_the_selected_album_a
         return _measure(monkeypatch, request)
 
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_gallery_mark_seen"))
+
+class _CountingFileCache(dict):
+    """A published scan cache that counts every entry a reader walks or copies."""
+
+    counts = OperationCounts()
+
+    def __iter__(self):
+        for path in super().__iter__():
+            self.counts.membership_rows += 1
+            yield path
+
+    def keys(self):
+        return list(iter(self))
+
+    def items(self):
+        return [(path, self[path]) for path in self]
+
+    def values(self):
+        return [self[path] for path in self]
+
+
+def _repairable_library(app, root: Path, track_count: int) -> tuple[list[str], OperationCounts]:
+    """One 12-track album with a mis-decoded title among `track_count` tracks;
+    every album and cache entry a request walks is counted."""
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_album_index import publish_library_albums
+
+    album_root = root / "Broadcast" / "Tender Buttons"
+    album_root.mkdir(parents=True)
+    album_cache = {}
+    for number in range(1, 13):
+        path = album_root / f"{number:02d}.mp3"
+        path.write_bytes(b"track")
+        album_cache[str(path)] = {
+            "path": str(path), "title": "Ã‰tÃ©" if number == 1 else f"Song {number}", "album": "Tender Buttons",
+            "album_artist": "Broadcast", "artist": "Broadcast", "track_number": number, "year": 2005,
+        }
+    unrelated_cache = {}
+    unrelated_albums = []
+    for album_index in range((track_count - 12) // 4):
+        tracks = []
+        for number in range(1, 5):
+            path = f"/library/Artist {album_index:05d}/Album/{number:02d}.mp3"
+            unrelated_cache[path] = {"path": path, "title": f"Track {number}", "album": "Album", "album_artist": f"Artist {album_index:05d}"}
+            tracks.append(SimpleNamespace(path=path))
+        unrelated_albums.append(SimpleNamespace(
+            key=f"artist {album_index:05d}::album", name="Album", album_artist=f"Artist {album_index:05d}", year=None, tracks=tracks,
+        ))
+    counts = OperationCounts()
+    albums = _CountingAlbums(sorted(
+        [*build_albums_from_file_cache(album_cache), *unrelated_albums], key=lambda album: album.album_artist.lower(),
+    ))
+    file_cache = _CountingFileCache({**unrelated_cache, **album_cache})
+    state = app.state.library_state
+    state.update({"file_cache": file_cache, "relation_views": {}, "separate_release_keys": set()})
+    publish_library_albums(state, albums)
+    albums.counts = file_cache.counts = counts
+    return sorted(album_cache), counts
+
+
+@pytest.mark.parametrize("repair", ["separate-release", "selected-rows"])
+def test_repair_album_route_contract_reads_only_the_repaired_album_at_production_track_count(
+    library_app, tmp_path, monkeypatch, repair,
+):
+    from music_app.routes import api_wave_a_asgi_routes
+    from music_app.services import ignored_repairs, rule_state_postgres
+    from music_app.services.library_album_index import library_album_index
+
+    select_backend = api_wave_a_asgi_routes.select_runtime_persistence_adapter
+    # The in-memory library browse path, as on a file-backed host.
+    monkeypatch.setattr(
+        api_wave_a_asgi_routes, "select_runtime_persistence_adapter",
+        lambda seam_id, config: (
+            SimpleNamespace(seam_id=seam_id, effective_backend="file")
+            if seam_id == "library_browse" else select_backend(seam_id, config)
+        ),
+    )
+    saved_separate_keys: list[set[str]] = []
+    # The Postgres rule-state store keeps the separate releases it is given
+    # and holds no ignored repairs.
+    monkeypatch.setattr(
+        rule_state_postgres.RuleStatePostgresAdapter, "save_separate_release_keys",
+        lambda _self, keys: saved_separate_keys.append(set(keys)),
+    )
+    monkeypatch.setattr(ignored_repairs, "load_ignored_repair_keys", lambda _config: set())
+    written: list[tuple[str, dict[str, str]]] = []
+    # The tag writer is media I/O outside this contract; it reports the fields it wrote.
+    monkeypatch.setattr(
+        api_wave_a_asgi_routes, "_apply_repairs_worker",
+        lambda path, repairs: written.append((path, dict(repairs))) or (path, True, sorted(repairs)),
+    )
+    finalized: list[dict[str, object]] = []
+    # The save task finalizes on its own registered worker.
+    monkeypatch.setattr(api_wave_a_asgi_routes, "queue_finalize_save_task", lambda **kwargs: finalized.append(kwargs))
+
+    def run(track_count: int) -> OperationCounts:
+        album_paths, counts = _repairable_library(library_app, tmp_path / f"library-{track_count}", track_count)
+        payload = {"confirmed": True, "album": {"name": "Tender Buttons", "tracks": [{"path": path} for path in album_paths]}}
+        if repair == "separate-release":
+            payload.update(selected_rows=[], separate_release_keys=["broadcast::tender buttons"])
+        else:
+            payload["selected_rows"] = [f"{album_paths[0]}::title"]
+        with count_filesystem_and_media(monkeypatch, counts):
+            status, _headers, body = run_asgi_request(library_app, "POST", "/utilities/repair-album", json_body=payload)
+        assert status == 200, body
+        result = decode_json(body)
+        if repair == "separate-release":
+            assert saved_separate_keys[-1] == {"broadcast::tender buttons"}
+            assert {track["path"] for album in result["updated_albums"] for track in album["tracks"]} == set(album_paths)
+            # The release now splits by year, in the response and in the published albums.
+            assert result["updated_problematic_album"]["key"] == "broadcast::tender buttons::year::2005"
+            assert library_album_index(library_app.state.library_state).album("broadcast::tender buttons::year::2005")
+            assert library_album_index(library_app.state.library_state).album("broadcast::tender buttons") is None
+        else:
+            assert written[-1] == (album_paths[0], {"title": "Été"})
+            assert result["changed_count"] == 1
+            assert result["updated_album"]["tracks"][0]["title"] == "Été"
+            assert set(finalized[-1]["updated_file_cache"]) == set(finalized[-1]["previous_file_cache"]) == {album_paths[0]}
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_a_asgi_routes.py#utilities_repair_album"))

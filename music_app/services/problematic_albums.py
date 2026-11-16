@@ -270,19 +270,41 @@ def build_problematic_album_detail_payload(
 def find_problematic_album_by_track_paths(
     track_paths: set[str],
     *,
-    build_problematic_albums_payload,
+    text_problem_reason,
+    config=None,
+    library_state: dict[str, object] | None = None,
+    logger=None,
+    **problem_checks,
 ) -> dict[str, object] | None:
+    """The problematic summary of the first album holding any of `track_paths`.
+
+    Only the albums holding those tracks are examined, never the whole library.
+    """
     if not track_paths:
         return None
-    for item in build_problematic_albums_payload().get("items", []):
-        item_paths = {
-            str(track.get("path") or "")
-            for track in item.get("tracks", [])
-            if isinstance(track, dict) and str(track.get("path") or "")
-        }
-        if item_paths & track_paths:
-            return item
-    return None
+    started_at = perf_counter()
+    if config is None:
+        raise ValueError("config is required to find a problematic album by track paths")
+    st = _require_library_state(library_state)
+    items = build_problematic_albums_read_payload(
+        state_getter=lambda: st,
+        config=config,
+        load_ignored_repair_keys=load_ignored_repair_keys,
+        load_separate_release_keys=load_separate_release_keys,
+        text_problem_reason=lambda label, value: text_problem_reason(label, value, detect_encoding=True),
+        album_to_dict=lambda album: album_to_dict(album, config=config),
+        get_album_duplicate_sources=get_album_duplicate_sources,
+        poor_art_min_edge=_POOR_ART_MIN_EDGE,
+        track_paths=track_paths,
+        **problem_checks,
+    )["items"]
+    _log_problematic_albums_timing(
+        "track_paths_payload",
+        logger=logger,
+        status="found" if items else "not_found",
+        elapsed_ms=round((perf_counter() - started_at) * 1000, 2),
+    )
+    return items[0] if items else None
 
 
 def find_problematic_album_cover_paths(problematic_album: dict[str, object]) -> list[Path]:

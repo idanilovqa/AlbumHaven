@@ -370,12 +370,19 @@ def resolve_configured_media_path(
     return unique_matches[0]
 
 
-def relative_parts_within_roots(config: dict[str, object], raw_path: str) -> tuple[dict[str, object], tuple[str, ...]] | None:
-    resolved = resolve_configured_media_path(config, raw_path)
+def relative_parts_within_roots(
+    config: dict[str, object],
+    raw_path: str,
+    *,
+    roots: list[dict[str, object]] | None = None,
+) -> tuple[dict[str, object], tuple[str, ...]] | None:
+    """Pass `roots` when resolving many paths: each root lookup is a database round trip."""
+    roots = get_library_roots(config) if roots is None else roots
+    root_paths = [Path(str(root["path"])).resolve(strict=False) for root in roots]
+    resolved = resolve_configured_media_path(config, raw_path, configured_root_paths=root_paths)
     if resolved is None:
         return None
-    for root in get_library_roots(config):
-        root_path = Path(str(root["path"])).resolve(strict=False)
+    for root, root_path in zip(roots, root_paths):
         try:
             rel_parts = resolved.relative_to(root_path).parts
         except Exception:

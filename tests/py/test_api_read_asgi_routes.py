@@ -1354,7 +1354,18 @@ def test_asgi_home_data_uses_asgi_state_without_flask_bridge(app, asgi_app, monk
     def fail_test_request_context(*_args, **_kwargs):
         raise AssertionError("ASGI home-data route must not enter Flask test_request_context")
 
+    def assert_off_event_loop(step: str) -> None:
+        # Owner 2026-11-16: /home-data on the event loop stalled every request for ~20 s.
+        import asyncio
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        raise AssertionError(f"{step} must not block the ASGI event loop")
+
     def fake_build_home_payload(**kwargs) -> dict[str, object]:
+        assert_off_event_loop("The home payload")
         assert kwargs["config"]["MUSIC_DIR"] == app.config["MUSIC_DIR"]
         assert kwargs["library_state"] is not None
         return {
@@ -1372,6 +1383,7 @@ def test_asgi_home_data_uses_asgi_state_without_flask_bridge(app, asgi_app, monk
         ensure_relations=False,
         validate_cache=False,
     ):
+        assert_off_event_loop("Library hydration")
         assert library_state is asgi_app.state.library_state
         assert config is app.config
         assert ensure_relations is False
@@ -1578,9 +1590,10 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert len(threadpool_calls) == 1
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[0]
-    assert threadpool_function.__name__ == "build_root_sidebar_payload"
+    assert [call[0].__name__ for call in threadpool_calls] == [
+        "_build_home_data_payload", "build_root_sidebar_payload",
+    ]
+    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[1]
     assert threadpool_args == ()
     assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
 
@@ -1673,7 +1686,7 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert threadpool_functions == ["build_root_counts_payload"]
+    assert threadpool_functions == ["_build_home_data_payload", "build_root_counts_payload"]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):

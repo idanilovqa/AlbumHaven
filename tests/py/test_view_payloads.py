@@ -7587,3 +7587,37 @@ def test_public_safe_album_payload_strips_private_app_rating_but_preserves_share
     assert public_payload["tag_album_rating_source"] == "file_tag"
     assert public_payload["gallery_list_block"]["summary"]["tag_album_rating"] == 7
     assert private_payload["album_preference"] == private_preference
+
+
+def test_non_album_candidates_load_library_roots_once_for_all_loose_tracks(tmp_path, monkeypatch):
+    # Owner 2026-11-16 (Sandbox1 stall): each loose track opened two database connections
+    # to reload the library roots, blocking every request for ~20 s.
+    from music_app.services import library_roots
+    from music_app.services import view_payloads as view_payloads_module
+
+    root = tmp_path / "Music"
+    file_cache = {}
+    for index in range(3):
+        track = root / "Mono" / f"Loose {index}.flac"
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"audio")
+        file_cache[str(track)] = {
+            "path": str(track), "album": "", "artist": "Mono", "album_artist": "Mono",
+            "title": f"Loose {index}", "exception_type": None,
+        }
+    root_loads = []
+    monkeypatch.setattr(
+        view_payloads_module, "get_library_roots",
+        lambda config: root_loads.append(config) or [{"path": str(root), "category": "main_library"}],
+    )
+    monkeypatch.setattr(library_roots, "get_library_roots", lambda _config: (_ for _ in ()).throw(
+        AssertionError("loose tracks must reuse the roots loaded for the build")))
+    monkeypatch.setattr(view_payloads_module, "entry_visible_in_categories", lambda *_args: True)
+
+    candidates = view_payloads_module._build_non_album_entry_candidates(
+        file_cache, {}, ["main_library"], config={},
+    )
+
+    assert len(candidates) == 3
+    assert len(root_loads) == 1
+    assert all(candidate["path_parts"] == frozenset({"mono"}) for candidate in candidates)

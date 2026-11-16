@@ -1168,17 +1168,14 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
     return False
 
 
-@router.get("/home-data")
-async def home_data(request: Request) -> JSONResponse:
+def _build_home_data_payload(request: Request) -> tuple[dict[str, object], dict[str, object]]:
     _hydrate_cached_library_for_asgi(request)
-    request_started_at = time.perf_counter()
     library_state = _library_state(request)
-    browse_state = resolve_active_scan_browse_state(library_state)
     payload = build_home_payload(
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
-        library_state=browse_state,
+        library_state=resolve_active_scan_browse_state(library_state),
         client_surface_class=resolve_client_surface_class(
             request.query_params.get("client_surface")
             or request.query_params.get("client_surface_class")
@@ -1186,6 +1183,15 @@ async def home_data(request: Request) -> JSONResponse:
             or request.headers.get("X-Album-Haven-Client-Surface-Class")
         ),
     )
+    return library_state, payload
+
+
+@router.get("/home-data")
+async def home_data(request: Request) -> JSONResponse:
+    request_started_at = time.perf_counter()
+    # Hydration and the file-backed home payload are blocking work; on the event loop they
+    # stalled every other request for ~20 s on the owner's library (2026-11-16).
+    library_state, payload = await run_in_threadpool(_build_home_data_payload, request)
     if not library_state.get("scan_in_progress"):
         selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
         if selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES:

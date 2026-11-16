@@ -802,7 +802,13 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #library-loader.is-scan-page { padding-top: 12px; }
 
   #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]):not([data-album-identity-in-body="true"]) { align-items: center; }
-  #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]):not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover, .mobile-bar-action) { align-self: center; }
+  #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]):not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: center; }
+  /* Owner (2026-11-16): hamburger, then back, then artbox, then the title text; the 40px buttons sit on the
+     40px title line (not the centre of title + summary) and never overlap. The component owns this order. */
+  .mobile-page-header > .mobile-bar-action {
+    align-self: flex-start; flex: 0 0 40px;
+    margin-block-start: calc((var(--mobile-page-title-line, 40px) - 40px) / 2);
+  }
   #mobile-page-header:not([data-gallery-bar-layout="mobile-primary"]) .gallery-bar__summary { margin: 2px 0 0; }
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] :is(.gallery-bar__title, .gallery-bar__summary) {
     display: flex; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -810,6 +816,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   /* The pinned album identity is two compact lines beside the 40px artwork.
      Do not reserve the generic toolbar title's 40px minimum above its metadata. */
   .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }
+  .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) { --mobile-page-title-line: 22px; }
   .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) #mobile-page-title {
     display: block; min-height: 0; line-height: 22px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

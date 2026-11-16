@@ -180,7 +180,10 @@
 }
 /* Reassembly (owner 2026-11-16): the compact view buttons travel to the view rail's places (JS) and stay
    visible the whole way; the view rail itself appears only once they arrive. */
-.shell-navigation-rail.is-expanding .shell-navigation-compact {
+/* Pinned to the compact column in both directions: centred in the still-wide panel, the buttons would aim for
+   its middle and then ride left with the edge (owner 2026-11-16: "I just want them to move up"). */
+.shell-navigation-rail.is-expanding .shell-navigation-compact,
+.shell-navigation-rail.is-collapsing .shell-navigation-compact {
   position: absolute;
   inset: 16px auto auto 10px;
   width: 44px;
@@ -205,8 +208,9 @@
   0% { opacity: 1; }
   60%, 100% { opacity: 0; }
 }
+/* The content fades in while the edge and the buttons move: one movement, not two (owner 2026-11-16). */
 @keyframes artist-tree-content-reveal {
-  0%, 45% { opacity: 0; visibility: hidden; transform: none; }
+  0% { opacity: 0; visibility: visible; transform: none; }
   70%, 100% { opacity: 1; visibility: visible; transform: translateX(0); }
 }
 @keyframes artist-tree-compact-control-exit {

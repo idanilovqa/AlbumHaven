@@ -209,31 +209,37 @@ class CoverLookupTasksPostgresAdapter:
         *,
         persistence_revision: int | None = None,
     ) -> None:
-        normalized_task = _normalize_task(task)
-        if normalized_task is None:
+        self.upsert_notifications([(task, persistence_revision)])
+
+    def upsert_notifications(self, revisions: list[tuple[dict[str, object], int | None]]) -> None:
+        """Upserts (task, persistence revision) pairs in one transaction."""
+        rows = [
+            _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision)
+            for normalized_task, persistence_revision in (
+                (_normalize_task(task), revision) for task, revision in revisions
+            )
+            if normalized_task is not None
+        ]
+        if not rows:
             return
-        row = _task_row(
-            normalized_task,
-            source_index=0,
-            persistence_revision=persistence_revision,
-        )
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
-                connection.execute(
-                    _upsert_notification_sql(),
-                    (
-                        row["task_key"],
-                        row["status"],
-                        row["requested_at"],
-                        row["completed_at"],
-                        row["album_key"],
-                        row["selected_cover_private_path"],
-                        _jsonb(row["provider_payload"]),
-                        row["error_message"],
-                        _jsonb(row["metadata"]),
-                    ),
-                )
+                for row in rows:
+                    connection.execute(
+                        _upsert_notification_sql(),
+                        (
+                            row["task_key"],
+                            row["status"],
+                            row["requested_at"],
+                            row["completed_at"],
+                            row["album_key"],
+                            row["selected_cover_private_path"],
+                            _jsonb(row["provider_payload"]),
+                            row["error_message"],
+                            _jsonb(row["metadata"]),
+                        ),
+                    )
 
     def delete_notifications(self, task_ids: set[str]) -> set[str]:
         normalized_ids = sorted({_text(task_id) for task_id in task_ids if _text(task_id)})

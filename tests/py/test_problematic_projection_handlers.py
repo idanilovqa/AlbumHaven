@@ -45,6 +45,7 @@ def _claim(*, attempt: int = 1) -> ClaimedJob:
 @dataclass
 class _Context:
     cancel_requested: bool = False
+    shutdown_requested: bool = False
     lease_active: bool = True
     allowed: bool = True
     library_current: bool = True
@@ -589,6 +590,106 @@ def test_handler_stops_between_reason_batches_without_advancing_checkpoint():
     ] == [100]
     assert not any(call[0] == "advance" for call in repository.calls)
     assert reason_facts.closed
+
+
+def test_handler_drains_between_reason_batches_without_losing_checkpoint():
+    reason_facts = _TrackingReasonFacts(_reason_fact(index) for index in range(205))
+    projected = _projected_item({"item_key": "item-a"}, reason_facts=reason_facts)
+
+    class Accumulator(_TestAccumulator):
+        def finalize(self, _facts):
+            yield projected
+
+    def projector(_rows):
+        raise AssertionError("the accumulator path must own projection")
+
+    projector.accumulator_type = Accumulator
+    context = _Context()
+
+    class Repository(_Repository):
+        def stage_claimed_reason_facts(self, **kwargs):
+            super().stage_claimed_reason_facts(**kwargs)
+            context.shutdown_requested = True
+
+        def advance_claimed_group_accumulator(self, **kwargs):
+            self.calls.append(("advance", kwargs["next_batch_index"]))
+            return super().advance_claimed_group_accumulator(**kwargs)
+
+    cursor = _cursor(2, 1)
+    repository = Repository(
+        [_page(_chunk(cursor, [{"key": "row"}], complete=True), complete=True)]
+    )
+
+    result = _handler(repository, projector)(_claim(), context)
+
+    assert result.next_state is JobState.RETRY_WAIT
+    assert result.reason_code == "problematic_projection_worker_shutdown"
+    assert result.preserve_attempt is True
+    assert result.scheduled_at > NOW
+    assert [
+        len(call[5]) for call in repository.calls if call[0] == "stage_reason"
+    ] == [100]
+    assert not any(
+        call[0] in {"advance", "complete_group", "publish", "cancel_build"}
+        for call in repository.calls
+    )
+    assert repository.accumulators
+    assert reason_facts.closed
+
+
+def test_handler_drains_before_republishing_a_committed_build():
+    from music_app.services.problematic_projection_postgres import (
+        ProblematicProjectionBuild,
+    )
+
+    context = _Context()
+
+    class Repository(_Repository):
+        def prepare_claimed_build(self, **kwargs):
+            build = super().prepare_claimed_build(**kwargs)
+            context.shutdown_requested = True
+            return build
+
+    repository = Repository()
+    repository.prepared_build = ProblematicProjectionBuild(
+        9, 12, 3, "revision-a", None, committed=True
+    )
+
+    result = _handler(repository, _stream_items)(_claim(), context)
+
+    assert result.next_state is JobState.RETRY_WAIT
+    assert result.reason_code == "problematic_projection_worker_shutdown"
+    assert result.preserve_attempt is True
+    assert result.scheduled_at > NOW
+    assert not any(
+        call[0] in {"publish", "cancel_build"} for call in repository.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("cancel_requested", "lease_active", "allowed", "reason_code"),
+    [
+        (True, True, True, "problematic_projection_canceled"),
+        (False, False, True, "problematic_projection_lease_lost"),
+        (False, True, False, "problematic_projection_scope_stale"),
+    ],
+)
+def test_handler_keeps_claim_stop_priority_over_worker_shutdown(
+    cancel_requested, lease_active, allowed, reason_code
+):
+    repository = _Repository()
+    context = _Context(
+        cancel_requested=cancel_requested,
+        shutdown_requested=True,
+        lease_active=lease_active,
+        allowed=allowed,
+    )
+
+    result = _handler(repository, _stream_items)(_claim(), context)
+
+    assert result.next_state is JobState.CANCELED
+    assert result.reason_code == reason_code
+    assert repository.calls == []
 
 
 def test_handler_pages_search_facts_and_restarts_from_claim_fenced_cursor():

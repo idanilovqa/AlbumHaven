@@ -41,6 +41,12 @@ def _context_stop_reason(context: Any) -> str | None:
         return "problematic_projection_lease_lost"
     if not context.reauthorize().allowed:
         return "problematic_projection_scope_stale"
+    if context.cancel_requested:
+        return "problematic_projection_canceled"
+    if not context.lease_active:
+        return "problematic_projection_lease_lost"
+    if getattr(context, "shutdown_requested", False):
+        return "problematic_projection_worker_shutdown"
     return None
 
 
@@ -128,6 +134,16 @@ def build_problematic_projection_handler(
     now = clock or (lambda: datetime.now(timezone.utc))
     accumulator_type = getattr(project_group, "accumulator_type", None)
 
+    def interruption_outcome(reason: str) -> JobTransitionResult:
+        if reason == "problematic_projection_worker_shutdown":
+            return JobTransitionResult(
+                JobState.RETRY_WAIT,
+                reason,
+                scheduled_at=now() + _STORAGE_RETRY_DELAY,
+                preserve_attempt=True,
+            )
+        return JobTransitionResult(JobState.CANCELED, reason)
+
     def failure_outcome(
         claim: ClaimedJob,
         build: ProblematicProjectionBuild | None,
@@ -150,7 +166,7 @@ def build_problematic_projection_handler(
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
         reason = _context_stop_reason(context)
         if reason is not None:
-            return JobTransitionResult(JobState.CANCELED, reason)
+            return interruption_outcome(reason)
 
         build: ProblematicProjectionBuild | None = None
 
@@ -325,6 +341,9 @@ def build_problematic_projection_handler(
         try:
             build = repository.prepare_claimed_build(claim=claim, now=now())
             if build.committed:
+                reason = _context_stop_reason(context)
+                if reason is not None:
+                    return interruption_outcome(reason)
                 if repository.publish_claimed_snapshot(
                     claim=claim, build=build, now=now()
                 ):
@@ -344,14 +363,14 @@ def build_problematic_projection_handler(
                     active_group_key, build.source_cursor
                 )
                 if group_result is _GroupProjectionResult.STOPPED:
-                    return JobTransitionResult(JobState.CANCELED, reason)
+                    return interruption_outcome(reason)
                 if group_result is _GroupProjectionResult.COMPLETED:
                     active_group_key = None
 
             while True:
                 reason = claimed_build_stop_reason()
                 if reason is not None:
-                    return JobTransitionResult(JobState.CANCELED, reason)
+                    return interruption_outcome(reason)
                 page = repository.load_claimed_source_page(
                     claim=claim,
                     build=build,
@@ -366,7 +385,7 @@ def build_problematic_projection_handler(
                 while not page.complete and not page.chunks:
                     reason = claimed_build_stop_reason()
                     if reason is not None:
-                        return JobTransitionResult(JobState.CANCELED, reason)
+                        return interruption_outcome(reason)
                     page = repository.load_claimed_source_page(
                         claim=claim,
                         build=build,
@@ -387,7 +406,7 @@ def build_problematic_projection_handler(
                     _validate_chunk(chunk, active_group_key)
                     reason = claimed_build_stop_reason()
                     if reason is not None:
-                        return JobTransitionResult(JobState.CANCELED, reason)
+                        return interruption_outcome(reason)
                     repository.stage_claimed_source_chunk(
                         claim=claim,
                         build=build,
@@ -399,7 +418,7 @@ def build_problematic_projection_handler(
                     )
                     reason = claimed_build_stop_reason()
                     if reason is not None:
-                        return JobTransitionResult(JobState.CANCELED, reason)
+                        return interruption_outcome(reason)
                     active_group_key = chunk.group_key
                     group_result, reason = project_active_group(
                         chunk.group_key,
@@ -407,7 +426,7 @@ def build_problematic_projection_handler(
                         source_complete=chunk.complete,
                     )
                     if group_result is _GroupProjectionResult.STOPPED:
-                        return JobTransitionResult(JobState.CANCELED, reason)
+                        return interruption_outcome(reason)
                     if group_result is _GroupProjectionResult.COMPLETED:
                         active_group_key = None
                     continue
@@ -421,7 +440,7 @@ def build_problematic_projection_handler(
 
             reason = claimed_build_stop_reason()
             if reason is not None:
-                return JobTransitionResult(JobState.CANCELED, reason)
+                return interruption_outcome(reason)
             if not repository.publish_claimed_snapshot(
                 claim=claim, build=build, now=now()
             ):

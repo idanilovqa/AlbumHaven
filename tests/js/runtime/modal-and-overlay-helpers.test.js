@@ -2694,3 +2694,22 @@ test('paged root loose tracks remain visible outside the loaded artist window', 
   };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
 });
+
+for (const mobile of [false, true]) {
+  test(`${mobile ? 'phone' : 'desktop'}: an artist clicked in the tree closes Loose Tracks in place, never by a Back step`, () => {
+    // Owner 2026-11-15: after the collections, clicking 10cc dropped its load and showed
+    // All Artists; the desktop close stepped history back over the artist's request.
+    const { context } = loadHelper();
+    const overlay = new FakeElement('non-album-modal');
+    overlay.classList.add(mobile ? 'is-mobile-page' : 'non-album-modal--page');
+    const calls = [];
+    context.document.querySelector = selector => (selector === '#non-album-modal:not([hidden])' ? overlay : null);
+    context.prepareMobileGalleryNavigation = () => { calls.push('in-place'); return true; };
+    context.closeNonAlbumModal = () => calls.push('history');
+    const artistLink = { closest: selector => (selector.includes('[data-sidebar-artist]') ? artistLink : null) };
+
+    context.closeNonAlbumPageOnTreeNavigation({ target: artistLink });
+
+    assert.deepEqual(calls, ['in-place']);
+  });
+}

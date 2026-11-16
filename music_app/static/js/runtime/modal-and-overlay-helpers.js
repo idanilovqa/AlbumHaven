@@ -918,8 +918,10 @@ function isCurrentNonAlbumModalRequest(options = {}) {
 function closeNonAlbumPageOnTreeNavigation(event) {
   if (!event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')) return;
   const overlay = document.querySelector('#non-album-modal:not([hidden])');
-  if (overlay?.classList.contains('is-mobile-page')) prepareMobileGalleryNavigation?.();
-  else if (overlay?.classList.contains('non-album-modal--page')) closeNonAlbumModal();
+  if (!['is-mobile-page', 'non-album-modal--page'].some(name => overlay?.classList.contains(name))) return;
+  // Close in place, never by history traversal: a Back step lands after the artist's
+  // request starts and restores the parent gallery over it (owner 2026-11-15, 10cc).
+  if (!prepareMobileGalleryNavigation?.()) closeNonAlbumModal();
 }
 
 function setNonAlbumPagePresentation(overlay, open) {

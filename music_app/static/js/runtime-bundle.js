@@ -14752,7 +14752,10 @@ function closeVersionPickerModal() {
 function getVisibleNonAlbumTracks(options = {}) {
   const view = state.view;
   const mainState = state.gallery?.mainState;
-  if (mainState) {
+  // The side panel's Loose Tracks and collections are their own page: only the search scopes them, never
+  // the Artist tree or the gallery's selection and source toggles (owner 2026-11-16). This check is for an
+  // artist's own Non-album tracks.
+  if (mainState && !options.libraryWide) {
     const activeSources = activeGallerySourceCategories(mainState);
     const payloadSources = view.non_album_library_categories
       || view.loaded_library_categories || view.visible_library_categories

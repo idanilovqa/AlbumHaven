@@ -1170,6 +1170,37 @@ test('Loose Tracks opened after an artist page shows the library tracks, not an 
     track => track.path), ['C:/Music/night.mp3']);
 });
 
+test('side-panel Loose Tracks ignore the selected artist page and its source scope', async () => {
+  // Owner 2026-11-16: open a band, then Loose Tracks, then a collection: "no tracks". "When I go to the side
+  // bar and click Loose Tracks it should not read or react to anything that is selected on Artist tree or
+  // gallery. It should react to the search".
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.fetch = async () => ({ ok: true, status: 200, json: async () => ({
+    library_non_album_tracks: [
+      { path: 'C:/Music/night.mp3', exception_type: 'Custom Collection', custom_collection_name: 'Night' },
+      { path: 'C:/Music/loose.mp3', title: 'Loose' },
+    ],
+  }) });
+  context.state.view = {
+    selected_artist: '10cc',
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
+    non_album_library_categories: ['main_library'],
+    non_album_tracks: [],
+  };
+  context.state.gallery = { mainState: {} };
+  context.activeGallerySourceCategories = () => ['main_library', 'new_arrivals', 'hoard'];
+  context.gallerySourceScopesEqual = (left, right) => left.length === right.length;
+
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
+
+  assert.equal(context.getVisibleNonAlbumTracks({ libraryWide: true }).length, 2);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true, collectionName: 'Night' }),
+    track => track.path), ['C:/Music/night.mp3']);
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0, "the artist's own Non-album tracks keep their scope check");
+});
+
 test('opening library-wide Loose Tracks resolves beyond a completed search probe', () => {
   const start = helperSource.indexOf('function openNonAlbumModal(options = {})');
   const end = helperSource.indexOf('function openNonAlbumTagEditor()', start);

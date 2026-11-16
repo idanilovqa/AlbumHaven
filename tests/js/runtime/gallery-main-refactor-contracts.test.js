@@ -1412,7 +1412,7 @@ test('art-only Gallery hover frame covers the complete card edge', () => {
   );
   assert.match(
     galleryMainCssSource,
-    /\.album-card\[data-gallery-release-year\]\[data-gallery-display="covers"\]:is\(:hover, :focus-within\)::after\s*\{[^}]*border-color:\s*var\(--gallery-artbox-hover-frame,[^}]*opacity:\s*1;/s,
+    /\.album-card\[data-gallery-release-year\]\[data-gallery-display="covers"\]:is\(:hover, :has\(:focus-visible\)\)::after\s*\{[^}]*border-color:\s*var\(--gallery-artbox-hover-frame,[^}]*opacity:\s*1;/s,
   );
   assert.doesNotMatch(galleryMainCssSource, /\.gallery-card__year-frame\s*\{/);
 });
@@ -2233,4 +2233,14 @@ test('Loose Tracks opens only from the Custom Collections tree, never a separate
   const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/index.html'), 'utf8');
   assert.doesNotMatch(template, /data-open-non-album-tracks="1"[^>]*data-library-wide="1"/);
   assert.doesNotMatch(template, /class="gallery-action-button"[^>]*aria-label="Loose Tracks"/);
+});
+
+test('a clicked gallery card shows no frame behind Album Details; keyboard focus still does', () => {
+  // Owner 2026-11-15: "when clicking on the album and it opens the hover frame remains visible".
+  for (const file of ['gallery-main.css', 'mobile-layout.css', 'runtime/non-album-and-player.css']) {
+    const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css', file), 'utf8');
+    assert.doesNotMatch(source, /\.album-card[^{,]*:focus-within/, `${file} frames a card after a mouse click`);
+  }
+  const shared = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(shared, /\.album-card:has\(:focus-visible\)\s*\{[^}]*border-color/);
 });

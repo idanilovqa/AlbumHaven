@@ -10,7 +10,7 @@ test('desktop album-card hover and focus preserve exact card geometry', () => {
   ), 'utf8');
   const cardRule = css.match(/\.album-card\s*\{([^}]*)\}/)?.[1] || '';
   const interactionRule = css.match(
-    /\.album-card:hover,\s*\.album-card:focus-within\s*\{([^}]*)\}/,
+    /\.album-card:hover,\s*\.album-card:has\(:focus-visible\)\s*\{([^}]*)\}/,
   )?.[1] || '';
 
   assert.ok(cardRule, 'album-card rule must exist');

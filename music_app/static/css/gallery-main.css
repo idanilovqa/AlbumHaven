@@ -215,7 +215,7 @@
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
-.album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:focus-within .gallery-card__focus-title { opacity: 1; }
+.album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:has(:focus-visible) .gallery-card__focus-title { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {
   .gallery-scrollbar { scrollbar-width: thin; scrollbar-color: #ffffff24 transparent; }
   .gallery-scrollbar::-webkit-scrollbar { width: 10px; }
@@ -295,7 +295,7 @@
   border-radius: 14px; opacity: 0;
   clip-path: polygon(0 0, calc(50% - var(--gallery-year-gap)) 0, calc(50% - var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 0, 100% 0, 100% 100%, 0 100%);
 }
-.album-card[data-gallery-release-year][data-gallery-display="covers"]:is(:hover, :focus-within)::after {
+.album-card[data-gallery-release-year][data-gallery-display="covers"]:is(:hover, :has(:focus-visible))::after {
   border-color: var(--gallery-artbox-hover-frame, rgba(248, 244, 234, 0.94));
   box-shadow: 0 0 26px 6px var(--gallery-artbox-hover-glow, rgba(241, 230, 204, 0.18));
   opacity: 1;
@@ -346,7 +346,7 @@
   opacity: 0;
   box-shadow: none;
 }
-:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]):is(:hover, :focus-within) > .cover::after { opacity: 1; }
+:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]):is(:hover, :has(:focus-visible)) > .cover::after { opacity: 1; }
 :root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources][data-gallery-release-year] > .cover::after {
   clip-path: polygon(0 0, calc(50% - var(--gallery-year-gap)) 0, calc(50% - var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 0, 100% 0, 100% 100%, 0 100%);
 }
@@ -392,7 +392,7 @@
 .album-card .gallery-source-action--new_arrivals { color: var(--library-source-arrivals); }
 .album-card .gallery-source-action svg { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .album-card .gallery-source-action span { max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; font-size: 12px; transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
-.album-card:is(:hover, :focus-within) .gallery-source-action { opacity: 1; pointer-events: auto; }
+.album-card:is(:hover, :has(:focus-visible)) .gallery-source-action { opacity: 1; pointer-events: auto; }
 .album-card .gallery-source-action:is(:hover, :focus-visible) span { max-width: 150px; margin-left: 6px; opacity: 1; }
 .album-card .gallery-source-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .album-card .gallery-source-action--duplicate { position: absolute; right: 9px; bottom: 9px; max-width: calc(100% - 18px); }

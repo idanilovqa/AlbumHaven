@@ -131,7 +131,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .album-card[data-gallery-display="list"] .chip-row { margin-top: 6px; font-size: 11px; }
   .album-card[data-gallery-display="list"] > .cover:is(:hover, :focus) { outline: none; box-shadow: none; }
   .album-card[data-gallery-display="cards"] .album-body { padding: 7px 6px; gap: 3px; }
-  .album-card:is(:hover, :focus-within) { transform: none; }
+  .album-card:is(:hover, :has(:focus-visible)) { transform: none; }
   .album-card[data-gallery-display="cards"] .album-title { font-size: 12px; line-height: 1.3; margin: 0; }
   .album-card[data-gallery-display="cards"] .album-meta-row { font-size: 10px; gap: 3px; }
   .album-card[data-gallery-display="cards"] .album-subtitle { font-size: 10px; margin: 0; }

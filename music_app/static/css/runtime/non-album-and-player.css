@@ -168,18 +168,18 @@ pointer-events: none;
 transition: border-color 240ms ease, box-shadow 300ms ease, opacity 260ms ease;
 }
 .album-card:hover::before,
-.album-card:focus-within::before {
+.album-card:has(:focus-visible)::before {
 opacity: 1;
 filter: blur(26px);
 transform: scale(1.03);
 }
 .album-card:hover,
-.album-card:focus-within {
+.album-card:has(:focus-visible) {
 border-color: var(--gallery-artbox-hover-frame, rgba(233, 223, 198, 0.6));
 box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
 }
 .album-card:hover::after,
-.album-card:focus-within::after {
+.album-card:has(:focus-visible)::after {
 box-shadow: none;
 }
 .cover {
@@ -209,9 +209,9 @@ pointer-events: none;
 transition: border-color 240ms ease, box-shadow 300ms ease, opacity 260ms ease;
 }
 .album-card:hover .cover,
-.album-card:focus-within .cover { filter: brightness(1.04); }
+.album-card:has(:focus-visible) .cover { filter: brightness(1.04); }
 .album-card:hover .cover::after,
-.album-card:focus-within .cover::after {
+.album-card:has(:focus-visible) .cover::after {
 border-color: var(--gallery-artbox-hover-frame, rgba(248, 244, 234, 0.94));
 box-shadow:
 inset 0 0 0 1px var(--gallery-artbox-hover-inner, rgba(255, 250, 240, 0.35)),
@@ -273,7 +273,7 @@ flex: 1 1 auto;
 transition: background 220ms ease, box-shadow 240ms ease;
 }
 .album-card:hover .album-body,
-.album-card:focus-within .album-body {
+.album-card:has(:focus-visible) .album-body {
 background: color-mix(in srgb, var(--panel) 88%, rgba(255, 248, 236, 0.12));
 box-shadow: inset 0 1px 0 rgba(255, 250, 240, 0.06);
 }

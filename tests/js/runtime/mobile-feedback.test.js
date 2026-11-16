@@ -1298,7 +1298,7 @@ test('mobile gallery cards do not move when touch hover or focus changes during 
   const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
   assert.match(
     css,
-    /\.album-card:is\(:hover, :focus-within\)\s*\{[^}]*transform:\s*none;/,
+    /\.album-card:is\(:hover, :has\(:focus-visible\)\)\s*\{[^}]*transform:\s*none;/,
   );
 });
 

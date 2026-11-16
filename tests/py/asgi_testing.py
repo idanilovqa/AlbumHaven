@@ -42,13 +42,18 @@ class EventLoopWatchdog:
     the loop thread's stack through `sys._current_frames()` while the heartbeat
     is overdue, so the failure names the blocking call. A stall every sample of
     which is inside import machinery is a test process's first import of a
-    module, not request work, and is not counted; an unsampled stall is. A test
-    that needs to wait must `await asyncio.sleep(...)`, never block the loop.
+    module, not request work, and is not counted. A stall the sampler could not
+    sample means the sampler thread did not run either: either the loop thread
+    held the GIL (a long C call, which spends process CPU time and is counted)
+    or the operating system did not schedule the process (machine load, which
+    spends almost none and is not counted). A test that needs to wait must
+    `await asyncio.sleep(...)`, never block the loop.
     """
 
     def __init__(self) -> None:
         self._loop_thread = threading.get_ident()
         self._last_beat = time.monotonic()
+        self._last_beat_cpu = time.process_time()
         self._worst_stall = 0.0
         self._stack = ""
         # The stacks sampled during each stall, keyed by the beat it started at,
@@ -61,6 +66,7 @@ class EventLoopWatchdog:
 
     async def __aenter__(self) -> EventLoopWatchdog:
         self._last_beat = time.monotonic()
+        self._last_beat_cpu = time.process_time()
         self._heartbeat = asyncio.get_running_loop().create_task(self._beat())
         self._sampler.start()
         return self
@@ -81,15 +87,20 @@ class EventLoopWatchdog:
 
     def _observe(self) -> None:
         now = time.monotonic()
+        now_cpu = time.process_time()
         stall = now - self._last_beat - _HEARTBEAT_SECONDS
         with self._samples_lock:
             samples = self._samples.pop(self._last_beat, [])
-        if stall > EVENT_LOOP_STALL_LIMIT_SECONDS and samples and all(importing for _stack, importing in samples):
-            stall = 0.0
+        if stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
+            if samples and all(importing for _stack, importing in samples):
+                stall = 0.0
+            elif not samples and now_cpu - self._last_beat_cpu < EVENT_LOOP_STALL_LIMIT_SECONDS:
+                stall = 0.0
         if stall > self._worst_stall:
             self._worst_stall = stall
             self._stack = next((stack for stack, importing in reversed(samples) if not importing), "")
         self._last_beat = now
+        self._last_beat_cpu = now_cpu
 
     async def _beat(self) -> None:
         while True:

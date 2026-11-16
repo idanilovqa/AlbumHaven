@@ -81,3 +81,34 @@ def test_blocking_work_in_the_same_stall_as_an_import_still_fails(tmp_path, monk
         run_asgi_request(importing_then_blocking_app, "GET", "/importing-then-blocking")
 
     assert "time.sleep(0.4)" in str(stall.value)
+
+
+def test_cpu_work_holding_the_gil_fails_even_though_the_sampler_cannot_run():
+    async def gil_holding_app(_scope, _receive, send):
+        deadline = time.process_time() + 0.4
+        while time.process_time() < deadline:
+            pass
+        await _respond(send)
+
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(5.0)  # The loop thread keeps the GIL, as a long C call would.
+    try:
+        with pytest.raises(EventLoopStall):
+            run_asgi_request(gil_holding_app, "GET", "/gil")
+    finally:
+        sys.setswitchinterval(interval)
+
+
+def test_an_unsampled_stall_without_process_cpu_is_machine_load_not_request_work():
+    from tests.py.asgi_testing import EventLoopWatchdog
+
+    watchdog = EventLoopWatchdog()
+    watchdog._last_beat = time.monotonic() - 0.6
+    watchdog._last_beat_cpu = time.process_time()
+    watchdog._observe()
+    assert watchdog._worst_stall == 0.0
+
+    watchdog._last_beat = time.monotonic() - 0.6
+    watchdog._last_beat_cpu = time.process_time() - 0.6
+    watchdog._observe()
+    assert watchdog._worst_stall > 0.25

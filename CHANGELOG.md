@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.14 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. 0.11.13 was merged before its pipeline's final gate ran, and that gate cannot run after a merge, so this release merges only once its complete pipeline has passed.
+
 ## 0.11.13 - 2026-11-16
 
 - Release only, no application change: carries 0.11.12 to the stable Android channel. The stable promotion needs a commit whose complete PR pipeline passed; 0.11.12's pipeline could not finish after its admin merge.

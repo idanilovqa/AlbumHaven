@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import threading
+import time
+import traceback
 from pathlib import Path
 from collections.abc import Iterable
 from types import SimpleNamespace
@@ -11,6 +15,75 @@ from urllib.parse import urlencode
 from urllib.parse import urlsplit
 
 from tests.py.runtime_testing import configure_test_app_paths
+
+
+EVENT_LOOP_STALL_LIMIT_SECONDS = 0.25
+_HEARTBEAT_SECONDS = 0.01
+_SAMPLE_SECONDS = 0.02
+
+
+class EventLoopStall(AssertionError):
+    """A request blocked the event loop, so every other request would have waited."""
+
+
+class EventLoopWatchdog:
+    """Fails a request during which the event loop is blocked for over 250 ms.
+
+    A heartbeat task records how late the loop runs it. A sampler thread reads
+    the loop thread's stack through `sys._current_frames()` while the heartbeat
+    is overdue, so the failure names the blocking call. A test that needs to
+    wait must `await asyncio.sleep(...)`, never block the loop.
+    """
+
+    def __init__(self) -> None:
+        self._loop_thread = threading.get_ident()
+        self._last_beat = time.monotonic()
+        self._worst_stall = 0.0
+        self._sampled_stall = 0.0
+        self._stack = ""
+        self._done = threading.Event()
+        self._sampler = threading.Thread(target=self._sample, name="asgi-event-loop-watchdog", daemon=True)
+        self._heartbeat: asyncio.Task | None = None
+
+    async def __aenter__(self) -> EventLoopWatchdog:
+        self._last_beat = time.monotonic()
+        self._heartbeat = asyncio.get_running_loop().create_task(self._beat())
+        self._sampler.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self._observe()
+        self._done.set()
+        self._heartbeat.cancel()
+        await asyncio.gather(self._heartbeat, return_exceptions=True)
+        self._sampler.join()
+        if exc_type is None and self._worst_stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
+            raise EventLoopStall(
+                f"the request blocked the event loop for {self._worst_stall * 1000:.0f} ms "
+                f"(limit {EVENT_LOOP_STALL_LIMIT_SECONDS * 1000:.0f} ms); loop thread stack while blocked:\n"
+                f"{self._stack or '<not sampled>'}"
+            )
+        return False
+
+    def _observe(self) -> None:
+        now = time.monotonic()
+        self._worst_stall = max(self._worst_stall, now - self._last_beat - _HEARTBEAT_SECONDS)
+        self._last_beat = now
+
+    async def _beat(self) -> None:
+        while True:
+            self._observe()
+            await asyncio.sleep(_HEARTBEAT_SECONDS)
+
+    def _sample(self) -> None:
+        while not self._done.wait(_SAMPLE_SECONDS):
+            stalled = time.monotonic() - self._last_beat
+            if stalled < EVENT_LOOP_STALL_LIMIT_SECONDS / 2 or stalled <= self._sampled_stall:
+                continue
+            frame = sys._current_frames().get(self._loop_thread)
+            if frame is not None:
+                self._stack = "".join(traceback.format_stack(frame))
+                self._sampled_stall = stalled
 
 
 class _BootstrapOwnerResolver:
@@ -212,23 +285,24 @@ async def run_asgi_request_async(
     async def send(message: dict[str, object]) -> None:
         messages.append(message)
 
-    await app(
-        {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": method,
-            "scheme": "http",
-            "path": path,
-            "raw_path": path.encode("ascii"),
-            "query_string": query_string,
-            "headers": request_headers,
-            "client": (client_host, 50000),
-            "server": (server_host, 80),
-        },
-        receive,
-        send,
-    )
+    async with EventLoopWatchdog():
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": query_string,
+                "headers": request_headers,
+                "client": (client_host, 50000),
+                "server": (server_host, 80),
+            },
+            receive,
+            send,
+        )
 
     start = next(message for message in messages if message["type"] == "http.response.start")
     response_body = b"".join(

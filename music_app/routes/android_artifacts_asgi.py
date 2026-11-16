@@ -137,7 +137,7 @@ async def android_artifact_attest(request: Request) -> Response:
 @router.api_route("/artifacts/android/download/{token}", methods=["GET", "HEAD"])
 async def android_artifact_download(request: Request, token: str) -> Response:
     grant = await run_in_threadpool(_access(request).resolve_download_token, token)
-    path = _artifact_file(grant.channel, grant.name) if grant is not None else None
+    path = await run_in_threadpool(_artifact_file, grant.channel, grant.name) if grant is not None else None
     if path is None:
         return PlainTextResponse("Download link is not valid.", status_code=403, headers=_NO_STORE)
     return FileResponse(path, media_type="application/vnd.android.package-archive",
@@ -152,7 +152,7 @@ async def android_manifest(request: Request, channel: str) -> Response:
         await _signed(request, channel)
     except ArtifactAccessError as error:
         return _refused(error)
-    path = _artifact_file(channel, "manifest.json")
+    path = await run_in_threadpool(_artifact_file, channel, "manifest.json")
     if path is None:
         return _not_found()
     return FileResponse(path, media_type="application/json", headers=_NO_STORE)
@@ -166,7 +166,7 @@ async def android_apk_exchange(request: Request, channel: str, name: str) -> Res
     try:
         await _require_empty_body(request)
         device_key = await _signed(request, channel)
-        if _artifact_file(channel, name) is None:
+        if await run_in_threadpool(_artifact_file, channel, name) is None:
             return _not_found()
         result = await run_in_threadpool(
             _access(request).issue_download_token, request.state.current_actor, device_key, channel, name,

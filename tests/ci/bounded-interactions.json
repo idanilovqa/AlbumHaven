@@ -7904,6 +7904,22 @@
       }
     },
     {
+      "id": "py:__init__.py#_configure_asgi_app.<locals>.require_runtime_javascript_revalidation",
+      "action": "Note foreground activity and set asset cache headers on every response",
+      "entrypoints": [
+        "py:music_app/__init__.py#_configure_asgi_app.<locals>.require_runtime_javascript_revalidation:middleware:MIDDLEWARE http"
+      ],
+      "owners": [
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:__init__.py#_start_library_warmup.<locals>.warm_library_state",
       "action": "Warm the connection pool and hydrate library state on a startup thread",
       "entrypoints": [
@@ -10813,6 +10829,22 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/playback_stream_asgi.py#playback_pcm_socket",
+      "action": "Serve WEBSOCKET /playback/pcm rendered playback streams",
+      "entrypoints": [
+        "py:music_app/routes/playback_stream_asgi.py#playback_pcm_socket:route:WEBSOCKET /playback/pcm"
+      ],
+      "owners": [
+        "music_app/routes/playback_stream_asgi.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/playback_stream_asgi.py#playback_waveform",
       "action": "Serve GET /playback/waveform",
       "entrypoints": [
@@ -12856,6 +12888,37 @@
         "BI-08"
       ],
       "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/private_route_boundary.py#install_private_route_boundary.<locals>.health",
+      "action": "Serve GET /health liveness",
+      "entrypoints": [
+        "py:music_app/services/private_route_boundary.py#install_private_route_boundary.<locals>.health:route:GET /health"
+      ],
+      "owners": [
+        "music_app/services/private_route_boundary.py"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/private_route_boundary.py#install_private_route_boundary.<locals>.require_private_authentication",
+      "action": "Authenticate and authorize every private request",
+      "entrypoints": [
+        "py:music_app/services/private_route_boundary.py#install_private_route_boundary.<locals>.require_private_authentication:middleware:MIDDLEWARE http"
+      ],
+      "owners": [
+        "music_app/services/private_route_boundary.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
       "proof": "static"
     },
     {

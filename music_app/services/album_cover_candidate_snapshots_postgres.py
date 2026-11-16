@@ -62,23 +62,24 @@ class AlbumCoverCandidateSnapshotRepository:
         *,
         track_paths: set[str],
     ) -> int | None:
-        normalized_paths = sorted(
-            {str(path or "").strip() for path in track_paths if str(path or "").strip()}
-        )
-        if not normalized_paths:
-            return None
+        return self.resolve_album_ids_for_track_path_sets([track_paths])[0]
+
+    def resolve_album_ids_for_track_path_sets(
+        self,
+        track_path_sets: list[set[str]],
+    ) -> list[int | None]:
+        """The album holding each set of track paths, over one connection."""
+        normalized_sets = [
+            sorted({str(path or "").strip() for path in track_paths if str(path or "").strip()})
+            for track_paths in track_path_sets
+        ]
+        if not any(normalized_sets):
+            return [None] * len(normalized_sets)
         with self._connect_to_database() as connection:
-            row = _first_row(
-                connection.execute(
-                    _resolve_album_id_for_track_paths_sql(),
-                    {"track_paths": normalized_paths},
-                )
-            )
-        album_id = _row_mapping(row).get("album_id")
-        try:
-            return int(album_id) if album_id is not None else None
-        except (TypeError, ValueError):
-            return None
+            return [
+                _album_id_for_track_paths(connection, normalized_paths) if normalized_paths else None
+                for normalized_paths in normalized_sets
+            ]
 
     def resolve_album_track_context(
         self,
@@ -206,6 +207,20 @@ class _NoopTransaction:
 
     def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
         pass
+
+
+def _album_id_for_track_paths(connection: Any, normalized_paths: list[str]) -> int | None:
+    row = _first_row(
+        connection.execute(
+            _resolve_album_id_for_track_paths_sql(),
+            {"track_paths": normalized_paths},
+        )
+    )
+    album_id = _row_mapping(row).get("album_id")
+    try:
+        return int(album_id) if album_id is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _connect(database_url: str) -> Any:

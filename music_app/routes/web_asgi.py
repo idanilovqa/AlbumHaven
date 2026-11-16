@@ -1129,7 +1129,8 @@ async def news_center(request: Request) -> Response:
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
-    payload = build_news_payload(
+    payload = await run_in_threadpool(
+        build_news_payload,
         query_args=query_args,
         tab=query_args.get("tab"),
         source=query_args.get("source"),
@@ -1318,7 +1319,7 @@ async def refresh(request: Request) -> RedirectResponse:
 
 
 @router.get("/track")
-async def track(request: Request, path: str = "") -> FileResponse:
+def track(request: Request, path: str = "") -> FileResponse:
     resolved = resolve_configured_media_path(_app_config(request), path)
     if resolved is None:
         return _not_found()
@@ -1327,18 +1328,18 @@ async def track(request: Request, path: str = "") -> FileResponse:
 
 @router.get("/loops/media/{loop_id}")
 async def saved_loop_media(request: Request, loop_id: str) -> FileResponse:
-    resolved = resolve_loop_media_path(_app_config(request), loop_id, **(await saved_loop_scope(request)))
+    resolved = await run_in_threadpool(resolve_loop_media_path, _app_config(request), loop_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return _conditional_file_response(request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
 
 
 @router.get("/loops/pitch-preview/{preview_id}")
 async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileResponse:
-    resolved = resolve_loop_preview_path(_app_config(request), preview_id, **(await saved_loop_scope(request)))
+    resolved = await run_in_threadpool(resolve_loop_preview_path, _app_config(request), preview_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return _conditional_file_response(request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
 
 
 def _cached_cover_variant_response(
@@ -1509,7 +1510,8 @@ async def cover(
     v: str = "",
 ) -> Response:
     if loop_id:
-        item = get_loop(
+        item = await run_in_threadpool(
+            get_loop,
             _app_config(request),
             loop_id,
             **(await saved_loop_scope(request)),
@@ -1545,6 +1547,10 @@ async def open_album_location(request: Request) -> JSONResponse:
         album.get("name"),
         len(album.get("tracks") or []),
     )
+    return await run_in_threadpool(_open_album_location_response, request, album, route_logger)
+
+
+def _open_album_location_response(request: Request, album: dict[str, object], route_logger: logging.Logger) -> JSONResponse:
     paths = resolve_album_open_directories(_app_config(request), album)
     if not paths:
         route_logger.warning("open_album_location: no valid album paths found for album=%r", album.get("name"))

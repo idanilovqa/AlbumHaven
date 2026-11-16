@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import hashlib
 import json
 import os
@@ -291,16 +292,35 @@ def resolve_configured_media_path(
     require_exists: bool = True,
     configured_root_paths: list[Path] | tuple[Path, ...] | None = None,
 ) -> Path | None:
+    """Resolves one path, loading the root settings unless given a snapshot.
+
+    A caller resolving many paths loads the roots once and calls
+    `resolve_media_path_within_roots` per path.
+    """
+    if not raw_path:
+        return None
+    return resolve_media_path_within_roots(
+        raw_path,
+        configured_root_paths if configured_root_paths is not None else iter_library_root_paths(config),
+        require_file=require_file,
+        require_exists=require_exists,
+    )
+
+
+def resolve_media_path_within_roots(
+    raw_path: str,
+    root_paths: Iterable[Path],
+    *,
+    require_file: bool = True,
+    require_exists: bool = True,
+) -> Path | None:
+    """Resolves a path under a snapshot of the configured roots."""
     if not raw_path:
         return None
 
     candidate = Path(str(raw_path)).expanduser()
     matched_paths: list[Path] = []
-    root_paths = (
-        list(configured_root_paths)
-        if configured_root_paths is not None
-        else iter_library_root_paths(config)
-    )
+    root_paths = list(root_paths)
     if candidate.is_absolute():
         try:
             resolved_candidate = candidate.resolve(strict=False)
@@ -377,14 +397,15 @@ def relative_parts_within_roots(
 
 
 def resolve_album_open_directories(config: dict[str, object], album_payload: dict[str, object]) -> list[Path]:
+    root_paths = iter_library_root_paths(config)
     preview_directories = album_payload.get("open_directory_paths") if isinstance(album_payload, dict) else None
     if isinstance(preview_directories, list):
         resolved_preview_dirs: list[Path] = []
         seen_preview_dirs: set[str] = set()
         for raw_directory in preview_directories:
-            resolved_directory = resolve_configured_media_path(
-                config,
+            resolved_directory = resolve_media_path_within_roots(
                 str(raw_directory or ""),
+                root_paths,
                 require_file=False,
             )
             if resolved_directory is None:
@@ -408,7 +429,7 @@ def resolve_album_open_directories(config: dict[str, object], album_payload: dic
     for track in tracks:
         if not isinstance(track, dict):
             continue
-        resolved_track = resolve_configured_media_path(config, str(track.get("path") or ""))
+        resolved_track = resolve_media_path_within_roots(str(track.get("path") or ""), root_paths)
         if resolved_track is None:
             continue
 

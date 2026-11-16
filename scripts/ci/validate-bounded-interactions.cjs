@@ -9,8 +9,9 @@
 // for a change to its owners or to any file hosting one of its hazards. Rejected
 // hazards (direct broad work in a high-frequency handler, a dedicated surface
 // routed through a generic endpoint, direct filesystem enumeration in a route,
-// or a route reaching a registered library-scale operation) fail regardless of
-// registration. There is no exemption mechanism.
+// a route reaching a registered library-scale operation, blocking I/O on the
+// ASGI event loop, or a database connection opened per loop item in a route)
+// fail regardless of registration. There is no exemption mechanism.
 
 const fs = require('node:fs');
 const os = require('node:os');

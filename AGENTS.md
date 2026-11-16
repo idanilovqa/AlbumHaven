@@ -106,10 +106,15 @@ operate, or contribute to the application.
   entrypoint may loop over or copy a registered `libraryStateCollections` key
   of the in-memory library state, only under a contract proving batching,
   coalescing, and convergence (routes still reject library-scale work).
-  Library-state scans are found only on receivers evidenced as library state
-  (a `library_state` name, `_library_state(...)`, a `.library_state`
-  attribute, or one local alias of a registered collection); a scan through
-  any other name is not seen. Otherwise the entry needs a
+  Library-state scans are found on receivers evidenced as library state
+  through the call graph, whatever they are named: a `.library_state`
+  attribute, a call of a getter whose return is library state
+  (`_library_state(request)`), a local bound from one (`st = get_state()`), a
+  getter parameter whose call sites pass such a getter or a lambda returning
+  library state, a parameter whose call sites pass library state or one of
+  its registered collections (`updated_file_cache=st["file_cache"]`), and one
+  local alias of a collection; a `library_state` parameter or local also
+  counts. Otherwise the entry needs a
   deterministic contract that runs the real code at a small and a
   production-calibration cardinality and asserts absolute operation budgets and
   growth
@@ -130,6 +135,45 @@ operate, or contribute to the application.
   Direct broad work is rejected outright only inside a high-frequency handler;
   interactive Python routes keep their library-scale and direct-enumeration
   rejections. Existing contracts on one-shot entries stay in force.
+- Event-loop blocking (BI-08) is rejected outright. uvicorn runs every
+  `async def` route, websocket handler, and middleware (`@app.middleware`,
+  `BaseHTTPMiddleware.dispatch`, ASGI `__call__`) on its one event-loop
+  thread, so a synchronous call made there stalls every request. From each
+  such entrypoint discovery follows the calls that run on the loop: calls made
+  directly, including sync helpers at any depth, coroutines the chain calls or
+  awaits, and a function passed as an argument that the callee calls. Work
+  handed to a thread is not followed (`run_in_threadpool`,
+  `asyncio.to_thread`, `anyio.to_thread.run_sync`, `loop.run_in_executor`,
+  `executor.submit` not waited on with `.result()`); an awaited call is never
+  itself blocking. A chain is rejected when it reaches a blocking operation:
+  a psycopg/psycopg2 connection or `psycopg_pool.ConnectionPool` (repository
+  `_connect` helpers are recognised by resolving to that call), DB-API
+  `execute`/`fetch*`/`getconn`/`connection` calls in a module that imports a
+  database driver, directory enumeration, path probes, `open`, path
+  reads/writes, media parses, `subprocess`, `time.sleep`, synchronous HTTP
+  (`urllib.request.urlopen`, `requests`, sync `httpx`), PIL `Image.open`, or
+  registered library-scale work. Each loop call site is reported with the
+  nearest blocking operation and the chain to it. A plain `def` route runs in
+  Starlette's threadpool and is not an event-loop entrypoint; a sync helper
+  that does none of the above is fine. Fix by making a route that awaits
+  nothing a plain `def`, or by awaiting its body or scope and handing the
+  blocking part to `run_in_threadpool`, keeping authorization first.
+- A database connection opened once per loop item (BI-05, N+1) is a hazard:
+  discovery reports a psycopg connect or pool reachable from a `for`, `while`,
+  or comprehension body, including through per-item helpers at any depth, at
+  the loop that repeats it. A loop over a fixed display (`for x in [a, b]`), a
+  block that ends with `break`, `return`, or `raise`, and the iterable of a
+  `for` run once. In a route or middleware it is rejected outright; a
+  background entrypoint needs a contract. Fix it at the owning boundary: load
+  once per request or build and pass the snapshot down (for example
+  `resolve_media_path_within_roots(raw_path, root_paths)` and
+  `resolve_album_root_within_roots(track_paths, roots)`), or write a batch in
+  one transaction. Do not add a process-wide cache unless it already has an
+  invalidation owner.
+- The ASGI test client (`tests/py/asgi_testing.py`) fails any request during
+  which the event loop is blocked for more than 250 ms and prints the loop
+  thread's stack sampled while it was blocked. It has no opt-out: a test that
+  needs to wait uses `await asyncio.sleep(...)`.
 - Before calling an interaction implemented, run
   `npm run test:bounded-interactions` (or with `--changed-paths <file>` for the
   owners you changed) at production-calibration cardinality. Record the exact

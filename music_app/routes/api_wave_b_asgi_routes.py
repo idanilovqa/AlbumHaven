@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from music_app.services.log_history import history_scope_for_request
+from music_app.services.log_history import HistoryScope, history_scope_for_request
 
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
@@ -542,12 +542,12 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
 
 
 @router.get("/utilities/integrations/foobar/help")
-async def utilities_foobar_help() -> JSONResponse:
+def utilities_foobar_help() -> JSONResponse:
     return JSONResponse(build_foobar_help_payload(build_asset_url=build_foobar_asset_url))
 
 
 @router.get("/utilities/integrations/foobar/assets/{asset_key}")
-async def utilities_foobar_asset(request: Request, asset_key: str) -> Response:
+def utilities_foobar_asset(request: Request, asset_key: str) -> Response:
     try:
         asset_definition, asset_path = resolve_foobar_asset(asset_key)
     except KeyError:
@@ -827,7 +827,7 @@ async def playback_session_complete(request: Request) -> JSONResponse:
             record_playback_session_complete,
             config,
             payload,
-            user_timezone="UTC" if scope else get_lastfm_user_timezone(config),
+            user_timezone="UTC" if scope else await run_in_threadpool(get_lastfm_user_timezone, config),
             **scope,
             normalize_playback_track_payload=normalize_playback_track_payload,
             is_meaningful_listen_session=is_meaningful_listen_session,
@@ -857,6 +857,10 @@ async def create_saved_loop(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
+    return await run_in_threadpool(_create_saved_loop_response, config, scope, library_state, logger, payload, history_scope)
+
+
+def _create_saved_loop_response(config: dict[str, object], scope: dict[str, object], library_state: dict[str, object], logger: logging.Logger, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     validated, error_response = validate_loop_create_payload(payload)
     if error_response is not None:
         return _json_response(error_response)
@@ -948,6 +952,10 @@ async def create_loop_pitch_preview(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_create_loop_pitch_preview_response, config, scope, payload)
+
+
+def _create_loop_pitch_preview_response(config: dict[str, object], scope: dict[str, object], payload: JsonDict) -> JSONResponse:
     loop_id, loop_error = parse_required_loop_id(payload)
     if loop_error is not None:
         return _json_response(loop_error)
@@ -984,6 +992,10 @@ async def delete_saved_loop(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_delete_saved_loop_response, config, scope, payload)
+
+
+def _delete_saved_loop_response(config: dict[str, object], scope: dict[str, object], payload: JsonDict) -> JSONResponse:
     loop_id, error_response = parse_required_loop_id(payload)
     if error_response is not None:
         return _json_response(error_response)
@@ -1000,6 +1012,10 @@ async def reorder_saved_loops(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_reorder_saved_loops_response, config, scope, payload)
+
+
+def _reorder_saved_loops_response(config: dict[str, object], scope: dict[str, object], payload: JsonDict) -> JSONResponse:
     ordered_ids = payload.get("ordered_ids")
     if not isinstance(ordered_ids, list):
         return _json_response(({"ok": False, "error": "ordered_ids must be a list"}, 400))
@@ -1099,6 +1115,10 @@ async def track_preferences_write(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
+    return await run_in_threadpool(_track_preferences_write_response, request, config, payload)
+
+
+def _track_preferences_write_response(request: Request, config: dict[str, object], payload: JsonDict) -> JSONResponse:
     track_ref = str(payload.get("track_ref") or "").strip()
     if not track_ref:
         return _json_response(({"ok": False, "error": "Track preference payload must include a track_ref."}, 400))

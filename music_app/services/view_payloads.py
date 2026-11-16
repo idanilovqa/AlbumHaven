@@ -699,8 +699,7 @@ def _build_non_album_entry_candidates(
     *,
     config: object,
 ) -> list[dict[str, object]]:
-    candidates: list[dict[str, object]] = []
-    root_paths: tuple[Path, ...] | None = None
+    visible: list[tuple[dict[str, object], dict[str, object], str, str]] = []
     for entry in file_cache.values():
         if not isinstance(entry, dict):
             continue
@@ -718,15 +717,20 @@ def _build_non_album_entry_candidates(
         normalized_copy["exception_type"] = exception_type
         if not entry_visible_in_categories(normalized_copy, visible_library_categories):
             continue
-        if root_paths is None:
-            root_paths = configured_library_root_paths_snapshot(config)
-        candidates.append({
+        visible.append((entry, normalized_copy, entry_artist, canonical_artist))
+    if not visible:
+        return []
+    # One root snapshot for every loose track, never a settings load per track.
+    root_paths = configured_library_root_paths_snapshot(config)
+    return [
+        {
             "entry": normalized_copy,
             "entry_artist": entry_artist,
             "canonical_artist": canonical_artist,
             "path_parts": _non_album_entry_path_parts(entry, root_paths=root_paths),
-        })
-    return candidates
+        }
+        for entry, normalized_copy, entry_artist, canonical_artist in visible
+    ]
 
 
 def _resolve_casefold_relation_views(

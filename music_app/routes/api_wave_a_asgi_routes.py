@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from music_app.services.media_host_roots import root_request_scope, bounded_directories
 
-from music_app.services.log_history import history_scope_for_request
+from music_app.services.log_history import HistoryScope, history_scope_for_request
 
 import inspect
 import logging
@@ -1452,6 +1452,10 @@ async def revert_version_exception(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_revert_version_exception_response, request, payload)
+
+
+def _revert_version_exception_response(request: Request, payload: JsonDict) -> JSONResponse:
     config = _app_config(request)
     _ignored, mutation_error = revert_rule_key(
         config,
@@ -1472,6 +1476,10 @@ async def revert_problem_ignore(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_revert_problem_ignore_response, request, payload, history_scope)
+
+
+def _revert_problem_ignore_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     try:
         row_key = revert_problem_exclusion(config, payload.get("row_key"))
@@ -1494,6 +1502,10 @@ async def create_problem_ignores(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_create_problem_ignores_response, request, payload, history_scope)
+
+
+def _create_problem_ignores_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     repository = PostgresLibraryBrowseRepository(config)
     try:
@@ -1526,6 +1538,10 @@ async def ignore_album_version(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_ignore_album_version_response, request, payload, history_scope)
+
+
+def _ignore_album_version_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     ignored, mutation_error = create_version_exception(
         config,
@@ -1554,6 +1570,10 @@ async def mark_album_version(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
+    return await run_in_threadpool(_mark_album_version_response, request, payload, history_scope)
+
+
+def _mark_album_version_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     library_state = _library_state(request)
     logger = _asgi_logger(request)
@@ -1608,6 +1628,10 @@ async def unmark_album_version(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_unmark_album_version_response, request, payload, history_scope)
+
+
+def _unmark_album_version_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     logger = _asgi_logger(request)
     album_key = str(payload.get("album_key") or "").strip()
@@ -1638,6 +1662,10 @@ async def utilities_move_album(request: Request) -> JSONResponse:
     if not payload.get("confirmed"):
         return _json_response(_invalid_payload_response("Move was not confirmed"))
 
+    return await run_in_threadpool(_utilities_move_album_response, request, payload)
+
+
+def _utilities_move_album_response(request: Request, payload: JsonDict) -> JSONResponse:
     action = str(payload.get("action") or "").strip()
     if not action:
         return _json_response(_invalid_payload_response("No move action was provided"))

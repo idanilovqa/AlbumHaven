@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from functools import partial
 from os.path import normcase
 from pathlib import Path
 
@@ -1111,7 +1112,7 @@ def refresh_cover_artwork_for_track_paths_for_state(
         force_search=force_search,
         select_manual_track_cover_refresh_jobs=select_manual_track_cover_refresh_jobs,
         build_cover_jobs=build_cover_refresh_jobs,
-        run_cover_jobs=run_cover_jobs,
+        run_cover_jobs=partial(run_cover_jobs, republish_changed_albums_only=True),
         log_cover_refresh_completion=log_cover_refresh_completion,
     )
 

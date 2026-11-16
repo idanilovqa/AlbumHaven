@@ -11910,19 +11910,35 @@
     },
     {
       "id": "py:services/cover_refresh_runtime.py#build_cover_refresh_context",
-      "action": "Run refresh build_cover_refresh_context",
+      "action": "Build a cover pass context: the whole library for a batch, or the selected albums for Fetch cover",
       "entrypoints": [
         "py:music_app/services/cover_refresh_runtime.py#build_cover_refresh_context:refresh:name"
       ],
       "owners": [
-        "music_app/services/cover_refresh_runtime.py"
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_planning.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 3,
+        "queue_claims": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_background_cover_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract parametrization; no product code changed for this interaction."
     },
     {
       "id": "py:services/cover_refresh_runtime.py#build_manual_cover_refresh_runner",
@@ -12006,19 +12022,36 @@
     },
     {
       "id": "py:services/cover_refresh_runtime.py#refresh_cover_artwork_for_track_paths_request",
-      "action": "Run refresh refresh_cover_artwork_for_track_paths_request",
+      "action": "Fetch the cover of the selected album and republish only that album",
       "entrypoints": [
         "py:music_app/services/cover_refresh_runtime.py#refresh_cover_artwork_for_track_paths_request:refresh:name"
       ],
       "owners": [
-        "music_app/services/cover_refresh_runtime.py"
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_execution.py",
+        "music_app/services/library_album_index.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
-      "workClass": "background-batch",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "candidate_rows": 0,
+        "queue_claims": 1
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count",
+      "testIdentity": "test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count",
+      "rollback": "Revert fix(covers) selected-album Fetch cover with its contract; that restores the whole-cache snapshot, whole-library job planning and full album rebuild per request."
     },
     {
       "id": "py:services/cover_refresh_runtime.py#refresh_cover_artwork_request",
@@ -12056,19 +12089,36 @@
     },
     {
       "id": "py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request",
-      "action": "Run refresh refresh_unsuccessful_cover_artwork_request",
+      "action": "Fetch covers for every album without a good cover, as the coalesced batch a manual reservation runs",
       "entrypoints": [
         "py:music_app/services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request:refresh:name"
       ],
       "owners": [
-        "music_app/services/cover_refresh_runtime.py"
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_planning.py",
+        "music_app/services/cover_refresh_execution.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 3,
+        "queue_claims": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract parametrization; no product code changed for this interaction."
     },
     {
       "id": "py:services/cover_refresh_runtime.py#run_background_cover_refresh_worker",
@@ -13353,19 +13403,36 @@
     },
     {
       "id": "py:services/state.py#refresh_cover_artwork_for_track_paths_for_state",
-      "action": "Run refresh refresh_cover_artwork_for_track_paths_for_state",
+      "action": "Fetch the cover of the selected album and republish only that album",
       "entrypoints": [
         "py:music_app/services/state.py#refresh_cover_artwork_for_track_paths_for_state:refresh:name"
       ],
       "owners": [
-        "music_app/services/state.py"
+        "music_app/services/state.py",
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_execution.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
-      "workClass": "background-batch",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "candidate_rows": 0,
+        "queue_claims": 1
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count",
+      "testIdentity": "test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count",
+      "rollback": "Revert fix(covers) selected-album Fetch cover with its contract; that restores the whole-cache snapshot, whole-library job planning and full album rebuild per request."
     },
     {
       "id": "py:services/state.py#refresh_library_for_state",
@@ -13449,19 +13516,36 @@
     },
     {
       "id": "py:services/state.py#refresh_unsuccessful_cover_artwork_for_state",
-      "action": "Run refresh refresh_unsuccessful_cover_artwork_for_state",
+      "action": "Fetch covers for every album without a good cover, as the coalesced batch a manual reservation runs",
       "entrypoints": [
         "py:music_app/services/state.py#refresh_unsuccessful_cover_artwork_for_state:refresh:name"
       ],
       "owners": [
-        "music_app/services/state.py"
+        "music_app/services/state.py",
+        "music_app/services/cover_refresh_runtime.py",
+        "music_app/services/cover_refresh_execution.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 3,
+        "queue_claims": 2
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "testIdentity": "test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
+      "rollback": "Revert the contract parametrization; no product code changed for this interaction."
     },
     {
       "id": "py:services/state.py#schedule_relation_projection_rebuild",

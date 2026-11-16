@@ -8543,7 +8543,10 @@ function normalizeStreamingContinuityOptions(options = {}) {
     .includes(options.kind) ? options.kind : 'queued-next';
   const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
   const endSeconds = Math.max(startSeconds, Number(options.endSeconds) || 0);
-  return { kind, startSeconds, endSeconds };
+  if (kind !== 'queued-next') return { kind, startSeconds, endSeconds };
+  return {
+    kind, startSeconds, endSeconds, consecutiveAlbumBoundary: options.consecutiveAlbumBoundary === true,
+  };
 }
 
 function streamingContinuityIdentity(track, options) {
@@ -9603,6 +9606,15 @@ function handleStreamingWorkletMessage(message) {
       },
       'processor-protocol-reject',
     );
+    return;
+  }
+  if (message.type === 'boundary-padding') {
+    const { edge, streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident } = message;
+    engine.diagnostics.boundaryPadding = {
+      ...engine.diagnostics.boundaryPadding,
+      [edge]: { streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident },
+    };
+    publishStreamingDiagnostics();
     return;
   }
   if (message.type === 'buffered-seek-reserved') {
@@ -11050,7 +11062,19 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
   }
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
-    return engine.roles.continuity;
+    const prepared = engine.roles.continuity;
+    // A queue that changed under the prepared successor may change whether it is consecutive.
+    if (normalized.kind === 'queued-next'
+        && prepared.continuityOptions.consecutiveAlbumBoundary !== normalized.consecutiveAlbumBoundary) {
+      prepared.continuityOptions = normalized;
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: engine.generation,
+        active: true,
+        consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
+      });
+    }
+    return prepared;
   }
   if (engine.pendingPromotion) {
     engine.pendingContinuityTrack = track;
@@ -11086,6 +11110,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
       type: 'expect-continuity',
       generation: engine.generation,
       active: true,
+      consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
     });
   }
   if (normalized.kind !== 'queued-next') {
@@ -39393,6 +39418,18 @@ function peekNextQueuedTrack() {
   return queue.tracks[nextIndex];
 }
 
+// Natural playback into `track` crosses a consecutive album boundary only when `track` is the very
+// next entry of the current album's queue; a continuation into another album never qualifies.
+function isConsecutiveAlbumSuccessor(track) {
+  const queue = state.player.playbackQueue;
+  if (!track || !queue?.albumRef || !Array.isArray(queue.tracks)) return false;
+  const currentPath = String(state.player.current?.path || '');
+  const currentIndex = currentPath
+    ? queue.tracks.findIndex((item) => String(item.path || '') === currentPath)
+    : -1;
+  return currentIndex >= 0 && queue.tracks[currentIndex + 1] === track;
+}
+
 function getNextQueuedTrack() {
   const queue = state.player.playbackQueue;
   const nextTrack = peekNextQueuedTrack();
@@ -45238,6 +45275,16 @@ function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
   });
 }
 
+// Only the queue owner knows whether `track` follows the current one inside the same album.
+function queuedNextContinuityOptions(track) {
+  return {
+    kind: 'queued-next',
+    startSeconds: 0,
+    consecutiveAlbumBoundary: typeof isConsecutiveAlbumSuccessor === 'function'
+      && isConsecutiveAlbumSuccessor(track),
+  };
+}
+
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -45269,7 +45316,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       || selectedTrackPath !== String(state.player.current?.path || '')) return;
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
-      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+      : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
@@ -45418,7 +45465,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
-    await scheduleStreamingContinuity(subsequentTrack);
+    await scheduleStreamingContinuity(subsequentTrack, queuedNextContinuityOptions(subsequentTrack));
   }
   if (typeof promoteWaveformPeaks === 'function') {
     try {
@@ -45595,9 +45642,7 @@ function setLoopActive(active) {
       ? peekNextQueuedTrack()
       : null;
     if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
-        kind: 'queued-next', startSeconds: 0,
-      });
+      const result = scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack));
       if (typeof observeStreamingFacadeCallback === 'function') {
         observeStreamingFacadeCallback(result, 'loop-disable-continuity-error');
       }

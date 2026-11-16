@@ -244,3 +244,52 @@ def test_files_a_map_cannot_describe_stay_on_server_decoding(tmp_path):
     damaged = tmp_path / "damaged.mp3"
     damaged.write_bytes(b"not an mpeg stream" * 1000)
     assert read_mp3_stream_map(damaged) is None
+
+
+def _quiet_edge_frames(samples: array, *, from_end: bool) -> int:
+    """Frames from one edge that stay below -40 dBFS: the worklet's and engine's padding threshold."""
+    ordered = reversed(samples) if from_end else iter(samples)
+    count = 0
+    for sample in ordered:
+        if abs(sample) >= 0.01:
+            break
+        count += 1
+    return count
+
+
+def test_untagged_album_halves_decode_with_bounded_padding_at_their_join(
+    tools, decode_with_client, tmp_path
+):
+    """A continuous source split into two MP3s without gapless metadata, as Karfagen's *Omni* is."""
+    ffmpeg, _node = tools
+    source = tmp_path / "continuous.f32"
+    subprocess.run(
+        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", NOISE.format(rate=48_000),
+         "-ac", "2", "-f", "f32le", str(source)],
+        check=True,
+    )
+    halves = []
+    for name, window in (("outgoing", ("-t", "3")), ("incoming", ("-ss", "3"))):
+        path = tmp_path / f"{name}.mp3"
+        subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-f", "f32le", "-ar", "48000", "-ac", "2",
+             "-i", str(source), *window, "-c:a", "libmp3lame", "-b:a", "320k",
+             "-write_xing", "0", "-id3v2_version", "0", str(path)],
+            check=True,
+        )
+        stream_map = read_mp3_stream_map(path)
+        assert stream_map is not None
+        assert (stream_map.first_sample, stream_map.end_sample) == (0, len(stream_map.frame_offsets) * 1152), (
+            "without metadata the server keeps every decoded frame"
+        )
+        window_bytes = stream_map.window(0)
+        decoded = decode_with_client("mp3", path.read_bytes()[window_bytes.start_byte:window_bytes.end_byte], tmp_path)
+        halves.append(decoded[window_bytes.skip_frames:window_bytes.skip_frames + window_bytes.total_frames])
+    outgoing, incoming = halves
+    max_edge_frames = round(48_000 * 0.064)
+    leading = _quiet_edge_frames(incoming, from_end=False)
+    trailing = _quiet_edge_frames(outgoing, from_end=True)
+    assert 0 < leading <= max_edge_frames, "the decoder emits a bounded quiet prefix the join must not play"
+    assert trailing <= max_edge_frames
+    content = incoming[leading:leading + 480]
+    assert max(abs(sample) for sample in content) > 0.05, "real content follows the padding at once"

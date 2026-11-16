@@ -1042,11 +1042,10 @@ def test_watcher_session_shutdown_failure_surfaces_and_leaves_session_open(
             deadline=123.0,
         )
 
-    expected = ["watch.stop"]
-    if failed_stage != "observer-stop":
-        expected.append(flush_label)
+    expected = ["watch.stop", flush_label]
     if failed_stage.startswith("session-finish"):
         expected.append("session.finish")
+    expected.append("coordinator.stop")
     assert calls == expected
 
 
@@ -1088,7 +1087,11 @@ def test_watcher_session_shutdown_observer_uses_remaining_deadline(monkeypatch, 
     if now > 123.0:
         with pytest.raises(TimeoutError, match="observer deadline exhausted"):
             stop()
-        assert calls == [("watch.stop", 0.0)]
+        assert calls == [
+            ("watch.stop", 0.0),
+            "retry.cancel_join_flush",
+            "coordinator.stop",
+        ]
     else:
         stop()
         assert calls == [

@@ -536,7 +536,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
 
-    assert migration_names[-9:] == [
+    assert migration_names[-10:] == [
         "0242_preserve_full_scan_progress_on_restart.sql",
         "0243_close_cover_consistency.sql",
         "0244_preserve_newer_watcher_incident_presentation.sql",
@@ -546,6 +546,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         "0248_restore_authoritative_exception_clear.sql",
         "0249_create_problematic_files_projection.sql",
         "0250_restore_incomplete_album_contract.sql",
+        "0252_refresh_reconciled_album_cover_cache.sql",
     ]
 
 
@@ -3604,7 +3605,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     # Migration numbers may have gaps, but each number has one owner.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-108:] == [
+    assert migration_names[-109:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -3713,6 +3714,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0248_restore_authoritative_exception_clear.sql",
         "0249_create_problematic_files_projection.sql",
         "0250_restore_incomplete_album_contract.sql",
+        "0252_refresh_reconciled_album_cover_cache.sql",
     ]
 
 def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():

@@ -362,3 +362,104 @@ def _not_found() -> HTTPException:
 
 def _unavailable() -> HTTPException:
     return HTTPException(503, _UNAVAILABLE)
+
+
+# The owner's manual MusicBrainz lookups (Delivery 2, S5): queue or search one artist or
+# album, list the waiting queue and the batch notification cards, open and dismiss a batch.
+lookup_router = APIRouter(prefix="/api/musicbrainz/lookups")
+
+_LOOKUP_TARGET_KINDS = {"artist", "album"}
+_LOOKUP_MODES = {"queue", "search"}
+_QUEUED_FIELDS = (
+    "request_id", "target_kind", "local_artist_id", "artist_name", "album_key", "album_title", "year",
+    "requested_at",
+)
+_BATCH_FIELDS = (
+    "batch_id", "started_at", "finished_at", "total", "matched", "not_matched", "artists", "albums",
+    "single_title", "single_artist_name", "single_target_kind", "single_outcome", "single_problem_label",
+)
+_BATCH_ITEM_FIELDS = (
+    "request_id", "target_kind", "local_artist_id", "artist_name", "album_key", "album_title", "year", "state",
+    "outcome", "result_mbid", "problem_label", "problem_occurrence_id",
+)
+_TARGET_FIELDS = ("album_key", "local_artist_id", "artist_name", "artist_has_mbid", "album_has_mbid")
+
+
+@lookup_router.post("")
+async def request_lookup(request: Request):
+    actor = await _require_current_library_owner(request)
+    body = await _request_object(request)
+    target = _lookup_target(body)
+    if target is None:
+        raise HTTPException(400, "Invalid MusicBrainz lookup request.")
+    result = await _call_service(request, "request_lookup", actor_account_id=actor.account_id, **target)
+    if not isinstance(result, Mapping):
+        raise HTTPException(404, "Artist or album was not found.")
+    return JSONResponse(
+        {field: result.get(field) for field in ("request_id", "state", "batch_id")}, status_code=202)
+
+
+@lookup_router.get("")
+async def list_lookups(request: Request):
+    await _require_current_library_owner(request)
+    result = await _call_service(request, "list_lookups")
+    if not isinstance(result, Mapping):
+        raise _unavailable()
+    return {
+        "queued": [_fields(row, _QUEUED_FIELDS) for row in result.get("queued") or ()],
+        "queue_starts_at": result.get("queue_starts_at"),
+        "batches": [_fields(row, _BATCH_FIELDS) for row in result.get("batches") or ()],
+    }
+
+
+@lookup_router.get("/target")
+async def lookup_target(album_key: str, request: Request):
+    await _require_current_library_owner(request)
+    row = await _call_service(request, "lookup_target", album_key=album_key)
+    if not isinstance(row, Mapping):
+        raise HTTPException(404, "Album was not found.")
+    return {"target": _fields(row, _TARGET_FIELDS)}
+
+
+@lookup_router.get("/batches/{batch_id}")
+async def get_lookup_batch(batch_id: int, request: Request):
+    await _require_current_library_owner(request)
+    batch = await _call_service(request, "get_lookup_batch", batch_id=batch_id)
+    if not isinstance(batch, Mapping):
+        raise HTTPException(404, "Lookup was not found.")
+    return {"batch": {**_fields(batch, _BATCH_FIELDS),
+                      "items": [_fields(item, _BATCH_ITEM_FIELDS) for item in batch.get("items") or ()]}}
+
+
+@lookup_router.post("/batches/{batch_id}/dismiss")
+async def dismiss_lookup_batch(batch_id: int, request: Request):
+    await _require_current_library_owner(request)
+    if await _request_object(request) != {}:
+        raise HTTPException(400, "Invalid MusicBrainz lookup request.")
+    result = await _call_service(request, "dismiss_lookup_batch", batch_id=batch_id)
+    if not isinstance(result, Mapping) or result.get("dismissed") is not True:
+        raise HTTPException(404, "Lookup was not found.")
+    return {"dismissed": True}
+
+
+def _lookup_target(body: object) -> dict[str, object] | None:
+    """Exactly one artist (by id or by one of its albums) or one album (by key)."""
+    if not isinstance(body, Mapping):
+        return None
+    target_kind, mode = body.get("target_kind"), body.get("mode")
+    named = set(body) - {"target_kind", "mode"}
+    if target_kind not in _LOOKUP_TARGET_KINDS or mode not in _LOOKUP_MODES or len(named) != 1:
+        return None
+    (name,) = named
+    value = body[name]
+    if name == "album_key" and isinstance(value, str) and 0 < len(value.strip()) <= 1024:
+        return {"target_kind": target_kind, "mode": mode, "album_key": value}
+    if (name == "local_artist_id" and target_kind == "artist" and isinstance(value, int)
+            and not isinstance(value, bool) and value > 0):
+        return {"target_kind": target_kind, "mode": mode, "local_artist_id": value}
+    return None
+
+
+def _fields(row: object, fields: tuple[str, ...]) -> dict[str, object]:
+    source = row if isinstance(row, Mapping) else {}
+    return {field: source.get(field) for field in fields}

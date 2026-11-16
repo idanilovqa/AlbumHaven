@@ -1780,6 +1780,8 @@ function replaceCoverLookupDrawerMarkup(body, markup, taskIds = []) {
   });
 }
 
+let renderedMusicBrainzCardMarkup = '';
+
 function renderCoverLookupDrawer({
   preserveInteraction = true,
   taskIds = [],
@@ -1856,7 +1858,12 @@ function renderCoverLookupDrawer({
   }
   if (musicBrainzCards) {
     musicBrainzCards.hidden = !state.coverLookup.drawerOpen || !musicBrainzBatches.length;
-    musicBrainzCards.innerHTML = musicBrainzCards.hidden ? '' : musicBrainzBatches.map(buildMusicBrainzLookupCardHtml).join('');
+    // Repainted only when a card changed, so a pressed or focused card survives cover polling.
+    const markup = musicBrainzCards.hidden ? '' : musicBrainzBatches.map(buildMusicBrainzLookupCardHtml).join('');
+    if (renderedMusicBrainzCardMarkup !== markup) {
+      musicBrainzCards.innerHTML = markup;
+      renderedMusicBrainzCardMarkup = markup;
+    }
   }
   if (!state.coverLookup.drawerOpen) {
     body.innerHTML = '';

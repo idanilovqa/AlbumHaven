@@ -4,7 +4,7 @@
 // results popup.
 const MUSICBRAINZ_LOOKUP_TITLE = 'MusicBrainz lookup';
 const MUSICBRAINZ_LOOKUP_REFRESH_MS = { running: 10000, queued: 60000, idle: 300000 };
-const musicBrainzLookups = { batches: [], queuedCount: 0, signature: '', loadedAt: 0, promise: null, openBatchId: 0 };
+const musicBrainzLookups = { batches: [], queuedCount: 0, signature: '', loadedAt: 0, promise: null };
 
 function canRequestMusicBrainzLookups() {
   return state.status?.allowed_actions?.['catalogue.enrichment.request'] === true;
@@ -212,7 +212,6 @@ async function openMusicBrainzLookupResults(batchId) {
       { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload?.batch) throw new Error(payload?.detail || 'Lookup results are unavailable.');
-    musicBrainzLookups.openBatchId = Number(batchId);
     renderMusicBrainzLookupResults(payload.batch);
     bindOverlayPointerOrigin(modal);
     modal.hidden = false;
@@ -227,7 +226,6 @@ function closeMusicBrainzLookupResults() {
   const modal = document.getElementById('musicbrainz-lookup-results-modal');
   if (!modal || modal.hidden) return false;
   modal.hidden = true;
-  musicBrainzLookups.openBatchId = 0;
   const otherModalOpen = ['track-modal', 'utility-modal', 'image-lightbox']
     .some((id) => document.getElementById(id)?.hidden === false);
   if (!otherModalOpen) document.body.classList.remove('modal-open');

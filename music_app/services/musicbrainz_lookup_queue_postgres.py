@@ -134,16 +134,14 @@ class MusicBrainzLookupQueuePostgresRepository:
 # The target in the active library; an album names its own artist.
 _REQUEST_SQL = _active_library_cte() + """
     , target as (
-      select active_library.library_id, artists.id as local_artist_id, albums.album_key
+      select active_library.library_id, artists.id as local_artist_id,
+             case when %(target_kind)s = 'album' then named_album.album_key end as album_key
       from active_library
       left join library.local_albums named_album
         on named_album.library_id = active_library.library_id and named_album.album_key = %(album_key)s
       join library.local_artists artists
         on artists.library_id = active_library.library_id
        and artists.id = coalesce(%(local_artist_id)s::bigint, named_album.artist_id)
-      left join library.local_albums albums
-        on albums.library_id = named_album.library_id and albums.id = named_album.id and %(target_kind)s = 'album'
-      where %(target_kind)s = 'artist' or albums.id is not null
     ), inserted as (
       insert into ops.musicbrainz_lookup_requests (
         library_id, target_kind, local_artist_id, album_key, mode, state, requested_by_account_id, requested_at)

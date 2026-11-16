@@ -742,8 +742,13 @@ def test_live_custom_collection_catalog_matches_loose_tracks_without_building_th
     repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     everything = {"category": ["main_library", "new_arrivals", "hoard"]}
     catalog = repository.build_custom_collection_catalog_payload(query_params=everything)
+    # No Loose Tracks snapshot yet: the All Loose Tracks total is unknown, never a wrong number.
+    assert catalog["loose_tracks_count"] is None
     page = repository.build_library_loose_tracks_payload(
         query_params=everything, rebuild_missing_snapshot=True)["library_non_album_tracks"]
+    # Owner 2026-11-16: the All Loose Tracks row and header show the same total as the page.
+    catalog = repository.build_custom_collection_catalog_payload(query_params=everything)
+    assert catalog["loose_tracks_count"] == len(page)
     from_page = {}
     for track in page:
         if track.get("exception_type") == "Custom Collection" and track.get("custom_collection_name"):
@@ -756,6 +761,8 @@ def test_live_custom_collection_catalog_matches_loose_tracks_without_building_th
         query_params={**everything, "artist": "Owner"}) == catalog
     main_only = repository.build_custom_collection_catalog_payload(query_params={"category": ["main_library"]})
     assert [(row["name"], row["count"]) for row in main_only["custom_collections"]] == [("Женя машина", 3)]
+    assert main_only["loose_tracks_count"] == len(repository.build_library_loose_tracks_payload(
+        query_params={"category": ["main_library"]})["library_non_album_tracks"])
 
 
 def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):

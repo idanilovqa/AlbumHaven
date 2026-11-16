@@ -967,8 +967,13 @@ function openNonAlbumModal(options = {}) {
   const page = setNonAlbumPagePresentation(els.overlay, true);
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
-  const subtitle = collectionName
-    ? `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`
+  // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree
+  // catalog's total stands in when it is known.
+  const trackTotal = libraryWide && !collectionName && hydrationPending
+    ? state.ui?.libraryLooseTracksCount
+    : looseTracks.length;
+  const subtitle = collectionName || (libraryWide && Number.isInteger(trackTotal))
+    ? `${trackTotal} ${trackTotal === 1 ? 'track' : 'tracks'}`
     : !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';

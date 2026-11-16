@@ -516,6 +516,19 @@ class PostgresLibraryBrowseRepository:
             # A few hundred rows: parallel worker startup would cost more than the query.
             connection.execute("set local max_parallel_workers_per_gather = 0")
             rows = connection.execute(_custom_collection_catalog_sql()).fetchall()
+            loose_rows = connection.execute(
+                _non_album_snapshot_category_counts_sql(), {"fingerprint_key": _SNAPSHOT_FINGERPRINT_KEY}
+            ).fetchall()
+            current_fingerprint = _non_album_inventory_fingerprint(connection) if loose_rows else ""
+        # All Loose Tracks total (owner 2026-11-16): counted inside Postgres from the current snapshot;
+        # unknown (None) while the snapshot is missing or stale, so the tree never shows a wrong number.
+        loose_tracks_count = None
+        if loose_rows and all(_row_mapping(row).get("fingerprint") == current_fingerprint for row in loose_rows):
+            loose_tracks_count = sum(
+                int(_row_mapping(row).get("track_count") or 0)
+                for row in loose_rows
+                if entry_visible_in_categories(_row_mapping(row), categories)
+            )
         counts: dict[str, int] = {}
         for row in rows:
             mapping = _row_mapping(row)
@@ -527,7 +540,10 @@ class PostgresLibraryBrowseRepository:
             ):
                 continue
             counts[name] = counts.get(name, 0) + int(mapping.get("track_count") or 0)
-        return {"custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())]}
+        return {
+            "custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())],
+            "loose_tracks_count": loose_tracks_count,
+        }
 
     def build_library_loose_tracks_payload(
         self,
@@ -6724,6 +6740,19 @@ def _non_album_track_snapshot_load_sql() -> str:
         select snapshots.payload
         from library.non_album_track_snapshots snapshots
         where snapshots.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
+    """
+
+
+def _non_album_snapshot_category_counts_sql() -> str:
+    # Counts the stored Loose Tracks per library source without sending the tracks to Python.
+    return f"""
+        select snapshots.payload ->> %(fingerprint_key)s as fingerprint,
+               track ->> 'library_root_category' as library_root_category,
+               count(*) as track_count
+        from library.non_album_track_snapshots snapshots
+        cross join lateral jsonb_array_elements(coalesce(snapshots.payload -> 'tracks', '[]'::jsonb)) track
+        where snapshots.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
+        group by 1, 2
     """
 
 

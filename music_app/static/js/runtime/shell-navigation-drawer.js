@@ -110,6 +110,9 @@ function loadCustomCollectionCatalog() {
       .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))
       .filter(({ name }) => name)
       .sort((left, right) => left.name.localeCompare(right.name));
+    // null while the server's Loose Tracks snapshot is not current: show no number rather than a wrong one.
+    const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
+    state.ui.libraryLooseTracksCount = looseTracksCount;
     customCollectionCatalog = { key, collections, request: null };
     return collections;
   })();
@@ -149,6 +152,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     variant: 'panel',
     key: 'all-loose-tracks',
     label: 'All Loose Tracks',
+    count: Number.isInteger(state.ui?.libraryLooseTracksCount) ? state.ui.libraryLooseTracksCount : undefined,
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });

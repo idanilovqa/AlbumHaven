@@ -11538,6 +11538,9 @@ function loadCustomCollectionCatalog() {
       .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))
       .filter(({ name }) => name)
       .sort((left, right) => left.name.localeCompare(right.name));
+    // null while the server's Loose Tracks snapshot is not current: show no number rather than a wrong one.
+    const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
+    state.ui.libraryLooseTracksCount = looseTracksCount;
     customCollectionCatalog = { key, collections, request: null };
     return collections;
   })();
@@ -11577,6 +11580,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     variant: 'panel',
     key: 'all-loose-tracks',
     label: 'All Loose Tracks',
+    count: Number.isInteger(state.ui?.libraryLooseTracksCount) ? state.ui.libraryLooseTracksCount : undefined,
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });
@@ -15517,8 +15521,13 @@ function openNonAlbumModal(options = {}) {
   const page = setNonAlbumPagePresentation(els.overlay, true);
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
-  const subtitle = collectionName
-    ? `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`
+  // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree
+  // catalog's total stands in when it is known.
+  const trackTotal = libraryWide && !collectionName && hydrationPending
+    ? state.ui?.libraryLooseTracksCount
+    : looseTracks.length;
+  const subtitle = collectionName || (libraryWide && Number.isInteger(trackTotal))
+    ? `${trackTotal} ${trackTotal === 1 ? 'track' : 'tracks'}`
     : !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';

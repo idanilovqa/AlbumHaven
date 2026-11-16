@@ -10,6 +10,7 @@ from concurrent.futures import Future
 from copy import deepcopy
 from dataclasses import asdict
 import hashlib
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -76,11 +77,35 @@ class _Rows:
         return self._rows[0] if self._rows else None
 
 
+def _write_covers_in_distinct_shards(paths: list[Path], *, max_size: int) -> list[Path]:
+    """Writes covers whose previews land in distinct ``cover_variants/<key[:2]>`` shards.
+
+    A preview key hashes the source path and mtime, so which covers share a
+    shard directory changes from run to run; each shared shard costs one more
+    ``Path.mkdir(exist_ok=True)`` stat. Nudging a colliding cover's mtime keeps
+    the counted work identical on every run.
+    """
+    shards: set[str] = set()
+    for path in paths:
+        _write_cover(path)
+        while True:
+            shard = covers_module.build_cover_variant_base_path(path, cache_root=Path("."), max_size=max_size).parent.name
+            if shard not in shards:
+                shards.add(shard)
+                break
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    return paths
+
+
 def test_cover_preview_backfill_contract_settles_after_one_pass_over_production_cycles(tmp_path, monkeypatch):
-    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+    from music_app.services.cover_preview_backfill import _DISPLAY_COVER_SIZE, CoverPreviewBackfill
 
     album_count = 20
-    sources = [_write_cover(tmp_path / "music" / f"Artist {index:02d}" / "Album" / "cover.jpg") for index in range(album_count)]
+    sources = _write_covers_in_distinct_shards(
+        [tmp_path / "music" / f"Artist {index:02d}" / "Album" / "cover.jpg" for index in range(album_count)],
+        max_size=_DISPLAY_COVER_SIZE,
+    )
     rows = [{"cover_path": str(source), "cover_revision": None} for source in sources]
 
     def run(cycles: int) -> OperationCounts:
@@ -128,7 +153,8 @@ def test_cover_preview_backfill_contract_settles_after_one_pass_over_production_
         small=1,
         large=100,
         run=run,
-        budgets={"filesystem_enumerations": 0, "stat_calls": 481, "open_calls": 20, "media_parses": 20},
+        # 24 stats per cover: existence and signature checks before and after rendering.
+        budgets={"filesystem_enumerations": 0, "stat_calls": 24 * album_count, "open_calls": 20, "media_parses": 20},
         growth=("stat_calls", 0),
     )
 

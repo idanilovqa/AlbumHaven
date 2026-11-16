@@ -11711,7 +11711,7 @@
       },
       "budgets": {
         "filesystem_enumerations": 0,
-        "stat_calls": 481,
+        "stat_calls": 480,
         "open_calls": 20,
         "media_parses": 20
       },

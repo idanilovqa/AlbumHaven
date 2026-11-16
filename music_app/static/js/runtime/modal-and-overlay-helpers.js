@@ -699,7 +699,7 @@ function buildCustomCollectionArtworkMarkup(collectionName, artwork = null) {
 function buildCustomCollectionHeaderArtworkMarkup(collectionName, artwork = null) {
   const name = String(collectionName || '').trim();
   const hasArtwork = Boolean(String(artwork?.image_url || '').trim());
-  return `<span class="custom-collection-header-art" data-custom-collection-header-art="${escapeHtml(name)}"${hasArtwork ? ' hidden' : ''}>${hasArtwork ? '' : buildCustomCollectionArtworkMarkup(name)}</span>`;
+  return `<span class="custom-collection-header-art gallery-bar__leading" data-custom-collection-header-art="${escapeHtml(name)}"${hasArtwork ? ' hidden' : ''}>${hasArtwork ? '' : buildCustomCollectionArtworkMarkup(name)}</span>`;
 }
 
 function buildCustomCollectionDetailMarkup(items, collectionName, artwork = null) {

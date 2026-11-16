@@ -278,7 +278,8 @@
   border-radius: var(--app-surface-radius) var(--app-surface-radius) 0 0;
   box-shadow: inset 1px 1px 0 #ffffff03;
 }
-.shell-main-surface { display: flex; flex-direction: column; padding: 24px var(--app-page-inline); }
+/* Main-surface insets are tokens so pages layered over it (Loose Tracks) start exactly where the Gallery does. */
+.shell-main-surface { --app-main-inset-block: 24px; --app-main-inset-inline: var(--app-page-inline); display: flex; flex-direction: column; padding: var(--app-main-inset-block) var(--app-main-inset-inline); }
 .settings-host .settings-outlet { overflow: auto; }
 .settings-host .settings-nav { padding: 25px 14px; }
 .settings-host .settings-nav h2 { margin: 0 12px 20px; font-size: 18px; }
@@ -350,7 +351,7 @@
   .app-bar .toolbar-right { grid-column: 2; grid-row: 1; padding: 0; }
   .shell-main-surface,
   .settings-host .settings-outlet { grid-column: 1 / -1; margin: 0 6px; border-radius: 12px 12px 0 0; }
-  .shell-main-surface { padding: 18px; }
+  .shell-main-surface { --app-main-inset-block: 18px; --app-main-inset-inline: 18px; }
   .settings-host.settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 56px auto minmax(0, 1fr); }
   .settings-host .app-bar { grid-template-columns: minmax(0, 1fr); padding: 0 12px; }
   .settings-host .settings-nav { grid-column: 1 / -1; grid-row: 2; padding: 7px 12px 12px; overflow: visible; }

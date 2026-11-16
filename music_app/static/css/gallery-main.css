@@ -29,6 +29,12 @@
   .page-gallery-bar .gallery-bar__summary { grid-column: 1; grid-row: 2; align-self: start; }
   .page-gallery-bar:has(> .page-gallery-bar__back) :is(.gallery-bar__title, .gallery-bar__summary) { grid-column: 2; }
   .page-gallery-bar > .gallery-bar__actions { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+  /* Leading slot (e.g. compact collection artwork): its own column across both text lines, so the title and
+     summary shift right without changing their vertical positions. */
+  .gallery-bar.page-gallery-bar:has(> .gallery-bar__leading:not([hidden])) { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 12px; }
+  .page-gallery-bar > .gallery-bar__leading { grid-column: 1; grid-row: 1 / span 2; align-self: center; }
+  .page-gallery-bar:has(> .gallery-bar__leading:not([hidden])) :is(.gallery-bar__title, .gallery-bar__summary) { grid-column: 2; }
+  .page-gallery-bar:has(> .gallery-bar__leading:not([hidden])) > .gallery-bar__actions { grid-column: 3; }
   .page-gallery-bar:has(> .page-gallery-bar__back) > .gallery-bar__actions { grid-column: 3; }
   .page-gallery-bar:not(:has(.gallery-bar__summary)) .gallery-bar__title { grid-row: 1 / span 2; align-self: center; }
   .gallery-bar__actions { --gallery-toolbar-button-background: var(--appearance-control, var(--panel)); }

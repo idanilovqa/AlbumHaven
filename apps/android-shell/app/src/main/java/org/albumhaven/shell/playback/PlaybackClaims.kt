@@ -29,7 +29,8 @@ sealed interface ClaimResponse {
 /** Blocking calls to the server-backed playback claim (music_app/routes/playback_control_asgi.py). */
 interface PlaybackClaimApi {
     fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse
-    fun release(clientId: String, claimToken: String)
+    /** Gives the claim back; false when the server never answered, so its lease may still run. */
+    fun release(clientId: String, claimToken: String): Boolean
 }
 
 enum class ClaimOutcome { GRANTED, BLOCKED, UNAVAILABLE }
@@ -60,8 +61,10 @@ class PlaybackClaimOwner(
     var acquiring = false
         private set
     private var renewing = false
-    private var lastRenewSentMs = 0L
-    private var leaseEndsMs = 0L
+    private var nextRenewMs = 0L
+
+    /** A token whose give-back the server never answered: its lease may still run there, so the next acquire renews it. */
+    private var unansweredRelease: String? = null
     private val waiters = mutableListOf<(ClaimOutcome) -> Unit>()
 
     // Set by [close]; a grant answered after it is given back by its own request.
@@ -103,14 +106,19 @@ class PlaybackClaimOwner(
         acquiring = true
         val requestEpoch = epoch
         val sentMs = clock()
+        val offered = unansweredRelease.also { unansweredRelease = null }
         io.execute {
-            val response = call { api.acquire(clientId, null, claimTrack) }
+            var response = call { api.acquire(clientId, offered, claimTrack) }
+            // A refused token was taken over or its claim already ended; only an anonymous acquire says which.
+            if (offered != null && (response is ClaimResponse.Conflict || response is ClaimResponse.Rejected)) {
+                response = call { api.acquire(clientId, null, claimTrack) }
+            }
             if (response is ClaimResponse.Granted) {
                 unreadGrant.set(response.claimToken)
                 // A closed owner never reads the answer, so the grant goes back from here.
                 if (closed) unreadGrant.getAndSet(null)?.let(::giveBack)
             }
-            post(Runnable { acquired(requestEpoch, sentMs, response) })
+            post(Runnable { acquired(requestEpoch, sentMs, response, offered) })
         }
     }
 
@@ -120,17 +128,18 @@ class PlaybackClaimOwner(
     }
 
     /**
-     * Heartbeats a held claim. Past its lease the server decides, as the web's expiry does: a
-     * renewal in flight answers for it, otherwise one more is sent, and only a refusal, or no
-     * answer to a renewal past the lease, gives the claim up. A server that answers late keeps it.
+     * Heartbeats a held claim every ten seconds, and two seconds after a renewal the server did not
+     * answer. Losing the network never stops playback (owner decision, 2026-11-15): the claim
+     * outlives its lease, whose token the server renews until another device claims, so only a
+     * refusal gives it up.
      */
     fun tick() {
         val held = token ?: return
         val now = clock()
-        if (renewing || (now < leaseEndsMs && now - lastRenewSentMs < HEARTBEAT_MS)) return
+        if (renewing || now < nextRenewMs) return
         val claimTrack = track ?: return
         renewing = true
-        lastRenewSentMs = now
+        nextRenewMs = now + HEARTBEAT_MS
         val requestEpoch = epoch
         io.execute {
             val response = call { api.acquire(clientId, held, claimTrack) }
@@ -138,12 +147,12 @@ class PlaybackClaimOwner(
         }
     }
 
-    /** When [tick] next has work for a held claim: its next heartbeat, or the end of its lease. */
+    /** When [tick] next has work for a held claim: its next heartbeat or retry; none while one is in flight. */
     fun nextDeadlineMs(): Long? = when {
         token == null -> null
-        // Past the lease only the renewal's answer, which wakes the playback thread, decides.
-        renewing -> leaseEndsMs.takeIf { clock() < it }
-        else -> minOf(leaseEndsMs, lastRenewSentMs + HEARTBEAT_MS)
+        // The renewal's answer wakes the playback thread.
+        renewing -> null
+        else -> nextRenewMs
     }
 
     /** Gives the claim back now; an expired claim needs no answer. The owner calls it once listen writes drain. */
@@ -151,7 +160,11 @@ class PlaybackClaimOwner(
         val held = token
         val wasActive = held != null || acquiring
         drop()
-        if (held != null) io.execute { giveBack(held) }
+        if (held != null) {
+            io.execute {
+                if (!giveBack(held)) post(Runnable { if (token == null && !acquiring && !closed) unansweredRelease = held })
+            }
+        }
         if (wasActive) events(ClaimEvent.Released)
     }
 
@@ -172,12 +185,11 @@ class PlaybackClaimOwner(
         ClaimResponse.Unreachable
     }
 
-    private fun giveBack(token: String) {
-        try {
-            api.release(clientId, token)
-        } catch (_: RuntimeException) {
-            // The server lease expires on its own.
-        }
+    private fun giveBack(token: String): Boolean = try {
+        api.release(clientId, token)
+    } catch (_: RuntimeException) {
+        // The server lease expires on its own.
+        false
     }
 
     private fun drop() {
@@ -189,7 +201,7 @@ class PlaybackClaimOwner(
         settle(ClaimOutcome.UNAVAILABLE)
     }
 
-    private fun acquired(requestEpoch: Long, sentMs: Long, response: ClaimResponse) {
+    private fun acquired(requestEpoch: Long, sentMs: Long, response: ClaimResponse, offered: String?) {
         // A grant [close] already gave back is not this owner's any more.
         if (response is ClaimResponse.Granted && !unreadGrant.compareAndSet(response.claimToken, null)) return
         if (requestEpoch != epoch) {
@@ -202,8 +214,7 @@ class PlaybackClaimOwner(
             is ClaimResponse.Granted -> {
                 token = response.claimToken
                 scrobblingAvailable = response.scrobblingAvailable
-                lastRenewSentMs = sentMs
-                leaseEndsMs = sentMs + LEASE_MS
+                nextRenewMs = sentMs + HEARTBEAT_MS
                 events(ClaimEvent.Owned)
                 settle(ClaimOutcome.GRANTED)
             }
@@ -211,7 +222,12 @@ class PlaybackClaimOwner(
                 events(ClaimEvent.Blocked)
                 settle(ClaimOutcome.BLOCKED)
             }
-            is ClaimResponse.Rejected, ClaimResponse.Unreachable -> settle(ClaimOutcome.UNAVAILABLE)
+            is ClaimResponse.Rejected -> settle(ClaimOutcome.UNAVAILABLE)
+            ClaimResponse.Unreachable -> {
+                // The offered token is still the best credential for the next try.
+                if (offered != null) unansweredRelease = offered
+                settle(ClaimOutcome.UNAVAILABLE)
+            }
         }
     }
 
@@ -222,20 +238,14 @@ class PlaybackClaimOwner(
             is ClaimResponse.Granted -> {
                 token = response.claimToken
                 scrobblingAvailable = response.scrobblingAvailable
-                leaseEndsMs = sentMs + LEASE_MS
             }
             // The server no longer recognizes this claim: another client owns playback now.
             ClaimResponse.Conflict, is ClaimResponse.Rejected -> {
                 drop()
                 events(ClaimEvent.Lost)
             }
-            // Retried on the next tick; past the lease, an unanswered renewal ends the claim.
-            ClaimResponse.Unreachable -> if (clock() >= leaseEndsMs) {
-                drop()
-                events(ClaimEvent.Lost)
-            } else {
-                lastRenewSentMs = sentMs - HEARTBEAT_MS + RETRY_MS
-            }
+            // No answer is not a refusal, however long it lasts: retried two seconds after it was sent.
+            ClaimResponse.Unreachable -> nextRenewMs = sentMs + RETRY_MS
         }
     }
 

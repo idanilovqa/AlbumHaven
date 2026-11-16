@@ -887,6 +887,25 @@ class NativePcmEngine(
         return splice
     }
 
+    /**
+     * A socket lost while the playing stream is already detached, as when a reconnect fails because
+     * the network is still down: it plays on as it was. A splice the lost socket had already opened
+     * is dropped, so [resume] on the next socket opens it again from the same frame. Returns the
+     * frame playback goes on to, or null when nothing was detached.
+     */
+    fun redetach(): Long? {
+        if (failed) return null
+        if (playingOffline) return current?.let(::receivedEnd)
+        val frame = resumeFrame ?: return null
+        continuity?.takeUnless { it.local }?.let { opened ->
+            opened.local = true
+            closeContinuity("socket-lost")
+        }
+        pendingPromotion = null
+        unconfirmedCloses.clear()
+        return frame
+    }
+
     /** The frame [stream]'s audio ends at when all of it is already on the device; else null. */
     private fun receivedEnd(stream: Stream): Long? {
         val encoded = stream.encoded

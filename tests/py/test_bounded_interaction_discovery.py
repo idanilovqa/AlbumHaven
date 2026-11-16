@@ -568,6 +568,64 @@ async def boundary(request, call_next):
     assert hazard["via"] == ["resolve", "read_keys"]
 
 
+def test_event_loop_blocking_follows_container_named_methods_on_app_class_receivers(tmp_path: Path):
+    _write(tmp_path, "music_app/services/history.py", """
+import psycopg
+
+class Store:
+    def __init__(self, config):
+        self.url = config["url"]
+
+    def _connect(self):
+        return psycopg.connect(self.url)
+
+class HistoryAdapter(Store):
+    def append(self, entry):
+        with self._connect() as connection:
+            return connection.execute("select 1 for update").fetchall()
+
+    def get(self, key):
+        return None
+
+def append_history(config, entry):
+    return HistoryAdapter(config).append(entry)
+
+def typed_append(adapter: HistoryAdapter, entry):
+    return adapter.append(entry)
+
+def bound_append(config, entry):
+    adapter = HistoryAdapter(config)
+    return adapter.append(entry)
+
+def builtin_append(rows, entry):
+    rows.append(entry)
+    return {}.get(entry)
+""")
+    _write(tmp_path, "music_app/routes/history.py", """
+from music_app.services.history import append_history, bound_append, builtin_append, typed_append
+
+@router.post('/constructed')
+async def constructed(request):
+    return append_history(request.app.state.config, {})
+
+@router.post('/typed')
+async def typed(request):
+    return typed_append(request.app.state.adapter, {})
+
+@router.post('/bound')
+async def bound(request):
+    return bound_append(request.app.state.config, {})
+
+@router.post('/builtin')
+async def builtin(request):
+    return builtin_append([], {})
+""")
+    hazards = {hazard["entrypoint"].split("#")[1]: hazard for hazard in _hazards(tmp_path, "BI-08")}
+    assert sorted(hazards) == ["bound:route:POST /bound", "constructed:route:POST /constructed", "typed:route:POST /typed"]
+    assert hazards["constructed:route:POST /constructed"]["via"] == ["append_history", "HistoryAdapter.append"]
+    assert all(hazard["operation"].startswith("event-loop-blocking:database:") for hazard in hazards.values())
+
+
 def test_connection_per_loop_item_is_rejected_in_a_route_and_reported_at_the_loop(tmp_path: Path):
     _write(tmp_path, "music_app/services/roots.py", """
 import psycopg

@@ -93,8 +93,10 @@ PROTOCOL_METHODS = frozenset({
     "send", "start", "submit", "wait", "write",
 })
 # Builtin container and string methods: on a receiver of unknown type such a
-# call (`rows.append(row)`) is the builtin, even when one app class defines the
-# same name, so it is never resolved to app code.
+# call (`rows.append(row)`) is the builtin, so it is followed only when the
+# receiver resolves to an app class: a constructor call (`Adapter(config).append`),
+# a class, or a local or parameter typed by one (`x = Adapter(config)`,
+# `x: Adapter`).
 CONTAINER_METHODS = frozenset(name for kind in (dict, list, set, str, bytes) for name in dir(kind) if not name.startswith("_"))
 
 
@@ -194,9 +196,21 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
     return module
 
 
+def _binding_targets(node: ast.AST) -> list[ast.AST]:
+    """The targets a statement or comprehension binds names to."""
+    if isinstance(node, ast.Assign):
+        return node.targets
+    if isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor, ast.NamedExpr, ast.comprehension)):
+        return [node.target]
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        return [item.optional_vars for item in node.items if item.optional_vars is not None]
+    return []
+
+
 class Index:
     def __init__(self, modules: list[Module]):
         self.modules = {module.name: module for module in modules}
+        self._local_types: dict[tuple[int, str], tuple[str, str] | None] = {}
         self.methods_by_name: dict[str, list[Definition]] = {}
         for module in modules:
             for methods in module.methods.values():
@@ -215,10 +229,84 @@ class Index:
             return self.module_function(imported[0], imported[1])
         return None
 
+    def class_ref(self, module_name: str, name: str, depth: int = 0) -> tuple[str, str] | None:
+        """The (module, class) an app class name refers to in a module."""
+        module = self.modules.get(module_name)
+        if module is None or depth > 8:
+            return None
+        if name in module.methods:
+            return module_name, name
+        imported = module.imports.get(name)
+        if imported and imported[1] and imported[0] != module_name:
+            return self.class_ref(imported[0], imported[1], depth + 1)
+        return None
+
+    def class_method(self, class_ref: tuple[str, str], name: str, depth: int = 0) -> Definition | None:
+        """A method of an app class or of the app classes it inherits from."""
+        module_name, class_name = class_ref
+        module = self.modules[module_name]
+        method = module.methods[class_name].get(name)
+        if method is not None or depth > 8:
+            return method
+        for base in module.class_bases.get(class_name, []):
+            base_ref = self.class_ref(module_name, base)
+            if base_ref is not None and (found := self.class_method(base_ref, name, depth + 1)):
+                return found
+        return None
+
+    def _type_ref(self, node: ast.AST | None, module_name: str) -> tuple[str, str] | None:
+        """The app class a type annotation or a class expression names."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return self.class_ref(module_name, node.value)
+        if isinstance(node, ast.Name):
+            return self.class_ref(module_name, node.id)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            imported = self.modules[module_name].imports.get(node.value.id)
+            if imported and imported[1] is None:
+                return self.class_ref(imported[0], node.attr)
+        return None
+
+    def receiver_class(self, value: ast.AST, owner: Definition) -> tuple[str, str] | None:
+        """The app class a method call's receiver is an instance of (or is):
+        a constructor call, a class, or a local or parameter whose every binding
+        in the owner is a constructor call of, or an annotation naming, one class."""
+        if isinstance(value, ast.Call):
+            return self._type_ref(value.func, owner.module)
+        if not isinstance(value, ast.Name) or value.id in {"self", "cls"}:
+            return None
+        key = (id(owner.node), value.id)
+        if key not in self._local_types:
+            self._local_types[key] = self._local_type(value, owner)
+        return self._local_types[key]
+
+    def _local_type(self, value: ast.Name, owner: Definition) -> tuple[str, str] | None:
+        name = value.id
+        local_types = set()
+        arguments = getattr(owner.node, "args", None)
+        for argument in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs] if arguments else []:
+            if argument.arg == name:
+                local_types.add(self._type_ref(argument.annotation, owner.module))
+        for node in ast.walk(owner.node):
+            if not any(isinstance(bound, ast.Name) and bound.id == name
+                       for target in _binding_targets(node) for bound in ast.walk(target)):
+                continue
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                    and isinstance(node.value, ast.Call):
+                local_types.add(self._type_ref(node.value.func, owner.module))
+            elif isinstance(node, ast.AnnAssign):
+                local_types.add(self._type_ref(node.annotation, owner.module))
+            else:
+                local_types.add(None)
+        if local_types:
+            return next(iter(local_types)) if len(local_types) == 1 else None
+        return self._type_ref(value, owner.module)
+
     def resolve(self, call_target: ast.AST, owner: Definition) -> list[Definition]:
-        """Definitions a call may run. A method call on an unknown receiver may
+        """Definitions a call may run. A method call on a receiver that resolves
+        to an app class runs that class's method. On an unknown receiver it may
         run any app method of that name; all candidates are followed, except
-        that an ambiguous builtin protocol name (see PROTOCOL_METHODS) is not."""
+        that a builtin container name (CONTAINER_METHODS) or an ambiguous
+        builtin protocol name (PROTOCOL_METHODS) is not."""
         module = self.modules[owner.module]
         if isinstance(call_target, ast.Name):
             name = call_target.id
@@ -247,6 +335,9 @@ class Index:
                     found = self.module_function(target_module, attr)
                     if found:
                         return [found]
+            receiver = self.receiver_class(value, owner)
+            if receiver is not None and (method := self.class_method(receiver, attr)):
+                return [method]
             if attr in CONTAINER_METHODS:
                 return []
             candidates = self.methods_by_name.get(attr, [])

@@ -141,7 +141,12 @@ operate, or contribute to the application.
   thread, so a synchronous call made there stalls every request. From each
   such entrypoint discovery follows the calls that run on the loop: calls made
   directly, including sync helpers at any depth, coroutines the chain calls or
-  awaits, and a function passed as an argument that the callee calls. Work
+  awaits, and a function passed as an argument that the callee calls. A
+  method call is followed into the app class its receiver resolves to: a
+  constructor call (`Adapter(config).append(...)`), a class, or a local or
+  parameter bound only to, or annotated with, one app class; a name a builtin
+  container or string also defines (`append`, `get`, `update`) is followed
+  only on such a receiver, and is otherwise the builtin. Work
   handed to a thread is not followed (`run_in_threadpool`,
   `asyncio.to_thread`, `anyio.to_thread.run_sync`, `loop.run_in_executor`,
   `executor.submit` not waited on with `.result()`); an awaited call is never

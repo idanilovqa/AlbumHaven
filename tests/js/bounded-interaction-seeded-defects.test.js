@@ -367,6 +367,19 @@ const DEFECTS = [
     expected: /^rejected BI-08 event-loop-blocking:database:psycopg\.connect@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_notes_create_reserved:route:POST \/album-notes via _seeded_note_count > _seeded_note_rows$/,
   },
   {
+    // A log-history write on the event loop: `append` shares a builtin list
+    // method's name, so it was followed only once its receiver, a constructor
+    // call of an app class, resolved.
+    id: 'BI-08 async route reaching a connection through a container-named method on a constructed adapter',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def album_note_replies_create_reserved() -> JSONResponse:\n',
+    replacement: 'async def album_note_replies_create_reserved() -> JSONResponse:\n'
+      + '    _SeededHistoryAdapter({}).append({"action": "seeded"}, scope=None)\n',
+    prelude: 'from music_app.services.log_history_postgres import LogHistoryPostgresAdapter as _SeededHistoryAdapter\n',
+    expected: /^rejected BI-08 event-loop-blocking:database:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_note_replies_create_reserved:route:POST \/album-note-replies via LogHistoryPostgresAdapter\.append/,
+  },
+  {
     id: 'BI-05 root settings reloaded through a new connection per requested path',
     language: 'py',
     file: 'music_app/routes/api_wave_c_asgi_routes.py',

@@ -1829,12 +1829,6 @@ function renderCoverLookupDrawer({
   const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
     : tasks.length) + musicBrainzBatches.length;
-  // The panel is titled by what it holds (owner, 2026-11-15).
-  const title = drawer.querySelector?.('.cover-lookup-drawer-title');
-  if (title) {
-    title.textContent = musicBrainzBatches.length && !tasks.length && !Number(counts?.total_count || 0)
-      ? MUSICBRAINZ_LOOKUP_TITLE : 'Cover lookups';
-  }
   const musicBrainzCards = document.getElementById('musicbrainz-lookup-cards');
   if (summary) {
     summary.textContent = [

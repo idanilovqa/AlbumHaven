@@ -322,7 +322,7 @@
   <aside class="cover-lookup-drawer shell-info-drawer" id="cover-lookup-drawer" data-shell-slot="info_drawer" data-shell-component-kind="{{ shell_drawer.component_kind or 'notification_drawer' }}" data-shell-content-kind="{{ shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-default-content-kind="{{ shell_drawer.default_content_kind or shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-supported-content-kinds="{{ (shell_drawer.supported_content_kinds or [shell_drawer.content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-surface-family="{{ shell_drawer.surface_family or 'notifications' }}" data-shell-default-surface-family="{{ shell_drawer.default_surface_family or shell_drawer.surface_family or 'notifications' }}" data-shell-placement="{{ shell_drawer.placement or 'right' }}" data-shell-splitter-desktop-only="{{ 'true' if shell_drawer.splitter and shell_drawer.splitter.desktop_only else 'false' }}" data-shell-mobile-fallback="{{ shell_drawer.splitter.mobile_fallback if shell_drawer.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_drawer.splitter.state_scope if shell_drawer.splitter else '' }}" hidden>
     <div class="cover-lookup-drawer-header">
       <div>
-        <h3 class="cover-lookup-drawer-title">Cover lookups</h3>
+        <h3 class="cover-lookup-drawer-title">Notifications</h3>
         <div class="cover-lookup-drawer-subtitle" id="cover-lookup-drawer-summary">No activity</div>
       </div>
       <div class="cover-lookup-drawer-actions">

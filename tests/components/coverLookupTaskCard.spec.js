@@ -216,7 +216,7 @@ for (const viewport of [
           <aside class="cover-lookup-drawer" id="cover-lookup-drawer" hidden>
             <div class="cover-lookup-drawer-header">
               <div>
-                <h3 class="cover-lookup-drawer-title">Cover lookups</h3>
+                <h3 class="cover-lookup-drawer-title">Notifications</h3>
                 <div class="cover-lookup-drawer-subtitle" id="cover-lookup-drawer-summary"></div>
               </div>
               <button id="cover-lookup-drawer-clear"></button>

@@ -233,3 +233,11 @@ test('the pasted artist field is the app search-field component with its open-li
   assert.match(html, /<span class="search-field-action"><button[^>]*search-field-button[^>]*aria-label="Open entered artist on MusicBrainz"/);
   assert.match(html, /<label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">/);
 });
+
+test('the notification panel is headed Notifications whatever cards it holds; each card keeps its own title', () => {
+  const markup = read('music_app/templates/index.html');
+  const drawer = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
+  assert.match(markup, /<h3 class="cover-lookup-drawer-title">Notifications<\/h3>/);
+  assert.doesNotMatch(drawer, /cover-lookup-drawer-title/, 'nothing renames the panel by its cards');
+  assert.match(read('music_app/static/js/runtime/musicbrainz-lookups.js'), /const MUSICBRAINZ_LOOKUP_TITLE = 'MusicBrainz lookup';/);
+});

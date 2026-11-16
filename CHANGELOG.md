@@ -4,6 +4,10 @@
 
 - The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target. Losing the network no longer stops playback at all: the player keeps its playback claim through the outage, retrying every 2 seconds, and renews it when the network returns, even past the claim's 30-second lease. The server now accepts that renewal until another device has claimed playback, so only another device taking over stops it, and Play after reconnecting or after a long pause no longer shows "Playback unavailable".
 
+## 0.11.14 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. 0.11.13 was merged before its pipeline's final gate ran, and that gate cannot run after a merge, so this release merges only once its complete pipeline has passed.
+
 ## 0.11.13 - 2026-11-16
 
 - Release only, no application change: carries 0.11.12 to the stable Android channel. The stable promotion needs a commit whose complete PR pipeline passed; 0.11.12's pipeline could not finish after its admin merge.

@@ -32327,12 +32327,19 @@ async function performDuplicateCopyRemoval(album, copy) {
       throw new Error(payload.error || 'Unable to delete the duplicate copy.');
     }
     await loadProblematicFiles(true);
-    await fetchAndRender(buildApiUrl(state.view), true);
+    // Owner 2026-11-16: a resolved album leaves the list and its details give way to the empty state.
+    const stillListed = (state.utility.problematicFiles || []).some((item) => String(item?.key || '') === albumKey);
+    if (!stillListed && String(state.utility.selectedProblematicKey || '') === albumKey) {
+      state.utility.selectedProblematicKey = '';
+      if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
+    }
     showToast(
       payload.cleanup_pending ? payload.message : 'Duplicate copy deleted.',
       payload.cleanup_pending ? 'error' : 'success',
       4000,
     );
+    // The gallery catches up in the background; the deletion's result never waits for it.
+    void Promise.resolve(fetchAndRender(buildApiUrl(state.view), true)).catch(() => {});
     return true;
   } catch (error) {
     console.error('[AlbumHaven][Utilities] Failed to delete duplicate copy.', error);

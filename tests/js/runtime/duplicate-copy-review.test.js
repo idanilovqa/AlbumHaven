@@ -442,7 +442,10 @@ test('authorized Delete previews, confirms exact whole folder, removes, and refr
   vm.createContext(c);
   vm.runInContext(fs.readFileSync(path.join(runtime, 'utility-loaders-and-cover-lookup.js'), 'utf8'), c,
     { filename: 'utility-loaders-and-cover-lookup.js' });
-  c.loadProblematicFiles = async (...args) => { refreshes.push(['problematic', ...args]); };
+  c.loadProblematicFiles = async (...args) => { refreshes.push(['problematic', ...args]); c.state.utility.problematicFiles = []; };
+  c.state.utility.selectedProblematicKey = 'album:key';
+  let detailRenders = 0;
+  c.renderUtilityModalContent = () => { detailRenders += 1; };
   const selected = { copy_number: 2, copy_ref: 'dcr1.7.copy', folder_name: 'Second copy' };
 
   assert.equal(await c.performDuplicateCopyRemoval({ key: 'album:key' }, selected), true);
@@ -458,6 +461,9 @@ test('authorized Delete previews, confirms exact whole folder, removes, and refr
   });
   assert.deepEqual(refreshes.map(item => item[0]), ['problematic', 'view']);
   assert.equal(toasts.at(-1)[1], 'success');
+  // Owner 2026-11-16: the resolved album leaves the list and its details show the empty state.
+  assert.equal(c.state.utility.selectedProblematicKey, '');
+  assert.equal(detailRenders, 1);
 });
 
 test('utility delegation consumes duplicate Delete without toggling its disclosure', () => {

@@ -151,14 +151,17 @@ def test_cover_gallery_hashes_local_duplicates_without_hashlib_file_digest(
     payload = serialize_cover_gallery_payload(
         album_root=album_root,
         track_paths={str(track_path)},
-        file_cache={str(track_path): {"cover_path": str(active_cover)}},
+        file_cache={str(track_path): {
+            "cover_path": str(active_cover),
+            "cover_revision": hashlib.sha256(active_cover.read_bytes()).hexdigest(),
+        }},
         image_extensions={".jpg"},
         image_dimensions=image_dimensions,
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    candidates = {item["path"]: item for item in payload["local_covers"]}
-    assert candidates[str(duplicate_cover)]["duplicate_of"] == str(active_cover)
+    assert payload["selected_source_path"] == str(duplicate_cover)
+    assert {item["path"] for item in payload["local_covers"]} == {str(active_cover), str(duplicate_cover)}
 
 
 def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Path):

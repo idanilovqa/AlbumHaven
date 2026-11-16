@@ -661,17 +661,8 @@ function applyCoverLookupGalleryPayload(gallery) {
     }
   }
   state.coverLookup.modal.remoteCover = gallery.remote_cover && typeof gallery.remote_cover === 'object' ? gallery.remote_cover : null;
-  // The canonical copy is not a second artwork choice when the server verified
-  // an identical source. Keep the real sources visible and the saved source selected.
-  const hidesCanonicalCopy = Boolean(incomingActiveLocalCover && gallery.active_cover_path
-    && String(gallery.active_cover_path) !== String(incomingActiveLocalCover.path));
-  state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
-    hidesCanonicalCopy && String(cover?.path || '') === String(gallery.active_cover_path)
-  ));
-  state.coverLookup.modal.hiddenCanonicalCoverAlias = hidesCanonicalCopy
-    ? { from: `local:${gallery.active_cover_path}`, to: `local:${incomingActiveLocalCover.path}` }
-    : null;
-  aliasHiddenCanonicalCoverSelections();
+  // Owner 2026-11-16: every real file is a choice, byte-identical copies included.
+  state.coverLookup.modal.localCovers = incomingLocalCovers;
   state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
   const candidateSnapshot = normalizeCoverLookupCandidateSnapshot(gallery.candidate_snapshot);
@@ -1166,18 +1157,6 @@ function orderedCoverSelectionEntry(reference) {
   return { key, reference: { selection_id: selectionId } };
 }
 
-// A saved selection may name the album's canonical cover file, which the gallery
-// hides behind its byte-identical source; that source card stands for it.
-function aliasHiddenCanonicalCoverSelections() {
-  const modal = state.coverLookup.modal;
-  const alias = modal.hiddenCanonicalCoverAlias;
-  const selections = modal.orderedCoverSelections;
-  if (!alias || !Array.isArray(selections) || selections.some((item) => item?.key === alias.to)) return;
-  modal.orderedCoverSelections = selections.map((item) => (
-    item?.key === alias.from ? { ...item, key: alias.to } : item
-  ));
-}
-
 function orderedCoverSelectionSignature(selections) {
   return JSON.stringify((Array.isArray(selections) ? selections : []).map((item) => item.reference));
 }
@@ -1239,7 +1218,6 @@ function seedOrderedCoverSelectionFromAlbum(album) {
   if (album?.selected_covers_loaded !== true || !Array.isArray(album.selected_covers)) return false;
   const selections = album.selected_covers.map(orderedCoverSelectionEntry).filter(Boolean);
   state.coverLookup.modal.orderedCoverSelections = selections;
-  aliasHiddenCanonicalCoverSelections();
   state.coverLookup.modal.orderedSelectionMode = selections.length > 1;
   state.coverLookup.modal.orderedCoversRevision = Math.max(0, Number(album.selected_covers_revision || 0) || 0);
   state.coverLookup.modal.orderedCoverBaseline = orderedCoverSelectionSignature(selections);
@@ -1259,7 +1237,6 @@ async function loadOrderedCoverSelectionForAlbum(album) {
       .map(orderedCoverSelectionEntry)
       .filter(Boolean);
     state.coverLookup.modal.orderedCoverSelections = selections;
-    aliasHiddenCanonicalCoverSelections();
     state.coverLookup.modal.orderedSelectionMode = selections.length > 1;
     state.coverLookup.modal.orderedCoversRevision = Math.max(
       0, Number(data.selected_covers_revision || 0) || 0,
@@ -2976,14 +2953,9 @@ function renderCoverLookupModal() {
   if (els.subtitle) {
     els.subtitle.innerHTML = buildCoverLookupAlbumSubtitleHtml(album);
   }
-  const allLocalCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
-  // Compact pages show one choice per initial artwork; desktop retains each
-  // file. Keep a draft chosen on desktop visible after the viewport narrows.
+  // Every real file shows on every layout, byte-identical copies included.
+  const localCovers = Array.isArray(modalState.localCovers) ? modalState.localCovers : [];
   const compact = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  const localCovers = compact ? allLocalCovers.filter(cover => !(
-    cover.duplicate_of && cover.path !== modalState.pendingLocalPath
-    && allLocalCovers.some(other => other.path === cover.duplicate_of)
-  )) : allLocalCovers;
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
   const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
     ? modalState.manualImageAttachments : [];
@@ -3865,7 +3837,6 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.orderedCoverSelections = [];
-  state.coverLookup.modal.hiddenCanonicalCoverAlias = null;
   state.coverLookup.modal.orderedSelectionMode = false;
   state.coverLookup.modal.orderedCoversRevision = 0;
   state.coverLookup.modal.currentCoverToken = '';
@@ -3967,7 +3938,6 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.orderedCoverSelections = [];
-  state.coverLookup.modal.hiddenCanonicalCoverAlias = null;
   state.coverLookup.modal.orderedSelectionMode = false;
   state.coverLookup.modal.orderedCoversRevision = 0;
   state.coverLookup.modal.currentCoverToken = '';

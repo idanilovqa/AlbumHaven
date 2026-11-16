@@ -111,8 +111,8 @@ def prepare_mobile_layout_media(root: Path, *, extended: bool = False) -> dict[s
         draw.text((28, 446), artist.upper(), fill=(182, 190, 195))
         image.save(cover, quality=90)
         if extended:
-            # Keep both generated source choices immutable. cover.jpg is the
-            # canonical copy and is deduplicated against its selected source in UI.
+            # Keep both generated source choices immutable. cover-original.jpg is a
+            # byte copy of cover.jpg; Cover Lookup shows both files.
             image.save(folder / "cover-original.jpg", quality=90)
             image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(folder / "cover-alternate.jpg", quality=90)
         titles = LONG_TRACKS if album == LONG_ALBUM else ("Open Water", "Small Hours", "Coming Home")

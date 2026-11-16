@@ -220,13 +220,11 @@ def _file_sha256(path: Path) -> str:
 
 
 def _matching_local_cover_sources(
-    candidates: list[dict[str, object]], active_path: Path, revision: str | None,
+    candidates: list[dict[str, object]], active_path: Path, revision: str,
 ) -> Iterator[str]:
-    """Compare content without turning initial duplicate bytes into a saved choice."""
+    """The files whose bytes match the saved cover revision."""
     try:
         size = active_path.stat().st_size
-        if not revision:
-            revision = _file_sha256(active_path)
     except OSError:
         return
     for item in candidates:
@@ -282,11 +280,6 @@ def serialize_cover_gallery_payload(
     selected_source_path = None if active_remote_cover else selected_local_cover_source(
         local_candidates, active_cover_path, active_cover_revision,
     )
-    if active_cover_path and not active_cover_revision and not active_remote_cover:
-        duplicates = set(_matching_local_cover_sources(local_candidates, active_cover_path, None))
-        for candidate in local_candidates:
-            if candidate["path"] in duplicates:
-                candidate["duplicate_of"] = str(active_cover_path)
     if active_cover_revision and not active_remote_cover:
         for candidate in local_candidates:
             if candidate.get("is_active") or candidate["path"] == selected_source_path:

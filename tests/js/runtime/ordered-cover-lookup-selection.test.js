@@ -574,35 +574,32 @@ require('node:test')('keyboard hold does not swallow the next intentional card a
   assert.equal(context.state.coverLookup.modal.suppressOrderedSelectionClickKey, '');
 });
 
-require('node:test')('a saved canonical cover answers on the source card the gallery shows for it', () => {
-  // Owner 2026-11-15 (Dragonland, Holy War): 3 covers selected, but Cover Look Up showed
-  // no #1. Saved #1 was cover.jpg, a byte copy of Covers/Front.jpg that the gallery hides.
+require('node:test')('a saved selection stays on the exact file even when another file has the same bytes', () => {
+  // Owner 2026-11-15/16 (Dragonland, Holy War): 3 covers selected but #1 (cover.jpg, a byte copy of
+  // Covers/Front.jpg) had no card. Selected files are never hidden or replaced by an identical file.
   const context = loadRuntime();
   const modal = context.state.coverLookup.modal;
-  const saved = [
+  context.seedOrderedCoverSelectionFromAlbum({ selected_covers_loaded: true, selected_covers: [
     { selection_id: 'one', kind: 'local', path: 'C:/Music/Album/cover.jpg' },
     { selection_id: 'two', kind: 'local', path: 'C:/Music/Album/cover-existing-1.jpg' },
-  ];
-  context.seedOrderedCoverSelectionFromAlbum({ selected_covers_loaded: true, selected_covers: saved });
+  ] });
   context.applyCoverLookupGalleryPayload({
     active_cover_path: 'C:/Music/Album/cover.jpg',
     selected_source_path: 'C:/Music/Album/Covers/Front.jpg',
     local_covers: [
-      { path: 'C:/Music/Album/cover.jpg', is_active: true },
-      { path: 'C:/Music/Album/Covers/Front.jpg' },
+      { path: 'C:/Music/Album/cover.jpg', is_active: true, cover_revision: 'r' },
+      { path: 'C:/Music/Album/Covers/Front.jpg', cover_revision: 'r' },
       { path: 'C:/Music/Album/cover-existing-1.jpg' },
     ],
     other_art: [],
   });
 
-  assert.deepEqual(modal.localCovers.map((cover) => cover.path),
-    ['C:/Music/Album/Covers/Front.jpg', 'C:/Music/Album/cover-existing-1.jpg']);
+  assert.deepEqual(modal.localCovers.map((cover) => cover.path), [
+    'C:/Music/Album/cover.jpg', 'C:/Music/Album/Covers/Front.jpg', 'C:/Music/Album/cover-existing-1.jpg',
+  ]);
   assert.deepEqual(modal.orderedCoverSelections.map((item) => item.key),
-    ['local:C:/Music/Album/Covers/Front.jpg', 'local:C:/Music/Album/cover-existing-1.jpg']);
-  // Unchanged references: Save is not offered for a selection the owner did not change.
-  assert.equal(context.orderedCoverSelectionSignature(modal.orderedCoverSelections), modal.orderedCoverBaseline);
-  // #1 can be unselected from that card.
-  context.applyCoverLookupSelectionIntent({ key: 'local:C:/Music/Album/Covers/Front.jpg', reference: {} });
+    ['local:C:/Music/Album/cover.jpg', 'local:C:/Music/Album/cover-existing-1.jpg']);
+  context.applyCoverLookupSelectionIntent({ key: 'local:C:/Music/Album/cover.jpg', reference: {} });
   assert.deepEqual(modal.orderedCoverSelections.map((item) => item.key),
     ['local:C:/Music/Album/cover-existing-1.jpg']);
 });

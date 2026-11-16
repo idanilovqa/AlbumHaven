@@ -433,6 +433,7 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         assert len(structural_calls) == 1
         call = structural_calls[0]
         assert call["changed_field_names"] == {expected_targeted_field}
+        assert call["rebuild_relation_projection"] is True
     else:
         assert structural_calls == []
         assert len(generic_calls) == 1
@@ -440,7 +441,6 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         assert args[2] == {track_path: resolved_entry}
         assert call["baseline_file_cache"] == {track_path: previous_entry}
     assert callable(call["before_commit"])
-    assert call["rebuild_relation_projection"] is True
 
 
 def test_startup_recovery_passes_merged_inventory_for_blank_album_change(

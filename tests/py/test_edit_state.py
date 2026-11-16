@@ -102,6 +102,7 @@ def test_partial_rebuild_replaces_automatically_year_split_albums(tmp_path):
             {paths[0]},
             {paths[0]},
             set(),
+            library_state=state,
         )
     ] == [(2001, "test artist::test album::year::2001")]
 
@@ -208,5 +209,25 @@ def test_update_cache_entry_after_year_repair_keeps_precise_release_date_in_sync
 
     assert updated["year"] == "2014"
     assert updated["release_date"] == "2014"
+
+
+def test_replaced_album_index_keeps_order_and_lookups_without_reindexing():
+    from music_app.services.library_album_index import LibraryAlbumIndex
+
+    def album(key, artist, path):
+        return SimpleNamespace(key=key, album_artist=artist, year=None, name=key, tracks=[SimpleNamespace(path=path)])
+
+    first, middle, last = album("a::x", "A", "a.mp3"), album("m::x", "M", "m.mp3"), album("z::x", "Z", "z.mp3")
+    index = LibraryAlbumIndex([first, middle, last])
+    rebuilt = [album("m::x::year::2001", "M", "m.mp3"), album("n::x", "N", "n.mp3")]
+
+    derived = index.replaced([middle], rebuilt, sort_key=edit_state_module._merge_sort_key)
+
+    assert derived.albums == [first, *rebuilt, last]
+    assert derived.albums_with_any_track({"z.mp3", "n.mp3", "m.mp3"}) == [*rebuilt, last]
+    assert derived.album("m::x") is None and derived.album("n::x") is rebuilt[1]
+    assert derived.albums_of_releases({"m::x"}) == [rebuilt[0]]
+    # The source index is untouched.
+    assert index.albums == [first, middle, last] and index.album("m::x") is middle
 
 

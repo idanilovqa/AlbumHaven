@@ -132,10 +132,7 @@ def apply_cover_selection_for_tracks(
     resolved_state = library_state
 
     def find_updated_albums(updated_track_paths: set[str]) -> list[dict[str, object]]:
-        return find_albums_by_track_paths_in_albums(
-            resolved_state.get("albums", []) if isinstance(resolved_state, dict) else [],
-            updated_track_paths,
-        )
+        return find_albums_by_track_paths_in_albums(resolved_state, updated_track_paths)
 
     def find_problematic_album(updated_track_paths: set[str]) -> dict[str, object] | None:
         if not include_problematic_album:

@@ -18,7 +18,7 @@ import pytest
 from music_app.services import library_roots as library_roots_module
 from music_app.services.library_roots import normalize_library_root_settings
 from tests.py.asgi_testing import create_test_asgi_app, decode_json, run_asgi_request
-from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
 from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
 
@@ -432,3 +432,482 @@ def test_cover_gallery_mark_seen_route_contract_probes_only_the_selected_album_a
         return _measure(monkeypatch, request)
 
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_gallery_mark_seen"))
+
+
+class _CountingFileCache(dict):
+    """A published scan cache that counts every entry a reader walks or copies."""
+
+    counts = OperationCounts()
+
+    def __iter__(self):
+        for path in super().__iter__():
+            self.counts.membership_rows += 1
+            yield path
+
+    def keys(self):
+        return list(iter(self))
+
+    def items(self):
+        return [(path, self[path]) for path in self]
+
+    def values(self):
+        return [self[path] for path in self]
+
+
+def _repairable_library(app, root: Path, track_count: int) -> tuple[list[str], OperationCounts]:
+    """One 12-track album with a mis-decoded title among `track_count` tracks;
+    every album and cache entry a request walks is counted."""
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_album_index import publish_library_albums
+
+    album_root = root / "Broadcast" / "Tender Buttons"
+    album_root.mkdir(parents=True)
+    album_cache = {}
+    for number in range(1, 13):
+        path = album_root / f"{number:02d}.mp3"
+        path.write_bytes(b"track")
+        album_cache[str(path)] = {
+            "path": str(path), "title": "Ã‰tÃ©" if number == 1 else f"Song {number}", "album": "Tender Buttons",
+            "album_artist": "Broadcast", "artist": "Broadcast", "track_number": number, "year": 2005,
+        }
+    unrelated_cache = {}
+    unrelated_albums = []
+    for album_index in range((track_count - 12) // 4):
+        tracks = []
+        for number in range(1, 5):
+            path = f"/library/Artist {album_index:05d}/Album/{number:02d}.mp3"
+            unrelated_cache[path] = {"path": path, "title": f"Track {number}", "album": "Album", "album_artist": f"Artist {album_index:05d}"}
+            tracks.append(SimpleNamespace(path=path))
+        unrelated_albums.append(SimpleNamespace(
+            key=f"artist {album_index:05d}::album", name="Album", album_artist=f"Artist {album_index:05d}", year=None, tracks=tracks,
+        ))
+    counts = OperationCounts()
+    albums = _CountingAlbums(sorted(
+        [*build_albums_from_file_cache(album_cache), *unrelated_albums], key=lambda album: album.album_artist.lower(),
+    ))
+    file_cache = _CountingFileCache({**unrelated_cache, **album_cache})
+    state = app.state.library_state
+    state.update({"file_cache": file_cache, "relation_views": {}, "separate_release_keys": set()})
+    publish_library_albums(state, albums)
+    albums.counts = file_cache.counts = counts
+    return sorted(album_cache), counts
+
+
+@pytest.mark.parametrize("repair", ["separate-release", "selected-rows"])
+def test_repair_album_route_contract_reads_only_the_repaired_album_at_production_track_count(
+    library_app, tmp_path, monkeypatch, repair,
+):
+    from music_app.routes import api_wave_a_asgi_routes
+    from music_app.services import ignored_repairs, rule_state_postgres
+    from music_app.services.library_album_index import library_album_index
+
+    select_backend = api_wave_a_asgi_routes.select_runtime_persistence_adapter
+    # The in-memory library browse path, as on a file-backed host.
+    monkeypatch.setattr(
+        api_wave_a_asgi_routes, "select_runtime_persistence_adapter",
+        lambda seam_id, config: (
+            SimpleNamespace(seam_id=seam_id, effective_backend="file")
+            if seam_id == "library_browse" else select_backend(seam_id, config)
+        ),
+    )
+    saved_separate_keys: list[set[str]] = []
+    # The Postgres rule-state store keeps the separate releases it is given
+    # and holds no ignored repairs.
+    monkeypatch.setattr(
+        rule_state_postgres.RuleStatePostgresAdapter, "save_separate_release_keys",
+        lambda _self, keys: saved_separate_keys.append(set(keys)),
+    )
+    monkeypatch.setattr(ignored_repairs, "load_ignored_repair_keys", lambda _config: set())
+    written: list[tuple[str, dict[str, str]]] = []
+    # The tag writer is media I/O outside this contract; it reports the fields it wrote.
+    monkeypatch.setattr(
+        api_wave_a_asgi_routes, "_apply_repairs_worker",
+        lambda path, repairs: written.append((path, dict(repairs))) or (path, True, sorted(repairs)),
+    )
+    finalized: list[dict[str, object]] = []
+    # The save task finalizes on its own registered worker.
+    monkeypatch.setattr(api_wave_a_asgi_routes, "queue_finalize_save_task", lambda **kwargs: finalized.append(kwargs))
+
+    def run(track_count: int) -> OperationCounts:
+        album_paths, counts = _repairable_library(library_app, tmp_path / f"library-{track_count}", track_count)
+        payload = {"confirmed": True, "album": {"name": "Tender Buttons", "tracks": [{"path": path} for path in album_paths]}}
+        if repair == "separate-release":
+            payload.update(selected_rows=[], separate_release_keys=["broadcast::tender buttons"])
+        else:
+            payload["selected_rows"] = [f"{album_paths[0]}::title"]
+        with count_filesystem_and_media(monkeypatch, counts):
+            status, _headers, body = run_asgi_request(library_app, "POST", "/utilities/repair-album", json_body=payload)
+        assert status == 200, body
+        result = decode_json(body)
+        if repair == "separate-release":
+            assert saved_separate_keys[-1] == {"broadcast::tender buttons"}
+            assert {track["path"] for album in result["updated_albums"] for track in album["tracks"]} == set(album_paths)
+            # The release now splits by year, in the response and in the published albums.
+            assert result["updated_problematic_album"]["key"] == "broadcast::tender buttons::year::2005"
+            assert library_album_index(library_app.state.library_state).album("broadcast::tender buttons::year::2005")
+            assert library_album_index(library_app.state.library_state).album("broadcast::tender buttons") is None
+        else:
+            assert written[-1] == (album_paths[0], {"title": "Été"})
+            assert result["changed_count"] == 1
+            assert result["updated_album"]["tracks"][0]["title"] == "Été"
+            assert set(finalized[-1]["updated_file_cache"]) == set(finalized[-1]["previous_file_cache"]) == {album_paths[0]}
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_a_asgi_routes.py#utilities_repair_album"))
+
+
+class _Rows:
+    description = ("rows",)
+    rowcount = -1
+
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _PublishedGalleryDatabase:
+    """Postgres double for a library of `track_count` tracks (12 per album)
+    whose root gallery projection is published. Each read returns what its
+    statement selects; a statement it does not know fails the contract."""
+
+    page_cover: Path | None = None
+
+    def __init__(self, track_count: int):
+        self.album_count = max(1, track_count // 12)
+        self.unknown: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+    def _occurrence(self, ordinal: int) -> dict[str, object]:
+        return {
+            "artist_id": ordinal, "artist_name": f"Artist {ordinal:06d}", "artist_sort_name": f"Artist {ordinal:06d}",
+            "album_id": ordinal + 1, "album_key": f"artist {ordinal:06d}::album", "album_title": "Album",
+            "album_release_year": 2000,
+        }
+
+    def _album_row(self, album_id: int) -> dict[str, object]:
+        ordinal = album_id - 1
+        return {
+            **self._occurrence(ordinal),
+            "album_cover_path": str(self.page_cover) if self.page_cover else None,
+            "album_metadata": {"album_artist": f"Artist {ordinal:06d}", "artists": [f"Artist {ordinal:06d}"]},
+            "track_id": album_id * 100, "track_key": f"album-{album_id}-track", "track_title": "Track",
+            "disc_number": 1, "track_number": 1, "duration_seconds": 90,
+            "file_private_path": f"/library/Artist {ordinal:06d}/Album/01.flac", "file_library_root_id": 1,
+            "file_library_root_category": "main_library", "track_count": 12, "total_duration_seconds": 1080,
+        }
+
+    def execute(self, sql, params=None):
+        text = " ".join(str(sql).split()).lower()
+        params = params or {}
+        if text.startswith("set transaction"):
+            return _Rows()
+        if "bootstrap_context_ready" in text:
+            return _Rows([{"bootstrap_context_ready": 1}])
+        if "to_regclass('library.gallery_projection_state')" in text:
+            return _Rows([{"installed": True}])
+        if "information_schema.columns" in text:
+            return _Rows([{"compatible": True}])
+        if "join library.gallery_projection_state state" in text:
+            return _Rows([{"library_id": 1, "generation": 7}])
+        if "from library.gallery_projection_snapshots" in text:
+            sidebar = [
+                {"artist": f"Artist {index:06d}", "artist_display": f"Artist {index:06d}", "count": 1}
+                for index in range(self.album_count)
+            ]
+            return _Rows([{"revision": "r1", "sidebar": sidebar, "album_count": self.album_count, "occurrence_count": self.album_count}])
+        if "select payload from library.gallery_projection_occurrences" in text:
+            return _Rows(
+                {"payload": self._occurrence(ordinal)}
+                for ordinal in range(params["offset"], min(params["end"], self.album_count))
+            )
+        if "gallery_album_ids" in params:
+            return _Rows(self._album_row(album_id) for album_id in sorted(params["gallery_album_ids"]))
+        if "alias_to_canonical" in text:
+            return _Rows([{"alias_to_canonical": {}, "canonical_to_aliases": {}}])
+        if "ignored_version_state as" in text and "manual_version_state as" in text:
+            return _Rows([{"ignored_version_keys": [], "manual_version_links": {}}])
+        if "from app.album_ratings" in text or "from app.album_disc_ratings" in text:
+            return _Rows()
+        self.unknown.append(text[-300:])
+        return _Rows()
+
+
+@pytest.fixture
+def published_gallery(library_app, tmp_path, monkeypatch):
+    """The Postgres library browse path, reading a published root gallery from
+    the `_PublishedGalleryDatabase` stand-in at the browse connection seam."""
+    import contextlib
+
+    from music_app.routes import api_read_asgi_routes, web_asgi
+    from music_app.services import covers, gallery_projection_postgres
+    from music_app.services import library_browse_postgres as browse
+
+    monkeypatch.setattr(
+        api_read_asgi_routes, "select_runtime_persistence_adapter",
+        lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="postgres"),
+    )
+    monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    # Background projection and display-variant work are their own registered entries.
+    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(covers, "queue_cover_display_variant_generation", lambda *_args, **_kwargs: None)
+    cover = tmp_path / "page-cover.jpg"
+    cover.write_bytes(b"cover")
+    current: dict[str, object] = {}
+
+    @contextlib.contextmanager
+    def browse_connection(_database_url, **_options):
+        yield CountingConnection(current["database"], current["counts"])
+
+    monkeypatch.setattr(browse, "_pooled_connection", browse_connection)
+
+    def install(track_count: int) -> tuple[_PublishedGalleryDatabase, OperationCounts]:
+        database = _PublishedGalleryDatabase(track_count)
+        database.page_cover = cover
+        current.update(database=database, counts=OperationCounts())
+        return database, current["counts"]
+
+    return install
+
+
+@pytest.mark.parametrize("route", [
+    ("py:routes/api_read_asgi_routes.py#view_data", "/view-data", {"surface": "albums", "gallery_page_size": "50"}),
+    ("py:routes/web_asgi.py#bootstrap_data", "/bootstrap-data", {"surface": "albums"}),
+], ids=["view-data", "bootstrap-data"])
+def test_root_gallery_route_contract_reads_one_published_page_at_production_track_count(
+    library_app, published_gallery, monkeypatch, route,
+):
+    from music_app.services import covers
+
+    interaction_id, path, query = route
+
+    def run(track_count: int) -> OperationCounts:
+        database, counts = published_gallery(track_count)
+
+        def request():
+            status, _headers, body = run_asgi_request(library_app, "GET", path, query=query)
+            assert status == 200, body
+            payload = decode_json(body)
+            view = payload.get("initial_view", payload)
+            albums = [album for group in view["artist_groups"] for album in group["albums"]]
+            assert [album["key"] for album in albums] == [f"artist {index:06d}::album" for index in range(len(albums))]
+            assert 0 < len(albums) <= 50
+            assert view["album_count"] == database.album_count
+            assert database.unknown == []
+
+        request()
+        counts.__init__()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction_id))
+
+
+def _cover_lookup_library(app, root: Path, album_count: int) -> tuple[Path, list[str], OperationCounts]:
+    """`album_count` sibling albums in the Main Library (folders and cache
+    entries) plus one selected two-track album; returns its folder, its track
+    paths, and the counts every cache walk is recorded in."""
+    from PIL import Image
+
+    main_root = root.resolve()
+    library_cache = {}
+    for index in range(album_count):
+        sibling = main_root / f"Artist {index:04d}" / "Album" / "01.mp3"
+        sibling.parent.mkdir(parents=True)
+        sibling.write_bytes(b"track")
+        library_cache[str(sibling)] = {"path": str(sibling), "title": "Track", "album": "Album", "album_artist": f"Artist {index:04d}"}
+    album_root = main_root / "Selected" / "Album"
+    album_root.mkdir(parents=True)
+    track_paths = []
+    for number in (1, 2):
+        track = album_root / f"{number:02d}.mp3"
+        track.write_bytes(b"track")
+        track_paths.append(str(track))
+        library_cache[str(track)] = {
+            "path": str(track), "title": f"Song {number}", "album": "Album", "album_artist": "Selected", "track_number": number,
+        }
+    Image.new("RGB", (1200, 1200), "red").save(album_root / "front.jpg")
+    _use_roots(app, {"main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}]})
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_album_index import publish_library_albums
+
+    albums = _CountingAlbums([
+        *build_albums_from_file_cache({path: library_cache[path] for path in track_paths}),
+        *(SimpleNamespace(key=f"artist {index:04d}::album", tracks=[SimpleNamespace(path=path)])
+          for index, path in enumerate(path for path in library_cache if path not in track_paths)),
+    ])
+    file_cache = _CountingFileCache(library_cache)
+    state = app.state.library_state
+    state.update({"file_cache": file_cache, "relation_views": {}})
+    publish_library_albums(state, albums)
+    counts = albums.counts = file_cache.counts = OperationCounts()
+    return album_root, track_paths, counts
+
+
+def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes
+    from music_app.services import covers
+
+    from music_app.services import cover_lookup_tasks
+
+    notified: list[str] = []
+    # The Postgres notification store keeps the one task it is given.
+    monkeypatch.setattr(
+        cover_lookup_tasks, "upsert_cover_lookup_notification",
+        lambda _config, task, **_kwargs: notified.append(str(task.get("id"))),
+    )
+    match = {"id": "pasted-1", "image_url": "https://covers.example/front.jpg", "source": "manual", "width": 1200, "height": 1200}
+    # Fetching the pasted pages is provider network work outside this contract.
+    monkeypatch.setattr(api_wave_d_asgi_routes, "add_manual_cover_candidates_from_urls", lambda urls, **_kwargs: [dict(match)])
+
+    def run(album_count: int) -> OperationCounts:
+        album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+
+        def request():
+            status, _headers, body = run_asgi_request(
+                library_app, "POST", "/utilities/cover-lookup/add-remote",
+                json_body={"album": {"name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]},
+                           "urls": ["https://covers.example/album"]},
+            )
+            assert status == 200, body
+            payload = decode_json(body)
+            assert [item["id"] for item in payload["task"]["possible_matches"]] == ["pasted-1"]
+            assert payload["gallery"]["album_root"] == str(album_root)
+            assert [Path(item["path"]).name for item in payload["gallery"]["local_covers"]] == ["front.jpg"]
+
+        request()
+        counts.__init__()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_add_remote"))
+
+
+def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes
+    from music_app.services import covers, library_browse_postgres
+
+    selected: dict[str, object] = {}
+
+    class SelectedAlbumRepository:
+        """The Postgres browse reads of the selected album."""
+
+        def __init__(self, _config, **_kwargs):
+            pass
+
+        def build_album_payloads_by_track_paths(self, _track_paths):
+            return [{"tracks": [{"path": path} for path in selected["track_paths"]]}]
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            cache = library_app.state.library_state["file_cache"]
+            return {path: dict(cache[path]) for path in track_paths}
+
+    monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", SelectedAlbumRepository)
+    monkeypatch.setattr(api_wave_d_asgi_routes, "PostgresLibraryBrowseRepository", SelectedAlbumRepository)
+    persisted: list[tuple[set[str], str]] = []
+
+    def persist_cover_selection(track_paths, cover_path, *, commit_guard, **_options):
+        # The Postgres cover-selection commit for the selected tracks.
+        persisted.append((set(track_paths), str(cover_path)))
+        return commit_guard(lambda: {"album_rows_updated": 1, "track_file_rows_updated": len(track_paths)})
+
+    monkeypatch.setattr(api_wave_d_asgi_routes, "persist_cover_selection_for_tracks", persist_cover_selection)
+
+    def run(album_count: int) -> OperationCounts:
+        album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        selected["track_paths"] = track_paths
+
+        def request():
+            status, _headers, body = run_asgi_request(
+                library_app, "POST", "/utilities/cover-lookup/local-select",
+                json_body={"album": {"name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]},
+                           "source_path": str(album_root / "front.jpg")},
+            )
+            assert status == 200, body
+            assert decode_json(body)["selected_cover_path"] == str(album_root / "cover.jpg")
+            assert persisted[-1] == (set(track_paths), str(album_root / "cover.jpg"))
+
+        request()
+        counts.__init__()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_local_select"))
+
+
+def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes
+    from music_app.services import cover_lookup_tasks, covers
+
+    # The Postgres notification store keeps the one task it is given.
+    monkeypatch.setattr(cover_lookup_tasks, "upsert_cover_lookup_notification", lambda *_args, **_kwargs: None)
+
+    class SnapshotRepository:
+        """The Postgres candidate-snapshot store resolves the selected album."""
+
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return 7
+
+    monkeypatch.setattr(api_wave_d_asgi_routes, "AlbumCoverCandidateSnapshotRepository", SnapshotRepository)
+    queued: list[tuple[str, set[str]]] = []
+    # Downloading and saving the image runs on its own registered worker.
+    monkeypatch.setattr(
+        api_wave_d_asgi_routes, "queue_cover_lookup_save_remote_task",
+        lambda task_id, _album_root, track_paths, candidate_id, *_args, **_kwargs: queued.append((candidate_id, set(track_paths))),
+    )
+    match = {"id": "remote-1", "url": "https://covers.example/front.jpg", "source": "musicbrainz", "art_kind": "cover", "width": 1200, "height": 1200}
+
+    def run(album_count: int) -> OperationCounts:
+        album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        album = {"id": 7, "name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]}
+        task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(album, set(track_paths), config=library_app.state.config)
+        cover_lookup_tasks.update_cover_lookup_task(
+            task_id, config=library_app.state.config, possible_matches=[dict(match)], status="completed",
+        )
+
+        def request():
+            status, _headers, body = run_asgi_request(
+                library_app, "POST", "/utilities/cover-lookup/save-remote",
+                json_body={"album": album, "task_id": task_id, "candidate_id": "remote-1"},
+            )
+            assert status == 200, body
+            assert decode_json(body)["optimistic_cover_path"] == str(album_root / "cover.jpg")
+            assert queued[-1] == ("remote-1", set(track_paths))
+
+        request()
+        counts.__init__()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_save_remote"))

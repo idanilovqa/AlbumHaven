@@ -3889,6 +3889,179 @@ def test_stale_search_requires_background_recovery_without_live_alias_build(monk
         repository.build_search_payload(query_params={"q": query, "omit_sidebar": "1", "all_artists": "1" if all_artists else "0"})
 
 
+def _pending_family_browse(monkeypatch, artist_count: int):
+    """Browse over a relation projection a watcher event marked stale.
+
+    The last published projection knows two families; since it was built the
+    watcher found "Kipelov Live", renamed "Ария" to "Aria Band", and deleted the
+    only album of "Kipelov Band". Filler artists scale the library.
+    """
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import relation_projection_builder as builder
+    from music_app.services import relation_projection_postgres as relation_projection
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts
+
+    counts = OperationCounts()
+    fillers = [f"Filler Artist {index:05d}" for index in range(artist_count)]
+    alias_to_canonical = {
+        "Кипелов": "Кипелов",
+        "Kipelov": "Кипелов",
+        "Kipelov Band": "Кипелов",
+        "Ария": "Ария",
+        "Aria": "Ария",
+        **{name: name for name in fillers},
+    }
+    canonical_to_aliases: dict[str, list[str]] = {}
+    for alias, canonical in alias_to_canonical.items():
+        canonical_to_aliases.setdefault(canonical, []).append(alias)
+    current_artists = [
+        "Кипелов", "Kipelov", "Kipelov Live", "Aria", "Aria Band", *fillers,
+    ]
+
+    class Connection:
+        def execute(self, sql, params=None):
+            sql = str(sql)
+            if "to_regclass('library.gallery_projection_state')" in sql:
+                return _InventoryCursor(row={"installed": False})
+            if "relation_alias_cache_identity" in sql:
+                return _InventoryCursor(row={
+                    "library_id": 1, "relation_alias_fingerprint": f"pending-{artist_count}",
+                })
+            if "projection_structure_complete" in sql:
+                return _InventoryCursor(row={
+                    "library_id": 1,
+                    "relation_alias_fingerprint": f"pending-{artist_count}",
+                    "alias_to_canonical": alias_to_canonical,
+                    "canonical_to_aliases": canonical_to_aliases,
+                    "relation_projection": {"status": "stale"},
+                    "projection_structure_complete": True,
+                    "projection_snapshot_missing": False,
+                })
+            return _InventoryCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def builder_call(*_args, **_kwargs):
+        counts.count("builder_calls")
+        pytest.fail("browse must not rebuild relations on the request thread")
+
+    for module, name in (
+        (builder, "build_postgres_relation_views"),
+        (builder, "build_postgres_relation_alias_views"),
+        (relation_projection, "build_relation_views_from_postgres_rows"),
+        (relation_projection, "ensure_relation_projection_ready"),
+    ):
+        monkeypatch.setattr(module, name, builder_call)
+    refreshes = []
+    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", lambda *_a, **_k: refreshes.append(1))
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": f"postgresql://album_haven_app@localhost/pending-{artist_count}"},
+        connect=lambda _url: CountingConnection(Connection(), counts),
+    )
+    monkeypatch.setattr(repository, "_load_live_relation_alias_maps", builder_call)
+    monkeypatch.setattr(repository, "_load_root_sidebar_rows", lambda _state, *, connection=None: [
+        {"artist_name": name, "album_count": 1} for name in current_artists
+    ])
+    return repository, counts, refreshes
+
+
+def test_pending_relation_rebuild_keeps_last_families_without_request_builds(
+    monkeypatch, default_empty_relation_alias_projection,
+):
+    """Keep last families, counted at 20 and 14,000 artists: a stale projection
+    still groups its families, the watcher-found artist shows ungrouped at once,
+    and no request rebuilds relations or does more statements as the library grows."""
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    # Read the stale projection through the real loader.
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "_load_relation_alias_maps",
+        default_empty_relation_alias_projection,
+    )
+    statements = {}
+    for artist_count in (20, 14_000):
+        repository, counts, refreshes = _pending_family_browse(monkeypatch, artist_count)
+
+        sidebar = repository.build_root_startup_preview_payload(
+            query_params={}, sidebar_only=True,
+        )["artists_sidebar"]
+        gallery_names = repository.canonical_gallery_artist_names(
+            ["Kipelov", "Kipelov Band", "Kipelov Live", "Aria", "Aria Band"],
+        )
+
+        named = {
+            entry["artist"]: entry["count"]
+            for entry in sidebar
+            if not entry["artist"].startswith("Filler Artist")
+        }
+        assert named == {
+            # The family stays grouped under its last published name, and its
+            # deleted member contributes nothing: no empty entry lingers.
+            "Кипелов": 2,
+            # Watcher-found, not in the last projection: visible, ungrouped.
+            "Kipelov Live": 1,
+            # Renamed canonical: its surviving member keeps the published
+            # family name; the new name shows ungrouped until the rebuild.
+            "Ария": 1,
+            "Aria Band": 1,
+        }
+        assert len(sidebar) == len(named) + artist_count
+        assert gallery_names == {
+            "Kipelov": "Кипелов",
+            "Kipelov Band": "Кипелов",
+            "Kipelov Live": "Kipelov Live",
+            "Aria": "Ария",
+            "Aria Band": "Aria Band",
+        }
+        assert counts.builder_calls == 0
+        # The background rebuild stays queued; the request never waits on it.
+        assert refreshes == [1]
+        statements[artist_count] = counts.sql_statements
+    assert statements[20] == statements[14_000]
+
+
+def test_renamed_family_name_still_opens_its_surviving_members():
+    """A stale family entry whose canonical artist was renamed away resolves
+    through the same published maps to the members that still have albums."""
+    from music_app.services import library_browse_postgres as browse
+
+    alias_to_canonical = {"Ария": "Ария", "Aria": "Ария"}
+    canonical_to_aliases = {"Ария": ["Ария", "Aria"]}
+
+    assert browse._expanded_primary_artist_names(
+        browse._canonical_artist_name("Ария", alias_to_canonical),
+        alias_to_canonical,
+        canonical_to_aliases,
+    ) == ["Ария", "Aria"]
+
+
+@pytest.mark.parametrize(
+    ("maps", "servable"),
+    [
+        ({"projection_stale_reason": ""}, True),
+        ({"projection_stale_reason": "projection_not_ready", "projection_structure_complete": True}, True),
+        ({"projection_stale_reason": "builder_version_changed", "projection_structure_complete": True}, True),
+        # Cold start: nothing was ever published, so nothing groups yet.
+        ({"projection_stale_reason": "missing_projection", "projection_structure_complete": False}, False),
+        ({"projection_stale_reason": "incomplete_projection", "projection_structure_complete": False}, False),
+    ],
+)
+def test_relation_aliases_servable_while_the_last_complete_projection_awaits_rebuild(maps, servable):
+    from music_app.services import library_browse_postgres as browse
+
+    alias_maps = {"alias_to_canonical": {"Alias": "Canonical"}, **maps}
+    assert browse._relation_aliases_servable(alias_maps) is servable
+    assert browse._servable_root_alias_to_canonical(alias_maps) == (
+        {"Alias": "Canonical"} if servable else {}
+    )
+
+
 @pytest.mark.parametrize(
     ("projection_case", "expected_stale_reason"),
     [
@@ -13427,7 +13600,6 @@ def test_selected_artist_family_context_does_not_use_cached_relation_views_when_
     assert context["family_artists"] == []
 def test_selected_artist_family_context_does_not_rebuild_partial_relation_views_when_projection_missing(monkeypatch):
     from music_app.services import artist_family_postgres as artist_family_postgres_module
-    from music_app.services import library_browse_postgres as browse_module
     from music_app.services.library_browse_postgres import _selected_artist_family_context_from_state
 
     monkeypatch.setattr(
@@ -13456,14 +13628,6 @@ def test_selected_artist_family_context_does_not_rebuild_partial_relation_views_
             "folder_related": {"Other Artist": {"Guest Artist"}},
         },
     }
-
-    monkeypatch.setattr(
-        browse_module,
-        "_refresh_relation_views",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("missing projections should not be repaired from runtime relation views during read shaping")
-        ),
-    )
 
     context = _selected_artist_family_context_from_state(
         "Mono",
@@ -18367,6 +18531,137 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
     assert not projections.relation_projection_stale_reason(after)
     assert not projections.artist_search_projection_stale_reason(after)
     assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
+
+
+def _seed_typo_family(fixture):
+    """"Rhapsody of Fyre" shares an album folder with the more frequent
+    "Rhapsody of Fire", so the relation builder makes it a family alias."""
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import relation_projection_postgres as projections
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from tests.e2e.support import isolatedPostgres
+
+    def album(relative, artist, title):
+        return {**fixture.entry(relative, artist=artist, album=title), 'album_artist': artist}
+
+    split = [
+        album('Rhapsody of Fire/Split/01.flac', 'Rhapsody of Fire', 'Fire Album'),
+        album('Rhapsody of Fire/Split/02.flac', 'Rhapsody of Fyre', 'Fyre Album'),
+    ]
+    fixture.seed(*split, album('Rhapsody of Fire/Other/01.flac', 'Rhapsody of Fire', 'Other Album'))
+    projections.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    published = repository._load_relation_alias_maps()
+    assert not published['projection_stale_reason']
+    assert published['alias_to_canonical'].get('Rhapsody of Fyre') == 'Rhapsody of Fire'
+    return album, split, repository
+
+
+def _sidebar_counts(payload):
+    return {entry['artist']: entry['count'] for entry in payload['artists_sidebar']}
+
+
+def test_live_watcher_event_keeps_last_families_until_background_rebuild_publishes(
+    watcher_repair_inventory, monkeypatch,
+):
+    """Keep last families: after a watcher event, browse keeps the published
+    family grouped and shows the watcher-found artist at once, ungrouped; the
+    background refresh then groups it with its family."""
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import relation_projection_postgres as projections
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    album, split, repository = _seed_typo_family(fixture)
+    # The watcher finds a new artist in the family's album folder.
+    found = album('Rhapsody of Fire/Split/03.flac', 'Rhapsody of Fira', 'Fira Album')
+    by_path = {str(Path(entry['path']).resolve()): entry for entry in (*split, found)}
+    result = TargetedLibraryReconciler(
+        fixture.config,
+        repository=fixture.adapter,
+        root_definitions=fixture.roots,
+        metadata_reader=lambda path: {**by_path[str(Path(path).resolve())], 'path': str(path)},
+        wait=lambda _seconds: None,
+    ).reconcile(SimpleNamespace(
+        root_id=fixture.roots[0]['id'], paths=(Path(found['path']),),
+        deleted_paths=(), deleted_subtrees=(), moves=(),
+    ))
+    assert result.revision > 0
+
+    pending = repository._load_relation_alias_maps()
+    assert pending['projection_stale_reason'] == 'projection_not_ready'
+    pending_sidebar = _sidebar_counts(repository.build_root_startup_preview_payload(
+        query_params={}, sidebar_only=True, queue_projection_refresh=False,
+    ))
+    assert pending_sidebar['Rhapsody of Fire'] == 3
+    assert pending_sidebar['Rhapsody of Fira'] == 1
+    assert 'Rhapsody of Fyre' not in pending_sidebar
+    assert repository.canonical_gallery_artist_names(['Rhapsody of Fyre', 'Rhapsody of Fira']) == {
+        'Rhapsody of Fyre': 'Rhapsody of Fire', 'Rhapsody of Fira': 'Rhapsody of Fira',
+    }
+
+    # The queued background refresh publishes the gallery with the last
+    # families before it rebuilds relations.
+    gallery_during_rebuild = []
+    rebuild = projections.ensure_relation_projection_ready
+
+    def observed_rebuild(*args, **kwargs):
+        gallery_during_rebuild.append(_sidebar_counts(repository.build_projected_root_sidebar_payload()))
+        return rebuild(*args, **kwargs)
+
+    monkeypatch.setattr(projections, 'ensure_relation_projection_ready', observed_rebuild)
+    gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+
+    assert len(gallery_during_rebuild) == 1
+    assert gallery_during_rebuild[0]['Rhapsody of Fire'] == 3
+    assert gallery_during_rebuild[0]['Rhapsody of Fira'] == 1
+    rebuilt = repository._load_relation_alias_maps()
+    assert not rebuilt['projection_stale_reason']
+    assert rebuilt['alias_to_canonical'].get('Rhapsody of Fira') == 'Rhapsody of Fire'
+    published_sidebar = _sidebar_counts(repository.build_projected_root_sidebar_payload())
+    assert published_sidebar['Rhapsody of Fire'] == 4
+    assert 'Rhapsody of Fira' not in published_sidebar
+
+
+def test_live_album_move_keeps_last_families_until_background_rebuild_publishes(watcher_repair_inventory):
+    """An in-app album move marks relations stale like a watcher event; browse
+    keeps the family grouped and the moved album visible until the rebuild."""
+    import shutil
+
+    fixture = watcher_repair_inventory
+    album, split, repository = _seed_typo_family(fixture)
+    main = Path(fixture.roots[0]['path'])
+    source = main / 'Rhapsody of Fire' / 'Split'
+    destination = main / 'Rhapsody of Fire' / 'Split (Moved)'
+    shutil.move(str(source), str(destination))
+    moved_entries = {
+        entry['path']: entry
+        for entry in (
+            album(f"Rhapsody of Fire/Split (Moved)/{Path(original['path']).name}",
+                  original['artist'], original['album'])
+            for original in split
+        )
+    }
+
+    persisted = fixture.adapter.persist_moved_album_inventory(
+        root_id=fixture.roots[0]['id'],
+        active_file_entries=moved_entries,
+        moves=({
+            'source_path': str(source), 'destination_path': str(destination),
+            'source_root_id': fixture.roots[0]['id'], 'destination_root_id': fixture.roots[0]['id'],
+            'is_directory': True,
+        },),
+    )
+    assert persisted['inventory_mutation_revision'] > 0
+
+    assert repository._load_relation_alias_maps()['projection_stale_reason'] == 'projection_not_ready'
+    pending_sidebar = _sidebar_counts(repository.build_root_startup_preview_payload(
+        query_params={}, sidebar_only=True, queue_projection_refresh=False,
+    ))
+    assert pending_sidebar['Rhapsody of Fire'] == 3
+    assert 'Rhapsody of Fyre' not in pending_sidebar
 
 
 def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():

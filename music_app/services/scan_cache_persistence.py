@@ -145,6 +145,9 @@ class ScanCacheAdapter(Protocol):
     def load_inventory_mutation_revision(self) -> int:
         ...
 
+    def load_file_entries(self, paths: set[str]) -> dict[str, dict[str, object]]:
+        ...
+
     def persist_targeted_inventory_mutation(
         self,
         *,
@@ -154,6 +157,9 @@ class ScanCacheAdapter(Protocol):
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[Any], object] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -276,6 +282,21 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
 
+    def load_file_entries(self, paths: set[str]) -> dict[str, dict[str, object]]:
+        """Load the active scan-cache entries of exactly these track paths."""
+        if not paths:
+            return {}
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                _load_file_entries_sql(targeted_paths=True),
+                {"source": _SOURCE, "paths": sorted(paths)},
+            ).fetchall()
+        return dict(
+            hydrated
+            for row in rows
+            if (hydrated := _hydrated_file_entry(_row_mapping(row))) is not None
+        )
+
     def load_targeted_subtree_track_paths(
         self, subtrees_by_root: dict[str, set[str]],
     ) -> tuple[str, ...]:
@@ -316,11 +337,16 @@ class PostgresScanCacheAdapter:
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[Any], object] | None = None,
     ) -> dict[str, object]:
         """Publish one targeted inventory mutation without rebuilding relations.
 
         The revision increment marks the relation projection stale; the caller
         queues the gallery refresh, which rebuilds it in the background.
+        Expected revisions reject a mutation prepared before a newer cover or
+        inventory commit; `before_commit` runs inside its transaction.
         """
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
@@ -364,6 +390,16 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            if (
+                expected_cover_mutation_revision is not None
+                and _load_cover_mutation_revision(connection) != expected_cover_mutation_revision
+            ) or (
+                expected_inventory_mutation_revision is not None
+                and _load_inventory_mutation_revision(connection) != expected_inventory_mutation_revision
+            ):
+                raise ScanCachePublicationSuperseded(
+                    "Cover or inventory changed while the targeted mutation was being prepared."
+                )
             if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
                 from music_app.services.library_watch_health import guard_destructive_library_publication
 
@@ -582,6 +618,8 @@ class PostgresScanCacheAdapter:
                     ).strip()
                 )
             if not inventory_changed:
+                if before_commit is not None:
+                    before_commit(connection)
                 return {
                     "inventory_mutation_revision": 0,
                     "affected_album_keys": [],
@@ -684,6 +722,8 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
+            if before_commit is not None:
+                before_commit(connection)
             connection.commit()
             return {
                 "inventory_mutation_revision": revision,
@@ -703,39 +743,11 @@ class PostgresScanCacheAdapter:
                 return {}, 0.0, {}, 0.0, None
             file_rows = list(connection.execute(_load_file_entries_sql(), {"source": _SOURCE}).fetchall())
 
-        file_cache: dict[str, dict[str, object]] = {}
-        for row in file_rows:
-            row_payload = _row_mapping(row)
-            file_entry = row_payload.get("file_entry")
-            if not isinstance(file_entry, dict):
-                file_entry = _fallback_file_entry(row_payload)
-            if not isinstance(file_entry, dict):
-                continue
-            path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
-            if not path:
-                continue
-            try:
-                hydrated_entry = deserialize_file_entry(file_entry)
-            except Exception:
-                hydrated_entry = dict(file_entry)
-            hydrated_entry["path"] = path
-            if type(row_payload.get("album_is_compilation")) is bool:
-                hydrated_entry["is_compilation"] = row_payload[
-                    "album_is_compilation"
-                ]
-            cover_selection_origin = str(
-                row_payload.get("cover_selection_origin") or ""
-            ).strip().casefold()
-            hydrated_entry["cover_selection_origin"] = (
-                cover_selection_origin
-                if cover_selection_origin in {"user", "automatic"}
-                else None
-            )
-            hydrated_entry["cover_selection_provenance"] = (
-                "explicit" if row_payload.get("cover_selection_provenance") == "explicit" else None
-            )
-            hydrated_entry["album_id"] = row_payload.get("album_id")
-            file_cache[path] = hydrated_entry
+        file_cache = dict(
+            hydrated
+            for row in file_rows
+            if (hydrated := _hydrated_file_entry(_row_mapping(row))) is not None
+        )
 
         relation_views = deserialize_relation_views(snapshot_payload.get("relation_views"))
         return (
@@ -3723,6 +3735,34 @@ def _file_entries_by_path(file_cache: dict[str, dict[str, object]]) -> dict[str,
     return entries
 
 
+def _hydrated_file_entry(row_payload: dict[str, object]) -> tuple[str, dict[str, object]] | None:
+    """One loaded track-file row as its runtime (path, scan-cache entry)."""
+    file_entry = row_payload.get("file_entry")
+    if not isinstance(file_entry, dict):
+        file_entry = _fallback_file_entry(row_payload)
+    if not isinstance(file_entry, dict):
+        return None
+    path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
+    if not path:
+        return None
+    try:
+        hydrated_entry = deserialize_file_entry(file_entry)
+    except Exception:
+        hydrated_entry = dict(file_entry)
+    hydrated_entry["path"] = path
+    if type(row_payload.get("album_is_compilation")) is bool:
+        hydrated_entry["is_compilation"] = row_payload["album_is_compilation"]
+    cover_selection_origin = str(row_payload.get("cover_selection_origin") or "").strip().casefold()
+    hydrated_entry["cover_selection_origin"] = (
+        cover_selection_origin if cover_selection_origin in {"user", "automatic"} else None
+    )
+    hydrated_entry["cover_selection_provenance"] = (
+        "explicit" if row_payload.get("cover_selection_provenance") == "explicit" else None
+    )
+    hydrated_entry["album_id"] = row_payload.get("album_id")
+    return path, hydrated_entry
+
+
 def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
     path = _text_or_none(row.get("private_path"))
     if path is None:
@@ -6543,8 +6583,10 @@ def _load_cover_selections_sql() -> str:
     """
 
 
-def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
+def _load_file_entries_sql(*, targeted_albums: bool = False, targeted_paths: bool = False) -> str:
     album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
+    if targeted_paths:
+        album_filter += " and library.local_track_files.private_path = any(%(paths)s::text[])"
     album_metadata_selection = (
         "library.local_albums.metadata as album_metadata,"
         if targeted_albums

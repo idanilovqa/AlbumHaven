@@ -72,9 +72,6 @@ from music_app.services.manual_versions import load_manual_version_links, save_m
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
 from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
-from music_app.services.problematic_albums import (
-    find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
-)
 from music_app.services.problem_exclusions import (
     create_problem_exclusions,
     revert_problem_exclusion,
@@ -92,9 +89,6 @@ from music_app.services.save_tasks import (
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
     PostgresTagEditIntentRepository,
-)
-from music_app.services.repair_previews import (
-    build_problematic_albums_payload as _build_problematic_albums_payload,
 )
 from music_app.services.state import (
     invalidate_targeted_library_projections,
@@ -487,10 +481,6 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         if intent_repository is not None
         else None
     )
-    rebuild_relation_projection = bool(
-        set(kwargs.get("changed_field_names") or ())
-        & _RELATION_PROJECTION_EDIT_FIELDS
-    ) and not scoped_postgres_exception_only
     if find_albums_by_track_paths is None:
         find_albums_by_track_paths = _default_albums_by_track_paths_finder(get_state_provider)
     if find_problematic_album_by_track_paths is None:
@@ -528,7 +518,6 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             cache_path,
             payload,
             baseline_file_cache=baseline,
-            rebuild_relation_projection=rebuild_relation_projection,
             **save_options,
         ),
         append_log_history=append_history,
@@ -860,17 +849,9 @@ def _asgi_problematic_album_by_track_paths_finder(request: Request):
     library_state = _library_state(request)
     logger = _asgi_logger(request)
 
-    def build_payload() -> JsonDict:
-        return _build_problematic_albums_payload(
-            config=config,
-            library_state=library_state,
-            logger=logger,
-        )
-
     def find_problematic_album(track_paths: TrackPathSet) -> JsonDict | None:
-        return _find_problematic_album_by_track_paths_in_payload(
-            track_paths,
-            build_problematic_albums_payload=build_payload,
+        return _find_problematic_album_by_track_paths(
+            track_paths, config=config, library_state=library_state, logger=logger,
         )
 
     return find_problematic_album
@@ -1295,12 +1276,17 @@ def _postgres_album_finder_for_track_paths(request: Request):
     return find_albums
 
 
+def _library_affected_album_dicts_builder(request: Request):
+    library_state = _library_state(request)
+    return lambda *cache_args: _build_affected_album_dicts(*cache_args, library_state=library_state)
+
+
 def _edit_tags_affected_album_dicts_builder(
     request: Request,
     payload: Mapping[str, object],
 ):
     if not _is_postgres_edit_tags_exception_only_response_request(request, payload):
-        return _build_affected_album_dicts
+        return _library_affected_album_dicts_builder(request)
 
     find_albums = _postgres_album_finder_for_track_paths(request)
 
@@ -1322,7 +1308,7 @@ def _repair_album_affected_album_dicts_builder(request: Request, payload: Mappin
         and _has_repair_album_media_write_rows(payload)
     ):
         return _empty_affected_album_dicts
-    return _build_affected_album_dicts
+    return _library_affected_album_dicts_builder(request)
 
 
 def _edit_tags_queue_finalize_save_task_builder(

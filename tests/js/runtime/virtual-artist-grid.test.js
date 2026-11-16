@@ -6705,7 +6705,7 @@ for (const mode of ['cards', 'covers']) {
         }
         assert.equal(preview.cards.size, 20, 'A draw must retain the prepared card set. Bounded mounting is covered by preparePinchPreview tests.');
         assert.equal(
-          preview.contextLabelBottoms.get('artist:pinch-draw'),
+          grid.pinchContextLabelBottom(grid.sections.find(section => grid.getRenderedSectionKey(section) === 'artist:pinch-draw')),
           grid.sectionHeaderHeight,
           'Sticky context uses modeled pinch geometry instead of transformed DOM labels.',
         );
@@ -6760,7 +6760,7 @@ for (const mode of ['cards', 'covers']) {
       const groups = grid.sections.map(section => ({
         artist: section.group.artist,
         albumCount: section.group.albums.length,
-        labelBottom: preview.contextLabelBottoms.get(`artist:${section.sectionKey}`),
+        labelBottom: grid.pinchContextLabelBottom(section),
       }));
       assert.equal(
         context.resolveGalleryBarContext({ scrollTop: scrollEl.scrollTop, groups }).artist,
@@ -6768,6 +6768,75 @@ for (const mode of ['cards', 'covers']) {
         `density ${density} must not select an artist below the anchored cover`,
       );
     }
+  });
+}
+
+for (const mode of ['cards', 'covers']) {
+  test(`mobile ${mode} pinch context ignores settled positions of artists that are not mounted`, () => {
+    // Owner PINCH-01 (Sandbox1): pinching 3 Inches of Blood from 3 to 1 per row cycled the header through
+    // 3rd World Electric ... 65daysofstatic. Only sections near the viewport are mounted during a pinch.
+    const { context, scrollEl, containerEl } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    scrollEl.clientWidth = 390;
+    const artist = (sectionKey, name, count, top) => ({
+      kind: 'artist', sectionKey, top, group: {
+        artist: name,
+        albums: Array.from({ length: count }, (_, index) => ({ key: `${sectionKey}-${index}`, name: `Album ${index}` })),
+      },
+    });
+    grid.sections = [
+      artist('before', 'Before', 3, 0),
+      artist('three-inches', '3 Inches of Blood', 9, 300),
+      artist('35007', '35007', 2, 1100),
+      artist('third-world', '3rd World Electric', 1, 1450),
+      artist('five-bridges', '5bridgeS', 1, 1700),
+      artist('five-uus', "5uu's", 4, 1950),
+      artist('sixty-five', '65daysofstatic', 8, 2400),
+    ];
+    const mounted = 'artist:three-inches';
+    const preview = {
+      mode, blocksByColumns: new Map(), headerHeights: new Map(), bodyHeights: new Map(), cards: new Map(),
+      sections: new Map([[mounted, { querySelector: () => null, querySelectorAll: () => [] }]]),
+      sectionByKey: new Map(grid.sections.map(section => [`artist:${section.sectionKey}`, section])),
+      anchor: { scrollTop: 700, artworkFraction: .5, artworkInset: 0, artworkTrim: 0, offsetTop: 120 },
+      contentOffset: 0, density: 3,
+    };
+    const initialLayout = grid.buildPinchLayout(3, preview);
+    // The owner scrolls to the middle of 3 Inches of Blood: its label is already above the header line.
+    preview.anchorKey = [...initialLayout.cards.keys()].filter(key => key.startsWith(`${mounted} `))[7];
+    initialLayout.cards.forEach((_point, key) => {
+      if (!key.startsWith(`${mounted} `)) return;
+      preview.cards.set(key, { style: {}, getBoundingClientRect() {
+        const width = Number.parseFloat(this.style.width);
+        return { height: width + (mode === 'cards' ? 72 : 0) };
+      } });
+    });
+    containerEl.style = {};
+    grid.primeVisibleCoverImages = () => {};
+    grid._pinchPreview = preview;
+
+    for (const density of [3, 2.6, 2.2, 1.9, 1.5, 1.2, 1]) {
+      preview.density = density;
+      grid.drawPinchPreview(preview);
+      const groups = grid.sections.map(section => ({
+        artist: section.group.artist,
+        albumCount: section.group.albums.length,
+        labelBottom: grid.pinchContextLabelBottom(section),
+      }));
+      assert.ok(groups.every(group => Number.isFinite(group.labelBottom)), 'every artist label is modeled, mounted or not');
+      assert.equal(
+        context.resolveGalleryBarContext({ scrollTop: scrollEl.scrollTop, groups }).artist,
+        '3 Inches of Blood',
+        `density ${density}: the header must stay on the artist whose covers fill the screen`,
+      );
+    }
+    // The previous rule (settled tops for unmounted artists) picks an artist below the covers at full zoom.
+    const legacy = grid.sections.map(section => ({
+      artist: section.group.artist, albumCount: section.group.albums.length,
+      labelBottom: `artist:${section.sectionKey}` === mounted ? grid.pinchContextLabelBottom(section)
+        : section.top + grid.sectionHeaderHeight,
+    }));
+    assert.notEqual(context.resolveGalleryBarContext({ scrollTop: scrollEl.scrollTop, groups: legacy }).artist, '3 Inches of Blood');
   });
 }
 

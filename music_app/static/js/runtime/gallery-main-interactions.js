@@ -224,9 +224,7 @@ function getGalleryMainContextSections() {
     : [];
   const scroll = document.getElementById('albums-scroll');
   const labelBottoms = new Map();
-  const pinchLabelBottoms = typeof virtualGrid !== 'undefined'
-    ? virtualGrid?._pinchPreview?.contextLabelBottoms
-    : null;
+  const pinching = typeof virtualGrid !== 'undefined' && Boolean(virtualGrid?._pinchPreview);
   if (scroll) {
     const viewportTop = scroll.getBoundingClientRect().top;
     document.querySelectorAll('[data-scroll-artist]').forEach(section => {
@@ -240,7 +238,8 @@ function getGalleryMainContextSections() {
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
     artist_musicbrainz: section.group?.artist_musicbrainz || null,
     top: Number(section.top || 0),
-    labelBottom: pinchLabelBottoms?.get(virtualGrid.getRenderedSectionKey(section))
+    // While pinching, transformed DOM labels and settled tops describe other layouts.
+    labelBottom: (pinching ? virtualGrid.pinchContextLabelBottom?.(section) : null)
       ?? labelBottoms.get(galleryMainGroupArtist(section.group))
       ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
   })).filter((section) => section.artist);

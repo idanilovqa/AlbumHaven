@@ -7109,9 +7109,7 @@ function getGalleryMainContextSections() {
     : [];
   const scroll = document.getElementById('albums-scroll');
   const labelBottoms = new Map();
-  const pinchLabelBottoms = typeof virtualGrid !== 'undefined'
-    ? virtualGrid?._pinchPreview?.contextLabelBottoms
-    : null;
+  const pinching = typeof virtualGrid !== 'undefined' && Boolean(virtualGrid?._pinchPreview);
   if (scroll) {
     const viewportTop = scroll.getBoundingClientRect().top;
     document.querySelectorAll('[data-scroll-artist]').forEach(section => {
@@ -7125,7 +7123,8 @@ function getGalleryMainContextSections() {
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
     artist_musicbrainz: section.group?.artist_musicbrainz || null,
     top: Number(section.top || 0),
-    labelBottom: pinchLabelBottoms?.get(virtualGrid.getRenderedSectionKey(section))
+    // While pinching, transformed DOM labels and settled tops describe other layouts.
+    labelBottom: (pinching ? virtualGrid.pinchContextLabelBottom?.(section) : null)
       ?? labelBottoms.get(galleryMainGroupArtist(section.group))
       ?? Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
   })).filter((section) => section.artist);
@@ -45487,18 +45486,7 @@ class VirtualArtistGrid {
       .map(columns => [columns, this.buildPinchLayout(columns, preview)]));
     const a = this.adjustPinchLayout(preview.layouts.get(low), preview);
     const b = high === low ? a : this.adjustPinchLayout(preview.layouts.get(high), preview);
-    preview.contextLabelBottoms = new Map();
-    preview.sections.forEach((_node, key) => {
-      const section = preview.sectionByKey.get(key);
-      if (section.kind !== 'artist') return;
-      const first = a.section(key), second = b.section(key);
-      if (!first || !second) return;
-      const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
-      preview.contextLabelBottoms.set(
-        key,
-        Number(preview.contentOffset || 0) + mix(first.top, second.top) + headerHeight,
-      );
-    });
+    preview.contextLayout = { a, b, progress };
     preview.cards.forEach((card, key) => {
       const first = a.point(key), second = b.point(key);
       if (!first || !second) return;
@@ -45523,6 +45511,20 @@ class VirtualArtistGrid {
     this.scrollEl.scrollTop = preview.anchor.scrollTop <= 1 ? 0 : Math.max(0, anchorPoint - preview.anchor.offsetTop);
     this.scrollEl.scrollLeft = 0;
     this.primeVisibleCoverImages();
+  }
+
+  // Sticky header context during a pinch. Every artist label, mounted or not, comes from the same modeled
+  // layout that places the cards; settled positions belong to the old column count and would name artists
+  // far below the anchored cover once the content grows.
+  pinchContextLabelBottom(section) {
+    const preview = this._pinchPreview;
+    const model = preview?.contextLayout;
+    if (!model || !section || section.kind === 'label') return null;
+    const key = this.getRenderedSectionKey(section);
+    const first = model.a.section(key), second = model.b.section(key);
+    if (!first || !second) return null;
+    const headerHeight = preview.headerHeights.get(key) ?? this.sectionHeaderHeight;
+    return Number(preview.contentOffset || 0) + first.top + (second.top - first.top) * model.progress + headerHeight;
   }
 
   finishPinchPreview(_columns, { cancelled = false } = {}) {

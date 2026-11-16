@@ -1975,10 +1975,8 @@ test('pinch context keeps the current artist until the modeled next label crosse
       sectionHeaderHeight: 52,
       sections,
       getRenderedSectionKey: section => section.sectionKey,
-      _pinchPreview: { contextLabelBottoms: new Map([
-        ['artist:first', 180],
-        ['artist:second', 640],
-      ]) },
+      _pinchPreview: {},
+      pinchContextLabelBottom: section => ({ 'artist:first': 180, 'artist:second': 640 })[section.sectionKey],
     },
     document: {
       getElementById: () => ({ scrollTop: 500, getBoundingClientRect: () => ({ top: 100 }) }),

@@ -2446,3 +2446,13 @@ def test_successful_tag_save_does_not_prewarm_settings_on_the_foreground_browse_
         "problematic-invalidated",
         "rules-invalidated",
     ]
+
+
+@pytest.mark.parametrize("live_file_cache", [None, ["not", "a", "mapping"]])
+def test_merging_committed_entries_never_replaces_a_broken_live_file_cache(live_file_cache):
+    library_state = {"file_cache": live_file_cache}
+
+    with pytest.raises(TypeError):
+        save_tasks_module._merge_file_cache_entries(library_state, {"track.mp3": {"path": "track.mp3"}})
+
+    assert library_state == {"file_cache": live_file_cache}

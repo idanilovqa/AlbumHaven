@@ -331,7 +331,8 @@ def _merge_file_cache_entries(
     caller's state-mutation guard, instead of republishing a copy of it."""
     file_cache = library_state.get("file_cache")
     if not isinstance(file_cache, dict):
-        file_cache = library_state["file_cache"] = {}
+        # Replacing it would silently drop every other track's entry.
+        raise TypeError("The live library file cache is not a mapping; refusing to replace it.")
     file_cache.update(entries)
     # Non-album candidates are cached under the cache's identity, which an
     # in-place merge keeps.

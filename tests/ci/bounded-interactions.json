@@ -13020,14 +13020,33 @@
         "py:music_app/services/private_route_boundary.py#install_private_route_boundary.<locals>.require_private_authentication:middleware:MIDDLEWARE http"
       ],
       "owners": [
-        "music_app/services/private_route_boundary.py"
+        "music_app/services/private_route_boundary.py",
+        "music_app/services/capability_artwork.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-03",
         "BI-08"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 3,
+        "open_calls": 1,
+        "sql_statements": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_private_boundary_contract_resolves_restricted_artwork_from_the_root_snapshot_at_production_library_size",
+      "testIdentity": "test_private_boundary_contract_resolves_restricted_artwork_from_the_root_snapshot_at_production_library_size",
+      "rollback": "Revert fix(boundary) restricted artwork root snapshot and its contract; that restores the root-settings reload on each restricted artwork request."
     },
     {
       "id": "py:services/problematic_albums.py#_run_problematic_albums_prewarm",

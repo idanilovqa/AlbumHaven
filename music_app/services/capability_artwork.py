@@ -65,7 +65,7 @@ async def browse_artwork_response(request) -> Response | None:
     allowed = allowed_actions_for_request(request, ("library.media.read",)).as_payload()
     if allowed.get("library.media.read") is True:
         return None
-    from music_app.services.library_roots import resolve_configured_media_path
+    from music_app.services.library_roots import configured_library_root_paths_snapshot, resolve_media_path_within_roots
 
     config = getattr(request.app.state, "config", {})
     raw_path = str(request.query_params.get("path") or "")
@@ -80,7 +80,9 @@ async def browse_artwork_response(request) -> Response | None:
             raise HTTPException(status_code=404, detail="Artwork not found.")
         # Ignore a supplied path: only this owned loop's stored cover is eligible.
         raw_path = str(item["cover_path"])
-    resolved = await run_in_threadpool(resolve_configured_media_path, config, raw_path)
+    # The cached root snapshot: no root-settings reload per artwork request.
+    root_paths = await run_in_threadpool(configured_library_root_paths_snapshot, config)
+    resolved = await run_in_threadpool(resolve_media_path_within_roots, raw_path, root_paths)
     if resolved is None:
         raise HTTPException(status_code=404, detail="Artwork not found.")
     return await run_in_threadpool(render_browse_artwork, resolved)

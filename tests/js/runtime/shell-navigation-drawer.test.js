@@ -734,9 +734,11 @@ test('navigation tree rows stay on one line and expose the edge anchor chevron',
   assert.equal(context.persistShellLayoutPreferencesCallCount, 1);
   assert.equal(appShell.classList.contains('is-artist-tree-folded'), true);
   assert.equal(drawerRail.classList.contains('is-folded'), true);
-  assert.equal(expandedTree.hidden, true);
+  // Owner 2026-11-16: while the edge moves, the expanded text stays and fades instead of vanishing.
+  assert.equal(drawerRail.classList.contains('is-collapsing'), true);
+  assert.equal(expandedTree.hidden, false);
   assert.equal(compactNavigation.hidden, false);
-  assert.equal(artistList.hidden, true);
+  assert.equal(artistList.hidden, false);
   assert.equal(foldButton.hidden, true);
   assert.equal(navigationButton.hidden, false);
   assert.equal(navigationButton.getAttribute('aria-expanded'), 'false');
@@ -756,6 +758,9 @@ test('navigation tree rows stay on one line and expose the edge anchor chevron',
   });
   assert.equal(resizeEvents.length, 0);
   assert.equal(settledEvents.length, 1);
+  assert.equal(drawerRail.classList.contains('is-collapsing'), false);
+  assert.equal(expandedTree.hidden, true);
+  assert.equal(artistList.hidden, true);
   documentElement.dispatchEvent({
     type: 'transitionend',
     target: documentElement,
@@ -977,4 +982,15 @@ test('the Artist tree runs down to the player with no bottom gap', () => {
   const player = fs.readFileSync(path.join(root, 'runtime', 'non-album-and-player.css'), 'utf8');
   assert.match(chrome, /\.shell-navigation-rail \{[^}]*padding: var\(--app-page-header-top\) 14px 0;/);
   assert.match(player, /has-docked-compact-player #shell-navigation-rail \{[^}]*padding-bottom: 0;/);
+});
+
+test('folding reassembles the panel: buttons travel, the edge moves, text fades', () => {
+  // Owner 2026-11-16: "buttons go up, right edge goes left, and text items slowly disappearing. The reverse
+  // happening on expansion".
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'shell-navigation-drawer.js'), 'utf8');
+  assert.match(css, /\.is-collapsing #artist-tree-expanded \{[^}]*animation: artist-tree-content-fade-out/);
+  assert.match(css, /\.is-expanding \.library-navigation-mode-rail,\s*\.shell-navigation-rail\.is-collapsing \.library-navigation-mode-rail \{ visibility: hidden; \}/);
+  assert.doesNotMatch(css, /\.is-expanding \.shell-navigation-compact \{[^}]*animation:/);
+  assert.match(source, /function animateLibraryViewButtons\(/);
 });

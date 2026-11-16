@@ -178,12 +178,32 @@
   pointer-events: none;
   animation: artist-tree-content-reveal var(--compact-motion-duration) var(--compact-motion-easing) both;
 }
+/* Reassembly (owner 2026-11-16): the compact view buttons travel to the view rail's places (JS) and stay
+   visible the whole way; the view rail itself appears only once they arrive. */
 .shell-navigation-rail.is-expanding .shell-navigation-compact {
   position: absolute;
   inset: 16px auto auto 10px;
   width: 44px;
   z-index: 2;
+}
+.shell-navigation-rail.is-expanding .shell-navigation-compact > :not([data-library-navigation-mode]) {
   animation: artist-tree-compact-control-exit var(--compact-motion-duration) ease both;
+}
+.shell-navigation-rail.is-expanding .library-navigation-mode-rail,
+.shell-navigation-rail.is-collapsing .library-navigation-mode-rail { visibility: hidden; }
+/* Folding: the expanded content keeps its place and fades while the edge moves over it. */
+.shell-navigation-rail.is-collapsing { position: relative; }
+.shell-navigation-rail.is-collapsing #artist-tree-expanded {
+  position: absolute;
+  top: var(--app-page-header-top);
+  left: 14px;
+  width: 292px;
+  pointer-events: none;
+  animation: artist-tree-content-fade-out var(--compact-motion-duration) var(--compact-motion-easing) both;
+}
+@keyframes artist-tree-content-fade-out {
+  0% { opacity: 1; }
+  60%, 100% { opacity: 0; }
 }
 @keyframes artist-tree-content-reveal {
   0%, 45% { opacity: 0; visibility: hidden; transform: none; }

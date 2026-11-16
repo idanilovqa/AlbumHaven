@@ -11759,10 +11759,13 @@ function syncArtistTreeFoldVisibility(options = {}) {
   const isFolded = Boolean(canFold && state.ui.artistTreeFolded);
   const isTransitioning = Boolean(canFold && options.transitioning);
   const isExpanding = Boolean(isTransitioning && !isFolded);
+  // While folding, the expanded content stays on screen to fade out behind the moving edge.
+  const isCollapsing = Boolean(isTransitioning && isFolded);
   shell?.classList?.toggle('is-artist-tree-folded', isFolded);
   rail?.classList?.toggle('is-folded', isFolded);
   rail?.classList?.toggle('is-transitioning', isTransitioning);
   rail?.classList?.toggle('is-expanding', isExpanding);
+  rail?.classList?.toggle('is-collapsing', isCollapsing);
   if (button) {
     button.hidden = !canFold || isFolded;
     button.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
@@ -11773,13 +11776,38 @@ function syncArtistTreeFoldVisibility(options = {}) {
     navigationButton.hidden = !(isFolded || isExpanding);
     navigationButton.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
   }
-  if (expandedTree) expandedTree.hidden = isFolded;
+  if (expandedTree) expandedTree.hidden = isFolded && !isCollapsing;
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
-  if (list) list.hidden = isFolded;
+  if (list) list.hidden = isFolded && !isCollapsing;
   document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '320px');
   if (!isArtistsDrawerMobileViewport()) setDesktopLibraryModeRailVisible(true);
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
+}
+
+// Owner 2026-11-16: folding and unfolding reassemble the panel. The compact view buttons travel between
+// their expanded places (the view rail) and their collapsed places while the edge moves and the text fades;
+// the expanded and compact buttons are matched by data-library-navigation-mode.
+function animateLibraryViewButtons({ folding, compactNavigation, expandedTree }) {
+  const root = document.documentElement;
+  const styles = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(root) : null;
+  const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
+  if (duration < 50) return;
+  const easing = String(styles?.getPropertyValue?.('--compact-motion-easing') || '').trim() || 'ease';
+  const expanded = new Map([...(expandedTree?.querySelectorAll?.('.library-navigation-mode-rail [data-library-navigation-mode]') || [])]
+    .map((button) => [button.getAttribute('data-library-navigation-mode'), button]));
+  compactNavigation?.querySelectorAll?.('[data-library-navigation-mode]').forEach((button) => {
+    const target = expanded.get(button.getAttribute('data-library-navigation-mode'));
+    if (typeof button.animate !== 'function' || !target?.getBoundingClientRect) return;
+    button.getAnimations?.().forEach((animation) => animation.cancel());
+    const from = target.getBoundingClientRect();
+    const to = button.getBoundingClientRect();
+    const offset = `translate(${from.left - to.left}px, ${from.top - to.top}px)`;
+    button.animate(
+      folding ? [{ transform: offset }, { transform: 'none' }] : [{ transform: 'none' }, { transform: offset }],
+      { duration, easing, fill: folding ? 'none' : 'forwards' },
+    );
+  });
 }
 
 function parseCssTimeMs(value) {
@@ -11852,12 +11880,17 @@ function toggleArtistTreeFold({ instant = false } = {}) {
   const root = document.documentElement;
   if (instant) root?.setAttribute?.('data-shell-motion', 'instant');
   const isFolded = syncArtistTreeFoldVisibility({ transitioning: !instant });
+  const { compactNavigation, expandedTree } = getArtistTreeFoldElements();
+  if (!instant) animateLibraryViewButtons({ folding: isFolded, compactNavigation, expandedTree });
   if (moveFocusWithinRail && isFolded) {
     navigationButton?.focus?.();
   }
   const settleArtistTree = () => {
     if (Boolean(state.ui.artistTreeFolded) !== isFolded) return;
     syncArtistTreeFoldVisibility();
+    // The expanded view rail takes over exactly where the travelling compact buttons stopped.
+    compactNavigation?.querySelectorAll?.('[data-library-navigation-mode]')
+      .forEach((compact) => compact.getAnimations?.().forEach((animation) => animation.cancel()));
     if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };
@@ -51886,6 +51919,12 @@ function handleGalleryBootstrapClick(event) {
     );
     if (opensMobileHome && typeof prepareMobileGalleryNavigation === 'function') {
       prepareMobileGalleryNavigation();
+    }
+    // The logo is the library landing page: the side panel returns to the Artists tree at All artists,
+    // whichever tree was showing (owner 2026-11-16).
+    if (isLibraryHome && state.ui.libraryNavigationMode === 'custom-collections'
+        && typeof setLibraryNavigationMode === 'function') {
+      void setLibraryNavigationMode('artists');
     }
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();

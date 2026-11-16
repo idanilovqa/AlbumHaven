@@ -1829,3 +1829,91 @@ def test_task_level_bounded_notification_reads_preserve_contract(monkeypatch):
     assert task_service.load_cover_lookup_task_summary_page(
         config={"key": "value"}, limit=50, cursor=None, active_only=False
     ) == page
+
+
+class _Rows:
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _NotificationStoreDatabase:
+    """Stands in for ops.cover_lookup_tasks behind the real Postgres adapter: it
+    answers the bootstrap check, the summary read, and the per-task upsert."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, object]] = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return None
+
+    def transaction(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    def execute(self, query, params=None):
+        if "bootstrap_context_ready" in query:
+            return _Rows([{"bootstrap_context_ready": 1}])
+        if "insert into ops.cover_lookup_tasks" in query:
+            task_key, status, *_rest, metadata = params
+            self.rows[task_key] = {"status": status, "payload": dict(metadata["source_payload"])}
+            return _Rows()
+        if "jsonb_strip_nulls" in query:
+            return _Rows([
+                {"task_summary": {**row["payload"], "id": task_key, "status": row["status"]}}
+                for task_key, row in self.rows.items()
+            ])
+        raise AssertionError(f"unexpected cover lookup store statement: {query[:120]}")
+
+
+def test_cover_lookup_notification_store_contract_opens_one_connection_per_call_at_any_task_count(monkeypatch):
+    """Upserting tasks, and the stale recovery in the task summary list, each
+    lease one connection however many tasks they touch."""
+    from contextlib import contextmanager
+
+    from music_app.services import cover_lookup_notifications, cover_lookup_tasks_postgres
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts, assert_plateau
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated.invalid/cover-lookup-store"}
+    monkeypatch.setattr(cover_lookup_notifications, "select_runtime_persistence_adapter", lambda *_args: None)
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "Jsonb", None)
+    current: dict[str, object] = {}
+
+    @contextmanager
+    def pooled_connection(_database_url, **_options):
+        current["counts"].pool_leases += 1
+        yield CountingConnection(current["database"], current["counts"])
+
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "_pooled_connection", pooled_connection)
+    stale = "2026-01-01T00:00:00+00:00"
+
+    def run(task_count: int) -> tuple[OperationCounts, OperationCounts]:
+        reset_cover_lookup_runtime_state()
+        database = current["database"] = _NotificationStoreDatabase()
+        tasks = [({"id": f"task-{index:05d}", "status": "running", "artist": "Artist", "album": f"Album {index}",
+                   "created_at": stale, "updated_at": stale}, 1) for index in range(task_count)]
+        upsert = current["counts"] = OperationCounts()
+        task_service.upsert_cover_lookup_notifications(config, tasks)
+        assert len(database.rows) == task_count
+        recovery = current["counts"] = OperationCounts()
+        summaries = task_service.list_cover_lookup_task_summaries(config=config)
+        assert len(summaries) == task_count
+        assert {row["status"] for row in database.rows.values()} == {"failed"}
+        assert {row["payload"]["result_kind"] for row in database.rows.values()} == {"interrupted"}
+        return upsert, recovery
+
+    small, large = run(5), run(500)
+
+    assert (small[0].pool_leases, small[1].pool_leases) == (1, 2)
+    assert_plateau([small[0].pool_leases, large[0].pool_leases], label="upsert connections")
+    # One summary read and one upsert of every interrupted task.
+    assert_plateau([small[1].pool_leases, large[1].pool_leases], label="stale recovery connections")

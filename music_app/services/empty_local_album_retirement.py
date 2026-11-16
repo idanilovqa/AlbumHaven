@@ -41,6 +41,9 @@ GUARDED_ALBUM_CHILD_TABLES = frozenset(
         "library.local_mbid_assertions",
         "library.local_album_musicbrainz_releases",
         "library.musicbrainz_contribution_flags",
+        # The owner's MusicBrainz lookups (S5) and approved data corrections (S4).
+        "ops.musicbrainz_lookup_requests",
+        "ops.musicbrainz_correction_queue",
     }
 )
 
@@ -98,6 +101,18 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
       select 1 from library.separate_releases as separate_release
       where separate_release.library_id = album.library_id
         and separate_release.release_key = album.album_key)"""),
+    # A lookup the owner asked for that has not finished; a finished one is batch history
+    # and goes with the row.
+    ("musicbrainz_lookup_request", """not exists (
+      select 1 from ops.musicbrainz_lookup_requests as lookup_request
+      where lookup_request.library_id = album.library_id
+        and lookup_request.album_key = album.album_key
+        and lookup_request.state in ('queued', 'running'))"""),
+    # A data correction the owner added to the Edits Queue.
+    ("musicbrainz_correction", """not exists (
+      select 1 from ops.musicbrainz_correction_queue as correction
+      where correction.library_id = album.library_id
+        and correction.album_key = album.album_key)"""),
     ("cover_lookup_task", """not exists (
       select 1 from ops.cover_lookup_tasks as cover_task
       where cover_task.library_id = album.library_id

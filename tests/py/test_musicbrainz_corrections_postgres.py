@@ -1,0 +1,147 @@
+"""MusicBrainz data corrections and the Edits Queue on real isolated PostgreSQL (Delivery 2, S4).
+
+Each test owns a freshly migrated isolated database. Nothing calls MusicBrainz: releases and
+decisions are stored as a recorded release lookup would store them.
+"""
+from __future__ import annotations
+
+import json
+from datetime import timedelta
+
+from music_app.services.musicbrainz_corrections import MusicBrainzCorrectionService
+from music_app.services.musicbrainz_corrections_postgres import MusicBrainzCorrectionsPostgresRepository
+from music_app.services.musicbrainz_lookup_queue_postgres import MusicBrainzLookupQueuePostgresRepository
+from tests.e2e.support import isolatedPostgres
+from tests.py.test_musicbrainz_release_identity_postgres import GROUP, NOW, RELEASE, _seed
+
+BOX = "050e7238-9751-4521-91b6-89c672eac591"
+
+
+def _credit(*names):
+    return [{"name": name, "artist_name": name, "join_phrase": " & " if index < len(names) - 1 else ""}
+            for index, name in enumerate(names)]
+
+
+def _medium(position, *tracks):
+    return {"position": position, "tracks": [
+        {"position": index, "title": title, "artist_credit": _credit(*artists)}
+        for index, (title, *artists) in enumerate(tracks, start=1)]}
+
+
+def _store_release(connection, mbid, title, credit, media):
+    connection.execute(
+        "insert into integration.musicbrainz_releases (mbid, release_group_mbid, title, artist_credit, media,"
+        " refreshed_at) values (%s, %s, %s, %s, %s, %s)",
+        (mbid, GROUP, title, json.dumps(credit), json.dumps(media), NOW))
+
+
+def _decide(connection, album_key, *, state="release", release=RELEASE, disc_position=None):
+    connection.execute(
+        "insert into library.local_album_musicbrainz_releases (library_id, album_key, state, release_group_mbid,"
+        " release_mbid, disc_position, matcher_version, observed_at)"
+        " select library_id, album_key, %s, %s, %s, %s, 2, %s from library.local_albums where album_key = %s",
+        (state, GROUP, release if state == "release" else None, disc_position, NOW, album_key))
+
+
+def _corrections(monkeypatch):
+    setup_url, _repository, ids, _albums = _seed(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into integration.musicbrainz_release_groups (mbid, title, refreshed_at) values (%s, 'Angels Cry', %s)",
+            (GROUP, NOW))
+        # Spelling aside (case, spacing, typographic apostrophe) the first track agrees;
+        # the second track's title and artist differ.
+        connection.execute("update library.local_tracks set title = 'Don''t  Despair' where track_key = 'rel-cry-1'")
+        _store_release(connection, RELEASE, "angels cry", _credit("Angra"),
+                       [_medium(1, ("don’t despair", "Angra"), ("Carry On", "Angra", "Andre Matos"))])
+        _decide(connection, "rel-cry")
+        # One disc of a box set: local disc 1 is the release's second medium.
+        _store_release(connection, BOX, "Holy Land Box", _credit("Angra"),
+                       [_medium(1, ("Wrong", "Angra")), _medium(2, ("Song 1", "Angra"), ("Song 2", "Angra"))])
+        _decide(connection, "rel-holy", release=BOX, disc_position=2)
+        # A release group alone proposes nothing.
+        _decide(connection, "rel-else", state="release_group")
+    repository = MusicBrainzCorrectionsPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
+    return setup_url, repository, ids
+
+
+def test_corrections_name_each_real_difference_from_the_certain_release_and_nothing_else(monkeypatch):
+    _setup_url, repository, _ids = _corrections(monkeypatch)
+    service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
+
+    albums = {album["album_key"]: album for album in service.list_corrections()}
+
+    assert set(albums) == {"rel-cry", "rel-holy"}
+    cry = albums["rel-cry"]
+    assert [(item["label"], item["current"], item["proposed"]) for item in cry["corrections"]] == [
+        ("Artist (1 track)", "Angra", "Angra & Andre Matos"), ("Track 2 title", "Song 2", "Carry On")]
+    assert (cry["track_count"], cry["year"], cry["release_mbid"], cry["queued_at"]) == (2, 1993, RELEASE, None)
+    holy = albums["rel-holy"]
+    assert [(item["label"], item["current"], item["proposed"]) for item in holy["corrections"]] == [
+        ("Album title", "Holy Land", "Holy Land Box")]
+    assert [album["album_key"] for album in service.list_corrections(album_key="rel-holy")] == ["rel-holy"]
+    assert service.list_corrections(album_key="rel-else") == []
+
+
+def test_album_artist_differences_use_the_release_credit_as_written(monkeypatch):
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update integration.musicbrainz_releases set artist_credit = %s where mbid = %s",
+                           (json.dumps(_credit("Magma")), BOX))
+
+    (holy,) = MusicBrainzCorrectionService(repository).list_corrections(album_key="rel-holy")
+
+    assert [(item["field"], item["current"], item["proposed"]) for item in holy["corrections"]] == [
+        ("album", "Holy Land", "Holy Land Box"), ("album_artist", "Angra", "Magma")]
+
+
+def test_add_to_queue_keeps_the_snapshot_and_remove_drops_it(monkeypatch):
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
+
+    queued = service.queue_correction(album_key="rel-cry", actor_account_id=None)
+    again = service.queue_correction(album_key="rel-cry", actor_account_id=None)
+
+    assert again["entry_id"] == queued["entry_id"] and queued["queued_at"] == NOW
+    (entry,) = service.list_queue()["items"]
+    assert (entry["album_title"], entry["artist_name"], entry["release_mbid"]) == ("Angels Cry", "Angra", RELEASE)
+    assert [item["label"] for item in entry["corrections"]] == ["Artist (1 track)", "Track 2 title"]
+    assert {album["album_key"]: album["queued_at"] for album in service.list_corrections()}["rel-cry"] == NOW
+    assert service.queue_correction(album_key="rel-else", actor_account_id=None) is None
+    with isolatedPostgres._connect(setup_url) as connection:
+        tracks = connection.execute("select title from library.local_tracks where track_key like 'rel-cry-%%'"
+                                    " order by track_key").fetchall()
+    assert [row["title"] for row in tracks] == ["Don't  Despair", "Song 2"], "queueing never changes tags"
+
+    assert service.remove_queued(entry_id=queued["entry_id"]) is True
+    assert service.remove_queued(entry_id=queued["entry_id"]) is False
+    assert service.list_queue()["items"] == []
+
+
+def test_auto_submit_bulks_is_off_until_switched_on_and_counts_from_the_switch(monkeypatch):
+    _setup_url, repository, _ids = _corrections(monkeypatch)
+    clock = [NOW]
+    service = MusicBrainzCorrectionService(repository, now=lambda: clock[0])
+
+    assert service.list_queue()["settings"] == {"auto_submit_bulks": False, "next_run_at": None}
+    assert service.save_settings(auto_submit_bulks=True, actor_account_id=None) == {
+        "auto_submit_bulks": True, "next_run_at": NOW + timedelta(hours=1)}
+    clock[0] = NOW + timedelta(minutes=90)
+    # Saving the same value again keeps the hour the queue counts from.
+    assert service.save_settings(auto_submit_bulks=True, actor_account_id=None)["next_run_at"] == NOW + timedelta(hours=2)
+    assert service.save_settings(auto_submit_bulks=False, actor_account_id=None)["next_run_at"] is None
+
+
+def test_only_a_waiting_lookup_can_be_removed(monkeypatch):
+    setup_url, _repository, ids = _corrections(monkeypatch)
+    lookups = MusicBrainzLookupQueuePostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
+    waiting = lookups.request(target_kind="album", mode="queue", album_key="rel-cry", actor_account_id=None,
+                              observed_at=NOW)
+    running = lookups.request(target_kind="artist", mode="search", local_artist_id=ids["other"],
+                              actor_account_id=None, observed_at=NOW)
+
+    assert lookups.remove_queued(request_id=running["request_id"]) is False
+    assert lookups.remove_queued(request_id=waiting["request_id"]) is True
+    assert lookups.list_lookups()["queued"] == []

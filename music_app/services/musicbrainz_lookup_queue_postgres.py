@@ -123,6 +123,12 @@ class MusicBrainzLookupQueuePostgresRepository:
         with self._connect(self._database_url) as connection:
             return bool(_row_mapping(connection.execute(_DISMISS_SQL, params).fetchone()).get("dismissed"))
 
+    def remove_queued(self, *, request_id: int) -> bool:
+        """Drop a lookup that has not started (Settings → Edits Queue)."""
+        with self._connect(self._database_url) as connection:
+            return bool(_row_mapping(connection.execute(
+                _REMOVE_QUEUED_SQL, {"request_id": _positive_id(request_id)}).fetchone()).get("removed"))
+
     @staticmethod
     def _start_queued(connection, observed: datetime, due_only: bool) -> int | None:
         row = _row_mapping(connection.execute(_START_SQL, {
@@ -382,4 +388,15 @@ _DISMISS_SQL = _active_library_cte() + """
       returning 1
     )
     select exists (select 1 from dismissed) as dismissed;
+"""
+
+_REMOVE_QUEUED_SQL = _active_library_cte() + """
+    , removed as (
+      delete from ops.musicbrainz_lookup_requests requests
+      using active_library
+      where requests.library_id = active_library.library_id and requests.id = %(request_id)s
+        and requests.state = 'queued'
+      returning 1
+    )
+    select exists (select 1 from removed) as removed;
 """

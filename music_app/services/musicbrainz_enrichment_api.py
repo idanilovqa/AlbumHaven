@@ -88,6 +88,9 @@ class MusicBrainzEnrichmentApiService:
     def dismiss_lookup_batch(self, *, batch_id: int) -> dict[str, bool]:
         return {"dismissed": self._lookups.dismiss_batch(batch_id=batch_id, observed_at=self._now())}
 
+    def remove_queued_lookup(self, *, request_id: int) -> dict[str, bool]:
+        return {"removed": self._lookups.remove_queued(request_id=request_id)}
+
     def enqueue_artist(self, *, local_artist_id: int, reason: str) -> dict[str, bool]:
         return self._scheduler.schedule(reason, local_artist_id=local_artist_id)
 

@@ -611,3 +611,15 @@ def test_build_legacy_search_context_ignores_malformed_people_search_shell_synta
 
     assert context["committed_query"] == 'persons:"Mike Portnoy, Neal Morse'
     assert "advanced_search" not in context
+
+
+def test_a_short_field_word_inside_the_query_is_not_a_match():
+    # Owner 2026-11-16: "dragonland" matched 28 A-ha tracks in Женя музыка ("a ha": "a" is inside the query).
+    from music_app.services.view_search import search_term_matches_field, search_word_matches
+
+    assert not search_word_matches("dragonland", "a")
+    assert not search_word_matches("dragonland", "land")
+    assert not search_term_matches_field("dragonland", "a ha")
+    assert search_word_matches("dragonlands", "dragonland")
+    assert search_word_matches("dragonland", "dragonlands")
+    assert search_term_matches_field("dragonland", "dragonland s rivers")

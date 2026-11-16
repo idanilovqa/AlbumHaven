@@ -441,7 +441,11 @@ def _search_word_matches(query_text: str, candidate_text: str) -> bool:
         return False
     if query_text == candidate_text:
         return True
-    if len(query_text) >= 3 and (query_text in candidate_text or candidate_text in query_text):
+    if len(query_text) >= 3 and query_text in candidate_text:
+        return True
+    # A field word inside the query counts only when it is nearly the whole query ("dragonland" vs
+    # "dragonlands"): short words such as "a" or "land" made "dragonland" match A-ha (owner 2026-11-16).
+    if len(candidate_text) >= 4 and len(query_text) - len(candidate_text) <= 2 and candidate_text in query_text:
         return True
     if query_text[0] != candidate_text[0] and min(len(query_text), len(candidate_text)) >= 4:
         return False

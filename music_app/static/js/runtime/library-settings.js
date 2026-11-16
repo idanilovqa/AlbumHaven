@@ -649,6 +649,19 @@ function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, 
   return { top: triggerRect.bottom + gap, maxHeight: below };
 }
 
+// The widest choice row plus the list's own frame. Rows are inline buttons, so the list's own
+// max-content would lay them side by side; each row is measured on its own instead.
+function measureUtilityChoiceListWidth(menu) {
+  const horizontal = (element) => {
+    const style = getComputedStyle(element);
+    return ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+      .reduce((total, key) => total + (parseFloat(style[key]) || 0), 0);
+  };
+  const rows = Array.from(menu.querySelectorAll('[data-foobar-format]'));
+  const widest = Math.max(0, ...rows.map(row => (row.firstElementChild?.scrollWidth || 0) + horizontal(row)));
+  return Math.ceil(widest + horizontal(menu));
+}
+
 function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false }) {
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
@@ -671,7 +684,10 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
   const position = () => {
     if (!trigger.isConnected) { close(); return; }
     const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.zIndex = '130';
-    const menuWidth = matchTriggerWidth ? Math.min(rect.width, window.innerWidth - 16) : Math.min(280, window.innerWidth - 16);
+    const maxWidth = window.innerWidth - 16;
+    let menuWidth = Math.min(280, maxWidth);
+    // The trigger's width is the floor: a list never cuts a choice longer than the closed button.
+    if (matchTriggerWidth) menuWidth = Math.min(Math.max(rect.width, measureUtilityChoiceListWidth(menu)), maxWidth);
     menu.style.width = `${Math.max(0, menuWidth)}px`;
     menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
     const playerRect = document.querySelector?.('.global-player')?.getBoundingClientRect?.();

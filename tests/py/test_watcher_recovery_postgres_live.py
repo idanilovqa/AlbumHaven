@@ -1123,9 +1123,10 @@ def _claim_enqueued_full_scan(
         database_url=scope.worker_url,
         connect_to_database=isolatedPostgres._connect,
     )
+    claim_now = max(now, datetime.now(timezone.utc))
     claim = jobs.claim(
         worker_id=worker_id or f"{request_ref}-worker",
-        now=now,
+        now=claim_now,
         lease_seconds=300,
         kinds=(JobKind.FULL_SCAN,),
     )
@@ -1146,7 +1147,7 @@ def _claim_enqueued_full_scan(
         attempt=claim.attempt,
         worker_id=claim.worker_id,
         lease_token=claim.lease_token,
-        now=now,
+        now=claim_now,
     )
     assert scope_result.scope_complete is True
     return worker_scans, claim, intent, scope_result
@@ -1185,18 +1186,22 @@ def _publish_linked_full_scan(
     claimed_scope,
     *,
     now: datetime,
+    scan_started_at: datetime | None = None,
 ):
+    inventory = {
+        "artists": [],
+        "albums": [],
+        "featured_artists": [],
+        "tracks": [],
+        "track_files": [],
+    }
+    if scan_started_at is not None:
+        inventory["scan_started_at"] = scan_started_at.isoformat()
     publication = scans.publish_claimed_full_scan(
         claim=claim,
         intent_id=accepted.intent_id,
         expected_inventory_mutation_revision=intent.inventory_mutation_revision,
-        inventory={
-            "artists": [],
-            "albums": [],
-            "featured_artists": [],
-            "tracks": [],
-            "track_files": [],
-        },
+        inventory=inventory,
         observed_root_ids=[root["id"] for root in claimed_scope.roots],
         now=now,
     )
@@ -3795,6 +3800,7 @@ def test_imported_legacy_health_is_cleared_only_after_its_captured_repair(
         ).fetchone()["health"]
     assert set(pending_health) == {"root-a", "root-b"}
 
+    scan_started_at = now
     worker_scans, claim, intent, claimed_scope = _claim_enqueued_full_scan(
         scope,
         now=now,
@@ -3808,6 +3814,7 @@ def test_imported_legacy_health_is_cleared_only_after_its_captured_repair(
         intent,
         claimed_scope,
         now=now + timedelta(seconds=1),
+        scan_started_at=scan_started_at,
     )
     assert publication["publication_won"] is True
 
@@ -4080,6 +4087,7 @@ def _seed_claimed_linked_full_scan(
     worker_id: str,
     root_ids: tuple[str, ...] = ("root-a",),
 ) -> SimpleNamespace:
+    scan_started_at = now
     app_repository = _repository(scope.app_url)
     worker_repository = _repository(scope.worker_url)
     app_repository.mark_dirty(
@@ -4116,6 +4124,7 @@ def _seed_claimed_linked_full_scan(
         claim=claim,
         intent=intent,
         scope=claimed_scope,
+        scan_started_at=scan_started_at,
     )
 
 
@@ -4993,6 +5002,7 @@ def test_repair_clears_only_legacy_warnings_covered_by_its_start(
     publication = _publish_linked_full_scan(
         seeded.worker_scans, seeded.full_scan, seeded.claim, seeded.intent,
         seeded.scope, now=NOW + timedelta(seconds=2),
+        scan_started_at=seeded.scan_started_at,
     )
     assert_summary_and_incident_state()
     assert seeded.worker_repository.complete_repair(

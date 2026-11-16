@@ -214,6 +214,7 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0249_create_problematic_files_projection.sql
 0250_restore_incomplete_album_contract.sql
 0252_refresh_reconciled_album_cover_cache.sql
+0253_preserve_invalid_legacy_scan_warnings.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.

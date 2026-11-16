@@ -214,11 +214,17 @@ def load_measured(connection, *, account_id, library_id, device_id, session_id):
     return dict(row["metadata"]["source_payload"])
 
 
+def provider_lock_key(*, account_id, library_id, device_id, session_id):
+    """The advisory lock that serializes Last.fm submission of one measured listen."""
+    identity = f"provider:{account_id}:{library_id}:{device_id}:{session_id}"
+    return int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
+
+
 @contextmanager
 def measured_provider_guard(config, *, account_id, library_id, device_id, session_id):
     from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
-    identity = f"provider:{account_id}:{library_id}:{device_id}:{session_id}"
-    lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
+    lock_key = provider_lock_key(account_id=account_id, library_id=library_id,
+                                 device_id=device_id, session_id=session_id)
     with PostgresListenHistoryAdapter(config)._connect_to_database() as connection:
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
         yield connection

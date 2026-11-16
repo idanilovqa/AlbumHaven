@@ -186,14 +186,42 @@ def clear_pending_scrobble(config: dict[str, object], *, listen_id: str) -> None
     save_lastfm_sync_state(config, sync_state)
 
 
-def record_retry_summary(config: dict[str, object], summary: dict[str, int]) -> None:
+def record_retry_results(
+    config: dict[str, object],
+    *,
+    pending_changes: dict[str, dict[str, object] | None],
+    summary: dict[str, int] | None,
+) -> None:
+    """Applies one retry pass to the legacy sync state in one read and one write.
+
+    ``pending_changes`` maps a listen id to its stored entry while it waits for
+    another retry, or to None once it no longer does."""
+    if not pending_changes and summary is None:
+        return
     sync_state = load_lastfm_sync_state(config)
-    sync_state["last_retry_summary"] = {
-        "pending_before": int(summary.get("pending_before") or 0),
-        "attempted": int(summary.get("attempted") or 0),
-        "succeeded": int(summary.get("succeeded") or 0),
-        "failed": int(summary.get("failed") or 0),
-        "pending_after": int(summary.get("pending_after") or 0),
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
-    }
+    pending_scrobbles = dict(sync_state.get("pending_scrobbles") or {})
+    sync_problems = dict(sync_state.get("sync_problems") or {})
+    for listen_id, entry in pending_changes.items():
+        if entry is None:
+            pending_scrobbles.pop(listen_id, None)
+            sync_problems.pop(listen_id, None)
+            continue
+        error = str(entry.get("scrobble_error") or "").strip()
+        pending_scrobbles[listen_id] = {
+            "retry_count": max(0, int(entry.get("scrobble_retry_count") or 0)),
+            "last_error": error,
+            "track_ref": str(entry.get("track_ref") or entry.get("path") or "").strip(),
+        }
+        sync_problems[listen_id] = build_lastfm_sync_problem(message=error)
+    sync_state["pending_scrobbles"] = pending_scrobbles
+    sync_state["sync_problems"] = sync_problems
+    if summary is not None:
+        sync_state["last_retry_summary"] = {
+            "pending_before": int(summary.get("pending_before") or 0),
+            "attempted": int(summary.get("attempted") or 0),
+            "succeeded": int(summary.get("succeeded") or 0),
+            "failed": int(summary.get("failed") or 0),
+            "pending_after": int(summary.get("pending_after") or 0),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
     save_lastfm_sync_state(config, sync_state)

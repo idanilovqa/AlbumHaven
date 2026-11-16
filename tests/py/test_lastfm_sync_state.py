@@ -13,7 +13,7 @@ from music_app.services.lastfm_listen_sync import (
     clear_pending_scrobble,
     load_lastfm_sync_state,
     record_pending_scrobble,
-    record_retry_summary,
+    record_retry_results,
     save_lastfm_sync_state,
 )
 
@@ -99,9 +99,10 @@ def test_pending_scrobble_and_retry_summary_state_shapes(
     clear_pending_scrobble(config, listen_id="listen-1")
     assert load_lastfm_sync_state(config)["pending_scrobbles"] == {}
 
-    record_retry_summary(
+    record_retry_results(
         config,
-        {
+        pending_changes={},
+        summary={
             "pending_before": 2,
             "attempted": 2,
             "succeeded": 1,
@@ -167,9 +168,10 @@ def test_selected_postgres_sync_state_pending_and_retry_summary_leave_stale_json
         error="retry me",
     )
     clear_pending_scrobble(config, listen_id="listen-db")
-    record_retry_summary(
+    record_retry_results(
         config,
-        {
+        pending_changes={},
+        summary={
             "pending_before": 1,
             "attempted": 1,
             "succeeded": 1,

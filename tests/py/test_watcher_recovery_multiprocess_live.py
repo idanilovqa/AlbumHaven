@@ -615,6 +615,16 @@ def test_cross_root_barrier_reclaim_rejects_the_stale_process_claim(
     first = first_results[0]
     assert first[1] is not None and first[2] == accepted.generation_id
 
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update ops.jobs
+            set lease_expires_at = clock_timestamp() - interval '1 second'
+            where id = %s
+            """,
+            (first[1],),
+        )
+
     jobs = PostgresJobRepository(
         database_url=scope.worker_url,
         connect_to_database=_connect,
@@ -738,6 +748,16 @@ def test_killed_claim_reconciles_retryable_work_without_cross_root_overtake(
         ),
         accepted_at=now + timedelta(milliseconds=1),
     )
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update ops.jobs
+            set lease_expires_at = clock_timestamp() - interval '1 second'
+            where id = %s
+            """,
+            (killed_claim[1],),
+        )
 
     jobs = PostgresJobRepository(
         database_url=scope.worker_url,

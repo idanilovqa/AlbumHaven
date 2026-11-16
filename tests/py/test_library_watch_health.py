@@ -335,6 +335,9 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
         def __init__(self, *_args, **_kwargs):
             pass
 
+        def inventory_existing_previews(self):
+            return 0
+
         def start(self):
             return True
 

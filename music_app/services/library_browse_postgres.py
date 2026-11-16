@@ -906,13 +906,7 @@ class PostgresLibraryBrowseRepository:
                     "alias_to_canonical": _row_json_mapping(alias_row.get("alias_to_canonical")),
                     "canonical_to_aliases": _row_json_mapping(alias_row.get("canonical_to_aliases")),
                 }
-            root_alias_to_canonical = (
-                {}
-                if relation_alias_maps.get("projection_stale_reason")
-                else _root_browse_alias_to_canonical(
-                    relation_alias_maps["alias_to_canonical"]
-                )
-            )
+            root_alias_to_canonical = _servable_root_alias_to_canonical(relation_alias_maps)
             phase_ms["aliases"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()
             support_state = (
@@ -2083,9 +2077,8 @@ class PostgresLibraryBrowseRepository:
         projection_stale_reason = str(
             relation_alias_maps.get("projection_stale_reason") or ""
         )
-        rebuilding_complete_projection = (
-            projection_stale_reason == "projection_not_ready"
-            and relation_alias_maps.get("projection_structure_complete") is True
+        rebuilding_complete_projection = bool(projection_stale_reason) and _relation_aliases_servable(
+            relation_alias_maps
         )
         runtime_rebuild_exact_lookup = (
             relation_alias_maps.get("projection_snapshot_missing") is True
@@ -3558,12 +3551,7 @@ class PostgresLibraryBrowseRepository:
 
     def canonical_gallery_artist_names(self, artist_names: Iterable[object]) -> dict[str, str]:
         """Map local artist names to the canonical artist the Gallery groups them under."""
-        relation_alias_maps = self._load_relation_alias_maps()
-        aliases = (
-            {}
-            if relation_alias_maps.get("projection_stale_reason")
-            else _root_browse_alias_to_canonical(relation_alias_maps["alias_to_canonical"])
-        )
+        aliases = _servable_root_alias_to_canonical(self._load_relation_alias_maps())
         normalized_aliases = _normalized_artist_aliases(aliases)
         return {
             str(name): _canonical_artist_name(
@@ -6818,6 +6806,28 @@ def _canonical_artist_name(
             normalized_aliases = _normalized_artist_aliases(alias_to_canonical)
         canonical = normalized_aliases.get(artist_key, artist_name)
     return str(canonical or artist_name).strip()
+
+
+def _relation_aliases_servable(relation_alias_maps: Mapping[str, object]) -> bool:
+    """Whether browse may group artists with these alias maps.
+
+    A complete projection marked stale (a watcher event or album move queued
+    its rebuild) keeps serving its last published families until the
+    background rebuild publishes the replacement; artists it does not know
+    yet stay ungrouped. Only a missing or partial projection serves none.
+    """
+    return (
+        not relation_alias_maps.get("projection_stale_reason")
+        or relation_alias_maps.get("projection_structure_complete") is True
+    )
+
+
+def _servable_root_alias_to_canonical(
+    relation_alias_maps: Mapping[str, object],
+) -> dict[str, object]:
+    if not _relation_aliases_servable(relation_alias_maps):
+        return {}
+    return _root_browse_alias_to_canonical(relation_alias_maps["alias_to_canonical"])
 
 
 def _root_browse_alias_to_canonical(

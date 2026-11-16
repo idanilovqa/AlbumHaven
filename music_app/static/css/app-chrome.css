@@ -161,7 +161,8 @@
   background: var(--app-chrome);
   border: 0;
 }
-.shell-navigation-rail { height: 100%; padding: var(--app-page-header-top) 14px 20px; overflow: hidden; }
+/* No bottom inset: the tree runs straight down to the player's edge (owner 2026-11-16). */
+.shell-navigation-rail { height: 100%; padding: var(--app-page-header-top) 14px 0; overflow: hidden; }
 .shell-navigation-rail-header { min-height: 54px; }
 @media (min-width: 901px) {
   /* The 22px gap to the tree belongs to the header, not the heading, so the Collapse button and "Artists"

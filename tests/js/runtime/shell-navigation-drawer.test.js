@@ -969,3 +969,12 @@ test('desktop Collapse button shares the "Artists" heading centre line', () => {
   assert.match(desktop, /\.shell-navigation-rail-header\s*\{[^}]*height:\s*54px;[^}]*padding-bottom:\s*22px/);
   assert.doesNotMatch(css, /\.shell-navigation-rail-header h2\s*\{[^}]*padding-bottom/);
 });
+
+test('the Artist tree runs down to the player with no bottom gap', () => {
+  // Owner 2026-11-16: "at the bottom of artist tree there's a black padding above the player".
+  const root = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css');
+  const chrome = fs.readFileSync(path.join(root, 'app-chrome.css'), 'utf8');
+  const player = fs.readFileSync(path.join(root, 'runtime', 'non-album-and-player.css'), 'utf8');
+  assert.match(chrome, /\.shell-navigation-rail \{[^}]*padding: var\(--app-page-header-top\) 14px 0;/);
+  assert.match(player, /has-docked-compact-player #shell-navigation-rail \{[^}]*padding-bottom: 0;/);
+});

@@ -16770,7 +16770,9 @@ function buildCoverUrl(coverPath, options = {}) {
     params.push(`size=${encodeURIComponent(String(Math.round(size)))}`);
   }
   const baseCoverUrl = `/cover?${params.join('&')}`;
-  let refreshToken = explicitRefreshToken || persistedRevision || coverSessionVersionTokens.get(baseCoverUrl);
+  // A content hash names the exact bytes, so callers showing a known file may prefer it to a refresh stamp.
+  let refreshToken = (options?.preferRevision && persistedRevision)
+    || explicitRefreshToken || persistedRevision || coverSessionVersionTokens.get(baseCoverUrl);
   if (!refreshToken) {
     const processToken = String(
       globalThis.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__?.bootstrap?.coverCacheToken || '',
@@ -37537,6 +37539,12 @@ function coverLookupLocalPathMatches(left, right) {
     : String(left || '') === String(right || '');
 }
 
+// Owner (2026-11-15): selecting or deleting a card never reloads the others. A card's image address follows
+// its file's content hash, not whether it is the selected cover, so a selection change keeps every image.
+function localCardImageRevision(item) {
+  return item?.sha256 || item?.cover_revision || undefined;
+}
+
 function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
@@ -37558,7 +37566,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         ? String(item?.object_url || item?.data_url || '').trim()
       : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', {
         size: 480,
-        revision: item?.cover_revision,
+        revision: localCardImageRevision(item),
+        preferRevision: true,
       });
   const fullImageUrl = kind === 'remote'
     ? buildRemoteCoverLookupDisplayUrl(item, item?.url || item?.thumbnail_url || '', `full:${item?.id || item?.url || ''}`)
@@ -37566,7 +37575,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.url || item?.thumbnail_url || '', `full:saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
+      : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', { revision: localCardImageRevision(item), preferRevision: true });
   const isActive = !inOtherArtbox && (kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
       String(state.coverLookup.modal.pendingLocalPath || '')

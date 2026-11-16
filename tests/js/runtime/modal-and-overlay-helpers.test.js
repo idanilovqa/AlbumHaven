@@ -1875,6 +1875,17 @@ test('stale navigation and close-like invalidation during decode cannot reveal a
   );
 }
 
+test('buildCoverUrl lets a known content hash win over a refresh stamp only when asked', () => {
+  const { context } = loadHelper();
+  context.state.coverRefreshTokens = { 'C:/a/cover-existing-2.jpg': '1794800056451' };
+  assert.match(context.buildCoverUrl('C:/a/cover-existing-2.jpg', { revision: 'abc' }), /v=1794800056451$/);
+  assert.match(
+    context.buildCoverUrl('C:/a/cover-existing-2.jpg', { revision: 'abc', preferRevision: true }),
+    /v=abc$/,
+    'Cover Look Up cards keep their image when the file becomes the album cover',
+  );
+});
+
 test('buildCoverUrl keeps one server process cover identity stable across browser epochs', () => {
   const buildUrlForProcess = (coverCacheToken, now) => {
     const { context } = loadHelper();

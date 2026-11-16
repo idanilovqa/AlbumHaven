@@ -7366,6 +7366,21 @@ require('node:test')('a reply still describing the replaced cover.jpg never swap
   assert.equal(pastedCard().preview_url, '', 'indexed with the new revision: the stored file replaces the temporary card in place');
 });
 
+require('node:test')('a local card keeps its image address when it becomes the selected cover', () => {
+  const context = loadHelper({
+    getAlbumRequestKey: value => String(value?.key || ''),
+    buildCoverUrl: (coverPath, options = {}) => `/cover?path=${encodeURIComponent(coverPath)}&v=${options.revision}`,
+    escapeHtml: value => String(value ?? ''),
+  });
+  context.state.coverLookup.modal = { album: { key: 'a' }, localCovers: [], otherArt: [], pastedImages: [] };
+  const card = { path: 'N:/A/cover-existing-2.jpg', filename: 'cover-existing-2.jpg', sha256: 'abc', width: 1024, height: 1024 };
+  const imageSource = markup => markup.match(/data-cover-preview-src="([^"]+)"/)?.[1];
+  const before = imageSource(context.buildCoverLookupCard(card, 'local'));
+  const selected = imageSource(context.buildCoverLookupCard({ ...card, is_active: true, cover_revision: 'abc' }, 'local'));
+  assert.ok(before);
+  assert.equal(selected, before, 'becoming the selection must not reload the card image');
+});
+
 require('node:test')('optimistic pasted LOCAL cover gets its final server ranking before inventory refresh', () => {
   const album = {
     key: 'fleet-foxes-pasted',

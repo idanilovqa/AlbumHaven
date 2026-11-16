@@ -1439,7 +1439,9 @@ function buildCoverUrl(coverPath, options = {}) {
     params.push(`size=${encodeURIComponent(String(Math.round(size)))}`);
   }
   const baseCoverUrl = `/cover?${params.join('&')}`;
-  let refreshToken = explicitRefreshToken || persistedRevision || coverSessionVersionTokens.get(baseCoverUrl);
+  // A content hash names the exact bytes, so callers showing a known file may prefer it to a refresh stamp.
+  let refreshToken = (options?.preferRevision && persistedRevision)
+    || explicitRefreshToken || persistedRevision || coverSessionVersionTokens.get(baseCoverUrl);
   if (!refreshToken) {
     const processToken = String(
       globalThis.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__?.bootstrap?.coverCacheToken || '',

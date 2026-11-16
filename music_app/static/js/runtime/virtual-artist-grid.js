@@ -537,6 +537,9 @@ class VirtualArtistGrid {
           return;
         }
         queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
+          preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
+        }
       });
     });
   }

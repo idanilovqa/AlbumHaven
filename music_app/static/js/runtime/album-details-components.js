@@ -32,6 +32,12 @@ function resolveAlbumDetailsCoverSlots(album) {
   })).filter((slot) => slot.selectionId);
 }
 
+// The rear-cover preview Album Details shows; the gallery preloads the same URL (owner 2026-11-16).
+function albumDetailsCoverPreviewUrl(slot) {
+  const url = String(slot?.imageUrl || '');
+  return url ? `${url}${url.includes('?') ? '&' : '?'}size=480` : '';
+}
+
 function buildAlbumDetailsCoverStackHtml(config = {}) {
   const frontHtml = String(config.frontHtml || '');
   const slots = resolveAlbumDetailsCoverSlots({
@@ -54,7 +60,7 @@ function buildAlbumDetailsCoverStackHtml(config = {}) {
     if (slot.unavailable) {
       return `<span class="album-details-cover-stack__rear ${positionClass} is-unavailable" data-album-details-cover-index="${index}" role="img" aria-label="${escapeHtml(label)} unavailable"></span>`;
     }
-    const previewUrl = `${slot.imageUrl}${slot.imageUrl.includes('?') ? '&' : '?'}size=480`;
+    const previewUrl = albumDetailsCoverPreviewUrl(slot);
     return `<button class="album-details-cover-stack__rear ${positionClass}" type="button" data-album-details-cover-index="${index}" aria-label="${escapeHtml(label)}"><img src="${escapeHtml(previewUrl)}" alt="" loading="lazy" decoding="async"></button>`;
   }).join('');
   const previous = canBrowse ? ButtonComponent.renderActionButton({

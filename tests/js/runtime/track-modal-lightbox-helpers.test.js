@@ -3306,3 +3306,46 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+test('visible gallery cards preload the extra selected covers Album Details shows behind the main cover', () => {
+  // Owner 2026-11-16: "when opening an album with 3 covers set in the artbox, those covers take some time to
+  // load ... I would prefer their previews to also load while user is in the gallery".
+  const { context } = loadHelper({
+    initialAlbums: [{
+      key: 'holy war', name: 'Holy War', selected_covers_loaded: true,
+      selected_covers: [
+        { selection_id: 'one', image_url: '/cover?library_id=1&album_id=7&selection_id=one' },
+        { selection_id: 'two', image_url: '/cover?library_id=1&album_id=7&selection_id=two' },
+        { selection_id: 'three', image_url: '/cover?library_id=1&album_id=7&selection_id=three' },
+      ],
+    }],
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-details-components.js'), 'utf8'), context);
+  const loaded = [];
+  context.Image = class { set src(value) { loaded.push({ src: value, priority: this.fetchPriority }); } };
+  const scrollEl = new context.HTMLElement('scroll');
+  scrollEl.getBoundingClientRect = () => ({ top: 0, bottom: 500, width: 400, height: 500 });
+  const button = new context.HTMLElement('holy-war-button');
+  button.setAttribute('data-album-key', 'holy war');
+  button.getBoundingClientRect = () => ({ top: 20, bottom: 60, width: 200, height: 40 });
+  const containerEl = new context.HTMLElement('artist-groups');
+  containerEl.querySelectorAll = (selector) => (
+    selector === '.album-title-button[data-open-tracklist="1"][data-album-key]' ? [button] : []
+  );
+
+  context.preloadVisibleAlbumDetailsCovers(containerEl, scrollEl);
+  context.preloadVisibleAlbumDetailsCovers(containerEl, scrollEl);
+
+  // The rear covers (not the main one), at the exact URL Album Details renders, once each, low priority.
+  assert.deepEqual(loaded.map((item) => item.src), [
+    '/cover?library_id=1&album_id=7&selection_id=two&size=480',
+    '/cover?library_id=1&album_id=7&selection_id=three&size=480',
+  ]);
+  assert.ok(loaded.every((item) => item.priority === 'low'));
+  context.ButtonComponent = { renderActionButton: () => '' };
+  const stack = context.buildAlbumDetailsCoverStackHtml({
+    frontHtml: '<img>', albumName: 'Holy War',
+    slots: context.getIndexedAlbum('holy war').selected_covers,
+  });
+  loaded.forEach((item) => assert.ok(stack.includes(item.src.replace(/&/g, '&amp;')) || stack.includes(item.src)));
+});

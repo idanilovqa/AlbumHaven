@@ -5289,6 +5289,12 @@ function resolveAlbumDetailsCoverSlots(album) {
   })).filter((slot) => slot.selectionId);
 }
 
+// The rear-cover preview Album Details shows; the gallery preloads the same URL (owner 2026-11-16).
+function albumDetailsCoverPreviewUrl(slot) {
+  const url = String(slot?.imageUrl || '');
+  return url ? `${url}${url.includes('?') ? '&' : '?'}size=480` : '';
+}
+
 function buildAlbumDetailsCoverStackHtml(config = {}) {
   const frontHtml = String(config.frontHtml || '');
   const slots = resolveAlbumDetailsCoverSlots({
@@ -5311,7 +5317,7 @@ function buildAlbumDetailsCoverStackHtml(config = {}) {
     if (slot.unavailable) {
       return `<span class="album-details-cover-stack__rear ${positionClass} is-unavailable" data-album-details-cover-index="${index}" role="img" aria-label="${escapeHtml(label)} unavailable"></span>`;
     }
-    const previewUrl = `${slot.imageUrl}${slot.imageUrl.includes('?') ? '&' : '?'}size=480`;
+    const previewUrl = albumDetailsCoverPreviewUrl(slot);
     return `<button class="album-details-cover-stack__rear ${positionClass}" type="button" data-album-details-cover-index="${index}" aria-label="${escapeHtml(label)}"><img src="${escapeHtml(previewUrl)}" alt="" loading="lazy" decoding="async"></button>`;
   }).join('');
   const previous = canBrowse ? ButtonComponent.renderActionButton({
@@ -17382,10 +17388,10 @@ function cancelTrackModalAlbumDetailsPrewarms() {
   trackModalSpeculativePrewarmControllers.clear();
 }
 
-function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
-  if (!(containerEl instanceof HTMLElement) || !(scrollEl instanceof HTMLElement)) return;
+function visibleGalleryAlbumButtons(containerEl, scrollEl, limit) {
+  if (!(containerEl instanceof HTMLElement) || !(scrollEl instanceof HTMLElement)) return [];
   const boundedLimit = Math.max(0, Number(limit) || 0);
-  if (!boundedLimit) return;
+  if (!boundedLimit) return [];
   const scrollRect = scrollEl.getBoundingClientRect();
   const visibleButtons = [];
   for (const button of containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]')) {
@@ -17396,11 +17402,39 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
     visibleButtons.push(button);
     if (visibleButtons.length >= boundedLimit) break;
   }
+  return visibleButtons;
+}
+
+function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
+  const visibleButtons = visibleGalleryAlbumButtons(containerEl, scrollEl, limit);
   if (!visibleButtons.length) return;
   visibleButtons.forEach((button) => {
     const albumKey = String(button.getAttribute('data-album-key') || '').trim();
     if (!albumKey) return;
     queueTrackModalAlbumDetailsPrewarm(albumKey);
+  });
+}
+
+// Owner 2026-11-16: an album's other selected covers sit behind its main cover in Album Details. Their
+// previews load for the settled visible gallery cards, so opening the album shows them at once. Low
+// priority, once per URL, and paused while a search is being typed, like the Album Details prewarm.
+const VISIBLE_SELECTED_COVER_PRELOAD_CARDS = 60;
+const preloadedAlbumDetailsCoverUrls = new Set();
+
+function preloadVisibleAlbumDetailsCovers(containerEl, scrollEl) {
+  if (typeof Image !== 'function' || state?.busy || state?.ui?.albumDetailPrewarmSearchSuspended) return;
+  visibleGalleryAlbumButtons(containerEl, scrollEl, VISIBLE_SELECTED_COVER_PRELOAD_CARDS).forEach((button) => {
+    const album = getIndexedAlbum(String(button.getAttribute('data-album-key') || '').trim());
+    resolveAlbumDetailsCoverSlots(album).slice(1).forEach((slot) => {
+      const source = slot.unavailable ? '' : albumDetailsCoverPreviewUrl(slot);
+      if (!source || preloadedAlbumDetailsCoverUrls.has(source)) return;
+      preloadedAlbumDetailsCoverUrls.add(source);
+      const image = new Image();
+      image.fetchPriority = 'low';
+      image.decoding = 'async';
+      image.onerror = () => preloadedAlbumDetailsCoverUrls.delete(source);
+      image.src = source;
+    });
   });
 }
 
@@ -45242,6 +45276,9 @@ class VirtualArtistGrid {
           return;
         }
         queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+        if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
+          preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
+        }
       });
     });
   }

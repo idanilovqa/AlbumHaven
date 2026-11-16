@@ -972,3 +972,14 @@
     box-shadow: none; border-color: Highlight;
   }
 }
+
+/* Custom Collection version (owner 2026-11-16): far fewer parts than an album's, so the dialog sizes to its
+   content and grows up to the default size as images are added; nothing is stretched into dead space. */
+.cover-lookup-modal.is-custom-collection > .cover-lookup-modal-dialog {
+  width: min(760px, calc(100vw - 32px));
+  height: auto;
+}
+.cover-lookup-modal.is-custom-collection .cover-lookup-modal-body { align-content: start; }
+.cover-lookup-modal.is-custom-collection .cover-lookup-manual-add { gap: 6px; margin-bottom: 0; }
+.cover-lookup-modal.is-custom-collection .cover-lookup-manual-content { flex: 1 1 auto; }
+.cover-lookup-modal.is-custom-collection .cover-lookup-manual-open { margin-top: auto; }

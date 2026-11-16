@@ -2894,7 +2894,7 @@ function buildCustomCollectionCoverLookupComposer(modalState) {
             <img src="${escapeHtml(item.object_url || item.data_url || '')}" alt="">
             <button type="button" data-remove-cover-lookup-pending-attachment="${escapeHtml(item.id || '')}" aria-label="Remove ${escapeHtml(item.filename || 'image')}">×</button>
           </span>`).join('')}</div>
-        <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="1" placeholder="Paste an image or a direct image or album link" ${disabled ? 'disabled' : ''}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
+        <textarea class="cover-lookup-manual-input" id="cover-lookup-pasted-urls" rows="1" placeholder="Paste an image or a direct image URL here" ${disabled ? 'disabled' : ''}>${escapeHtml(modalState.manualUrlText || '')}</textarea>
       </div>
       <input type="file" accept="image/*" multiple data-cover-lookup-file-input hidden ${disabled ? 'disabled' : ''}>
       <button class="cover-lookup-manual-open" type="button" data-choose-cover-lookup-files="1" aria-label="Add image" ${disabled ? 'disabled' : ''}><span aria-hidden="true">+</span><span>Add image</span></button>
@@ -2910,6 +2910,8 @@ function renderCustomCollectionCoverLookupModal(els, modalState) {
   const name = String(modalState.collectionName || '').trim();
   if (els.subtitle) els.subtitle.innerHTML = `<span>${escapeHtml(name)}</span><span class="cover-lookup-modal-subtitle-meta">Custom collection</span>`;
   if (els.status) els.status.textContent = '';
+  // Fewer parts than the album version: the dialog sizes to its content (owner 2026-11-16).
+  els.overlay.classList?.toggle?.('is-custom-collection', true);
   const current = buildCustomCollectionCoverLookupCard(modalState.localCovers?.[0]);
   const staged = (Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [])
     .map(item => buildCoverLookupCard(item, 'pasted')).join('');
@@ -2938,6 +2940,7 @@ function renderCoverLookupModal() {
     renderCustomCollectionCoverLookupModal(els, modalState);
     return;
   }
+  els.overlay.classList?.toggle?.('is-custom-collection', false);
   const manualInputSession = String(coverLookupModalSession);
   const preserveManualInput = els.pastedUrls?.dataset?.coverLookupSession === manualInputSession;
   const restoreManualInputFocus = preserveManualInput && document.activeElement === els.pastedUrls;

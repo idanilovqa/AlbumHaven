@@ -2182,9 +2182,10 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
 test('UI-5: merging a split release back with only its moved tracks known opens the merged album, not the chooser', async () => {
   const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
   const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));
-  const original = { album_id: 40, key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', tracks: all };
-  const remixes = { key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', tracks: all.slice(5) };
-  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', tracks: all.slice(0, 5) };
+  // Keys exactly as sandbox2's page built them (2026-11-15): with and without the year suffix.
+  const original = { album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all };
+  const remixes = { key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(5) };
+  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) };
   const overlay = { hidden: true, classList: { toggle() {} }, toggleAttribute() {}, removeAttribute() {} };
   const context = {
     window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {},
@@ -2206,10 +2207,46 @@ test('UI-5: merging a split release back with only its moved tracks known opens 
   assert.equal(choosers.length, 1, 'right after the split the chooser opens');
 
   // Merge from a compact gallery card: the edited album only holds the 5 moved tracks.
-  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', tracks: all.slice(0, 5) }]);
+  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) }]);
   const task = context.state.coverLookup.tasks[0];
   await context.openCoverLookupModal(task.album_payload, { taskId: 't1' });
   assert.equal(choosers.length, 1, 'after merging back no split chooser opens');
   assert.equal(task.album, 'Ремиксы');
   assert.equal(new Set(Array.from(task.album_payload.track_paths)).size, 11);
+});
+
+
+test('UI-5: a server still reporting the split never opens the chooser over an optimistic merge', async () => {
+  const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
+  const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));
+  const original = { album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all };
+  const remixes = { key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(5) };
+  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) };
+  const overlay = { hidden: true, classList: { toggle() {}, contains: () => false }, toggleAttribute() {}, removeAttribute() {}, setAttribute() {}, hasAttribute: () => false };
+  const timers = [];
+  const context = {
+    window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {},
+    setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    state: { coverLookup: { tasks: [{ id: 't1', album_payload: { ...original } }], modal: { pastedImages: [] } } },
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    showToast() {},
+    fetch: async () => ({ ok: false, json: async () => ({ ok: false, resolution_kind: 'album_split',
+      current_releases: [{ album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', track_count: 6 }, { album_id: 41, key: 'ддт::ремиксы2', name: 'Ремиксы2', track_count: 5 }] }) }),
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choosers = [];
+  context.presentCoverLookupSplitChoice = async current => choosers.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.recordCoverLookupOptimisticSplit(original, [remixes, remixes2]);
+  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) }]);
+  context.state.coverLookup.modal.album = context.state.coverLookup.tasks[0].album_payload;
+  context.state.coverLookup.modal.taskId = 't1';
+  await context.refreshCoverLookupGallery(false);
+  assert.equal(choosers.length, 0, 'the merge the page already made wins over the server lagging behind');
+  assert.equal(timers.length, 1, 'the gallery is asked again until the server has the merge');
 });

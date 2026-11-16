@@ -3849,6 +3849,15 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
     // poll starts a newer request, so a split answer must not be dropped as stale or the chooser waits for
     // the search to end.
     if (isSplit && state.coverLookup.modal.album === album) {
+      // Owner (UI-5): an optimistic merge wins; the server still sees the split until the tags are written.
+      if (hasPendingCoverLookupMerge(album)) {
+        if (typeof setTimeout === 'function') {
+          setTimeout(() => {
+            if (state.coverLookup.modal.album === album) void refreshCoverLookupGallery(false);
+          }, 2000);
+        }
+        return;
+      }
       handleCoverLookupSplitResponse(data.current_releases);
       return;
     }
@@ -3933,9 +3942,21 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
   });
 }
 
+// One release, however its key was spelled: the page builds keys with and without "::year::N".
 function sameCoverLookupAlbumIdentity(left, right) {
-  const identity = (album) => String(album?.album_ref || album?.key || '').trim().toLowerCase();
-  return Boolean(identity(left)) && identity(left) === identity(right);
+  const norm = (value) => String(value ?? '').trim().toLowerCase();
+  const key = (album) => norm(album?.album_ref || album?.key);
+  if (key(left) && key(left) === key(right)) return true;
+  return Boolean(norm(left?.name))
+    && norm(left?.name) === norm(right?.name)
+    && norm(left?.album_artist) === norm(right?.album_artist)
+    && (!left?.year || !right?.year || String(left.year) === String(right.year));
+}
+
+function hasPendingCoverLookupMerge(album) {
+  return Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).some((transition) => (
+    transition?.replacement && sameCoverLookupAlbumIdentity(transition.replacement, album)
+  ));
 }
 
 function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {

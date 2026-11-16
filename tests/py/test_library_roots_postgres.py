@@ -155,6 +155,9 @@ def test_postgres_library_root_settings_missing_row_returns_uninitialized_settin
         "hoarding_library_roots": [],
         "new_arrivals_roots": [],
         "move_policy": {},
+        # Every normalized payload carries the Data Corrections mode (03998b226); the
+        # default for uninitialized settings is the non-writing display_only mode.
+        "metadata_corrections": "display_only",
     }
 
 

@@ -1,5 +1,8 @@
 function coverLookupFixtureEndpoint(testInfo, pathname) {
-  const providerBaseURL = String(testInfo?.config?.metadata?.providerBaseURL || '').trim();
+  // Runner-managed configs (performance targets) expose the fixture only through the environment.
+  const providerBaseURL = String(
+    testInfo?.config?.metadata?.providerBaseURL || process.env.ALBUM_HAVEN_FAKE_E2E_PROVIDER_BASE_URL || '',
+  ).trim();
   if (!providerBaseURL) {
     throw new Error('The isolated Playwright config must expose its fixture-owned provider base URL.');
   }
@@ -99,6 +102,16 @@ export async function setPastedCoverSaveHeld(testInfo, held) {
     body: JSON.stringify({ action: held ? 'hold-pasted-cover-save' : 'release-pasted-cover-save' }),
   });
   return readJsonResponse(response, `Pasted cover save ${held ? 'hold' : 'release'}`);
+}
+
+// Holds the real complete Problematic Files list so a test can prove the bounded page works first.
+export async function setProblematicCompleteListHeld(testInfo, held) {
+  const response = await fetch(coverLookupFixtureEndpoint(testInfo, '/cover-lookup-fixture/control'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: held ? 'hold-problematic-complete-list' : 'release-problematic-complete-list' }),
+  });
+  return readJsonResponse(response, `Problematic Files complete list ${held ? 'hold' : 'release'}`);
 }
 
 export async function readCoverLookupProviderEvidence(testInfo) {

@@ -151,18 +151,10 @@ _PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
 _PROBLEMATIC_SNAPSHOT_CHECKED: set[tuple[str, str]] = set()
 _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES: set[str] = set()
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
-# Advances whenever a complete Problematic Files list lands. Status carries it
-# so an open tab that was answered from an outdated stored list reloads once.
-_PROBLEMATIC_COMPLETE_LIST_REVISION = 0
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
     thread_name_prefix="albumhaven-postgres-utility-prewarm",
 )
-
-
-def problematic_files_complete_list_revision() -> int:
-    with _UTILITY_PROJECTION_CACHE_LOCK:
-        return _PROBLEMATIC_COMPLETE_LIST_REVISION
 
 
 class _SearchPreviewRows(list[object]):
@@ -3056,7 +3048,6 @@ class PostgresLibraryBrowseRepository:
             return payload
 
         def build(generation: int | None) -> dict[str, object]:
-            global _PROBLEMATIC_COMPLETE_LIST_REVISION
             payload = self._build_problematic_files_payload_uncached()
             fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
             self._set_cached_utility_projection(kind, payload, expected_generation=generation)
@@ -3074,9 +3065,6 @@ class PostgresLibraryBrowseRepository:
                         _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0) + 1
                     )
                     _UTILITY_PROJECTION_CACHE.pop(page_cache_key, None)
-            if current:
-                with _UTILITY_PROJECTION_CACHE_LOCK:
-                    _PROBLEMATIC_COMPLETE_LIST_REVISION += 1
             if current and fingerprint:
                 self._queue_problematic_files_snapshot_store(payload, fingerprint)
             payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
@@ -3100,9 +3088,7 @@ class PostgresLibraryBrowseRepository:
             payload[_SNAPSHOT_FINGERPRINT_KEY] = _problematic_inventory_fingerprint(connection)
             return payload
 
-    def build_problematic_files_page(
-        self, *, limit: int, cursor: str = "", rebuild_outdated: bool = False,
-    ) -> dict[str, object]:
+    def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
         cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
@@ -3182,8 +3168,6 @@ class PostgresLibraryBrowseRepository:
             )
         page = window(page)
         page["problem_reason_types"] = _problematic_filter_reason_types(page.get("items") or ())
-        if rebuild_outdated and page.get("projection_cache_status") in {"stale", "revalidated"}:
-            self._queue_problematic_complete_list_rebuild()
         return page
 
     def _build_problematic_files_first_page(
@@ -3382,7 +3366,6 @@ class PostgresLibraryBrowseRepository:
         *,
         limit: int = 50,
         cursor: str = "",
-        rebuild_outdated: bool = False,
     ) -> dict[str, object]:
         """Every problematic album whose summary matches ``query``, without the full list.
 
@@ -3419,8 +3402,6 @@ class PostgresLibraryBrowseRepository:
             cached_payload = self._get_stale_utility_projection("problematic-files")
         if cached_payload is None:
             cached_payload = self._load_problematic_files_snapshot(allow_outdated=True)
-        if rebuild_outdated and not complete and cached_payload is not None:
-            self._queue_problematic_complete_list_rebuild()
         if cached_payload is None:
             # Search is its own bounded query. Never queue it behind a complete
             # projection rebuild; that would make typing wait for the slow path
@@ -5078,25 +5059,13 @@ class PostgresLibraryBrowseRepository:
         for kind in kinds:
             self.queue_utility_projection_prewarm(kind)
 
-    def _queue_problematic_complete_list_rebuild(self) -> None:
-        """Replace an outdated list someone is reading, whether or not prewarm is on.
-
-        Pages and searches answer at once from the last stored list, which
-        cannot contain albums that became problematic since. One background
-        build (never concurrent, never awaited by the request) replaces it.
-        Only an open tab asks for it: background reloads after each tag edit
-        must not put a whole-library build in front of the next browse.
-        """
-        if self._use_shared_connection_pool:
-            self.queue_utility_projection_prewarm("problematic-files", required=True)
-
-    def queue_utility_projection_prewarm(self, kind: str, *, required: bool = False) -> None:
+    def queue_utility_projection_prewarm(self, kind: str) -> None:
         required_loose_track_refresh = (
             kind == "loose-tracks"
             and self._use_shared_connection_pool
             and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
         )
-        if not self._allow_background_prewarm and not required_loose_track_refresh and not required:
+        if not self._allow_background_prewarm and not required_loose_track_refresh:
             return
         cache_key = self._utility_projection_cache_key(kind)
         if cache_key is None:
@@ -7791,14 +7760,9 @@ def _decode_problematic_search_cursor(
 
 
 def _problematic_filter_reason_types(items: Iterable[object]) -> list[str]:
-    reasons: list[object] = [
-        *_PROBLEM_REASON_IDENTITY_CODES,
-        "Album not found",
-        "Duplicate track outside album folder",
-        "Edition descriptor in album name",
-        "Incomplete track order",
-        "Spotify cover search quota exceeded",
-    ]
+    # Only problems the listed albums actually have (owner decision 2026-11-16): a type
+    # no album has is never offered as a filter.
+    reasons: list[object] = []
     for item in items:
         if isinstance(item, Mapping):
             reasons.extend(item.get("problem_reasons") or ())

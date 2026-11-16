@@ -16135,17 +16135,15 @@ def test_problematic_full_payload_materializes_duplicate_sources_only_for_initia
     ]
 
 
-def test_problematic_files_bounded_filter_metadata_includes_complete_reason_taxonomy():
+def test_problematic_files_bounded_filter_metadata_lists_only_present_reasons():
+    """Owner decision (2026-11-16): a problem type no listed album has is never offered."""
     from music_app.services import library_browse_postgres as browse
 
-    assert browse._problematic_filter_reason_types([]) == sorted([
-        *browse._PROBLEM_REASON_IDENTITY_CODES,
-        "Album not found",
-        "Duplicate track outside album folder",
-        "Edition descriptor in album name",
-        "Incomplete track order",
-        "Spotify cover search quota exceeded",
-    ])
+    assert browse._problematic_filter_reason_types([]) == []
+    assert browse._problematic_filter_reason_types([
+        {"problem_reasons": ["Missing year", "Incomplete track order: Disc 1 missing 2"]},
+        {"problem_reasons": ["Missing year"]},
+    ]) == ["Incomplete track order", "Missing year"]
 
 
 def test_problematic_files_page_builds_only_bounded_candidate_rows(monkeypatch):

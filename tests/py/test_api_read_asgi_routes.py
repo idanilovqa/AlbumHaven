@@ -5236,7 +5236,7 @@ def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
         def __init__(self, _config):
             pass
 
-        def build_problematic_files_page(self, *, limit, cursor="", rebuild_outdated=False):
+        def build_problematic_files_page(self, *, limit, cursor=""):
             assert limit == 50
             assert cursor == "page-2"
             return {
@@ -5339,7 +5339,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_page(self, *, limit, cursor="", rebuild_outdated=False):
+        def build_problematic_files_page(self, *, limit, cursor=""):
             assert limit == 50
             assert cursor == ""
             return {
@@ -5352,7 +5352,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_search(self, query, *, limit=50, cursor="", rebuild_outdated=False):
+        def build_problematic_files_search(self, query, *, limit=50, cursor=""):
             assert query == "needle"
             assert limit == 50
             assert cursor == ""

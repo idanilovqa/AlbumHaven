@@ -41,6 +41,18 @@ const listBuildersPath = path.join(
 );
 const listBuildersSource = fs.readFileSync(listBuildersPath, 'utf8');
 
+// The renderer resolves rows through getAllProblematicItems() (utility-list-builders.js).
+// Contexts that do not load that file get the same album + Artist owner union.
+function runProblematicRenderer(context) {
+  if (typeof context.getAllProblematicItems !== 'function') {
+    context.getAllProblematicItems = () => [
+      ...(context.state?.utility?.problematicFiles || []),
+      ...(context.state?.utility?.problematicArtistItems || []),
+    ];
+  }
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+}
+
 function createDeferred() {
   let resolve;
   const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
@@ -176,7 +188,7 @@ test('problematic-file render scrolls the focused track row into view determinis
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -232,7 +244,7 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
   context.escapeHtml = value => String(value || '');
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), 'alert-components.js'), 'utf8'), context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
   context.renderProblematicFiles();
@@ -288,7 +300,7 @@ test('focused-track navigation keeps the matching album selected during a summar
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -332,7 +344,7 @@ test('incomplete problematic summary does not replace a missing existing selecti
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -388,7 +400,7 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -467,7 +479,7 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
     buildProblematicAlbumDetail() { return '<div>normal detail</div>'; },
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderUtilityModalContent();
   context.renderUtilityModalContent();
@@ -562,7 +574,7 @@ test('removed mutation owner keeps its scrim until the nearest previous survivor
     initializeRepairSelections() {},
     buildProblematicAlbumDetail(album) { return `<div>Hydrated ${album.name}</div>`; },
   });
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
   assert.match(detail.innerHTML, /Hold on\. Your changes are being applied/);
@@ -791,7 +803,7 @@ function renderFocusedAlbumWithGeometry({
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   context.renderProblematicFiles();
 
@@ -1020,7 +1032,7 @@ test(`problematic-file render preserves owned mutation scroll geometry across a 
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
 
   if (withLoadingRefresh) {
     context.state.utility.loading = true;
@@ -1075,7 +1087,7 @@ test('empty scoped log history renders its captured console and keeps export exp
   for (const file of ['utility-log-history-query.js', 'utility-log-history-ui.js']) {
     vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), file), 'utf8'), context);
   }
-  vm.runInContext(rendererSource, context, { filename: rendererPath });
+  runProblematicRenderer(context);
   context.renderUtilityLogHistory();
   assert.match(elements.detail.innerHTML, /No events in this snapshot/);
   assert.match(elements.detail.innerHTML, /Recent activity/);
@@ -1135,7 +1147,7 @@ for (const focused of [true, false]) {
       async loadProblematicAlbumDetail() {},
     };
     vm.createContext(context);
-    vm.runInContext(rendererSource, context, { filename: rendererPath });
+    runProblematicRenderer(context);
 
     context.renderProblematicFiles();
     reveals.length = 0;

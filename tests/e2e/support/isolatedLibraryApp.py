@@ -4429,6 +4429,9 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
         # Owner (2026-11-15): Sandbox2 saves pasted covers slowly; a held gate replays that window for real.
         self.pasted_cover_save_gate = threading.Event()
         self.pasted_cover_save_gate.set()
+        # Holds the complete Problematic Files list so a test can prove the bounded page works first.
+        self.problematic_complete_list_gate = threading.Event()
+        self.problematic_complete_list_gate.set()
         self.cover_lookup_mode = "no-results"
         self.cover_lookup_mode_lock = threading.Lock()
         self.cover_cache_path = cover_cache_path
@@ -4601,6 +4604,9 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
 
     def wait_for_pasted_cover_save(self) -> None:
         self.pasted_cover_save_gate.wait()
+
+    def wait_for_problematic_complete_list(self) -> None:
+        self.problematic_complete_list_gate.wait()
 
     def wait_for_cover_lookup_candidate_image(self) -> None:
         with self.cover_lookup_evidence_lock:
@@ -4885,6 +4891,10 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             self.server.pasted_cover_save_gate.clear()
         elif action == "release-pasted-cover-save":
             self.server.pasted_cover_save_gate.set()
+        elif action == "hold-problematic-complete-list":
+            self.server.problematic_complete_list_gate.clear()
+        elif action == "release-problematic-complete-list":
+            self.server.problematic_complete_list_gate.set()
         elif action == "reset-evidence":
             self.server.reset_cover_lookup_evidence()
         elif action == "set-itunes-search-delay":
@@ -5675,10 +5685,23 @@ class ProviderFixtureService:
 
         api_wave_d_asgi_routes.save_pasted_image_as_authoritative_cover = gated_save
 
+    def gate_problematic_complete_list(self) -> None:
+        # The real complete list is still built and returned; it only starts once the test releases it.
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+        build = PostgresLibraryBrowseRepository.build_problematic_files_payload
+
+        def gated_build(repository, *args, **kwargs):
+            self._server.wait_for_problematic_complete_list()
+            return build(repository, *args, **kwargs)
+
+        PostgresLibraryBrowseRepository.build_problematic_files_payload = gated_build
+
     def stop(self) -> None:
         self._server.release_cover_lookup_later_provider()
         self._server.release_cover_lookup_candidate_images()
         self._server.pasted_cover_save_gate.set()
+        self._server.problematic_complete_list_gate.set()
         self._server.release_musicbrainz_hydration()
         self._server.shutdown()
         self._server.server_close()
@@ -5951,6 +5974,7 @@ def main() -> None:
             app.state.config, temp_root, fixture_media_root=fixture_media_root
         )
         provider_service.gate_pasted_cover_saves()
+        provider_service.gate_problematic_complete_list()
         print(
             f"Album Haven production E2E app listening on http://127.0.0.1:{args.port} "
             f"with {artist_count} artists, {album_count} albums, {track_count} tracks, "

@@ -4339,30 +4339,6 @@ test('watcher health ordering is stable and simultaneous inventory changes refre
   assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 1);
 });
 
-test('a replaced Problematic Files list reloads the open tab once, keeping its selection', async () => {
-  const fixture = watcherRefreshFixture();
-  const healthy = { state: 'healthy', problems: [] };
-  const observeList = async (listRevision) => {
-    const requestIndex = fixture.pendingRequests.length;
-    const pending = fixture.context.pollStatus();
-    fixture.pendingRequests[requestIndex].resolveWith({
-      inventory_mutation_revision: 12, watcher_health: healthy, problematic_files_list_revision: listRevision,
-    });
-    await pending;
-  };
-  await observeList(4);
-  assert.deepEqual(fixture.refreshes, [], 'the first observation is a baseline');
-  await observeList(4);
-  assert.deepEqual(fixture.refreshes, []);
-  await observeList(5);
-  assert.deepEqual(fixture.refreshes, [true]);
-  await observeList(5);
-  assert.deepEqual(fixture.refreshes, [true]);
-  fixture.context.state.utility.loaded = false;
-  await observeList(6);
-  assert.deepEqual(fixture.refreshes, [true], 'an unopened tab is not loaded');
-});
-
 test('watcher health changes do not load an unused utility', async () => {
   const fixture = watcherRefreshFixture();
   fixture.context.state.utility.loaded = false;

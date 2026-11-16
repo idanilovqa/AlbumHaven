@@ -371,31 +371,36 @@ test('reopening Problematic Files preserves the current query', () => {
   assert.equal(context.state.utility.searchQuery, 'art');
 });
 
-test('only an opened Problematic Files tab asks the server to replace an outdated stored list', async () => {
+test('only an opened Problematic Files tab reconciles with the complete list; a background list completes on open', async () => {
   const overlay = { hidden: true };
-  const requests = [];
+  const requested = [];
   const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
   const { context } = loadHelper({
     getUtilityModalElements() { return { overlay }; },
-    async fetch(url, options = {}) {
-      requests.push([String(url), options.headers?.['X-Album-Haven-Problematic-Viewing'] || '']);
-      return json({ complete: true, projection_cache_status: 'stale', items: [{ key: 'a', name: 'A', detail_loaded: false }] });
+    async fetch(url) {
+      requested.push(String(url));
+      const bounded = String(url).endsWith('?limit=50');
+      return json({
+        complete: !bounded, has_more: false, projection_cache_status: bounded ? 'stale' : 'hit',
+        items: [{ key: 'a', name: 'A', detail_loaded: false }],
+      });
     },
   });
 
-  // A background reload (after a tag edit) with Settings closed never starts a server rebuild.
+  // A background reload (after a tag edit) with Settings closed reads only the bounded page.
   await context.loadProblematicFiles(true, { render: false });
-  assert.deepEqual(requests, [['/utilities/problematic-files?limit=50', '']]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requested, ['/utilities/problematic-files?limit=50']);
   assert.equal(context.state.utility.problematicListOutdated, true);
 
-  // Opening the tab reloads that outdated list once, now as a viewing request.
+  // Opening the tab adds only the complete list; the bounded page is reused.
   overlay.hidden = false;
   await context.loadActiveUtilityTab(false);
-  assert.deepEqual(requests.at(-1), ['/utilities/problematic-files?limit=50', '1']);
+  assert.deepEqual(requested.slice(1), ['/utilities/problematic-files']);
   assert.equal(context.state.utility.problematicListOutdated, false);
-  const count = requests.length;
+  const count = requested.length;
   await context.loadActiveUtilityTab(false);
-  assert.equal(requests.length, count, 'a viewed list is not reloaded again on reopen');
+  assert.equal(requested.length, count, 'a reconciled list is not reloaded again on reopen');
 });
 
 test('opening the account menu prefetches Problematic Files and Settings reuses it', async () => {
@@ -413,13 +418,18 @@ test('opening the account menu prefetches Problematic Files and Settings reuses 
   context.prefetchProblematicFilesForSettingsIntent();
   await context.state.utility.completeLoadPromise;
   await new Promise((resolve) => setImmediate(resolve));
+  // A closed Settings modal only prefetches the bounded page; the whole-library read waits for the open tab.
   assert.deepEqual(requested, ['/utilities/problematic-files?limit=50']);
   assert.equal(calls.renders, 0, 'a closed Settings modal is not painted');
 
   overlay.hidden = false;
   await context.loadActiveUtilityTab(true);
-  assert.equal(requested.length, 1, 'Settings opened right after the prefetch reuses it');
-  assert.equal(calls.renders, 1);
+  assert.deepEqual(
+    requested,
+    ['/utilities/problematic-files?limit=50', '/utilities/problematic-files'],
+    'Settings reuses the prefetched page and adds only the complete list',
+  );
+  assert.ok(calls.renders >= 1);
 });
 
 function loadSearchHelper(searchBody) {
@@ -1049,9 +1059,12 @@ test('Artist cursor restart removes stale later rows and rerenders unchanged pag
 
 test('one-character search continues album and Artist owners until a later match appears', async () => {
   const requested = [];
+  // Loaded in the background (Settings closed), so the album list stays paged; an open
+  // tab would reconcile with the complete list instead.
+  const overlay = { hidden: true };
   const response = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
   const { context, calls } = loadHelper({
-    getUtilityModalElements() { return { overlay: { hidden: false } }; },
+    getUtilityModalElements() { return { overlay }; },
     getFilteredProblematicAlbums() {
       const query = String(context.state.utility.searchQuery || '').toLowerCase();
       return [
@@ -1071,6 +1084,7 @@ test('one-character search continues album and Artist owners until a later match
     },
   });
   await context.loadProblematicFiles(true);
+  overlay.hidden = false;
   Object.assign(context.state.utility, {
     problematicArtistItems: [{ key: 'artist-first', name: 'Gamma Artist', detail_loaded: false }],
     problematicArtistHasMore: true,

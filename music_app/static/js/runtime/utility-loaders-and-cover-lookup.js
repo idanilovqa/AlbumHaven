@@ -70,9 +70,9 @@ async function loadProblematicFiles(force = false, options = {}) {
     let boundedPayloadCommitted = false;
     let previousSummaryItems = [];
     try {
-      const fetchSummary = async (url, viewing = false) => {
+      const fetchSummary = async (url) => {
         const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetch(url, { headers: problematicFilesRequestHeaders(viewing) });
+        const response = await fetch(url, { headers: { Accept: 'application/json' } });
         requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
         responseStatus = Number(response.status || 0);
         const parseStartedAt = getProblematicUtilityNow();
@@ -145,23 +145,50 @@ async function loadProblematicFiles(force = false, options = {}) {
           refreshChangedSelection };
       };
 
-      const viewing = problematicFilesTabOnScreen() || options.render === 'when-open';
-      let data = await fetchSummary('/utilities/problematic-files?limit=50', viewing);
-      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      state.utility.problematicListOutdated = !viewing
-        && ['stale', 'revalidated'].includes(String(data?.projection_cache_status || ''));
-      let committedSelection = commitSummary(
-        data,
-        options.preserveSelectedDetail === true || data.complete === false,
-      );
-      boundedPayloadCommitted = data.complete === false;
-      state.utility.problematicHasMore = data.has_more === true
-        || (data.has_more === undefined && data.complete === false);
-      state.utility.problematicNextCursor = String(data.next_cursor || '');
-      settleInitialSummary(state.utility.problematicFiles);
+      const commitCompleteList = (completeData) => {
+        // A bounded page's reason catalog served paging; the complete list's own reasons replace it.
+        if (!Array.isArray(completeData?.problem_reason_types)) state.utility.completeProblemReasonTypes = [];
+        const committed = commitSummary(completeData, true, true);
+        state.utility.problematicHasMore = false;
+        state.utility.problematicNextCursor = '';
+        state.utility.problematicArtistHasMore = false;
+        state.utility.problematicListOutdated = false;
+        return committed;
+      };
+      let data;
+      let committedSelection;
+      if (options.completeOnly === true) {
+        // The tab opened on a list loaded in the background: its bounded page is already on screen.
+        data = await fetchSummary('/utilities/problematic-files');
+        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        committedSelection = commitCompleteList(data);
+        settleInitialSummary(state.utility.problematicFiles);
+      } else {
+        data = await fetchSummary('/utilities/problematic-files?limit=50');
+        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        committedSelection = commitSummary(
+          data,
+          options.preserveSelectedDetail === true || data.complete === false,
+        );
+        boundedPayloadCommitted = data.complete === false;
+        state.utility.problematicHasMore = data.has_more === true
+          || (data.has_more === undefined && data.complete === false);
+        state.utility.problematicNextCursor = String(data.next_cursor || '');
+        state.utility.problematicListOutdated = ['stale', 'revalidated']
+          .includes(String(data?.projection_cache_status || ''));
+        settleInitialSummary(state.utility.problematicFiles);
+      }
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         scheduleProblematicServerSearch();
+        // Only an open tab reconciles with the complete list (a whole-library read); background
+        // reloads after tag edits keep paging. The complete list then supersedes paging, so
+        // reaching the bounded list's end must not request more pages.
+        const reconcile = problematicFilesTabOnScreen();
+        if (reconcile) {
+          state.utility.problematicHasMore = false;
+          state.utility.problematicArtistHasMore = false;
+        }
         if (state.utility.loadPromise === requestPromise) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
@@ -172,7 +199,15 @@ async function loadProblematicFiles(force = false, options = {}) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
-        scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
+        if (reconcile) {
+          // Requested only after the bounded page has painted, so it can never arrive first.
+          data = await fetchSummary('/utilities/problematic-files');
+          if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+          committedSelection = commitCompleteList(data);
+        } else {
+          // The complete list already carries Artist problems; only a paged list pages them.
+          scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
+        }
       }
       state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
       loadSucceeded = true;
@@ -366,15 +401,8 @@ async function loadProblematicPagesUntilLocalQueryMatch(query) {
     : [];
 }
 
-// An open tab may ask the server to replace an outdated stored list; background reloads never do.
 function problematicFilesTabOnScreen() {
   return typeof getUtilityModalElements === 'function' && isUtilityModalOpen();
-}
-
-function problematicFilesRequestHeaders(viewing) {
-  return viewing
-    ? { Accept: 'application/json', 'X-Album-Haven-Problematic-Viewing': '1' }
-    : { Accept: 'application/json' };
 }
 
 // Search the server so every album is covered, including matches beyond the
@@ -432,7 +460,7 @@ async function searchProblematicFilesOnServer(query) {
   let data;
   try {
     const response = await fetch(`/utilities/problematic-files?q=${encodeURIComponent(query)}&limit=50`, {
-      headers: problematicFilesRequestHeaders(problematicFilesTabOnScreen()),
+      headers: { Accept: 'application/json' },
     });
     if (!response.ok) return;
     data = await response.json();
@@ -1555,8 +1583,17 @@ function loadActiveUtilityTab(force = false) {
   }
   const freshPrefetch = state.utility.loaded
     && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
-  // A list loaded in the background from an outdated stored copy reloads once it is opened.
-  return loadProblematicFiles((force && !freshPrefetch) || state.utility.problematicListOutdated === true);
+  // A list loaded in the background (bounded, or from an outdated stored copy) reconciles
+  // with the complete list once its tab is open.
+  const reconcileOpenedList = (result) => {
+    const needsCompleteList = state.utility.loaded === true
+      && (state.utility.problematicFilesComplete === false || state.utility.problematicListOutdated === true)
+      && !state.utility.loading
+      && !state.utility.completeLoadPromise
+      && problematicFilesTabOnScreen();
+    return needsCompleteList ? loadProblematicFiles(true, { completeOnly: true }) : result;
+  };
+  return Promise.resolve(loadProblematicFiles(force && !freshPrefetch)).then(reconcileOpenedList);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {

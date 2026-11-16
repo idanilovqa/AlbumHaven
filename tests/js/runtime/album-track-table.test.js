@@ -11,6 +11,8 @@ function loadTrackTable() {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     encodeURIComponent,
     ButtonComponent: require(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js')),
+    // player-and-waveform.js owns the runtime formatter.
+    formatTrackDuration: (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
   };
   vm.createContext(context);
   for (const filename of ['compact-data-table.js', 'album-track-table.js']) {
@@ -362,4 +364,80 @@ test('AlbumTrackTable shows a later disc rating on its heading only when both ar
     const html = render(discRating, albumRating, options);
     assert.doesNotMatch(html, /album-track-table__disc-rating/, `no disc rating for ${discRating}/${albumRating}/${JSON.stringify(options)}`);
   }
+});
+
+// Tracklist sub-sections (MusicBrainz Delivery 2, S8; visuals approved in
+// mrb-album-details-features v001 section A).
+const DISSECTION_MAIN = [
+  ['At the Fathomless Depths', 238], ["Night's Blood", 401], ['Unhallowed', 323], ['Where Dead Angels Lie', 350],
+  ["Retribution – Storm of the Light's Bane", 308], ['Thorns of Crimson Death', 375], ['Soulreaper', 360],
+  ['No Dreams Breed in Breathless Sleep', 279],
+];
+const DISSECTION_SECTION = [
+  ['Where Dead Angels Lie (demo version)', 301], ['Elisabeth Bathori', 263], ['Anti Christ', 233],
+  ['Feathers Fell', 200], ['Son of the Mourning', 269],
+];
+
+function dissectionTracks() {
+  return [...DISSECTION_MAIN, ...DISSECTION_SECTION].map(([title, seconds], index) => ({
+    path: `dissection-${index + 1}`,
+    title,
+    trackNumber: index + 1,
+    durationSeconds: seconds,
+    duration: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
+    section: index >= 8 ? 'Where Dead Angels Lie' : '',
+  }));
+}
+
+test('a sub-section is a disc heading between rows of one disc, with its own and the main length (Dissection)', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ discNumber: 1, discLabel: 'CD 1', isBonus: false, tracks: dissectionTracks() }],
+    multiDisc: false,
+    totalLength: '1h 5m',
+  });
+
+  // One disc; the heading uses the disc-heading element and names the section alone.
+  assert.equal(html.match(/<section class="album-track-table__disc">/g).length, 1);
+  assert.equal(html.match(/<h4 class="album-track-table__disc-heading">/g).length, 1);
+  assert.match(html, /<h4 class="album-track-table__disc-heading">Where Dead Angels Lie<\/h4>/);
+  assert.doesNotMatch(html, /disc-heading">CD|namedSection|album-track-table__disc--named/);
+  // Track 8, the main length, the heading, tracks 9-13, the section length, then the total.
+  assert.match(html, new RegExp([
+    'No Dreams Breed in Breathless Sleep',
+    '<div class="album-track-table__total"><div class="album-track-table__main-total">Total Main Album Length: 43:54</div></div>',
+    '<h4 class="album-track-table__disc-heading">Where Dead Angels Lie</h4><div class="compact-data-table" id="album-track-table-tracks-1-2"[^>]*aria-label="Album tracks — Where Dead Angels Lie"',
+    'Where Dead Angels Lie \\(demo version\\)',
+    'Son of the Mourning',
+    '</section><div class="album-track-table__total"><div class="album-track-table__section-total">Where Dead Angels Lie Length: 21:06</div><div class="album-track-table__aggregate-total">Total Length: 1h 5m</div></div>',
+  ].join('[\\s\\S]*')));
+  // Numbering continues across the heading, and only the first table has a column header.
+  const numbers = [...html.matchAll(/album-track-table__number">(\d+)</g)].map((match) => Number(match[1]));
+  assert.deepEqual(numbers, Array.from({ length: 13 }, (_, index) => index + 1));
+  assert.equal(html.match(/compact-data-table-header/g).length, 1);
+  assert.equal(html.match(/Total Main Album Length/g).length, 1);
+});
+
+test('a real CD 2 stays "CD 2 • Name" and tracks without a section add no length lines', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [
+      { discNumber: 1, discLabel: 'CD 1', tracks: [{ path: 'one', title: 'One', durationSeconds: 60 }] },
+      { discNumber: 2, discLabel: 'CD 2 • Alien Live', tracks: [{ path: 'two', title: 'Two', durationSeconds: 60 }] },
+    ],
+    multiDisc: true,
+    totalLength: '2:00',
+  });
+  assert.match(html, /<h4 class="album-track-table__disc-heading">CD 2 • Alien Live<\/h4>/);
+  assert.doesNotMatch(html, /section-total|main-total/);
+  assert.equal(html.match(/album-track-table__total"/g).length, 1);
+});
+
+test('a sub-section length line closes its rows like the album total does', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  assert.match(css, /\.album-track-table__disc \.compact-data-table:has\(\+ \.album-track-table__total\),\s*\.album-track-table__frame:has/);
+  assert.match(css, /\.album-track-table__total \+ \.album-track-table__disc-heading\s*\{[^}]*margin-top:\s*14px/);
 });

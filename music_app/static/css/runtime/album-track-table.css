@@ -12,6 +12,7 @@
 .album-track-table__disc-heading { display: block; margin: 0 0 7px; color: var(--album-track-accent); font-size: 0.86rem; font-weight: 750; }
 .album-track-table__disc-header { display: flex; align-items: center; gap: 12px; margin: 0 0 7px; }
 .album-track-table__disc-header > .album-track-table__disc-heading { margin: 0; }
+.album-track-table__total + .album-track-table__disc-heading { margin-top: 14px; }
 .album-track-table__disc-rating { width: 150px; }
 @media (max-width: 900px) {
   .album-track-table__disc-rating { width: auto; }
@@ -31,10 +32,13 @@
   background: var(--appearance-table-surface, color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 94%, var(--appearance-ink, var(--text, #f3f6fa))));
   color: var(--appearance-ink, var(--text));
 }
+/* A sub-section's length line (S8) closes its rows like the album total does. */
+.album-track-table__disc .compact-data-table:has(+ .album-track-table__total),
 .album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table {
   position: relative;
   border-bottom-right-radius: 0;
 }
+.album-track-table__disc .compact-data-table:has(+ .album-track-table__total)::after,
 .album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table::after {
   content: '';
   pointer-events: none;

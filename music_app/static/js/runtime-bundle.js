@@ -22147,6 +22147,26 @@ function buildDiscRatingHtml(group, groupIndex, albumRating) {
   });
 }
 
+// A provider sub-section ("Where Dead Angels Lie", S8) splits a disc's rows wherever
+// track.section changes; the disc itself stays one disc.
+function splitAlbumTrackSections(tracks) {
+  const segments = [];
+  tracks.forEach((track, index) => {
+    const section = String(track?.section || '').trim();
+    const last = segments.at(-1);
+    if (last?.section === section) last.rows.push([track, index]);
+    else segments.push({ section, rows: [[track, index]] });
+  });
+  return segments.length ? segments : [{ section: '', rows: [] }];
+}
+
+function buildAlbumTrackLengthHtml(className, label, rows) {
+  const seconds = rows.reduce((total, [track]) => total + Math.max(0, Number(track?.durationSeconds) || 0), 0);
+  return seconds > 0
+    ? `<div class="${className}">${escapeHtml(label)}: ${escapeHtml(formatTrackDuration(seconds))}</div>`
+    : '';
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
   const showPath = Boolean(config.showPath);
@@ -22156,34 +22176,57 @@ function buildAlbumTrackTableHtml(config = {}) {
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
+  const segmentedGroups = groups.map((group) => splitAlbumTrackSections(Array.isArray(group?.tracks) ? group.tracks : []));
+  const segments = segmentedGroups.flat();
+  const firstSection = segments.findIndex((segment) => segment.section);
+  // With sub-sections every part ends with its length (approved look): the main album
+  // (everything before the first sub-section), then each sub-section.
+  const lengthAfter = (position) => {
+    const segment = segments[position];
+    if (firstSection < 0) return '';
+    if (segment.section) return buildAlbumTrackLengthHtml('album-track-table__section-total', `${segment.section} Length`, segment.rows);
+    if (position !== firstSection - 1) return '';
+    return buildAlbumTrackLengthHtml('album-track-table__main-total', 'Total Main Album Length',
+      segments.slice(0, firstSection).flatMap((part) => part.rows));
+  };
+  let position = -1;
+  const columnsConfig = [
+    { key: 'number', label: '#' },
+    { key: 'title', label: 'Track' },
+    ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+    { key: 'problem', label: 'Problem', header: 'absent', action: true },
+    { key: 'duration', label: 'Length', action: true },
+  ];
   const tableSections = groups.map((group, groupIndex) => {
-    const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
     const showLabel = Boolean(label) && (
       forceGroupLabels
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
-    const columnsConfig = [
-      { key: 'number', label: '#' },
-      { key: 'title', label: 'Track' },
-      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true },
-      { key: 'duration', label: 'Length', action: true },
-    ];
-    const table = buildCompactDataTable({
-      id: `${idPrefix}-tracks-${groupIndex + 1}`,
-      ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
-      headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: showPath
-        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
-      columnsConfig,
-      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
-      density: 'compact',
-      frame: 'outline',
-      overflow: 'none',
-      mobile: 'preserve',
-    });
+    const table = segmentedGroups[groupIndex].map((segment, segmentIndex) => {
+      position += 1;
+      const tableLabel = segment.section || label;
+      const tableHtml = buildCompactDataTable({
+        id: `${idPrefix}-tracks-${groupIndex + 1}${segmentIndex ? `-${segmentIndex + 1}` : ''}`,
+        ariaLabel: tableLabel ? `${ariaLabel} — ${tableLabel}` : ariaLabel,
+        headers: groupIndex === 0 && segmentIndex === 0 ? 'visible' : 'absent',
+        columns: showPath
+          ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+          : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+        columnsConfig,
+        rows: segment.rows.map(([track, index]) => buildAlbumTrackTableRow(track, index, config)),
+        density: 'compact',
+        frame: 'outline',
+        overflow: 'none',
+        mobile: 'preserve',
+      });
+      const sectionHeading = segment.section
+        ? `<h4 class="album-track-table__disc-heading">${escapeHtml(segment.section)}</h4>`
+        : '';
+      // The last part's length joins the album totals below.
+      const length = position < segments.length - 1 ? lengthAfter(position) : '';
+      return `${sectionHeading}${tableHtml}${length ? `<div class="album-track-table__total">${length}</div>` : ''}`;
+    }).join('');
     if (collapsibleGroups && showLabel) {
       return `<details class="album-track-table__disc album-track-table__disc--collapsible" open><summary class="album-track-table__disc-heading" aria-expanded="true">${escapeHtml(label)}</summary>${table}</details>`;
     }
@@ -22197,9 +22240,11 @@ function buildAlbumTrackTableHtml(config = {}) {
     return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
-  const mainLength = String(config.mainLength || '').trim();
+  // With sub-sections the main album's length already follows its rows.
+  const mainLength = firstSection < 0 ? String(config.mainLength || '').trim() : '';
   const bonusLength = String(config.bonusLength || '').trim();
   const summaries = [
+    lengthAfter(segments.length - 1),
     totalLength ? `<div class="album-track-table__aggregate-total">Total Length: ${escapeHtml(totalLength)}</div>` : '',
     mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
     bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
@@ -39381,6 +39426,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         originalDuration: duration,
         trackNumber: trackValue,
         secondaryArtist,
+        // The matched release's sub-section heading (S8); never a tag.
+        section: String(trackRow?.section || '').trim(),
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),

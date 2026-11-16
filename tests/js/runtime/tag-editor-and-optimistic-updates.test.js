@@ -318,6 +318,31 @@ test('track modal play button exposes numeric duration seconds', () => {
   assert.match(markup, /data-track-duration-seconds="180"/);
 });
 
+test('track modal hands each track row provider sub-section to the track table, never a tag', () => {
+  let tableConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml: (config) => { tableConfig = config; return ''; },
+    document: { documentElement: null },
+  });
+  const tracks = [8, 9].map((number) => ({
+    path: `C:/Music/${number}.flac`, title: `Track ${number}`, track_number: number, disc_number: 1,
+    duration_seconds: 180, section: 'From a tag',
+  }));
+  context.buildTrackListHtml(tracks, {
+    track_rows: [
+      { path: tracks[0].path, track_number: 8 },
+      { path: tracks[1].path, track_number: 9, section: 'Where Dead Angels Lie' },
+    ],
+  });
+
+  assert.deepEqual([...tableConfig.groups[0].tracks].map((track) => track.section), ['', 'Where Dead Angels Lie']);
+});
+
 test('track modal playback refresh preserves generic Play track and Pause track accessible names', () => {
   const trackPath = 'C:\\Music\\Named Track.flac';
   const attributes = new Map([

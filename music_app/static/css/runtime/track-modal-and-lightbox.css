@@ -194,6 +194,8 @@
   --album-cover-pointer-rotation: 0deg;
   position: relative;
   padding-block: 12px;
+  /* Quick clicks on the cover arrows are double clicks; they must not select nearby text (the "#" header). */
+  user-select: none;
   animation: album-details-cover-settle 180ms ease-out;
 }
 @keyframes album-details-cover-settle {

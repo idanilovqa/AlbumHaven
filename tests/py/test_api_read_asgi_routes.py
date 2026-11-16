@@ -2791,6 +2791,36 @@ def test_postgres_album_search_request_allows_search_scoped_all_artists(app, asg
     assert asgi_read_routes._is_postgres_album_search_request(request) is True
 
 
+def test_postgres_album_search_request_allows_the_searched_loose_tracks_request(app, asgi_app, monkeypatch):
+    # Owner 2026-11-15: with "dragonland" searched, opening a Custom Collection
+    # showed "Unsupported Postgres album-search request shape" and 0 tracks.
+    from starlette.requests import Request
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        "music_app.services.library_browse_postgres.psycopg",
+        type("FakePsycopg", (), {"connect": lambda self: None})(),
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/view-data",
+            "query_string": (
+                b"surface=albums&q=dragonland&omit_sidebar=1"
+                b"&include_non_album=1&include_library_wide_non_album=1"
+            ),
+            "headers": [],
+            "app": asgi_app,
+        }
+    )
+
+    assert asgi_read_routes._is_postgres_album_search_request(request) is True
+
+
 def test_postgres_album_search_request_allows_search_scoped_all_artists_without_omit_sidebar(app, asgi_app, monkeypatch):
     from starlette.requests import Request
     from music_app.routes import api_read_asgi_routes as asgi_read_routes

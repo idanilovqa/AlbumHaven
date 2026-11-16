@@ -35134,10 +35134,15 @@ function applyCoverLookupGalleryPayload(gallery) {
   state.coverLookup.modal.remoteCover = gallery.remote_cover && typeof gallery.remote_cover === 'object' ? gallery.remote_cover : null;
   // The canonical copy is not a second artwork choice when the server verified
   // an identical source. Keep the real sources visible and the saved source selected.
+  const hidesCanonicalCopy = Boolean(incomingActiveLocalCover && gallery.active_cover_path
+    && String(gallery.active_cover_path) !== String(incomingActiveLocalCover.path));
   state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
-    incomingActiveLocalCover && String(cover?.path || '') === String(gallery.active_cover_path || '')
-    && String(cover?.path || '') !== String(incomingActiveLocalCover.path)
+    hidesCanonicalCopy && String(cover?.path || '') === String(gallery.active_cover_path)
   ));
+  state.coverLookup.modal.hiddenCanonicalCoverAlias = hidesCanonicalCopy
+    ? { from: `local:${gallery.active_cover_path}`, to: `local:${incomingActiveLocalCover.path}` }
+    : null;
+  aliasHiddenCanonicalCoverSelections();
   state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
   const candidateSnapshot = normalizeCoverLookupCandidateSnapshot(gallery.candidate_snapshot);
@@ -35632,6 +35637,18 @@ function orderedCoverSelectionEntry(reference) {
   return { key, reference: { selection_id: selectionId } };
 }
 
+// A saved selection may name the album's canonical cover file, which the gallery
+// hides behind its byte-identical source; that source card stands for it.
+function aliasHiddenCanonicalCoverSelections() {
+  const modal = state.coverLookup.modal;
+  const alias = modal.hiddenCanonicalCoverAlias;
+  const selections = modal.orderedCoverSelections;
+  if (!alias || !Array.isArray(selections) || selections.some((item) => item?.key === alias.to)) return;
+  modal.orderedCoverSelections = selections.map((item) => (
+    item?.key === alias.from ? { ...item, key: alias.to } : item
+  ));
+}
+
 function orderedCoverSelectionSignature(selections) {
   return JSON.stringify((Array.isArray(selections) ? selections : []).map((item) => item.reference));
 }
@@ -35693,6 +35710,7 @@ function seedOrderedCoverSelectionFromAlbum(album) {
   if (album?.selected_covers_loaded !== true || !Array.isArray(album.selected_covers)) return false;
   const selections = album.selected_covers.map(orderedCoverSelectionEntry).filter(Boolean);
   state.coverLookup.modal.orderedCoverSelections = selections;
+  aliasHiddenCanonicalCoverSelections();
   state.coverLookup.modal.orderedSelectionMode = selections.length > 1;
   state.coverLookup.modal.orderedCoversRevision = Math.max(0, Number(album.selected_covers_revision || 0) || 0);
   state.coverLookup.modal.orderedCoverBaseline = orderedCoverSelectionSignature(selections);
@@ -35712,6 +35730,7 @@ async function loadOrderedCoverSelectionForAlbum(album) {
       .map(orderedCoverSelectionEntry)
       .filter(Boolean);
     state.coverLookup.modal.orderedCoverSelections = selections;
+    aliasHiddenCanonicalCoverSelections();
     state.coverLookup.modal.orderedSelectionMode = selections.length > 1;
     state.coverLookup.modal.orderedCoversRevision = Math.max(
       0, Number(data.selected_covers_revision || 0) || 0,
@@ -38317,6 +38336,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.orderedCoverSelections = [];
+  state.coverLookup.modal.hiddenCanonicalCoverAlias = null;
   state.coverLookup.modal.orderedSelectionMode = false;
   state.coverLookup.modal.orderedCoversRevision = 0;
   state.coverLookup.modal.currentCoverToken = '';
@@ -38418,6 +38438,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.orderedCoverSelections = [];
+  state.coverLookup.modal.hiddenCanonicalCoverAlias = null;
   state.coverLookup.modal.orderedSelectionMode = false;
   state.coverLookup.modal.orderedCoversRevision = 0;
   state.coverLookup.modal.currentCoverToken = '';

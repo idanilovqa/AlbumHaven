@@ -13,7 +13,8 @@ const client = fs.readFileSync(path.join(root, 'music_app/static/js/app-copy.js'
 const worker = fs.readFileSync(path.join(root, 'music_app/static/js/app-copy-worker.js'));
 
 function startServer() {
-  const server = { renders: 0, signedIn: true, account: 'acct-a', delayMs: 0 };
+  // [androidShell]: the page runs inside the Android app (capability-ui.js reports its bridge).
+  const server = { renders: 0, signedIn: true, account: 'acct-a', delayMs: 0, androidShell: true };
   server.http = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/') {
@@ -32,7 +33,9 @@ function startServer() {
           ? { 'Cache-Control': 'private, no-cache', 'X-Album-Haven-App-Copy': server.account, 'X-Album-Haven-Asset-Version': 't1' }
           : { 'Cache-Control': 'no-store, max-age=0' }),
       });
-      response.end(`<!doctype html><html><head>${marker}<script src="/static/js/app-copy.js?v=t1"></script></head>
+      const shell = server.androidShell
+        ? '<script>window.AlbumHavenCapabilities = { isAndroidShell: () => true, setReadOnly() {} };</script>' : '';
+      response.end(`<!doctype html><html><head>${marker}${shell}<script src="/static/js/app-copy.js?v=t1" defer></script></head>
         <body><h1 data-render>Render ${server.renders}</h1>
         <section id="app-copy-offline-notice" class="on-page-alert" role="status" hidden>Offline</section></body></html>`);
       return;
@@ -176,6 +179,7 @@ test.describe('app copy service worker', () => {
 
   test("IAR-W01: a browser takes the server's page when it is quick and the copy after 1.5 s without it", async ({ page }) => {
     // No Android shell: the page registers the browser worker once it has loaded.
+    server.androidShell = false;
     await page.goto(`${server.origin}/`);
     await expect.poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.scriptURL || ''))
       .toMatch(/\/app-copy-worker\.js\?mode=web$/);

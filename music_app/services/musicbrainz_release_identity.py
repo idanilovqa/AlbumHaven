@@ -347,10 +347,13 @@ class MusicBrainzAlbumReleaseProcessor:
         self._repository.enqueue(reason="artist_identity_changed", observed_at=self._now(),
                                  local_artist_id=local_artist_id, force=True)
 
-    def process_next(self, *, worker_id: str) -> dict[str, object]:
+    def process_next(self, *, worker_id: str, min_priority: int | None = None) -> dict[str, object]:
+        """The next due job; with ``min_priority`` only the owner's manual lookups, and no sweep."""
         observed_at = self._now()
         job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at,
-                                             lease_duration=self._lease_duration)
+                                             lease_duration=self._lease_duration, min_priority=min_priority)
+        if min_priority is not None and not job:
+            return {"processed": False, "state": "idle"}
         if not job and (self._last_sweep is None or observed_at - self._last_sweep >= self._sweep_interval):
             # New identities, new albums, an older matcher or stale decisions.
             self._last_sweep = observed_at

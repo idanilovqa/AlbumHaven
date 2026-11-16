@@ -1135,7 +1135,7 @@ test('Album Details labels a numeric bonus medium from its separate disc title',
   );
   context.buildTrackListHtml(tracks);
   assert.equal(renderedConfig.groups[0].discLabel, 'CD 2 • Bonus');
-  assert.equal(renderedConfig.groups[0].namedSection, true);
+  assert.equal(renderedConfig.groups[0].namedSection, undefined, 'a disc subtitle is a CD name, not a named section');
 });
 
 test('Album Details treats an explicit raw bonus-disc label as bonus evidence', () => {

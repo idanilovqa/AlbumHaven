@@ -164,7 +164,6 @@ function buildAlbumTrackTableHtml(config = {}) {
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
     const showLabel = Boolean(label) && (
       forceGroupLabels
-      || Boolean(group?.namedSection)
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
     const table = buildCompactDataTable(albumTrackTableGroupConfig(config, group, groupIndex));
@@ -173,7 +172,7 @@ function buildAlbumTrackTableHtml(config = {}) {
         ? '<span class="album-track-table__skeleton album-track-table__skeleton--heading"></span>'
         : escapeHtml(label);
       return buildCompactDataTableDisclosure({
-        className: `album-track-table__disc album-track-table__disc--collapsible${group?.namedSection ? ' album-track-table__disc--named' : ''}`,
+        className: 'album-track-table__disc album-track-table__disc--collapsible',
         summaryClassName: 'album-track-table__disc-heading',
         summaryAttributes: { 'aria-expanded': 'true' },
         contentClassName: 'album-track-table__disc-content',
@@ -189,7 +188,7 @@ function buildAlbumTrackTableHtml(config = {}) {
     const heading = ratingHtml
       ? `<div class="album-track-table__disc-header">${headingHtml}${ratingHtml}</div>`
       : headingHtml;
-    return `<section class="album-track-table__disc${group?.namedSection ? ' album-track-table__disc--named' : ''}">${heading}${table}</section>`;
+    return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
   const mainLength = String(config.mainLength || '').trim();

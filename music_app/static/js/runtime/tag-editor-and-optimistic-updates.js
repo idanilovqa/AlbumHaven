@@ -2568,7 +2568,6 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     return {
       discNumber: group.discNumber,
       discLabel,
-      namedSection: Boolean(group.discSubtitle),
       isBonus: Boolean(group.isBonus),
       discRating: discRatingByKey.get(getTrackDiscRatingKey(group.tracks[0])) ?? null,
       tracks: componentTracks,

@@ -176,16 +176,18 @@ test('collapsible AlbumTrackTable groups reuse the PF shared disclosure componen
   assert.doesNotMatch(html, /summary::before/);
 });
 
-test('AlbumTrackTable marks named sections for shared row styling', () => {
+test('A disc with a subtitle is a CD, rendered with the normal disc heading', () => {
+  // Owner 2026-11-15: CD names (e.g. Alien's two soundtrack discs) display as CDs, like main; named sections are different.
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({
-    groups: [{ namedSection: true, discLabel: 'Second movement', tracks: [{ path: 'two.flac', title: 'Two' }] }],
+    groups: [
+      { discNumber: 1, discLabel: 'CD 1 • The Complete Original Score', tracks: [{ path: 'one.flac', title: 'One' }] },
+      { discNumber: 2, discLabel: 'CD 2 • The Original 1979 Soundtrack Album', tracks: [{ path: 'two.flac', title: 'Two' }] },
+    ],
   });
-
-  assert.match(html, /album-track-table__disc--named/);
-  assert.match(html, /album-track-table__disc-heading[^>]*>Second movement<\/h4>/);
-  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
-  assert.match(css, /album-track-table__disc--named[\s\S]*padding:\s*7px 10px[\s\S]*background:\s*color-mix/);
+  assert.doesNotMatch(html, /album-track-table__disc--named/);
+  assert.match(html, /album-track-table__disc-heading">CD 1 • The Complete Original Score<\/h4>/);
+  assert.match(html, /album-track-table__disc-heading">CD 2 • The Original 1979 Soundtrack Album<\/h4>/);
 });
 
 test('AlbumTrackTable uses an opaque member identity without inventing another table', () => {

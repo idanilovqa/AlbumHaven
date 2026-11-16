@@ -693,3 +693,52 @@
 }
 .library-loader.is-searching .library-status-workspace > :not(.library-status-state),
 .library-loader.is-searching .library-status-state > :not(.library-loader-state-heading) { display: none; }
+
+/* MusicBrainz lookup batches (Delivery 2, S5): the same notification cards, above the
+   cover lookups' scrolling list. */
+.cover-lookup-drawer-pinned {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px 0;
+}
+.cover-lookup-drawer-pinned[hidden] {
+  display: none;
+}
+
+/* The MusicBrainz lookup results popup: the app's dialog, header and navigation-tree rows. */
+.musicbrainz-lookup-results-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(80vh, 760px);
+}
+.musicbrainz-lookup-results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.musicbrainz-lookup-results-header > div {
+  min-width: 0;
+}
+.musicbrainz-lookup-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+.musicbrainz-lookup-result-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  text-align: right;
+}
+.musicbrainz-lookup-result-mbid {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: nowrap;
+}

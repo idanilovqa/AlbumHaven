@@ -380,7 +380,7 @@ _BATCH_FIELDS = (
 )
 _BATCH_ITEM_FIELDS = (
     "request_id", "target_kind", "local_artist_id", "artist_name", "album_key", "album_title", "year", "state",
-    "outcome", "result_mbid", "problem_label", "problem_occurrence_id",
+    "outcome", "result_mbid", "result_entity", "problem_label", "problem_occurrence_id",
 )
 _TARGET_FIELDS = ("album_key", "local_artist_id", "artist_name", "artist_has_mbid", "album_has_mbid")
 

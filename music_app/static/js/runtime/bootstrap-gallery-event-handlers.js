@@ -141,6 +141,8 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
+    if (typeof runAlbumMenuMusicBrainzAction === 'function') runAlbumMenuMusicBrainzAction(action, album);
+
     return;
   }
 

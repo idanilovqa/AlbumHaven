@@ -335,6 +335,12 @@ _BATCH_ITEMS_SQL = _active_library_cte() + """
     select requests.id as request_id, requests.target_kind, requests.local_artist_id,
            artists.name as artist_name, requests.album_key, albums.title as album_title,
            albums.release_year as year, requests.state, requests.outcome, requests.result_mbid::text,
+           -- Which MusicBrainz page the MBID opens.
+           case when requests.result_mbid is null then null
+                when requests.target_kind = 'artist' then 'artist'
+                when exists (select 1 from integration.musicbrainz_releases releases
+                             where releases.mbid = requests.result_mbid) then 'release'
+                else 'release-group' end as result_entity,
            requests.problem_label,
            (select problem.id from library.metadata_enrichment_problems problem
             where problem.library_id = requests.library_id and problem.local_artist_id = requests.local_artist_id

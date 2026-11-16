@@ -40,10 +40,14 @@ function showAlbumCardContextMenu(x, y, album) {
     isMarkedVersion
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
+    ...(typeof buildAlbumMenuMusicBrainzItems === 'function' ? buildAlbumMenuMusicBrainzItems() : []),
   ].join('');
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  }
+  if (typeof appendAlbumMenuMusicBrainzSearchItems === 'function') {
+    void appendAlbumMenuMusicBrainzSearchItems(menu, menu.dataset.albumKey);
   }
 }
 

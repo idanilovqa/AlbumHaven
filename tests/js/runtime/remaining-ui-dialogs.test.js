@@ -116,10 +116,12 @@ test('cover lookup notifications use self-contained cards, state labels, and sha
  assert.match(close, /m5 5 10 10M15 5 5 15/);
   assert.doesNotMatch(clear, /<span>Clear finished<\/span>/);
  assert.ok(markup.indexOf("id='cover-lookup-drawer-clear'") < markup.indexOf('data-close-cover-lookup-drawer'));
-  assert.match(drawer, /cover-lookup-task-card \$\{taskStateClass\}/);
+  // One card component for every notification kind; the cover lookup passes its state.
+  assert.match(drawer, /cover-lookup-task-card \$\{stateClass\}/);
+  assert.match(drawer, /buildNotificationTaskCardHtml\(\{\s*stateClass: taskStateClass,/);
   assert.doesNotMatch(drawer, /cover-lookup-task-card navigation-tree-item/);
   assert.match(drawer, /taskStateClass = artChosen[^]*'is-completed'[^]*status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
-  assert.match(drawer, /cover-lookup-task-status-label \$\{taskStateClass\}/);
+  assert.match(drawer, /cover-lookup-task-status-label \$\{stateClass\}/);
   assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'refresh',[^]*?ariaLabel: 'Retry lookup',[^]*?className: 'cover-lookup-task-retry'/);
   assert.doesNotMatch(drawer, /data-retry-cover-lookup-task="[^]*>Retry<\/button>/);
   assert.match(drawer, /ButtonComponent\.renderActionButton\(\{\s*icon: 'delete',\s*semantic: 'destructive',[^]*?className: 'cover-lookup-task-clear',[^]*?'data-clear-cover-lookup-task': task.id/);

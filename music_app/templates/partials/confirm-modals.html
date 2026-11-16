@@ -1,4 +1,5 @@
 {% from 'components/on-page-alert.html' import on_page_alert %}
+{% from 'partials/button.html' import action_button %}
   <div class="confirm-modal" id="repair-confirm-modal" hidden>
     <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="repair-confirm-title" aria-describedby="repair-confirm-text">
       <h3 class="confirm-modal-title" id="repair-confirm-title">Repair local files</h3>
@@ -78,6 +79,23 @@
       <div class="confirm-modal-actions">
       <button class="button ui-button ui-button--quiet ui-button--medium" type="button" id="app-form-cancel">Cancel</button>
         <button class="button ui-button ui-button--primary ui-button--medium" type="button" id="app-form-submit">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-modal musicbrainz-lookup-results-modal" id="musicbrainz-lookup-results-modal" hidden>
+    <div class="confirm-modal-dialog musicbrainz-lookup-results-dialog" role="dialog" aria-modal="true" aria-labelledby="musicbrainz-lookup-results-title" aria-describedby="musicbrainz-lookup-results-summary">
+      <div class="musicbrainz-lookup-results-header">
+        <div>
+          <h3 class="confirm-modal-title" id="musicbrainz-lookup-results-title">MusicBrainz lookup</h3>
+          <div class="confirm-modal-text" id="musicbrainz-lookup-results-summary"></div>
+        </div>
+        {% call action_button('Close MusicBrainz lookup results', class_name='musicbrainz-lookup-results-close', attributes={'data-close-musicbrainz-lookup-results': '1'}) %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
+      </div>
+      <div class="musicbrainz-lookup-results-list" id="musicbrainz-lookup-results-list"></div>
+      <div class="confirm-modal-actions">
+        <button class="button ui-button ui-button--quiet ui-button--medium" type="button" data-close-musicbrainz-lookup-results="1">Close</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" type="button" data-open-problematic-files-from-lookup="1">Open Problematic Files</button>
       </div>
     </div>
   </div>

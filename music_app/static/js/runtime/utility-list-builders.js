@@ -3481,8 +3481,12 @@ function buildMusicBrainzManualResolutionHtml(detail, ui) {
       <p class="utility-detail-meta">Find the correct artist on MusicBrainz, then paste the artist page URL or bare artist MBID here. Album Haven verifies the entity before assignment.</p>
       <label class="musicbrainz-manual-field-label" for="musicbrainz-manual-artist">MusicBrainz artist URL or MBID</label>
       <div class="musicbrainz-manual-field-row">
-        <input id="musicbrainz-manual-artist" class="musicbrainz-manual-field" type="text" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1"${actionsAvailable ? '' : ' disabled'}>
-        ${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid })}
+        <div class="search-field musicbrainz-manual-field">
+          <div class="search-field-control ui-input-action">
+            <input id="musicbrainz-manual-artist" type="search" autocomplete="off" spellcheck="false" placeholder="Paste artist URL or MBID" value="${escapeHtml(ui.manualValue || '')}" data-musicbrainz-manual-artist="1"${actionsAvailable ? '' : ' disabled'}>
+            <span class="search-field-action">${buildMusicBrainzExternalLinkHtml(mbid ? `https://musicbrainz.org/artist/${mbid}` : '', 'Open entered artist on MusicBrainz', { disabled: !mbid, className: 'search-field-button' })}</span>
+          </div>
+        </div>
         ${ButtonComponent.renderButton({ label: 'Find manually', attributes: { 'data-open-musicbrainz-url': searchUrl } })}
       </div>
       <div class="musicbrainz-manual-helper${ui.validationError ? ' is-error' : ''}" role="status" aria-live="polite">${escapeHtml(helper)}</div>
@@ -3536,6 +3540,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
     body = buildMusicBrainzProviderStatusHtml(detail, view);
     actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: !actionsAvailable || ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
   }
+  actions = `${buildMusicBrainzLookupButtonsHtml(detail, ui)}${actions}`;
   const pendingDots = view === 'pending'
     ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
     : '';
@@ -3552,6 +3557,18 @@ function buildMusicBrainzArtistProblemDetail(item) {
     ${body}
     ${ui.error ? buildOnPageAlertHtml({ severity: 'error', title: 'MusicBrainz action failed', message: ui.error }) : ''}
     <div class="utility-detected-actions">${actions}</div>`;
+}
+
+// G: the album menu's lookups, for this artist: queue it, or search now while it has no MBID.
+function buildMusicBrainzLookupButtonsHtml(detail, ui) {
+  if (detail.actions_available === false || typeof canRequestMusicBrainzLookups !== 'function'
+      || !canRequestMusicBrainzLookups()) return '';
+  return [
+    detail.artist_mbid ? '' : ButtonComponent.renderButton({ label: 'Search MusicBrainz for the artist', disabled: ui.busy,
+      attributes: { 'data-musicbrainz-lookup': 'search' } }),
+    ButtonComponent.renderButton({ label: 'Queue MusicBrainz lookup for the artist', disabled: ui.busy,
+      attributes: { 'data-musicbrainz-lookup': 'queue' } }),
+  ].join('');
 }
 
 async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
@@ -3726,6 +3743,14 @@ function handleMusicBrainzArtistProblemEvent(event) {
       'MusicBrainz retry queued.',
       { refreshSurvivingDetail: true },
     );
+    return true;
+  }
+  const lookup = target?.closest?.('[data-musicbrainz-lookup]');
+  if (lookup) {
+    event.preventDefault();
+    void requestMusicBrainzLookup({
+      targetKind: 'artist', mode: lookup.dataset.musicbrainzLookup, localArtistId: item.local_artist_id,
+    });
     return true;
   }
   if (target?.closest?.('[data-musicbrainz-keep-current]')) {

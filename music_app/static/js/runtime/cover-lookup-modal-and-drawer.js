@@ -1793,6 +1793,7 @@ function renderCoverLookupDrawer({
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const musicBrainzBatches = typeof getMusicBrainzLookupBatches === 'function' ? getMusicBrainzLookupBatches() : [];
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -1816,15 +1817,23 @@ function renderCoverLookupDrawer({
   const loadedActionedCount = tasks.filter((task) => isActionedCoverLookupNotification(task)).length;
   const counts = state.coverLookup.notificationCounts;
   const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
-  const activeCount = hasAuthoritativeCounts
+  const musicBrainzActiveCount = musicBrainzBatches.filter((batch) => !batch.finished_at).length;
+  const activeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.active_count || 0), loadedActiveCount)
-    : loadedActiveCount;
-  const terminalCount = hasAuthoritativeCounts
+    : loadedActiveCount) + musicBrainzActiveCount;
+  const terminalCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.finished_count || 0), loadedTerminalCount)
-    : loadedTerminalCount;
-  const badgeCount = hasAuthoritativeCounts
+    : loadedTerminalCount) + musicBrainzBatches.length - musicBrainzActiveCount;
+  const badgeCount = (hasAuthoritativeCounts
     ? Math.max(Number(counts.total_count || 0), tasks.length)
-    : tasks.length;
+    : tasks.length) + musicBrainzBatches.length;
+  // The panel is titled by what it holds (owner, 2026-11-15).
+  const title = drawer.querySelector?.('.cover-lookup-drawer-title');
+  if (title) {
+    title.textContent = musicBrainzBatches.length && !tasks.length && !Number(counts?.total_count || 0)
+      ? MUSICBRAINZ_LOOKUP_TITLE : 'Cover lookups';
+  }
+  const musicBrainzCards = document.getElementById('musicbrainz-lookup-cards');
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
@@ -1844,6 +1853,10 @@ function renderCoverLookupDrawer({
     body.classList?.toggle('is-clearing', clearInProgress);
     body.setAttribute?.('aria-busy', String(clearInProgress));
     body.inert = clearInProgress;
+  }
+  if (musicBrainzCards) {
+    musicBrainzCards.hidden = !state.coverLookup.drawerOpen || !musicBrainzBatches.length;
+    musicBrainzCards.innerHTML = musicBrainzCards.hidden ? '' : musicBrainzBatches.map(buildMusicBrainzLookupCardHtml).join('');
   }
   if (!state.coverLookup.drawerOpen) {
     body.innerHTML = '';
@@ -1877,7 +1890,9 @@ function renderCoverLookupDrawer({
                 <span class="cover-lookup-task-loading-line"></span>
               </span>
             </div>`
-          : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
+          : musicBrainzBatches.length
+            ? ''
+            : '<div class="cover-lookup-drawer-empty">You\'re not looking for anything at the moment. Search for specific album art to see notifications.</div>';
       state.coverLookup.drawerRenderedTerminalSignatures = {};
     }
     syncCoverLookupElapsedTimer();
@@ -1970,20 +1985,17 @@ function renderCoverLookupDrawer({
     const coverMarkup = coverUrl
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
-    return `
-      <div class="cover-lookup-task-card ${taskStateClass}">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
-          ${coverMarkup}
-          <span class="cover-lookup-task-copy">
-            <span class="cover-lookup-task-title">${escapeHtml(albumTitle)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(albumByline)}</span>
-            <span class="cover-lookup-task-meta">
-              <span class="cover-lookup-task-status-label ${taskStateClass}">${escapeHtml(statusLabel)}</span>
-              <span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>
-            </span>
-          </span>
-        </div>
-      <div class="cover-lookup-task-actions">
+    return buildNotificationTaskCardHtml({
+      stateClass: taskStateClass,
+      openAttributes: `data-open-cover-lookup-task="${escapeHtml(task.id || '')}"`,
+      openLabel,
+      coverHtml: coverMarkup,
+      title: albumTitle,
+      byline: albumByline,
+      statusLabel,
+      elapsedHtml: `<span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>`,
+      progress,
+      actionsHtml: `
         ${status === 'failed' && task?.album_payload
           ? ButtonComponent.renderActionButton({
             icon: 'refresh',
@@ -2012,10 +2024,8 @@ function renderCoverLookupDrawer({
               attributes: { 'data-clear-cover-lookup-task': task.id || '' },
             })
             : ''}
-      </div>
-      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
-      </div>
-    `;
+      `,
+    });
   }).join('');
   if (!preserveSelectedNotificationText) {
     const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
@@ -2031,6 +2041,30 @@ function renderCoverLookupDrawer({
     state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
   }
   syncCoverLookupElapsedTimer();
+}
+
+// One notification card for every kind (cover lookups, MusicBrainz lookups): only its
+// content and open action differ.
+function buildNotificationTaskCardHtml({
+  stateClass, openAttributes, openLabel, coverHtml, title, byline, statusLabel, elapsedHtml, actionsHtml, progress,
+}) {
+  return `
+      <div class="cover-lookup-task-card ${stateClass}">
+        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>
+          ${coverHtml}
+          <span class="cover-lookup-task-copy">
+            <span class="cover-lookup-task-title">${escapeHtml(title)}</span>
+            <span class="cover-lookup-task-byline">${escapeHtml(byline)}</span>
+            <span class="cover-lookup-task-meta">
+              <span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>
+              ${elapsedHtml}
+            </span>
+          </span>
+        </div>
+      <div class="cover-lookup-task-actions">${actionsHtml}</div>
+      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
+      </div>
+    `;
 }
 
 async function clearCompletedCoverLookupTasks() {

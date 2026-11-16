@@ -20,7 +20,6 @@ from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumRele
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_musicbrainz_release_identity_postgres import (
     ANGRA,
-    GROUP,
     NOW,
     RELEASE,
     FakeResolverClient,
@@ -80,7 +79,7 @@ def test_queued_lookups_wait_an_hour_then_start_together_at_manual_priority(monk
 
 
 def test_sync_starts_the_queue_at_once_and_raises_an_automatic_job_already_waiting(monkeypatch):
-    setup_url, lookups, releases, ids = _lookups(monkeypatch)
+    setup_url, lookups, _releases, ids = _lookups(monkeypatch)
     later = NOW + timedelta(days=1)
     with isolatedPostgres._connect(setup_url) as connection:
         library_id = connection.execute("select library_id from library.local_artists where id = %s",
@@ -138,7 +137,8 @@ def test_an_album_lookup_runs_before_the_artist_backlog_and_settles_with_its_rel
     lookups.advance(observed_at=NOW)
 
     (found,) = lookups.get_batch(batch_id=cry["batch_id"])["items"]
-    assert (found["outcome"], found["result_mbid"], found["problem_label"]) == ("matched", RELEASE, None)
+    assert (found["outcome"], found["result_mbid"], found["result_entity"], found["problem_label"]) == (
+        "matched", RELEASE, "release", None)
     (missing,) = lookups.get_batch(batch_id=holy["batch_id"])["items"]
     assert (missing["outcome"], missing["result_mbid"], missing["problem_label"]) == (
         "not_matched", None, RELEASE_NOT_FOUND_LABEL)
@@ -146,7 +146,6 @@ def test_an_album_lookup_runs_before_the_artist_backlog_and_settles_with_its_rel
     assert batches[cry["batch_id"]]["finished_at"] == NOW
     assert (batches[cry["batch_id"]]["single_title"], batches[cry["batch_id"]]["single_outcome"]) == (
         "Angels Cry", "matched")
-    assert GROUP  # the recorded release belongs to this group
 
 
 def test_artist_lookups_settle_with_the_accepted_mbid_or_the_problematic_files_label(monkeypatch):
@@ -164,7 +163,7 @@ def test_artist_lookups_settle_with_the_accepted_mbid_or_the_problematic_files_l
     lookups.advance(observed_at=NOW + timedelta(minutes=1))
 
     (angra,) = lookups.get_batch(batch_id=matched["batch_id"])["items"]
-    assert (angra["outcome"], angra["result_mbid"]) == ("matched", ANGRA)
+    assert (angra["outcome"], angra["result_mbid"], angra["result_entity"]) == ("matched", ANGRA, "artist")
     (nobody,) = lookups.get_batch(batch_id=missing["batch_id"])["items"]
     assert (nobody["outcome"], nobody["problem_label"]) == ("not_matched", ARTIST_NOT_FOUND_LABEL)
     assert lookups.dismiss_batch(batch_id=matched["batch_id"], observed_at=NOW) is True

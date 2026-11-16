@@ -25,7 +25,7 @@ BATCH = {"batch_id": 5, "started_at": "2026-11-16T10:00:00+00:00", "finished_at"
          "single_target_kind": None, "single_outcome": None, "single_problem_label": None}
 ITEM = {"request_id": 9, "target_kind": "album", "local_artist_id": 41, "artist_name": "Dream Theater",
         "album_key": "k1", "album_title": "Octavarium", "year": 2005, "state": "finished", "outcome": "matched",
-        "result_mbid": MBID, "problem_label": None, "problem_occurrence_id": None}
+        "result_mbid": MBID, "result_entity": "release", "problem_label": None, "problem_occurrence_id": None}
 
 
 class Service(ArtistService):

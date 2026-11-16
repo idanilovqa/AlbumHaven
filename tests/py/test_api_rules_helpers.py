@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from music_app.routes.api_rules_helpers import build_utility_rules_payload
+from music_app.services.library_album_index import LibraryAlbumIndex
 
 
 def _config(tmp_path):
@@ -37,10 +38,10 @@ def test_build_utility_rules_payload_reuses_alias_views_and_serializes_only_igno
 
     payload = build_utility_rules_payload(
         config=config,
-        albums=[
+        albums_with_keys=LibraryAlbumIndex([
             _album(key="ignored-album", name="Ignored Album", album_artist="Canonical Artist"),
             _album(key="other-album", name="Other Album", album_artist="Other Artist"),
-        ],
+        ]).albums_with_keys,
         file_cache={
             ignored_row_path: {
                 "path": ignored_row_path,
@@ -67,7 +68,7 @@ def test_build_utility_rules_payload_does_not_rebuild_alias_views_when_none_are_
 
     payload = build_utility_rules_payload(
         config=config,
-        albums=[],
+        albums_with_keys=LibraryAlbumIndex([]).albums_with_keys,
         file_cache={
             ignored_row_path: {
                 "path": ignored_row_path,
@@ -89,7 +90,7 @@ def test_build_utility_rules_payload_does_not_rebuild_alias_views_when_none_are_
 def test_build_utility_rules_payload_uses_saved_key_as_fallback_album_label(tmp_path):
     payload = build_utility_rules_payload(
         config=_config(tmp_path),
-        albums=[],
+        albums_with_keys=LibraryAlbumIndex([]).albums_with_keys,
         file_cache={},
         ignored_version_keys={"helloween"},
         ignored_repair_keys=set(),

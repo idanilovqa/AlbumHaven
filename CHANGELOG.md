@@ -1,10 +1,18 @@
 # Changelog
 
-## 0.11.13 - 2026-11-16
+## 0.11.15 - 2026-11-16
 
 - Instant return in ordinary browsers (HTTPS or localhost): the library loads from the server as before, and a copy of the last view kept in the browser appears instead when the server cannot be reached, fails at its gateway, or has not answered within 1.5 seconds. That view is read-only with the existing Offline notice and updates in place once the server answers. Private windows and plain-HTTP addresses other than localhost behave as before.
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
+
+## 0.11.14 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. 0.11.13 was merged before its pipeline's final gate ran, and that gate cannot run after a merge, so this release merges only once its complete pipeline has passed.
+
+## 0.11.13 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. The stable promotion needs a commit whose complete PR pipeline passed; 0.11.12's pipeline could not finish after its admin merge.
 
 ## 0.11.12 - 2026-11-15
 

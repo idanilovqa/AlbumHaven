@@ -18033,6 +18033,45 @@ function preloadTrackModalArtwork(album) {
   image.src = source;
 }
 
+// Until a tag edit is saved, the server (and any earlier hydrated copy) still holds the album
+// as it was. The card is what the user sees, so details add the tracks the unsaved edit moved
+// in (the card carries them). A full card also drops tracks the edit moved out; a compact card
+// knows only its additions, so it never removes saved members.
+function overlayPendingTagEditMembership(hydratedAlbum, visibleAlbum) {
+  if (!hydratedAlbum || !visibleAlbum || hydratedAlbum === visibleAlbum
+      || typeof hasPendingTagEditViewMutations !== 'function'
+      || !hasPendingTagEditViewMutations()) return hydratedAlbum;
+  const membership = Array.isArray(visibleAlbum.track_paths)
+    ? new Set(visibleAlbum.track_paths.map((path) => String(path || '')).filter(Boolean))
+    : null;
+  if (!membership?.size) return hydratedAlbum;
+  const hydratedTracks = Array.isArray(hydratedAlbum.tracks) ? hydratedAlbum.tracks : [];
+  const known = new Set(hydratedTracks.map((track) => String(track?.path || '')));
+  const movedIn = (Array.isArray(visibleAlbum.tracks) ? visibleAlbum.tracks : [])
+    .filter((track) => membership.has(String(track?.path || '')) && !known.has(String(track?.path || '')));
+  const kept = visibleAlbum.preview_only === true
+    ? hydratedTracks
+    : hydratedTracks.filter((track) => membership.has(String(track?.path || '')));
+  if (!movedIn.length && kept.length === hydratedTracks.length) return hydratedAlbum;
+  const tracks = [...kept, ...movedIn];
+  if (typeof compareAlbumTracks === 'function') tracks.sort(compareAlbumTracks);
+  const totalDurationSeconds = tracks.reduce((sum, track) => {
+    const duration = Number(track?.duration_seconds || 0);
+    return sum + (Number.isFinite(duration) ? Math.max(0, duration) : 0);
+  }, 0);
+  return {
+    ...hydratedAlbum,
+    tracks,
+    track_paths: tracks.map((track) => String(track?.path || '')).filter(Boolean),
+    track_count: tracks.length,
+    track_count_preview: tracks.length,
+    total_duration_seconds: totalDurationSeconds,
+    ...(typeof formatCanonicalAlbumDuration === 'function'
+      ? { total_duration_display: formatCanonicalAlbumDuration(totalDurationSeconds) }
+      : {}),
+  };
+}
+
 function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -18044,7 +18083,13 @@ function openTrackModal(album, options = {}) {
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
   }
-  const albumWithPlaybackContext = attachGalleryPlaybackContextToAlbum(album);
+  let albumWithPlaybackContext = attachGalleryPlaybackContextToAlbum(album);
+  if (!albumRequiresHydration(albumWithPlaybackContext) && typeof flattenVisibleAlbums === 'function') {
+    // An earlier full copy predates an unsaved tag edit; the visible card carries the edit.
+    const requestKey = getAlbumRequestKey(albumWithPlaybackContext);
+    const card = flattenVisibleAlbums().find((candidate) => getAlbumRequestKey(candidate) === requestKey);
+    albumWithPlaybackContext = overlayPendingTagEditMembership(albumWithPlaybackContext, card);
+  }
   if (albumRequiresHydration(albumWithPlaybackContext)) {
     const albumKey = getAlbumRequestKey(albumWithPlaybackContext);
     const loadToken = invalidatePendingTrackModalLoad();
@@ -18058,9 +18103,10 @@ function openTrackModal(album, options = {}) {
     detailsPromise.then((hydratedAlbum) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       const refreshedAlbum = getIndexedAlbum(albumKey);
-      const resolvedAlbum = (!refreshedAlbum || albumRequiresHydration(refreshedAlbum))
-        ? hydratedAlbum
-        : refreshedAlbum;
+      const resolvedAlbum = overlayPendingTagEditMembership(
+        (!refreshedAlbum || albumRequiresHydration(refreshedAlbum)) ? hydratedAlbum : refreshedAlbum,
+        albumWithPlaybackContext,
+      );
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();

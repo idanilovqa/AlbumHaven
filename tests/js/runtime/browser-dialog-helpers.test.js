@@ -415,3 +415,26 @@ verifyLoopDeleteConfirmDialogContract().catch((error) => {
     throw error;
   });
 });
+
+require('node:test')('a destructive confirmation shows a red accept button', async () => {
+  // Owner 2026-11-16: "Delete copy button in delete copy modal should be red".
+  const element = () => {
+    const classes = new Set();
+    return {
+      hidden: true, style: {}, textContent: '',
+      classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)), contains: (name) => classes.has(name), add: (name) => classes.add(name) },
+      addEventListener() {}, removeEventListener() {}, focus() {},
+    };
+  };
+  const els = { 'app-confirm-modal': element(), 'app-confirm-title': element(), 'app-confirm-text': element(),
+    'app-confirm-cancel': element(), 'app-confirm-accept': element() };
+  els['app-confirm-accept'].classList.add('ui-button--primary');
+  const context = loadHelper({}, { document: { getElementById: (id) => els[id] || null, body: element(), activeElement: null } });
+  const accept = els['app-confirm-accept'];
+
+  context.showAppConfirmDialog({ title: 'Delete duplicate copy?', acceptLabel: 'Delete copy', danger: true });
+  assert.equal(accept.classList.contains('ui-button--destructive'), true);
+  assert.equal(accept.classList.contains('ui-button--primary'), false);
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
+  assert.match(css, /\.ui-button--destructive \{[^}]*background: var\(--appearance-error, #ef5350\);/);
+});

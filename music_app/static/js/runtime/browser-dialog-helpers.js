@@ -182,7 +182,9 @@ function showAppConfirmDialog(options = {}) {
   text.textContent = String(options.message || 'Continue?');
   cancelButton.textContent = String(options.cancelLabel || 'Cancel');
   acceptButton.textContent = String(options.acceptLabel || 'Continue');
-  acceptButton.classList?.toggle?.('confirm-modal-danger', Boolean(options.danger));
+  // A destructive confirmation uses the shared red button variant instead of the green primary.
+  acceptButton.classList?.toggle?.('ui-button--primary', !options.danger);
+  acceptButton.classList?.toggle?.('ui-button--destructive', Boolean(options.danger));
   modal.style.zIndex = '140';
   modal.hidden = false;
   document.body?.classList?.add?.('modal-open');

@@ -35,6 +35,21 @@ background: var(--appearance-primary-button, var(--accent));
 color: var(--appearance-primary-button-ink, #fff);
 font-weight: 700;
 }
+/* Filled red for a confirmed destructive action, e.g. "Delete copy" (owner 2026-11-16). */
+.ui-button--destructive {
+border-color: var(--appearance-error, #ef5350);
+background: var(--appearance-error, #ef5350);
+color: #fff;
+font-weight: 700;
+}
+.ui-button--destructive:hover:not(:disabled):not([aria-disabled='true']) {
+border-color: color-mix(in srgb, var(--appearance-error, #ef5350) 80%, white);
+background: color-mix(in srgb, var(--appearance-error, #ef5350) 88%, white);
+color: #fff;
+}
+.ui-button--destructive:focus-visible {
+outline-color: color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white);
+}
 .ui-button--secondary {
 border-color: var(--appearance-line, var(--border));
 background: var(--appearance-neutral-button-background, var(--appearance-control, var(--panel)));

@@ -1142,6 +1142,34 @@ test('library-wide collections survive an artist view replacement without anothe
   assert.equal(context.state.view.library_non_album_tracks, tracks);
 });
 
+test('Loose Tracks opened after an artist page shows the library tracks, not an empty list', async () => {
+  // Owner 2026-11-16: "opened loose tracks once. Went to artist tree opened ... specific artists, returned to
+  // loose tracks - none of the items shows any tracks in it when opened. Page loads empty". Browser repro:
+  // after 10cc the view held library_non_album_tracks [] with the library scope still marked hydrated.
+  const { context } = loadHelper();
+  context.URL = URL;
+  context.updateGalleryMainControls = () => {};
+  context.fetch = async () => ({ ok: true, status: 200, json: async () => ({
+    library_non_album_tracks: [
+      { path: 'C:/Music/night.mp3', exception_type: 'Custom Collection', custom_collection_name: 'Night' },
+      { path: 'C:/Music/loose.mp3', title: 'Loose' },
+    ],
+  }) });
+  await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
+  const hydratedScope = context.state.view.library_non_album_tracks_hydrated_scope;
+  context.state.view = {
+    selected_artist: '10cc',
+    visible_library_categories: [],
+    library_non_album_tracks: [],
+    library_non_album_tracks_hydrated_scope: hydratedScope,
+  };
+
+  assert.equal(context.needsNonAlbumHydration({ libraryWide: true }), false);
+  assert.equal(context.getVisibleNonAlbumTracks({ libraryWide: true }).length, 2);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true, collectionName: 'Night' }),
+    track => track.path), ['C:/Music/night.mp3']);
+});
+
 test('opening library-wide Loose Tracks resolves beyond a completed search probe', () => {
   const start = helperSource.indexOf('function openNonAlbumModal(options = {})');
   const end = helperSource.indexOf('function openNonAlbumTagEditor()', start);

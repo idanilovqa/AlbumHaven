@@ -14759,9 +14759,17 @@ function getVisibleNonAlbumTracks(options = {}) {
       || ['main_library', 'new_arrivals', 'hoard'];
     if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
   }
-  let tracks = options.libraryWide && Array.isArray(view.library_non_album_tracks)
-    ? view.library_non_album_tracks
-    : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  // Library-wide Loose Tracks do not belong to any artist page: an artist view replaces state.view and its
+  // list, so the scope-keyed hydration cache is their source (owner 2026-11-16: back from 10cc, every
+  // Loose Tracks item opened empty).
+  const libraryWideCache = options.libraryWide && libraryNonAlbumHydrationCache
+    && libraryNonAlbumHydrationCache.key === getLibraryNonAlbumScopeKey(view)
+    ? libraryNonAlbumHydrationCache.tracks
+    : null;
+  let tracks = libraryWideCache
+    || (options.libraryWide && Array.isArray(view.library_non_album_tracks)
+      ? view.library_non_album_tracks
+      : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : []);
   const collectionName = String(options.collectionName || '').trim();
   if (collectionName) {
     tracks = tracks.filter((track) => (

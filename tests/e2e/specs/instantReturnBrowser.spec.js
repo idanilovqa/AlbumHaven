@@ -26,6 +26,9 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   await primeCopy(page, galleryActions);
   const albumsOnline = await visibleAlbumNames(galleryActions.galleryPage);
   expect(albumsOnline.length).toBeGreaterThan(0);
+  // The library's scan control, one of the changes the read-only view hides.
+  const scanControl = page.locator('#scan-indicator');
+  await expect(scanControl).toBeVisible();
 
   await context.setOffline(true);
   const started = Date.now();
@@ -40,10 +43,8 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   const albumsOffline = await visibleAlbumNames(galleryActions.galleryPage);
   expect(albumsOffline.length).toBeGreaterThan(0);
   expect(albumsOffline).toEqual(albumsOnline.slice(0, albumsOffline.length));
-  // Changes are off: the album menu's Edit Tags cannot be used while the server cannot be reached.
-  await galleryActions.openAlbumContextMenu(albumsOnline[0]);
-  await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeDisabled();
-  await galleryActions.dismissAlbumContextMenu();
+  // Changes are off while the server cannot be reached.
+  await expect(scanControl).toBeHidden();
   expect(elapsed, `saved view took ${elapsed} ms`).toBeLessThanOrEqual(UNREACHABLE_VIEW_BUDGET_MS);
 
   // Back online: the notice goes and the same page stays (no reload).
@@ -52,7 +53,5 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   await expect(page.locator(OFFLINE_NOTICE)).toBeHidden({ timeout: 35_000 });
   expect(await page.evaluate(() => window.__iarSamePage)).toBe(true);
   expect(await visibleAlbumNames(galleryActions.galleryPage)).toEqual(albumsOnline);
-  await galleryActions.openAlbumContextMenu(albumsOnline[0]);
-  await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeEnabled();
-  await galleryActions.dismissAlbumContextMenu();
+  await expect(scanControl).toBeVisible();
 });

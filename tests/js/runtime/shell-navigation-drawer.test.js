@@ -598,23 +598,42 @@ test('drawer hamburger selects the mode of the tree already displayed', () => {
   assert.deepEqual(modes, ['artists', 'custom-collections']);
 });
 
-test('switching from mobile Loose Tracks to Artists leaves every artist row unselected', async () => {
-  const { context } = loadHelper({ isMobile: true });
+for (const isMobile of [true, false]) {
+  test(`${isMobile ? 'phone' : 'desktop'}: switching from library Loose Tracks to Artists leaves every artist row unselected`, async () => {
+    // Owner 2026-11-15: on a collection page, the Artists tree must not select All artists.
+    const { context } = loadHelper({ isMobile });
+    context.state.ui.libraryNavigationMode = 'custom-collections';
+    context.state.ui.nonAlbumLibraryWide = true;
+    const originalQuerySelector = context.document.querySelector.bind(context.document);
+    context.document.querySelector = selector => (
+      selector === '#non-album-modal:not([hidden])'
+        ? {}
+        : originalQuerySelector(selector)
+    );
+    let suppressedDuringRender = false;
+    context.renderSidebar = () => {
+      suppressedDuringRender = context.state.ui.suppressSidebarSelection === true;
+    };
+
+    await context.setLibraryNavigationMode('artists');
+
+    assert.equal(suppressedDuringRender, true);
+  });
+}
+
+test('an artist Loose Tracks page keeps that artist selected in the Artists tree', async () => {
+  const { context } = loadHelper({ isMobile: false });
   context.state.ui.libraryNavigationMode = 'custom-collections';
+  context.state.ui.nonAlbumLibraryWide = false;
   const originalQuerySelector = context.document.querySelector.bind(context.document);
   context.document.querySelector = selector => (
-    selector === '#non-album-modal.is-mobile-page:not([hidden])'
-      ? {}
-      : originalQuerySelector(selector)
+    selector === '#non-album-modal:not([hidden])' ? {} : originalQuerySelector(selector)
   );
-  let suppressedDuringRender = false;
-  context.renderSidebar = () => {
-    suppressedDuringRender = context.state.ui.suppressSidebarSelection === true;
-  };
+  context.renderSidebar = () => {};
 
   await context.setLibraryNavigationMode('artists');
 
-  assert.equal(suppressedDuringRender, true);
+  assert.equal(context.state.ui.suppressSidebarSelection, false);
 });
 
 test('mobile artist-tree scrolling does not schedule a mode-rail hide', () => {

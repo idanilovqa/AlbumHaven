@@ -1226,6 +1226,7 @@ function closeNonAlbumModal() {
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);
+  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;

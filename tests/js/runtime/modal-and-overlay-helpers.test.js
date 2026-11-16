@@ -2713,3 +2713,20 @@ for (const mobile of [false, true]) {
     assert.deepEqual(calls, ['in-place']);
   });
 }
+
+test('closing Loose Tracks clears its Custom Collections selection', () => {
+  // Owner 2026-11-15: after the logo closed a collection, the tree still showed it selected.
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  overlay.hidden = false;
+  overlay.querySelector = () => null;
+  context.document.body.appendChild(overlay);
+  context.document.removeEventListener = () => {};
+  context.dismissMobilePage = () => false;
+  let overlayHiddenWhenSynced = null;
+  context.syncCustomCollectionNavigationSelection = () => { overlayHiddenWhenSynced = overlay.hidden; };
+
+  context.closeNonAlbumModal();
+
+  assert.equal(overlayHiddenWhenSynced, true);
+});

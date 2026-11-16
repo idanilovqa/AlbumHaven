@@ -11548,17 +11548,27 @@ function loadCustomCollectionCatalog() {
   return promise;
 }
 
+// Only the tree whose page is on screen shows a selection (owner 2026-11-15): while
+// library-wide Loose Tracks or a collection is open, the Artists tree selects nothing.
+function libraryLooseTracksPageOpen() {
+  return Boolean(document.querySelector?.('#non-album-modal:not([hidden])'))
+    && state.ui?.nonAlbumLibraryWide === true;
+}
+
+// Redraws the Custom Collections selection after its page opens or closes.
+function syncCustomCollectionNavigationSelection() {
+  if (state.ui?.libraryNavigationMode !== 'custom-collections') return;
+  if (customCollectionCatalog.key !== customCollectionCatalogUrl().search) return;
+  renderCustomCollectionNavigation(customCollectionCatalog.collections);
+}
+
 // collections === null renders placeholders where the named rows will appear.
 function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
   const list = document.getElementById('sidebar-list');
   if (!list) return;
-  const pageOpen = Boolean(document.querySelector?.('#non-album-modal:not([hidden])'));
-  const activeCollectionName = pageOpen && state.ui?.nonAlbumLibraryWide === true
-    ? String(state.ui?.nonAlbumCollectionName || '').trim()
-    : '';
-  const allLooseTracksSelected = pageOpen
-    && state.ui?.nonAlbumLibraryWide === true
-    && !activeCollectionName;
+  const pageOpen = libraryLooseTracksPageOpen();
+  const activeCollectionName = pageOpen ? String(state.ui?.nonAlbumCollectionName || '').trim() : '';
+  const allLooseTracksSelected = pageOpen && !activeCollectionName;
   list.dataset.navigationTree = 'custom-collections';
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
@@ -11588,8 +11598,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
 
 async function setLibraryNavigationMode(mode) {
   const normalized = mode === 'custom-collections' ? mode : 'artists';
-  state.ui.suppressSidebarSelection = normalized === 'artists'
-    && Boolean(document.querySelector?.('#non-album-modal.is-mobile-page:not([hidden])'));
+  state.ui.suppressSidebarSelection = normalized === 'artists' && libraryLooseTracksPageOpen();
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
   if (normalized === 'artists') {
@@ -15767,6 +15776,7 @@ function closeNonAlbumModal() {
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);
+  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;

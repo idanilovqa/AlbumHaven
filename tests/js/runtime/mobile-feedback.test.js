@@ -10,7 +10,12 @@ test('shared mobile Settings hamburger uses the bare aligned GalleryBar action',
   const template = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/partials/gallery-bar.html'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/mobile-layout.css'), 'utf8');
   assert.match(template, /action_button\('Settings sections'[^\n]*presentation='bare'/);
-  assert.match(css, /#mobile-page-header:not\(\[data-album-identity-in-body="true"\]\) > :is\([^}]*\.mobile-bar-action\)\s*\{\s*align-self:\s*center;/s);
+  // Owner 2026-11-16: hamburger, then Back, then artbox, then the title; buttons sit on the title line, never overlap.
+  assert.match(css, /\.mobile-page-header > \.mobile-bar-action\s*\{[^}]*align-self:\s*flex-start;[^}]*flex:\s*0 0 40px;[^}]*margin-block-start:\s*calc\(\(var\(--mobile-page-title-line, 40px\) - 40px\) \/ 2\)/s);
+  const order = ['mobile-settings-button', 'mobile-page-library-button', 'mobile-back-button', 'mobile-page-collection-artwork', 'mobile-page-cover', 'mobile-page-title']
+    .map((id) => template.search(new RegExp(`id=['"]${id}['"]`)));
+  assert.ok(order.every((at) => at >= 0), 'every header slot is present');
+  assert.deepEqual(order, [...order].sort((left, right) => left - right), 'hamburgers, Back, artbox, cover, title');
 });
 
 test('mobile page and Gallery hamburgers declare their NavigationTree owners', () => {

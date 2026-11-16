@@ -216,13 +216,51 @@ test('notifications load only for the owner and are throttled between status pol
 
 test('Problematic Files offers the same lookups for an artist, Search only while it has no MBID', () => {
   const { context } = loadContext();
-  const html = (detail) => context.buildMusicBrainzLookupButtonsHtml(
-    { actions_available: true, ...detail }, {});
-  assert.match(html({ artist_mbid: null }), />Search MusicBrainz for the artist<.*>Queue MusicBrainz lookup for the artist</s);
-  assert.doesNotMatch(html({ artist_mbid: MBID }), /Search MusicBrainz/);
-  assert.match(html({ artist_mbid: MBID }), /Queue MusicBrainz lookup for the artist/);
-  assert.equal(html({ actions_available: false }), '');
-  assert.equal(loadContext({ allowed: false }).context.buildMusicBrainzLookupButtonsHtml({}, {}), '');
+  const html = (detail) => context.buildMusicBrainzArtistProblemDetail({
+    key: 'musicbrainz-artist:7', local_artist_id: 7, problem_reasons: ['MBID: Not found'],
+    musicbrainz_detail: { local_artist_name: 'Ktzat Acheret', problem_reason_code: 'musicbrainz_artist_not_found',
+      actions_available: true, ...detail },
+    musicbrainz_ui: { manualValue: '' },
+  });
+  assert.match(html({ artist_mbid: null }), />Search MusicBrainz for the artist<.*>Queue MusicBrainz lookup for the artist<.*>Assign MBID</s);
+  assert.doesNotMatch(html({ artist_mbid: MBID, problem_reason_code: 'musicbrainz_artist_metadata_conflict' }), /Search MusicBrainz/);
+  assert.match(html({ artist_mbid: MBID, problem_reason_code: 'musicbrainz_artist_metadata_conflict' }), /Queue MusicBrainz lookup for the artist/);
+  assert.doesNotMatch(html({ actions_available: false }), /MusicBrainz lookup|Search MusicBrainz/);
+  assert.equal(loadContext({ allowed: false }).context.buildMusicBrainzLookupButtonsHtml({ subject: 'artist' }), '');
+});
+
+const ALBUM_ROW = JSON.parse(read('tests/fixtures/musicbrainz/problematic-album-summary-item.json'));
+
+test('an album MusicBrainz has no info on is a valid summary row that never requests an album detail', async () => {
+  const { context, requests } = loadContext();
+  vm.runInContext(read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'), context);
+  const album = { key: 'zed', name: 'Zed', problem_reasons: ['Missing year'], detail_loaded: false };
+  const { summaryItems } = context.validateProblematicSummaryPayload({ ok: true, items: [ALBUM_ROW, album] });
+  assert.deepEqual(summaryItems.map((item) => item.key), [ALBUM_ROW.key, 'zed']);
+  context.state.utility.problematicFiles = [ALBUM_ROW];
+  assert.equal(await context.loadProblematicAlbumDetail(ALBUM_ROW.key, true), ALBUM_ROW);
+  assert.deepEqual(requests, []);
+  assert.equal(context.isMusicBrainzAlbumProblem(album), false);
+});
+
+test('the album entry shows its label and the album lookups for its own album key', async () => {
+  const { context, requests } = loadContext({ responses: {
+    'POST /api/musicbrainz/lookups': { status: 202, body: { request_id: 3, state: 'running' } } } });
+  context.buildUtilityAlbumArtbox = (_album, { label }) => `<span class="album-artbox" aria-label="${label}"></span>`;
+  const html = context.buildMusicBrainzAlbumProblemDetail(ALBUM_ROW);
+  assert.match(html, /utility-detail-title">…Карусель Эпох…</);
+  assert.match(html, /MusicBrainz has no info/);
+  assert.match(html, /data-musicbrainz-lookup-album="carousel"[^>]*data-musicbrainz-lookup="search"[^>]*>.*Search MusicBrainz for the album/s);
+  assert.match(html, /Queue MusicBrainz lookup for the album/);
+
+  const button = { dataset: { musicbrainzLookup: 'search', musicbrainzLookupAlbum: 'carousel' } };
+  const event = { type: 'click', target: { closest: (selector) => (selector === '[data-musicbrainz-lookup-album]' ? button : null) },
+    preventDefault() {} };
+  assert.equal(context.handleMusicBrainzLookupEvent(event), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.find(([method]) => method === 'POST')[2], { target_kind: 'album', mode: 'search', album_key: 'carousel' });
+
+  assert.doesNotMatch(loadContext({ allowed: false }).context.buildMusicBrainzAlbumLookupHtml(ALBUM_ROW), /<button/);
 });
 
 test('the pasted artist field is the app search-field component with its open-link action inside', () => {

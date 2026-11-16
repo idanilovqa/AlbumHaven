@@ -60,6 +60,9 @@ class MusicBrainzEnrichmentApiService:
             row["gallery_artist"] = canonical.get(name) or name
         return rows
 
+    def list_album_attention(self, *, album_key: str | None = None) -> list[dict[str, object]]:
+        return self._repository.list_album_attention(album_key=album_key)
+
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         return self._repository.get_artist_problem(local_artist_id=local_artist_id)
 

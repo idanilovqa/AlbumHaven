@@ -255,6 +255,15 @@ function handleMusicBrainzLookupEvent(event) {
   } else if (event.type !== 'click') {
     return false;
   }
+  const albumLookup = target?.closest?.('[data-musicbrainz-lookup-album]');
+  if (albumLookup && event.type === 'click') {
+    event.preventDefault();
+    void requestMusicBrainzLookup({
+      targetKind: 'album', mode: albumLookup.dataset.musicbrainzLookup,
+      albumKey: albumLookup.dataset.musicbrainzLookupAlbum,
+    });
+    return true;
+  }
   const dismiss = target?.closest?.('[data-dismiss-musicbrainz-lookup-batch]');
   if (dismiss && event.type === 'click') {
     event.preventDefault();

@@ -124,6 +124,24 @@ test('G2: Problematic Files adds the lookups beside Assign MBID, and the pasted 
   await expect(detail.getByLabel('MusicBrainz artist URL or MBID', { exact: true })).toHaveAttribute('placeholder', 'Paste artist URL or MBID');
 });
 
+test('G1: an album MusicBrainz has no info on shows its label and the album lookups', async ({ page }) => {
+  await mount(page, '<div id="utility-modal"><div id="utility-problematic-detail" style="width: 760px; padding: 16px;"></div></div>');
+  await page.evaluate(() => {
+    window.state.coverLookup.optimisticAlbumCovers = {};
+    document.getElementById('utility-problematic-detail').innerHTML = buildMusicBrainzAlbumProblemDetail({
+      key: 'musicbrainz-album:wings', entity_kind: 'musicbrainz_album', musicbrainz_album_key: 'wings',
+      name: '...And the Wings Embraced Us', album_artist: 'Lacrimas Profundere', year: 1995,
+      problem_reasons: ['MusicBrainz has no info'], detail_loaded: false,
+    });
+  });
+  const detail = page.locator('#utility-problematic-detail');
+  await expect(detail.locator('.utility-detail-title')).toHaveText('...And the Wings Embraced Us');
+  await expect(detail.locator('.utility-album-problem-labels')).toHaveText('MusicBrainz has no info');
+  await expect(detail.locator('.utility-detected-actions button'))
+    .toHaveText(['Search MusicBrainz for the album', 'Queue MusicBrainz lookup for the album']);
+  await expect(detail.locator('[data-musicbrainz-lookup-album="wings"]')).toHaveCount(2);
+});
+
 test('H1: a MusicBrainz lookup batch is the same card as a cover lookup, titled by its kind', async ({ page }) => {
   await mount(page, '<aside class="cover-lookup-drawer is-open" style="position: static;"><div class="cover-lookup-drawer-pinned" id="cards"></div></aside>', { width: 480, height: 640 });
   await page.evaluate(() => {

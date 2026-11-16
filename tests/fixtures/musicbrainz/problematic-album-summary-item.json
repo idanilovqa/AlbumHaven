@@ -1,0 +1,12 @@
+{
+  "key": "musicbrainz-album:carousel",
+  "entity_kind": "musicbrainz_album",
+  "musicbrainz_album_key": "carousel",
+  "local_artist_id": 9,
+  "name": "…Карусель Эпох…",
+  "album_artist": "R.D.(Роман Дрозд)",
+  "year": 2004,
+  "cover_path": null,
+  "problem_reasons": ["MusicBrainz has no info"],
+  "detail_loaded": false
+}

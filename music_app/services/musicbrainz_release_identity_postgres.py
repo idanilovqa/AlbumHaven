@@ -401,6 +401,23 @@ _REPLACE_ALBUMS = _active_library_cte() + """
           signals = excluded.signals, matcher_version = excluded.matcher_version,
           observed_at = excluded.observed_at, updated_at = excluded.updated_at
       where library.local_album_musicbrainz_releases.decision_source <> 'manual'
+      returning library_id, album_key, release_group_mbid, diagnostic
+    ), flagged as (
+      -- "MusicBrainz has no info" (S5): no release of the artist has this album's title. An
+      -- owner's manual decision is never stored here, so it never raises a flag.
+      insert into library.musicbrainz_contribution_flags (
+        library_id, target_kind, album_key, source, reason, created_at, updated_at)
+      select library_id, 'album', album_key, 'automatic', 'missing_from_musicbrainz',
+             %(observed_at)s, %(observed_at)s
+      from stored where release_group_mbid is null and diagnostic = 'no_title_match'
+      on conflict (library_id, album_key, source) where target_kind = 'album' do nothing
+      returning 1
+    ), cleared as (
+      -- Cleared once the album resolves; the owner's own flags (source manual) stay.
+      delete from library.musicbrainz_contribution_flags flags using stored
+      where flags.library_id = stored.library_id and flags.album_key = stored.album_key
+        and flags.target_kind = 'album' and flags.source = 'automatic'
+        and stored.release_group_mbid is not null
       returning 1
     )
     select count(*)::integer as stored from stored;

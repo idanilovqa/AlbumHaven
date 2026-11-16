@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from uuid import UUID, uuid4
 
@@ -273,6 +274,84 @@ def project_artist_problems_into_problematic_files(
         )
         payload["count"] = len(payload["items"])
     return payload
+
+
+def load_problematic_album_items(request: Request, *, album_key: str | None = None) -> list[dict[str, object]]:
+    """The primary owner's albums MusicBrainz has no info on, as Problematic Files rows
+    (S5), owner-only like the artist rows. A failure yields no rows."""
+    if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
+        return []
+    service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
+    list_attention = getattr(service, "list_album_attention", None)
+    try:
+        rows = (list_attention if callable(list_attention) else MusicBrainzEnrichmentPostgresRepository(
+            request.app.state.config).list_album_attention)(album_key=album_key)
+    except Exception:
+        logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
+        logger.warning("MusicBrainz album problems were unavailable for Problematic Files.")
+        return []
+    return [_problematic_album_item(row) for row in rows if isinstance(row, Mapping) and row.get("album_key")]
+
+
+def project_album_problems_into_problematic_files(
+    request: Request,
+    payload: object,
+    album_items: list[dict[str, object]] | None = None,
+) -> object:
+    """An album already listed gains the "MusicBrainz has no info" label and its lookups;
+    any other flagged album is added as a row of its own, by name."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return payload
+    if album_items is None:
+        album_items = load_problematic_album_items(request)
+    by_key = {item["musicbrainz_album_key"]: item for item in album_items}
+    for item in payload["items"]:
+        flagged = by_key.pop(_problematic_album_key(item.get("key")), None)
+        if flagged is not None:
+            _label_flagged_album(item, flagged["musicbrainz_album_key"])
+    if by_key:
+        payload["items"] = sorted([*payload["items"], *by_key.values()],
+                                  key=lambda item: str(item.get("name") or "").lower())
+        payload["count"] = len(payload["items"])
+    return payload
+
+
+def project_album_problem_into_problematic_detail(request: Request, payload: object) -> object:
+    """A loaded album detail keeps the label its summary row carried."""
+    if isinstance(payload, dict) and payload.get("key"):
+        album_key = _problematic_album_key(payload["key"])
+        if load_problematic_album_items(request, album_key=album_key):
+            _label_flagged_album(payload, album_key)
+    return payload
+
+
+def _problematic_album_key(key: object) -> str:
+    # Problematic Files keys a separate release by its year.
+    return re.sub(r"::year::\d{4}$", "", str(key or ""))
+
+
+def _label_flagged_album(item: dict[str, object], album_key: str) -> None:
+    reasons = list(item.get("problem_reasons") or [])
+    if MUSICBRAINZ_HAS_NO_INFO_LABEL not in reasons:
+        item["problem_reasons"] = [*reasons, MUSICBRAINZ_HAS_NO_INFO_LABEL]
+    item["musicbrainz_album_key"] = album_key
+
+
+def _problematic_album_item(row: Mapping[str, object]) -> dict[str, object]:
+    album_key = str(row["album_key"])
+    return {
+        "key": f"musicbrainz-album:{album_key}",
+        "entity_kind": "musicbrainz_album",
+        "musicbrainz_album_key": album_key,
+        "local_artist_id": row.get("local_artist_id"),
+        "name": str(row.get("album_title") or "").strip() or "Unknown Album",
+        "album_artist": str(row.get("artist_name") or "").strip() or "Unknown Artist",
+        "year": row.get("year"),
+        "cover_path": row.get("cover_path") or None,
+        "problem_reasons": [MUSICBRAINZ_HAS_NO_INFO_LABEL],
+        # A summary row like every other; its detail is the row itself.
+        "detail_loaded": False,
+    }
 
 
 def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:

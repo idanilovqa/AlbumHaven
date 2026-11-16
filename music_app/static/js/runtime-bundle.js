@@ -22795,6 +22795,7 @@ function buildProblematicAlbumDetail(album) {
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
+    ${album.musicbrainz_album_key ? buildMusicBrainzAlbumLookupHtml(album) : ''}
   `;
 }
 
@@ -25797,7 +25798,9 @@ function buildMusicBrainzArtistProblemDetail(item) {
     body = buildMusicBrainzProviderStatusHtml(detail, view);
     actions = ButtonComponent.renderButton({ label: 'Retry now', variant: 'primary', disabled: !actionsAvailable || ui.busy, attributes: { 'data-musicbrainz-retry': '1' } });
   }
-  actions = `${buildMusicBrainzLookupButtonsHtml(detail, ui)}${actions}`;
+  actions = `${actionsAvailable ? buildMusicBrainzLookupButtonsHtml({
+    subject: 'artist', hasMbid: Boolean(detail.artist_mbid), disabled: ui.busy,
+  }) : ''}${actions}`;
   const pendingDots = view === 'pending'
     ? '<span class="artist-musicbrainz-pending" aria-hidden="true"><span data-pending-dot>.</span><span data-pending-dot>.</span><span data-pending-dot>.</span></span>'
     : '';
@@ -25816,16 +25819,42 @@ function buildMusicBrainzArtistProblemDetail(item) {
     <div class="utility-detected-actions">${actions}</div>`;
 }
 
-// G: the album menu's lookups, for this artist: queue it, or search now while it has no MBID.
-function buildMusicBrainzLookupButtonsHtml(detail, ui) {
-  if (detail.actions_available === false || typeof canRequestMusicBrainzLookups !== 'function'
-      || !canRequestMusicBrainzLookups()) return '';
-  return [
-    detail.artist_mbid ? '' : ButtonComponent.renderButton({ label: 'Search MusicBrainz for the artist', disabled: ui.busy,
-      attributes: { 'data-musicbrainz-lookup': 'search' } }),
-    ButtonComponent.renderButton({ label: 'Queue MusicBrainz lookup for the artist', disabled: ui.busy,
-      attributes: { 'data-musicbrainz-lookup': 'queue' } }),
-  ].join('');
+// G: the album menu's lookups for an artist or album entry: queue it, or search now while it
+// has no MBID.
+function buildMusicBrainzLookupButtonsHtml({ subject, hasMbid = false, disabled = false, attributes = {} }) {
+  if (typeof canRequestMusicBrainzLookups !== 'function' || !canRequestMusicBrainzLookups()) return '';
+  const button = (mode, label) => ButtonComponent.renderButton({
+    label, disabled, attributes: { ...attributes, 'data-musicbrainz-lookup': mode },
+  });
+  return `${hasMbid ? '' : button('search', `Search MusicBrainz for the ${subject}`)}${button('queue', `Queue MusicBrainz lookup for the ${subject}`)}`;
+}
+
+function isMusicBrainzAlbumProblem(item) {
+  return item?.entity_kind === 'musicbrainz_album';
+}
+
+// An album MusicBrainz has no info on (S5): its label and lookups. A listed album shows
+// them beneath its detected problems; an album listed only for this has this detail.
+function buildMusicBrainzAlbumLookupHtml(album) {
+  return `<div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: 'info', message: MUSICBRAINZ_HAS_NO_INFO_LABEL })}</div>
+    <p class="utility-detail-meta">No release of this artist on MusicBrainz has this album's title. Search MusicBrainz again after fixing its tags, or queue it for the next MusicBrainz sync.</p>
+    <div class="utility-detected-actions">${buildMusicBrainzLookupButtonsHtml({
+      subject: 'album', attributes: { 'data-musicbrainz-lookup-album': album.musicbrainz_album_key },
+    })}</div>`;
+}
+
+function buildMusicBrainzAlbumProblemDetail(item) {
+  const title = String(item.name || 'Unknown Album');
+  return `<div class="utility-detail-header">
+      <div class="utility-detail-cover">${buildUtilityAlbumArtbox(item, { label: `Album cover for ${title}` })}</div>
+      <div class="utility-detail-summary">
+        <h3 class="utility-detail-title">${escapeHtml(title)}</h3>
+        <div class="utility-detail-meta">${escapeHtml(item.album_artist || 'Unknown Artist')}</div>
+        <div class="utility-detail-meta">Year: ${escapeHtml(item.year ?? 'Unknown')}</div>
+      </div>
+    </div>
+    <h4 class="utility-detail-section-title">Detected problems</h4>
+    ${buildMusicBrainzAlbumLookupHtml(item)}`;
 }
 
 async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
@@ -28342,6 +28371,10 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
     return;
   }
+  if (typeof isMusicBrainzAlbumProblem === 'function' && isMusicBrainzAlbumProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzAlbumProblemDetail(selectedAlbum);
+    return;
+  }
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
@@ -30559,8 +30592,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
-  // MusicBrainz artist rows load their own detail from the MusicBrainz API.
-  if (typeof isMusicBrainzArtistProblem === 'function' && isMusicBrainzArtistProblem(currentAlbum)) {
+  // MusicBrainz artist rows load their own detail from the MusicBrainz API; an album row
+  // listed only because MusicBrainz has no info on it is its own detail.
+  if (typeof isMusicBrainzArtistProblem === 'function'
+      && (isMusicBrainzArtistProblem(currentAlbum) || isMusicBrainzAlbumProblem(currentAlbum))) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {
@@ -37347,6 +37382,15 @@ function handleMusicBrainzLookupEvent(event) {
     if (event.key !== 'Enter' && event.key !== ' ') return false;
   } else if (event.type !== 'click') {
     return false;
+  }
+  const albumLookup = target?.closest?.('[data-musicbrainz-lookup-album]');
+  if (albumLookup && event.type === 'click') {
+    event.preventDefault();
+    void requestMusicBrainzLookup({
+      targetKind: 'album', mode: albumLookup.dataset.musicbrainzLookup,
+      albumKey: albumLookup.dataset.musicbrainzLookupAlbum,
+    });
+    return true;
   }
   const dismiss = target?.closest?.('[data-dismiss-musicbrainz-lookup-batch]');
   if (dismiss && event.type === 'click') {

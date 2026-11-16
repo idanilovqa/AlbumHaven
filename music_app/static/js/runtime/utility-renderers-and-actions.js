@@ -175,6 +175,10 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     }
     return;
   }
+  if (typeof isMusicBrainzAlbumProblem === 'function' && isMusicBrainzAlbumProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzAlbumProblemDetail(selectedAlbum);
+    return;
+  }
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;

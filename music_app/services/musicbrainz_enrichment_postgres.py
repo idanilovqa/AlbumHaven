@@ -712,6 +712,13 @@ class MusicBrainzEnrichmentPostgresRepository:
             rows = connection.execute(_artist_attention_sql(), {}).fetchall()
         return [_attention_row(row) for row in rows]
 
+    def list_album_attention(self, *, album_key: str | None = None) -> list[dict[str, object]]:
+        """Present albums MusicBrainz has no info on (an automatic contribution flag, S5),
+        all or one: the owner's Problematic Files "MusicBrainz has no info" album rows."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_ALBUM_ATTENTION_SQL, {"album_key": album_key}).fetchall()
+        return [_row_mapping(row) for row in rows]
+
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         params = {"local_artist_id": _positive_id(local_artist_id)}
         with self._connect(self._database_url) as connection:
@@ -1056,6 +1063,22 @@ _ATTENTION_FIELDS = (
     "local_album_count",
     "musicbrainz_has_no_info",
 )
+
+
+_ALBUM_ATTENTION_SQL = _active_library_cte() + """
+    select albums.album_key, albums.title as album_title, albums.release_year as year, albums.cover_path,
+           artists.id as local_artist_id, artists.name as artist_name
+    from active_library
+    join library.musicbrainz_contribution_flags flags
+      on flags.library_id = active_library.library_id and flags.target_kind = 'album'
+     and flags.source = 'automatic' and flags.reason = 'missing_from_musicbrainz'
+     and (%(album_key)s::text is null or flags.album_key = %(album_key)s::text)
+    join library.local_albums albums on albums.library_id = flags.library_id and albums.album_key = flags.album_key
+    join library.local_artists artists on artists.library_id = albums.library_id and artists.id = albums.artist_id
+    where exists (select 1 from library.local_tracks tracks
+                  where tracks.library_id = albums.library_id and tracks.album_id = albums.id)
+    order by albums.title, albums.album_key;
+"""
 
 
 def _attention_row(row: object) -> dict[str, object]:

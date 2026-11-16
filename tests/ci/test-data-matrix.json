@@ -9452,6 +9452,21 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/musicbrainzLookups.spec.js",
+    "case": "G1: an album MusicBrainz has no info on shows its label and the album lookups",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-lookup-problematic-files-actions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzLookups.spec.js",
     "case": "H1: a MusicBrainz lookup batch is the same card as a cover lookup, titled by its kind",
     "profile": null,
     "setupScope": "suite",

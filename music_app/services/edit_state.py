@@ -10,7 +10,12 @@ from collections.abc import Mapping
 import logging
 from pathlib import Path
 
-from music_app.services.library import album_separate_release_key, album_to_dict, build_albums_from_file_cache
+from music_app.services.library import (
+    album_separate_release_key,
+    album_sort_key,
+    album_to_dict,
+    build_albums_from_file_cache,
+)
 from music_app.services.library_album_index import LibraryAlbumIndex, library_album_index, replace_library_albums
 from music_app.services.metadata import apply_text_repairs_to_file, normalize_exception_value
 from music_app.services.non_album_view_payloads import is_loose_track_album_value
@@ -97,14 +102,6 @@ def _cache_entry_album_keys(entry: dict[str, object], separate_release_keys: set
     return keys
 
 
-def _merge_sort_key(album: object) -> tuple[str, int, str]:
-    return (
-        str(getattr(album, "album_artist", "") or "").lower(),
-        int(getattr(album, "year", None) or 9999),
-        str(getattr(album, "name", "") or "").lower(),
-    )
-
-
 def _affected_album_keys(
     previous_file_cache: Mapping[str, dict[str, object]],
     updated_file_cache: Mapping[str, dict[str, object]],
@@ -181,7 +178,7 @@ def rebuild_affected_albums_in_state(
         separate_release_keys,
     )
     replace_library_albums(
-        st, index.albums_of_releases(affected_album_keys), rebuilt_albums, sort_key=_merge_sort_key,
+        st, index.albums_of_releases(affected_album_keys), rebuilt_albums, sort_key=album_sort_key,
     )
 
 

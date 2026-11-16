@@ -107,6 +107,28 @@ def test_partial_rebuild_replaces_automatically_year_split_albums(tmp_path):
     ] == [(2001, "test artist::test album::year::2001")]
 
 
+def test_partial_rebuild_places_an_album_by_the_published_sort_order(tmp_path):
+    # Same artist and year: the published order is by release date before name.
+    releases = (("2001-01-01", "Bravo"), ("2001-06-01", "Charlie"), ("2001-12-01", "Alpha"))
+    file_cache = {
+        str(tmp_path / name / "song.flac"): {
+            "path": str(tmp_path / name / "song.flac"), "title": "Song", "track_number": 1,
+            "disc_number": 1, "artist": "Test Artist", "album_artist": "Test Artist", "album": name,
+            "year": 2001, "release_date": release_date, "duration_seconds": 180,
+        }
+        for release_date, name in releases
+    }
+    state = {"albums": edit_state_module.build_albums_from_file_cache(file_cache)}
+    assert [album.name for album in state["albums"]] == ["Bravo", "Charlie", "Alpha"]
+    changed = str(tmp_path / "Charlie" / "song.flac")
+    updated_file_cache = {**file_cache, changed: {**file_cache[changed], "title": "Updated Song"}}
+
+    rebuild_affected_albums_in_state(state, file_cache, updated_file_cache, {changed}, set())
+
+    assert [album.name for album in state["albums"]] == ["Bravo", "Charlie", "Alpha"]
+    assert state["albums"][1].tracks[0].title == "Updated Song"
+
+
 def test_partial_rebuild_keeps_explicit_year_siblings(tmp_path):
     paths = [str(tmp_path / str(year) / "song.flac") for year in (2001, 2011)]
     file_cache = {
@@ -221,7 +243,7 @@ def test_replaced_album_index_keeps_order_and_lookups_without_reindexing():
     index = LibraryAlbumIndex([first, middle, last])
     rebuilt = [album("m::x::year::2001", "M", "m.mp3"), album("n::x", "N", "n.mp3")]
 
-    derived = index.replaced([middle], rebuilt, sort_key=edit_state_module._merge_sort_key)
+    derived = index.replaced([middle], rebuilt, sort_key=edit_state_module.album_sort_key)
 
     assert derived.albums == [first, *rebuilt, last]
     assert derived.albums_with_any_track({"z.mp3", "n.mp3", "m.mp3"}) == [*rebuilt, last]

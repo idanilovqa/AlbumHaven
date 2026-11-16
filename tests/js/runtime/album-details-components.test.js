@@ -454,3 +454,27 @@ test('romanized names load once per ten minutes and redraw the tree and gallery 
   assert.equal(await context.refreshRomanizedArtistNames(), false, 'unchanged names redraw nothing');
   assert.equal(calls.length, 5);
 });
+
+test('album details carry the romanized artist name as hover text on desktop and a line on phones (J3)', () => {
+  const context = loadComponents();
+  for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+    const html = context.buildAlbumDetailsHeaderHtml({ layout, artist: '天門', album: 'Hoshi no Koe', year: '2002', artistRomanized: 'Tenmon' });
+    assert.match(html, /<span title="Tenmon">天門<\/span>/, layout);
+    assert.equal((html.match(/class="album-details-header__romanized">\(Tenmon\)</g) || []).length, 1, layout);
+  }
+  const copy = context.buildAlbumDetailsHeaderHtml({ variant: 'copy', title: 'Hoshi no Koe', eyebrow: '天門', eyebrowRomanized: 'Tenmon' });
+  assert.match(copy, /album-details-header__eyebrow">天門<\/div><div class="album-details-header__romanized">\(Tenmon\)<\/div>/);
+  const plain = context.buildAlbumDetailsHeaderHtml({ layout: 'classic_bar', artist: 'Angra', album: 'Angels Cry' });
+  assert.doesNotMatch(plain, /title=|album-details-header__romanized/);
+  context.romanizedArtistName = (name) => (name === '天門' ? 'Tenmon' : '');
+  assert.equal(context.albumDetailsRomanizedArtist({ album_artist: '天門' }), 'Tenmon');
+  assert.equal(context.albumDetailsRomanizedArtist({ album_artist: 'Кипелов' }), '');
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-details-components.css'), 'utf8');
+  assert.match(css, /\.album-details-header__romanized \{ display: none;/);
+  const phone = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'), 'utf8');
+  assert.match(phone.slice(phone.indexOf('@media (max-width: 900px)')), /\.album-details-header__romanized \{ display: block;/);
+  const callers = ['tag-editor-and-optimistic-updates.js', 'album-details-components.js'].map((file) => fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', file), 'utf8')).join('\n');
+  assert.match(callers, /artistRomanized: albumDetailsRomanizedArtist\(album\)/);
+  assert.match(callers, /eyebrowRomanized: albumDetailsRomanizedArtist\(album\)/);
+});

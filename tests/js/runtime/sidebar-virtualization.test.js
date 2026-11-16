@@ -269,3 +269,10 @@ test('original-script artists show their romanized name in parentheses and re-re
   assert.equal(context.romanizedArtistLabel(' 天門 '), '(Tenmon)');
   assert.equal(context.romanizedArtistLabel('Angra'), '');
 });
+
+test('the romanized name lookup gives the bare Latin form for hover text (J3)', () => {
+  const context = loadHelpers();
+  context.setRomanizedArtistNames({ '天門': 'Tenmon' });
+  assert.equal(context.romanizedArtistName('天門'), 'Tenmon');
+  assert.equal(context.romanizedArtistName('Кипелов'), '');
+});

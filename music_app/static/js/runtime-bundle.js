@@ -4302,9 +4302,14 @@ function setRomanizedArtistNames(names = {}) {
   romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
 }
 
-// "(Tenmon)" for "天門"; empty for every other name.
+// "Tenmon" for "天門" (hover text); empty for every other name.
+function romanizedArtistName(name) {
+  return romanizedArtistNames.get(String(name || '').trim()) || '';
+}
+
+// "(Tenmon)" for "天門" (visible text); empty for every other name.
 function romanizedArtistLabel(name) {
-  const latin = romanizedArtistNames.get(String(name || '').trim());
+  const latin = romanizedArtistName(name);
   return latin ? `(${latin})` : '';
 }
 
@@ -4664,7 +4669,11 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
-// The romanized name beside an original-script artist name (approved J3); see render-markup-helpers.
+// The romanized form of an original-script artist name (approved J3); see render-markup-helpers.
+function galleryRomanizedArtistName(name) {
+  return typeof romanizedArtistName === 'function' ? romanizedArtistName(name) : '';
+}
+
 function galleryRomanizedArtistLabel(name) {
   return typeof romanizedArtistLabel === 'function' ? romanizedArtistLabel(name) : '';
 }
@@ -4978,11 +4987,14 @@ function buildGalleryCardInfoHtml(config = {}) {
   const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
   // The album's MusicBrainz genre (approved A2), beside artist and year.
   const genre = String(config.genre || '').trim();
+  // J3 (owner 2026-11-15): the artist's romanized name is hover text on desktop and, on
+  // phones, a line under artist and year inside the meta row (mobile-layout.css shows it).
+  const romanized = String(config.artistRomanized || '').trim();
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div>${genre ? `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>` : ''}</div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"${romanized ? ` title="${escapeHtml(romanized)}"` : ''}><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div>${genre ? `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>` : ''}${romanized ? `<div class="album-subtitle gallery-card__romanized">(${escapeHtml(romanized)})</div>` : ''}</div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -5354,6 +5366,17 @@ function albumTaggedArtistNote(album) {
     : '';
 }
 
+// The romanized form of the album's original-script artist name (J3), or empty.
+function albumDetailsRomanizedArtist(album) {
+  return typeof romanizedArtistName === 'function' ? romanizedArtistName(albumDisplayArtist(album)) : '';
+}
+
+// J3 (owner 2026-11-15): hover text on desktop; on phones its own line, shown by mobile-layout.css.
+function buildAlbumDetailsRomanizedArtistHtml(romanized) {
+  const latin = String(romanized || '').trim();
+  return latin ? `<div class="album-details-header__romanized">(${escapeHtml(latin)})</div>` : '';
+}
+
 // MusicBrainz's release type ("Live", "EP • Live"; owner 2026-11-15) wins over the local tag.
 function albumDetailsReleaseType(album) {
   return album?.musicbrainz_release?.type_label || album?.release_type || 'ALBUM';
@@ -5377,9 +5400,12 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     const title = escapeHtml(config.title || '');
     const subtitle = escapeHtml(config.subtitle || '');
     const eyebrow = escapeHtml(config.eyebrow || '');
-    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>${buildAlbumDetailsRomanizedArtistHtml(config.eyebrowRomanized)}` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
-  const artist = escapeHtml(config.artist || '');
+  const artistRomanized = String(config.artistRomanized || '').trim();
+  const artist = artistRomanized && config.artist
+    ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(config.artist)}</span>`
+    : escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
   const year = escapeHtml(config.year || '');
   const releaseType = escapeHtml(config.releaseType || 'ALBUM');
@@ -5400,7 +5426,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${qualityAlertHtml}</div>${buildAlbumDetailsRomanizedArtistHtml(artistRomanized)}${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -5563,6 +5589,7 @@ function syncMobileAlbumComposition(album) {
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
         title: album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
+        eyebrowRomanized: albumDetailsRomanizedArtist(album),
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
         poorArtQuality: album.poor_art_quality === true,
       });
@@ -39057,6 +39084,7 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
+      artistRomanized: albumDetailsRomanizedArtist(album),
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),
@@ -42432,6 +42460,7 @@ function albumCardHtml(album, options = {}) {
     artist: album.album_artist,
     year: displayYear,
     genre: album?.musicbrainz_genre,
+    artistRomanized: galleryRomanizedArtistName(album.album_artist),
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
@@ -42468,6 +42497,7 @@ function getAlbumCardRenderKey(album) {
     String(album?.year || ''),
     String(album?.display_year || ''),
     String(album?.musicbrainz_genre || ''),
+    galleryRomanizedArtistName(album?.album_artist),
     getAlbumCardRating(album),
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
@@ -51389,7 +51419,10 @@ function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
-    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
+    subtitle,
+    // J3 (owner 2026-11-15): the artist's romanized name on its own line under the album page header.
+    romanized: kind === 'album' && album && typeof albumDetailsRomanizedArtist === 'function' ? albumDetailsRomanizedArtist(album) : '',
+    coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
@@ -51413,6 +51446,7 @@ function syncMobilePageShell() {
     document.getElementById('mobile-page-title').textContent = active.title;
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
+    if (active.romanized) { const romanized = document.createElement('span'); romanized.className = 'mobile-page-romanized'; romanized.textContent = `(${active.romanized})`; summary.appendChild(romanized); }
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
     document.title = `${active.title} — Album Haven`;
   }

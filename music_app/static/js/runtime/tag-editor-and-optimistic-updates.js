@@ -1957,6 +1957,7 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
+      artistRomanized: albumDetailsRomanizedArtist(album),
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),

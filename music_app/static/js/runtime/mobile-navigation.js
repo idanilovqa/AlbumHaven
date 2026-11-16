@@ -13,7 +13,10 @@ function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
-    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
+    subtitle,
+    // J3 (owner 2026-11-15): the artist's romanized name on its own line under the album page header.
+    romanized: kind === 'album' && album && typeof albumDetailsRomanizedArtist === 'function' ? albumDetailsRomanizedArtist(album) : '',
+    coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
@@ -37,6 +40,7 @@ function syncMobilePageShell() {
     document.getElementById('mobile-page-title').textContent = active.title;
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
+    if (active.romanized) { const romanized = document.createElement('span'); romanized.className = 'mobile-page-romanized'; romanized.textContent = `(${active.romanized})`; summary.appendChild(romanized); }
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
     document.title = `${active.title} — Album Haven`;
   }

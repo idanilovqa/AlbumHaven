@@ -128,9 +128,14 @@ function setRomanizedArtistNames(names = {}) {
   romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
 }
 
-// "(Tenmon)" for "天門"; empty for every other name.
+// "Tenmon" for "天門" (hover text); empty for every other name.
+function romanizedArtistName(name) {
+  return romanizedArtistNames.get(String(name || '').trim()) || '';
+}
+
+// "(Tenmon)" for "天門" (visible text); empty for every other name.
 function romanizedArtistLabel(name) {
-  const latin = romanizedArtistNames.get(String(name || '').trim());
+  const latin = romanizedArtistName(name);
   return latin ? `(${latin})` : '';
 }
 

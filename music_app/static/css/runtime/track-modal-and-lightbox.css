@@ -271,11 +271,16 @@
   cursor: pointer;
   transform: translateY(-50%);
 }
-:root .track-modal-dialog .album-details-cover-stack .album-details-cover-nav.action-button--bare:is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+/* The arrows have no frame in any state. `outline: none` on hover reset the outline colour to white, and when
+   the cursor left the arrow the shared button faded it back to transparent: a white ring flashed (owner
+   2026-11-16). The outline stays transparent and nothing fades; focus shows on the icon's glow instead. */
+:root .track-modal-dialog .album-details-cover-stack .album-details-cover-nav.action-button--bare {
   border-color: transparent !important;
-  outline: none;
+  outline: none !important;
+  outline-color: transparent !important;
   background: transparent !important;
   box-shadow: none;
+  transition: none;
 }
 :root .album-details-cover-nav:is(:hover, :active):not(:disabled):not([aria-disabled='true']) .ui-icon {
   filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.78));

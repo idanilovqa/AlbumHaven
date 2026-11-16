@@ -413,7 +413,8 @@ test('Loose Tracks template delegates its header contents to AlbumDetailsHeader'
   const modalEnd = template.indexOf('</div>\n\n  <div', modalStart);
   const modal = template.slice(modalStart, modalEnd);
 
-  assert.match(modal, /<div class="non-album-modal-header" id="non-album-modal-header"><\/div>/);
+  // Since a943cda48 the empty header container is also the shared page GalleryBar; its contents stay delegated.
+  assert.match(modal, /<div class="non-album-modal-header gallery-bar page-gallery-bar" id="non-album-modal-header" data-gallery-bar data-gallery-bar-instance="page"><\/div>/);
   assert.doesNotMatch(modal, /&#9998;|>✕<|class="icon-button/);
 });
 
@@ -575,4 +576,15 @@ test('Album Details callers use presentation-only title and year values', () => 
   assert.match(tagEditorSource, /year:\s*album\.display_year\s*\|\|\s*album\.year/);
   assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
+});
+
+test('cover arrows never flash a ring when the cursor leaves them', () => {
+  // Owner 2026-11-16: "after I click if I move the mouse away from the arrow the white circle around arrow
+  // flashes". The hover-only `outline: none` reset the outline colour to white, which faded out on leave.
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'), 'utf8');
+  const rule = css.match(/\.album-details-cover-stack \.album-details-cover-nav\.action-button--bare \{([^}]*)\}/)?.[1] || '';
+  assert.match(rule, /outline: none !important;/);
+  assert.match(rule, /outline-color: transparent !important;/);
+  assert.match(rule, /transition: none;/);
+  assert.doesNotMatch(css, /\.album-details-cover-nav\.action-button--bare:is\(:hover/);
 });

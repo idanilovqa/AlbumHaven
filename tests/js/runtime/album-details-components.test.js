@@ -146,6 +146,21 @@ test('Album Details stack exposes bounded pointer-position variables', () => {
   assert.equal(values.size, 0);
 });
 
+test('a mouse press on the cover arrows or rear covers neither selects text nor takes focus', () => {
+  const context = loadComponents();
+  const listeners = {};
+  const stack = { dataset: {}, style: { setProperty() {}, removeProperty() {} }, addEventListener(type, listener) { listeners[type] = listener; } };
+  context.bindAlbumDetailsCoverStackPointer(stack);
+  const press = (button, matches) => {
+    let prevented = false;
+    listeners.mousedown({ button, target: { closest: () => (matches ? {} : null) }, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  assert.equal(press(0, true), true);
+  assert.equal(press(0, false), false, 'the front cover keeps its normal press');
+  assert.equal(press(2, true), false, 'a right press keeps its context menu');
+});
+
 test('Album Details stack reserves layout room and is static under reduced motion', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'),

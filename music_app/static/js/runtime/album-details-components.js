@@ -99,6 +99,14 @@ function bindAlbumDetailsCoverStackPointer(stack) {
     stack.style.setProperty('--album-cover-pointer-y', `${(y * 2).toFixed(3)}px`);
     stack.style.setProperty('--album-cover-pointer-rotation', `${(x * 0.6).toFixed(3)}deg`);
   });
+  // Owner 2026-11-16: quick clicks on the arrows or rear covers are double clicks that selected the table's "#"
+  // header, and a mouse-focused arrow flashed a ring when it lost focus. A mouse press neither starts a text
+  // selection nor moves focus; the click still browses, and keyboard focus is unchanged.
+  stack.addEventListener('mousedown', (event) => {
+    if (event.button === 0 && event.target?.closest?.('[data-album-details-cover-step], [data-album-details-cover-index]')) {
+      event.preventDefault();
+    }
+  });
   stack.addEventListener('pointerup', clear);
   stack.addEventListener('pointerleave', clear);
   stack.addEventListener('pointercancel', clear);

@@ -42,6 +42,42 @@ test('1B: web album details show "Series: <name>" on one line under the cover; t
   expect(linkBox.x).toBeGreaterThan(label.x + label.width);
 });
 
+test('web album details wrap several series left-aligned under the first name, never clipped', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.setContent('<div id="track-modal"><div id="track-modal-cover" style="width:280px"><div class="cover" style="height:280px"></div></div><div id="track-modal-list"></div></div>');
+  await loadAlbumDetailsComponents(page);
+  const names = ['Colossus Projects', 'Rolling Stone: The 100 Greatest Metal Albums of All Time', 'Spirit of the Seventies', 'Kalevala Collection'];
+  await page.evaluate((list) => syncAlbumDetailsSeries({ musicbrainz_series: list.map((name, index) => ({
+    mbid: `00000000-0000-4000-8000-00000000000${index}`, name, kind: index === 1 ? 'featured_in' : 'series' })) }, {
+    cover: document.getElementById('track-modal-cover'), list: document.getElementById('track-modal-list'), mobile: false,
+  }), names);
+  for (const [kind, label] of [['series', 'Series:'], ['featured_in', 'Featured In:']]) {
+    const block = page.locator(`[data-album-details-series="${kind}"]`);
+    await expect(block.locator('.album-details-series__label')).toHaveText(label);
+    const geometry = await block.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const label = element.querySelector('.album-details-series__label').getBoundingClientRect();
+      const lines = [...element.querySelectorAll('.album-details-series__link')]
+        .flatMap((link) => [...link.getClientRects()]).map((rect) => ({ left: rect.left, right: rect.right, top: rect.top }));
+      return { box: { left: box.left, right: box.right }, label: { left: label.left, top: label.top },
+        lines, clipped: element.scrollWidth > element.clientWidth };
+    });
+    // The first line starts with the label; the names never start under it.
+    expect(Math.abs(geometry.label.left - geometry.box.left)).toBeLessThanOrEqual(1);
+    const first = geometry.lines[0];
+    expect(first.left).toBeGreaterThan(geometry.label.left);
+    expect(Math.abs(first.top - geometry.label.top)).toBeLessThanOrEqual(3);
+    // Every wrapped line starts at the first name's left edge.
+    const wrapped = geometry.lines.filter((line) => line.top > first.top + 1);
+    // Three series names cannot share one line in the cover column.
+    if (kind === 'series') expect(wrapped.length).toBeGreaterThan(0);
+    for (const line of wrapped) expect(Math.abs(line.left - first.left)).toBeLessThanOrEqual(1);
+    // Nothing overflows the block or is clipped.
+    expect(geometry.clipped).toBe(false);
+    for (const line of geometry.lines) expect(line.right).toBeLessThanOrEqual(geometry.box.right + 0.5);
+  }
+});
+
 test('4A: on a phone the SERIES block follows the track table, and an album of no series shows none', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.setContent('<div id="track-modal"><div id="track-modal-cover"></div><div id="track-modal-list"><table><tr><td>Track</td></tr></table></div></div>');

@@ -19,11 +19,13 @@
 .album-details-series { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
 .album-details-series > .section-split-label { margin: 0; padding: 0; }
 .album-details-series__link { text-align: left; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-/* Web: one line, "Series: <name>" (owner 2026-11-15). */
-.album-details-series--inline { display: block; }
+/* Web: one line, "Series: <name>" (owner 2026-11-15); the label keeps its own column and the
+   names wrap left-aligned under the first name (owner 2026-11-16). */
+.album-details-series--inline { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 0.3em; align-items: baseline; }
 .album-details-series--inline + .album-details-series--inline { margin-top: 4px; }
-.album-details-series__label { color: var(--muted); }
-.album-details-series--inline .album-details-series__link { display: inline; }
+.album-details-series__label { color: var(--muted); white-space: nowrap; }
+.album-details-series__names { min-width: 0; overflow-wrap: anywhere; }
+.album-details-series--inline .album-details-series__link { display: inline; white-space: normal; overflow-wrap: anywhere; }
 .album-details-source-marker { display: inline-grid; place-items: center; width: 24px; height: 24px; color: var(--muted); pointer-events: none; }
 .album-details-source-marker svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .album-details-source-marker--hoard { color: var(--library-source-hoard); }

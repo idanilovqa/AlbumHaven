@@ -141,8 +141,9 @@ function buildMissingAlbumDetailsHtml(config = {}) {
 // The MusicBrainz series the album is part of: a Series line for real series and a Featured
 // In line for the lists, awards and collections that name the album (owner 2026-11-15).
 // Each shows only when it has an entry; every name is a link to that series' gallery.
-// Web: one line, "Series: <name>" (owner 2026-11-15). Phone (approved 4A): the label above
-// its names. Several names on one line are separated by commas.
+// Web: one line, "Series: <name>" (owner 2026-11-15). Several names are comma-separated and,
+// when they do not fit, wrap left-aligned under the first name (owner 2026-11-16). Phone
+// (approved 4A): the label above its names.
 function buildAlbumDetailsSeriesHtml(album, { inline = false } = {}) {
   const series = Array.isArray(album?.musicbrainz_series) ? album.musicbrainz_series.filter((item) => item?.mbid) : [];
   return [['series', 'Series'], ['featured_in', 'Featured In']].map(([kind, label]) => {
@@ -150,7 +151,7 @@ function buildAlbumDetailsSeriesHtml(album, { inline = false } = {}) {
       .map((item) => `<button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${escapeHtml(item.mbid)}">${escapeHtml(item.name || '')}</button>`);
     if (!links.length) return '';
     return inline
-      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span> ${links.join(', ')}</div>`
+      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span><span class="album-details-series__names">${links.join(', ')}</span></div>`
       : `<div class="album-details-series" data-album-details-series="${kind}"><div class="section-split-label">${label}</div>${links.join('')}</div>`;
   }).join('');
 }

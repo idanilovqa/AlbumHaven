@@ -9392,6 +9392,21 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/seriesView.spec.js",
+    "case": "web album details wrap several series left-aligned under the first name, never clipped",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-album-details-block"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
     "case": "4A: on a phone the SERIES block follows the track table, and an album of no series shows none",
     "profile": null,
     "setupScope": "suite",

@@ -37,10 +37,10 @@ test('web album details read "Series: <name>" on one line; the name links to its
   const html = components().buildAlbumDetailsSeriesHtml(
     { musicbrainz_series: [{ ...SERIES, kind: 'series' }, { ...SERIES, mbid: 'b', name: 'Second Series', kind: 'series' }] },
     { inline: true });
-  assert.equal(html, `<div class="album-details-series album-details-series--inline" data-album-details-series="series"><span class="album-details-series__label">Series:</span> <button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${COLOSSUS}">Colossus Projects</button>, <button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="b">Second Series</button></div>`);
+  assert.equal(html, `<div class="album-details-series album-details-series--inline" data-album-details-series="series"><span class="album-details-series__label">Series:</span><span class="album-details-series__names"><button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${COLOSSUS}">Colossus Projects</button>, <button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="b">Second Series</button></span></div>`);
   const featured = components().buildAlbumDetailsSeriesHtml(
     { musicbrainz_series: [{ mbid: 'c', name: 'Metal Albums', kind: 'featured_in' }] }, { inline: true });
-  assert.match(featured, /<span class="album-details-series__label">Featured In:<\/span> <button[^>]*data-open-series="c">Metal Albums<\/button><\/div>$/);
+  assert.match(featured, /<span class="album-details-series__label">Featured In:<\/span><span class="album-details-series__names"><button[^>]*data-open-series="c">Metal Albums<\/button><\/span><\/div>$/);
 });
 
 test('4A: phone album details show a SERIES block naming each series as a link to its gallery', () => {

@@ -785,7 +785,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 
   #mobile-page-header:not([data-album-identity-in-body="true"]) { align-items: center; }
   #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover, .mobile-bar-action) { align-self: center; }
-  #mobile-page-header .gallery-bar__summary { margin: 2px 0 0; }
   /* The pinned album identity is two compact lines beside the 40px artwork.
      Do not reserve the generic toolbar title's 40px minimum above its metadata. */
   .shell-main-surface:has(> #mobile-page-outlet[data-mobile-page-kind="album"]) > #mobile-page-header:not([data-album-identity-in-body="true"]) > :is(.gallery-bar__context, .mobile-page-cover) { align-self: flex-start; }

@@ -43,7 +43,12 @@ export async function primeCopy(page, galleryActions) {
   await expect.poll(async () => (await keptPages(page)).map(kept => kept.key)).toContain(LIBRARY_PATH);
 }
 
-// The first album titles on screen, as the gallery POM reads them.
+// The album titles inside the window, as the gallery POM finds them.
 export async function visibleAlbumNames(galleryPage) {
-  return (await galleryPage.albumCard.visibleTitles.allInnerTexts()).slice(0, 12);
+  return galleryPage.albumCard.visibleTitles.evaluateAll(titles => titles
+    .filter((title) => {
+      const box = title.getBoundingClientRect();
+      return box.height > 0 && box.bottom > 0 && box.top < window.innerHeight;
+    })
+    .map(title => title.textContent.trim()));
 }

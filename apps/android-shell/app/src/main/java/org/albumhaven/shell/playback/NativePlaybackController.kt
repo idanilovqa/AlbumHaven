@@ -576,6 +576,10 @@ class NativePlaybackController(
         }
     }
 
+    /** Whether the item after [itemIndex] is the next track of the same album: one web queue is one `queueGroup`. */
+    private fun consecutiveAlbumSuccessor(itemIndex: Int): Boolean =
+        queue.getOrNull(itemIndex + 1)?.queueGroup?.let { it == queue.getOrNull(itemIndex)?.queueGroup } == true
+
     /** The web keeps playing a track whose queue changed under it; only the queue around it is replaced. */
     private fun keepCurrent(load: QueueLoad): Boolean {
         val playingItem = queue.getOrNull(index) ?: return false
@@ -589,7 +593,7 @@ class NativePlaybackController(
         val successor = queue.getOrNull(index + 1)?.pcmTrack()
         // A successor prepared for the old queue is not heard yet; what plays next must be the one this queue names.
         if (current.preparedSuccessor.let { it != null && it != successor }) current.setQueuedNext(null)
-        current.setQueuedNext(successor)
+        current.setQueuedNext(successor, consecutiveAlbumSuccessor(index))
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
         return true
     }
@@ -725,7 +729,7 @@ class NativePlaybackController(
             sink?.let { timing.outputReady(it.heardFrames(), queued = false) }
         }
         startMeasuring()
-        queue.getOrNull(itemIndex + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
+        queue.getOrNull(itemIndex + 1)?.let { current.setQueuedNext(it.pcmTrack(), consecutiveAlbumSuccessor(itemIndex)) }
         loop?.let { applyEngineLoop(current, it, rate) }
         if (playWhenReady) {
             startWaitSinceMs = clock()
@@ -840,7 +844,7 @@ class NativePlaybackController(
             itemMarker = boundary
         }
         queue[index].let { claims.updateTrack(it.claimTrack()) }
-        queue.getOrNull(index + 1)?.let { engine?.setQueuedNext(it.pcmTrack()) }
+        queue.getOrNull(index + 1)?.let { engine?.setQueuedNext(it.pcmTrack(), consecutiveAlbumSuccessor(index)) }
         advanceListen(outgoing)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.ADVANCE) }
     }
@@ -1051,7 +1055,7 @@ class NativePlaybackController(
         recoveryAttempted = false
         changeListenTrack(outgoing, outgoingPositionMs)
         queue[index].let { claims.updateTrack(it.claimTrack()) }
-        queue.getOrNull(index + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
+        queue.getOrNull(index + 1)?.let { current.setQueuedNext(it.pcmTrack(), consecutiveAlbumSuccessor(index)) }
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.NEXT, source = source) }
         return true
     }

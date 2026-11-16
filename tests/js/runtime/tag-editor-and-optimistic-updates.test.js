@@ -4140,6 +4140,42 @@ test('cross-album continuity peek is side-effect free until the exact boundary c
   assert.equal(context.state.player.playbackQueue.currentIndex, 0);
 });
 
+test('only the immediate successor inside the current album queue is a consecutive album boundary', () => {
+  const paths = ['01', '02', '03'].map((number) => `/music/artist/first/${number}.flac`);
+  const nextAlbumPath = '/music/artist/second/01.flac';
+  const first = {
+    key: 'first', name: 'First', album_artist: 'Artist',
+    tracks: paths.map((path, index) => ({ path, title: `Track ${index + 1}` })),
+    playback_context: {
+      kind: 'artist_page', end_behavior: 'continue', ordered_album_refs: ['first', 'second'],
+      albums: [{ album_ref: 'first', can_play: true }, { album_ref: 'second', can_play: true }],
+    },
+  };
+  const second = {
+    key: 'second', name: 'Second', album_artist: 'Artist',
+    tracks: [{ path: nextAlbumPath, title: 'Second' }],
+  };
+  const context = loadHelper([first, second]);
+  context.state.player = { current: { path: paths[0] }, playbackQueue: null };
+  context.setAlbumPlaybackQueue(first, paths[0]);
+  const { tracks } = context.state.player.playbackQueue;
+
+  assert.equal(context.isConsecutiveAlbumSuccessor(context.peekNextQueuedTrack()), true);
+  assert.equal(context.isConsecutiveAlbumSuccessor(tracks[2]), false, 'a skipped queue entry is not adjacent');
+  assert.equal(context.isConsecutiveAlbumSuccessor({ ...tracks[1] }), false, 'only the queued entry itself qualifies');
+
+  context.state.player.current = { path: paths[2] };
+  const continuation = context.peekNextQueuedTrack();
+  assert.equal(continuation.path, nextAlbumPath);
+  assert.equal(context.isConsecutiveAlbumSuccessor(continuation), false, 'continuing into another album never qualifies');
+
+  context.state.player.current = null;
+  assert.equal(context.isConsecutiveAlbumSuccessor(tracks[1]), false, 'an unknown current track never qualifies');
+  context.state.player.current = { path: paths[0] };
+  delete context.state.player.playbackQueue.albumRef;
+  assert.equal(context.isConsecutiveAlbumSuccessor(tracks[1]), false, 'a queue without a concrete album never qualifies');
+});
+
 test('Various Artists modal playback preserves album artist in markup and queue payloads', () => {
   const trackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 - Credit Signal 1.mp3';
   const album = {

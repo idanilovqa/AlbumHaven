@@ -428,6 +428,16 @@ function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
   });
 }
 
+// Only the queue owner knows whether `track` follows the current one inside the same album.
+function queuedNextContinuityOptions(track) {
+  return {
+    kind: 'queued-next',
+    startSeconds: 0,
+    consecutiveAlbumBoundary: typeof isConsecutiveAlbumSuccessor === 'function'
+      && isConsecutiveAlbumSuccessor(track),
+  };
+}
+
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -459,7 +469,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       || selectedTrackPath !== String(state.player.current?.path || '')) return;
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
-      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+      : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
@@ -608,7 +618,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
-    await scheduleStreamingContinuity(subsequentTrack);
+    await scheduleStreamingContinuity(subsequentTrack, queuedNextContinuityOptions(subsequentTrack));
   }
   if (typeof promoteWaveformPeaks === 'function') {
     try {
@@ -785,9 +795,7 @@ function setLoopActive(active) {
       ? peekNextQueuedTrack()
       : null;
     if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
-        kind: 'queued-next', startSeconds: 0,
-      });
+      const result = scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack));
       if (typeof observeStreamingFacadeCallback === 'function') {
         observeStreamingFacadeCallback(result, 'loop-disable-continuity-error');
       }

@@ -4,6 +4,10 @@
 
 - The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays and for 30 seconds after it runs out. Seeking while offline plays at once inside the received audio, or jumps and waits at the target. Losing the network no longer stops playback at all: the player keeps its playback claim through the outage, retrying every 2 seconds, and renews it when the network returns, even past the claim's 30-second lease. The server now accepts that renewal until another device has claimed playback, so only another device taking over stops it, and Play after reconnecting or after a long pause no longer shows "Playback unavailable".
 
+## 0.11.12 - 2026-11-15
+
+- Gapless playback: when an album plays on into its next track, the near-silent MP3 decoder padding at the end of one track and the start of the next (MP3s without encoder gapless metadata) is removed, so the transition no longer pauses. Only edges at most 64 ms long, below -40 dBFS and at least 20 dB under the neighbouring audio are trimmed; seeks, loops, skips and moves into another album keep every sample. Web and Android behave the same.
+
 ## 0.11.11 - 2026-11-15
 
 - Android Sandbox app: Update offers the build each sandbox serves. One waiting build installs at once, switching to its sandbox (and signing in there) when it belongs to another; two or more open a build sheet. An older build is rebuilt under a newer version code by the owner's one-tap rebuild, so no uninstall is needed. Sandbox promotions now name their sandbox, branch and label; a `test_build` pull request names its sandbox with one `sandbox<N>` label. The Stable app is unchanged.

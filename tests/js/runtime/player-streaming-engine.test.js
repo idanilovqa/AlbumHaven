@@ -3002,6 +3002,38 @@ test('fresh playback keeps queued-next decoding behind one buffered second of th
   }]);
 });
 
+test('a queued successor tells the worklet whether it is the next track of the same album', async () => {
+  const harness = createEngineHarness();
+  const currentTrack = makeTrack('album-01.flac');
+  const queuedTrack = makeTrack('album-02.flac');
+  await harness.api.start(currentTrack);
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  receivePcmAndAssertEnqueue(harness, {
+    generation: current.generation,
+    streamId: current.streamId,
+    samples: new Array(48_000 * 2).fill(0.25),
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 12.5,
+  });
+
+  await harness.api.continuity(queuedTrack, { kind: 'queued-next', consecutiveAlbumBoundary: true });
+  const prepared = harness.engine.roles.continuity;
+  await harness.api.continuity(queuedTrack, { kind: 'queued-next', consecutiveAlbumBoundary: false });
+
+  assert.equal(harness.sent('open').length, 2, 'a changed qualification keeps the prepared decoder');
+  assert.strictEqual(harness.engine.roles.continuity, prepared);
+  assert.equal(prepared.continuityOptions.consecutiveAlbumBoundary, false);
+  assert.deepEqual(harness.portMessages('expect-continuity').map(({ active, consecutiveAlbumBoundary }) => ({
+    active, consecutiveAlbumBoundary,
+  })), [
+    { active: true, consecutiveAlbumBoundary: true },
+    { active: true, consecutiveAlbumBoundary: false },
+  ]);
+});
+
 test('zero-start playback also keeps queued-next decoding behind the audible buffer', async () => {
   const harness = createEngineHarness();
   const currentTrack = makeTrack('current-zero.flac');

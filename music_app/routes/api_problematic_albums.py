@@ -368,39 +368,39 @@ def build_problematic_album_detail_payload(
     separate_release_keys = load_separate_release_keys(cfg)
     st["separate_release_keys"] = separate_release_keys
 
-    for album in st.get("albums", []):
-        if str(getattr(album, "key", "") or "") not in requested_keys:
-            continue
-        context = _collect_problematic_album_context(
-            album,
-            file_cache=file_cache,
-            ignored_row_keys=ignored_row_keys,
-            separate_release_keys=separate_release_keys,
-            alias_to_canonical=alias_to_canonical,
-            text_problem_reason=text_problem_reason,
-            artist_alias_problem_reason=artist_alias_problem_reason,
-            year_problem_reason=year_problem_reason,
-            all_track_text_problems_ignored=all_track_text_problems_ignored,
-            all_track_year_problems_ignored=all_track_year_problems_ignored,
-            collect_track_level_problem_reasons=collect_track_level_problem_reasons,
-            build_encoding_repair_preview=build_encoding_repair_preview,
-            collect_track_problem_rows=collect_track_problem_rows,
-            separate_release_candidate=separate_release_candidate,
-            get_album_duplicate_sources=get_album_duplicate_sources,
-            image_dimensions=image_dimensions,
-            poor_art_min_edge=poor_art_min_edge,
-            include_detail_fields=True,
-        )
-        if context is None:
-            return None
-        return _build_problematic_album_detail_payload(
-            album,
-            album_to_dict=album_to_dict,
-            problem_reasons=list(context["problem_reasons"]),
-            repair_preview=dict(context["repair_preview"]),
-            track_problem_rows=list(context["track_problem_rows"]),
-            separate_release_candidate=context["separate_release_candidate"],
-            cover_width=int(context["cover_width"]),
-            cover_height=int(context["cover_height"]),
-        )
-    return None
+    matches = library_album_index(st).albums_with_keys(requested_keys)
+    if not matches:
+        return None
+    album = matches[0]
+    context = _collect_problematic_album_context(
+        album,
+        file_cache=file_cache,
+        ignored_row_keys=ignored_row_keys,
+        separate_release_keys=separate_release_keys,
+        alias_to_canonical=alias_to_canonical,
+        text_problem_reason=text_problem_reason,
+        artist_alias_problem_reason=artist_alias_problem_reason,
+        year_problem_reason=year_problem_reason,
+        all_track_text_problems_ignored=all_track_text_problems_ignored,
+        all_track_year_problems_ignored=all_track_year_problems_ignored,
+        collect_track_level_problem_reasons=collect_track_level_problem_reasons,
+        build_encoding_repair_preview=build_encoding_repair_preview,
+        collect_track_problem_rows=collect_track_problem_rows,
+        separate_release_candidate=separate_release_candidate,
+        get_album_duplicate_sources=get_album_duplicate_sources,
+        image_dimensions=image_dimensions,
+        poor_art_min_edge=poor_art_min_edge,
+        include_detail_fields=True,
+    )
+    if context is None:
+        return None
+    return _build_problematic_album_detail_payload(
+        album,
+        album_to_dict=album_to_dict,
+        problem_reasons=list(context["problem_reasons"]),
+        repair_preview=dict(context["repair_preview"]),
+        track_problem_rows=list(context["track_problem_rows"]),
+        separate_release_candidate=context["separate_release_candidate"],
+        cover_width=int(context["cover_width"]),
+        cover_height=int(context["cover_height"]),
+    )

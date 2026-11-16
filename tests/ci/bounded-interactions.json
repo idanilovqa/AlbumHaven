@@ -8672,14 +8672,34 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_file_detail:route:GET /utilities/problematic-files/{album_key:path}"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/routes/api_problematic_albums.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/library_album_index.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
-      "workClass": "page",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "membership_rows": 0,
+        "candidate_rows": 12,
+        "sql_statements": 1,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
+      "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query",
@@ -8688,14 +8708,34 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_file_detail_query:route:GET /utilities/problematic-files/detail"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/routes/api_problematic_albums.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/library_album_index.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
-      "workClass": "page",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "membership_rows": 0,
+        "candidate_rows": 12,
+        "sql_statements": 1,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
+      "testIdentity": "test_problematic_file_detail_route_contract_reads_only_the_selected_album_at_production_track_count",
+      "rollback": "Revert fix(problematic) keyed detail lookup and once-per-request alias maps with this contract; that restores the album-list walk and a relation-alias read per matching album."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#utilities_problematic_files",

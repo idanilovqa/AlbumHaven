@@ -73,6 +73,14 @@ class LibraryAlbumIndex:
         matches = self._by_key.get(str(key or "").strip())
         return matches[0] if matches else None
 
+    def albums_with_keys(self, album_keys: Iterable[object]) -> list[object]:
+        """Albums whose key is one of `album_keys`, in published order."""
+        return self._in_list_order(
+            album
+            for key in {str(key or "").strip() for key in album_keys}
+            for album in self._by_key.get(key, ())
+        )
+
     def albums_with_any_track(self, track_paths: Iterable[str]) -> list[object]:
         """Albums holding any of `track_paths`, in published order."""
         return self._in_list_order(

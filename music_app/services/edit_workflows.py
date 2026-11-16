@@ -508,7 +508,9 @@ def _handle_edit_tags_request_after_reservation(
         except (ValueError, OSError, RuntimeError):
             return {"ok": False, "error": "Suggestions changed or could not be verified. Refresh and try again.", "proposal_status": "stale"}, 409
     file_cache = st.get("file_cache", {}) or {}
-    updated_file_cache = dict(file_cache)
+    # Only the edited tracks' entries change; the library cache is never copied.
+    updated_entries: FileCache = {}
+    updated_file_cache = ChainMap(updated_entries, file_cache)
     repair_jobs: list[tuple[str, JsonDict, dict[str, str]]] = []
     skipped_files: list[str] = []
     exception_updates: list[tuple[str, JsonDict, dict[str, str]]] = []
@@ -574,11 +576,11 @@ def _handle_edit_tags_request_after_reservation(
             repair_jobs.append((path, entry, repairs))
 
     if prevalidate_structural_tag_edit is not None and repair_jobs:
-        prospective_file_cache = dict(file_cache)
+        prospective_entries: FileCache = {}
         prospective_changed_paths: set[str] = set()
         prospective_changed_fields: set[str] = set()
         for raw_path, entry, repairs in repair_jobs:
-            prospective_file_cache[raw_path] = update_cache_entry_after_repairs(
+            prospective_entries[raw_path] = update_cache_entry_after_repairs(
                 Path(raw_path),
                 entry,
                 repairs,
@@ -589,7 +591,7 @@ def _handle_edit_tags_request_after_reservation(
             prevalidate_structural_tag_edit(
                 changed_paths=prospective_changed_paths,
                 previous_file_entries=file_cache,
-                updated_file_entries=prospective_file_cache,
+                updated_file_entries=prospective_entries,
                 changed_field_names=prospective_changed_fields,
             )
         except StructuralTagEditDestinationConflict as exc:
@@ -686,7 +688,7 @@ def _handle_edit_tags_request_after_reservation(
         update_cache_entry_after_repairs=update_cache_entry_after_repairs,
         append_log_history=append_log_history,
         log_app_event=log_app_event,
-        updated_file_cache=updated_file_cache,
+        updated_file_cache=updated_entries,
         action_name="Tag edit failed",
         failure_prefix="Failed to edit tags for",
         edit_write_workers=edit_write_workers,
@@ -751,7 +753,7 @@ def _handle_edit_tags_request_after_reservation(
         # Tag readers may omit a removed TALB frame. Keep the request-owned
         # blank in the queued snapshot so runtime and Postgres agree.
         refreshed_entry["album"] = str(repairs.get("album") or "").strip()
-        updated_file_cache[path] = refreshed_entry
+        updated_entries[path] = refreshed_entry
     persisted_exception_updates = {
         path: (
             override_payload
@@ -834,7 +836,7 @@ def _handle_edit_tags_request_after_reservation(
             if isinstance(saved_override, dict)
             else saved_override
         )
-        updated_file_cache[path] = update_cache_entry_after_repairs(
+        updated_entries[path] = update_cache_entry_after_repairs(
             Path(path),
             updated_file_cache.get(path, entry),
             {
@@ -891,8 +893,9 @@ def _handle_edit_tags_request_after_reservation(
             task_id=task_id,
             config=config,
             logger=logger,
-            updated_file_cache=dict(updated_file_cache),
-            previous_file_cache=dict(file_cache),
+            # The finalizer reads only the changed paths' entries.
+            updated_file_cache=dict(updated_entries),
+            previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},
             changed_paths=set(changed_paths),
             requested_track_paths=set(requested_track_paths),
             separate_release_keys=set(separate_release_keys),

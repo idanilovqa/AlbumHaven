@@ -556,6 +556,191 @@ def test_repair_album_route_contract_reads_only_the_repaired_album_at_production
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_a_asgi_routes.py#utilities_repair_album"))
 
 
+class _EditTagsDatabase:
+    """Stands in for every Postgres store the Edit Tags route and its save task
+    reach: each call is one statement and counts the rows it reads or writes."""
+
+    def __init__(self, entries: dict[str, dict[str, object]], album_key: str, album_paths: list[str], counts: OperationCounts):
+        self.entries = {path: dict(entry) for path, entry in entries.items()}
+        self.album_key = album_key
+        self.album_paths = album_paths
+        self.counts = counts
+        self.completed_exception_updates: list[dict[str, object]] = []
+        self.persisted_paths: list[set[str]] = []
+
+    def statement(self, *, read: int = 0, written: int = 0) -> None:
+        self.counts.sql_statements += 1
+        self.counts.returned_rows += read
+        self.counts.affected_rows += written
+
+    # PostgresLibraryBrowseRepository
+    def build_track_file_entries_by_paths(self, paths):
+        found = {path: dict(self.entries[path]) for path in paths if path in self.entries}
+        self.statement(read=len(found))
+        return found
+
+    def build_album_payloads_by_track_paths(self, paths):
+        albums = []
+        if set(paths) & set(self.album_paths):
+            albums.append({"key": self.album_key, "tracks": [{"path": path} for path in self.album_paths]})
+        self.statement(read=sum(len(album["tracks"]) for album in albums))
+        return albums
+
+    # Targeted inventory and structural persistence
+    def commit(self, updated_entries, paths, before_commit) -> None:
+        for path in paths:
+            self.entries[path] = dict(updated_entries[path])
+        if before_commit is not None:
+            before_commit(None)
+        self.persisted_paths.append(set(paths))
+        self.statement(written=len(paths))
+
+    def schedule_cache_updates_save(self, _config, _cache_path, changed_entries, *, baseline_file_cache=None, before_commit=None):
+        from concurrent.futures import Future
+
+        self.commit(changed_entries, set(changed_entries), before_commit)
+        committed = Future()
+        committed.set_result({})
+        return committed
+
+    def validate_structural_tag_edit(self, _config, *, changed_paths, previous_file_entries, updated_file_entries, changed_field_names):
+        assert all(path in previous_file_entries and path in updated_file_entries for path in changed_paths)
+        self.statement(read=len(changed_paths))
+
+    def persist_structural_tag_edit(self, _config, *, changed_paths, updated_file_entries, before_commit=None, **_options):
+        self.commit(updated_file_entries, set(changed_paths), before_commit)
+        return {
+            "inventory_mutation_revision": 1, "destination_album_id": 2, "destination_album_key": "broadcast::tender buttons (demos)",
+            "destination_artist_name": "Broadcast", "cover_inherited_from_structural_edit": True,
+        }
+
+    # PostgresTagEditIntentRepository
+    def intent_repository(self):
+        database = self
+
+        class Intents:
+            def __init__(self, _config):
+                pass
+
+            def intent_lease(self):
+                return self
+
+            def release(self):
+                pass
+
+            def prepare_intent(self, *, library_root_identity, changes):
+                database.statement(written=len(changes))
+                return "intent-edit-tags"
+
+            def mark_files_verified(self, _intent_id):
+                database.statement(written=1)
+
+            def complete(self, _intent_id, *, exception_updates=None, **_kwargs):
+                database.completed_exception_updates.append(dict(exception_updates or {}))
+                database.statement(written=1 + len(exception_updates or {}))
+
+            def complete_in_transaction(self, _connection, intent_id, *, exception_updates=None, **kwargs):
+                self.complete(intent_id, exception_updates=exception_updates, **kwargs)
+
+            def mark_terminal(self, *_args, **_kwargs):
+                database.statement(written=1)
+
+            def mark_recovery_failed(self, *_args, **_kwargs):
+                database.statement(written=1)
+
+        return Intents
+
+
+@pytest.mark.parametrize("edit", ["in-memory-album-move", "postgres-exception", "postgres-album-move"])
+def test_edit_tags_route_contract_reads_only_the_edited_albums_at_production_track_count(
+    library_app, tmp_path, monkeypatch, edit,
+):
+    from music_app.routes import api_wave_a_asgi_routes
+    from music_app.services import edit_state, ignored_repairs, log_history
+    from music_app.services.library_album_index import library_album_index
+    from music_app.services.save_tasks import save_task_result
+
+    select_backend = api_wave_a_asgi_routes.select_runtime_persistence_adapter
+    if edit.startswith("in-memory"):
+        # The in-memory library browse path, as on a file-backed host.
+        monkeypatch.setattr(
+            api_wave_a_asgi_routes, "select_runtime_persistence_adapter",
+            lambda seam_id, config: (
+                SimpleNamespace(seam_id=seam_id, effective_backend="file")
+                if seam_id == "library_browse" else select_backend(seam_id, config)
+            ),
+        )
+    # The Postgres rule-state store holds no ignored repairs.
+    monkeypatch.setattr(ignored_repairs, "load_ignored_repair_keys", lambda _config: set())
+    monkeypatch.setattr(api_wave_a_asgi_routes, "library_root_cache_identity", lambda _config: "contract-root")
+    # The tag writer is media I/O outside this contract; it reports the fields it wrote.
+    monkeypatch.setattr(api_wave_a_asgi_routes, "_apply_repairs_worker", lambda path, repairs: (path, True, sorted(repairs)))
+    real_builder = edit_state.build_albums_from_file_cache
+    builder_counts: list[OperationCounts] = []
+
+    def counted_builder(*args, **kwargs):
+        builder_counts[-1].builder_calls += 1
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(edit_state, "build_albums_from_file_cache", counted_builder)
+
+    def run(track_count: int) -> OperationCounts:
+        album_paths, counts = _repairable_library(library_app, tmp_path / f"{edit}-{track_count}", track_count)
+        builder_counts.append(counts)
+        state = library_app.state.library_state
+        file_cache = state["file_cache"]
+        moved, sibling = album_paths[0], album_paths[1]
+        cover = str(Path(moved).parent / "cover.jpg")
+        for path in album_paths:
+            dict.__getitem__(file_cache, path)["cover_path"] = cover
+        database = _EditTagsDatabase({path: dict.__getitem__(file_cache, path) for path in album_paths}, "broadcast::tender buttons", album_paths, counts)
+        for owner, name, stand_in in (
+            (api_wave_a_asgi_routes, "PostgresLibraryBrowseRepository", lambda _config: database),
+            (api_wave_a_asgi_routes, "PostgresTagEditIntentRepository", database.intent_repository()),
+            (api_wave_a_asgi_routes, "schedule_cache_updates_save_for_config", database.schedule_cache_updates_save),
+            (api_wave_a_asgi_routes, "validate_structural_tag_edit_for_config", database.validate_structural_tag_edit),
+            (api_wave_a_asgi_routes, "persist_structural_tag_edit_for_config", database.persist_structural_tag_edit),
+            (api_wave_a_asgi_routes, "load_separate_release_keys", lambda _config: database.statement() or set()),
+            (log_history, "LogHistoryPostgresAdapter", lambda _config: SimpleNamespace(append=lambda *_a, **_k: database.statement(written=1))),
+        ):
+            monkeypatch.setattr(owner, name, stand_in)
+        update = {"exception_type": "Non-album rarity"} if edit == "postgres-exception" else {"album": "Tender Buttons (Demos)"}
+        payload = {
+            "confirmed": True,
+            "album": {"key": "broadcast::tender buttons", "name": "Tender Buttons", "album_artist": "Broadcast",
+                      "tracks": [{"path": path} for path in album_paths]},
+            "updates": {moved: update},
+        }
+        with count_filesystem_and_media(monkeypatch, counts):
+            status, _headers, body = run_asgi_request(library_app, "POST", "/utilities/edit-tags", json_body=payload)
+        assert status == 200, body
+        result = decode_json(body)
+        assert result["ok"] is True and result["changed_files"] == [{"path": moved, "fields": sorted(update)}]
+        assert save_task_result(result["save_task_id"])["status"] == "completed"
+        # Persisted and published: the store holds the edit, and the live cache
+        # entry and the published albums reflect it.
+        assert database.persisted_paths in ([], [{moved}])
+        file_cache = state["file_cache"]
+        live_entry = dict.__getitem__(file_cache, moved)
+        if edit == "postgres-exception":
+            assert database.completed_exception_updates == [{moved: "Non-album rarity"}]
+            assert live_entry["exception_type"] == "Non-album rarity"
+        else:
+            assert database.persisted_paths == [{moved}] and database.entries[moved]["album"] == "Tender Buttons (Demos)"
+            assert live_entry["album"] == "Tender Buttons (Demos)"
+            index = library_album_index(state)
+            assert [album.key for album in index.albums_with_any_track({moved})] == ["broadcast::tender buttons (demos)"]
+            (source,) = index.albums_with_any_track({sibling})
+            assert source.key == "broadcast::tender buttons" and len(source.tracks) == 11
+        if edit == "postgres-album-move":
+            # The moved track and its former album share that album's cover.
+            assert live_entry["cover_inherited_from_structural_edit"] is True
+            assert dict.__getitem__(file_cache, sibling)["cover_inherited_from_structural_edit"] is True
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags"))
+
+
 class _Rows:
     description = ("rows",)
     rowcount = -1

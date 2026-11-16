@@ -7,6 +7,7 @@ from music_app.services.log_history import HistoryScope, history_scope_for_reque
 
 import inspect
 import logging
+from collections import ChainMap
 from collections.abc import Mapping
 from pathlib import Path
 from threading import Event
@@ -112,7 +113,6 @@ from music_app.services.edit_workflows import (
     handle_edit_tags_request,
     handle_repair_album_request,
 )
-from music_app.services.edit_state import find_album_dicts_by_track_paths
 
 
 router = APIRouter()
@@ -386,7 +386,7 @@ def _find_albums_by_track_paths(
     *,
     library_state: dict[str, object],
 ) -> list[JsonDict]:
-    return find_album_dicts_by_track_paths(list(library_state.get("albums", []) or []), track_paths)
+    return [album_to_dict(album) for album in library_album_index(library_state).albums_with_any_track(track_paths)]
 
 
 def _default_albums_by_track_paths_finder(get_state_provider):
@@ -1234,8 +1234,7 @@ def _postgres_exception_only_edit_state(
         for path in (payload.get("updates") or {})
         if str(path or "").strip()
     }
-    request_state = dict(_library_state(request))
-    runtime_file_cache = dict(request_state.get("file_cache", {}) or {})
+    library_state = _library_state(request)
     repository = PostgresLibraryBrowseRepository(_app_config(request))
     inventory_paths = set(requested_paths)
     if _has_edit_tags_media_write_fields(payload):
@@ -1255,10 +1254,14 @@ def _postgres_exception_only_edit_state(
             "Postgres library inventory could not resolve requested track paths: "
             + ", ".join(sorted(unresolved_paths))
         )
-    for path, selected_entry in selected_file_entries.items():
-        runtime_file_cache[path] = dict(selected_entry)
-    request_state["file_cache"] = runtime_file_cache
-    return request_state
+    # The selected inventory overlays the runtime cache, which is never copied.
+    return {
+        **library_state,
+        "file_cache": ChainMap(
+            {path: dict(entry) for path, entry in selected_file_entries.items()},
+            library_state.get("file_cache") or {},
+        ),
+    }
 
 
 def _postgres_album_finder_for_track_paths(request: Request):
@@ -1837,7 +1840,8 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         _is_selected_postgres_library_browse_request(request)
         and _has_edit_tags_media_write_fields(payload)
     )
-    if needs_postgres_edit_state:
+    if needs_postgres_edit_state or "proposal_ids" in payload:
+        # Request-scoped overlays replace this copy's file cache, never the live one.
         get_state = lambda: dict(library_state)
     if needs_postgres_edit_state and "proposal_ids" not in payload:
         try:
@@ -1945,10 +1949,10 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             if needs_postgres_edit_state:
                 st.update(_postgres_exception_only_edit_state(request, payload))
             previous_entries = st.get("file_cache") or {}
-            st["file_cache"] = {**previous_entries, **{
+            st["file_cache"] = ChainMap({
                 path: {**(previous_entries.get(path) or {}), **entry}
                 for path, entry in entries.items()
-            }}
+            }, previous_entries)
             return verified
 
         handler_options["validate_proposals"] = validate_proposals

@@ -120,6 +120,31 @@ def _affected_album_keys(
     return affected_album_keys
 
 
+def _album_track_paths(albums: list[object]) -> set[str]:
+    return {
+        path
+        for album in albums
+        for track in getattr(album, "tracks", ()) or ()
+        if (path := str(getattr(track, "path", "") or ""))
+    }
+
+
+def affected_album_track_paths(
+    library_state: Mapping[str, object],
+    previous_file_cache: Mapping[str, dict[str, object]],
+    updated_file_cache: Mapping[str, dict[str, object]],
+    changed_paths: set[str],
+    separate_release_keys: set[str],
+) -> set[str]:
+    """The changed paths and every track of the published albums they left or
+    joined, read by track path and release key, never by scanning."""
+    index = library_album_index(library_state)
+    affected_album_keys = _affected_album_keys(previous_file_cache, updated_file_cache, changed_paths, separate_release_keys)
+    return set(changed_paths) | _album_track_paths([
+        *index.albums_with_any_track(changed_paths), *index.albums_of_releases(affected_album_keys),
+    ])
+
+
 def _affected_album_entries(
     index: LibraryAlbumIndex,
     updated_file_cache: Mapping[str, dict[str, object]],
@@ -129,9 +154,7 @@ def _affected_album_entries(
 ) -> dict[str, dict[str, object]]:
     """The entries of every affected album: the given paths plus the tracks the
     published albums of those releases hold, read by key, never by scanning."""
-    candidate_paths = set(paths)
-    for album in index.albums_of_releases(affected_album_keys):
-        candidate_paths.update(str(getattr(track, "path", "") or "") for track in getattr(album, "tracks", ()) or ())
+    candidate_paths = set(paths) | _album_track_paths(index.albums_of_releases(affected_album_keys))
     return {
         path: entry
         for path in sorted(candidate_paths)

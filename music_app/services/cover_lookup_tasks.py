@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from collections.abc import Mapping
-from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -23,7 +22,7 @@ from music_app.services.cover_lookup_notifications import (
     load_cover_lookup_notification_summary_page,
     load_cover_lookup_notifications,
     save_cover_lookup_notifications,
-    upsert_cover_lookup_notifications,
+    upsert_cover_lookup_notification,
 )
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
 
@@ -322,57 +321,34 @@ def _save_cover_lookup_notification_task(
     config: Mapping[str, object] | None = None,
     expected_revision: int | None = None,
 ) -> None:
-    _save_cover_lookup_notification_tasks([(task_payload, expected_revision)], config=config)
-
-
-def _save_cover_lookup_notification_tasks(
-    snapshots: list[tuple[dict[str, object] | None, int | None]],
-    *,
-    config: Mapping[str, object] | None = None,
-) -> None:
-    """Persists task snapshots in one write. A snapshot whose task revision
-    moved on after it was taken is skipped: a newer save owns that row."""
-    if config is None:
+    if isinstance(task_payload, dict) and bool(task_payload.get("internal")):
         return
-    pending: list[tuple[dict[str, object], int]] = []
-    for task_payload, expected_revision in snapshots:
-        if isinstance(task_payload, dict) and bool(task_payload.get("internal")):
-            continue
-        normalized = _normalize_cover_lookup_persisted_task(task_payload)
-        if normalized is None:
-            continue
-        if expected_revision is None:
-            with _COVER_LOOKUP_TASKS_LOCK:
-                expected_revision = _COVER_LOOKUP_TASK_REVISIONS.get(str(normalized.get("id") or ""), 0)
-        pending.append((normalized, expected_revision))
-    if not pending:
+    normalized = _normalize_cover_lookup_persisted_task(task_payload)
+    if normalized is None or config is None:
         return
-
-    def current_snapshots() -> list[tuple[dict[str, object], int]]:
+    task_id = str(normalized.get("id") or "")
+    if expected_revision is None:
         with _COVER_LOOKUP_TASKS_LOCK:
-            return [
-                (task, revision)
-                for task, revision in pending
-                if _COVER_LOOKUP_TASK_REVISIONS.get(str(task.get("id") or ""), 0) == revision
-            ]
-
+            expected_revision = _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
-        task_ids = sorted({str(task.get("id") or "") for task, _revision in pending})
         with _COVER_LOOKUP_TASKS_LOCK:
-            persistence_locks = [_COVER_LOOKUP_PERSISTENCE_LOCKS.setdefault(task_id, Lock()) for task_id in task_ids]
-        # Sorted acquisition: a concurrent single-task save holds at most one.
-        with ExitStack() as held:
-            for persistence_lock in persistence_locks:
-                held.enter_context(persistence_lock)
-            upsert_cover_lookup_notifications(config, current_snapshots())
+            persistence_lock = _COVER_LOOKUP_PERSISTENCE_LOCKS.setdefault(task_id, Lock())
+        with persistence_lock:
+            with _COVER_LOOKUP_TASKS_LOCK:
+                if _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) != expected_revision:
+                    return
+            upsert_cover_lookup_notification(
+                config,
+                normalized,
+                persistence_revision=expected_revision,
+            )
         return
     persisted = load_cover_lookup_notifications(config)
-    current = current_snapshots()
-    if not current:
-        return
-    saved_ids = {str(task.get("id") or "") for task, _revision in current}
-    next_tasks = [item for item in persisted if str(item.get("id") or "") not in saved_ids]
-    next_tasks.extend(task for task, _revision in current)
+    with _COVER_LOOKUP_TASKS_LOCK:
+        if _COVER_LOOKUP_TASK_REVISIONS.get(task_id, 0) != expected_revision:
+            return
+    next_tasks = [item for item in persisted if str(item.get("id") or "") != task_id]
+    next_tasks.append(normalized)
     next_tasks.sort(key=_sort_cover_lookup_task_key, reverse=True)
     save_cover_lookup_notifications(config, next_tasks)
 
@@ -513,15 +489,14 @@ def list_cover_lookup_task_summaries(
     )
     if config is not None:
         now = datetime.now(timezone.utc)
-        recovered_items = [_interrupt_stale_cover_lookup_task(item, now=now) for item in persisted_items]
-        upsert_cover_lookup_notifications(
-            dict(config),
-            [
-                (recovered, 1)
-                for item, recovered in zip(persisted_items, recovered_items)
-                if recovered is not item
-            ],
-        )
+        recovered_items = []
+        for item in persisted_items:
+            recovered = _interrupt_stale_cover_lookup_task(item, now=now)
+            if recovered is not item:
+                upsert_cover_lookup_notification(
+                    dict(config), recovered, persistence_revision=1
+                )
+            recovered_items.append(recovered)
         persisted_items = recovered_items
     persisted_by_id = {
         str(item.get("id") or "").strip(): item
@@ -601,7 +576,12 @@ def _reconcile_stale_cover_lookup_tasks(
                 _COVER_LOOKUP_TASK_REVISIONS[task_id] = task_revision
                 interrupted_snapshots.append((dict(task), task_revision))
 
-        _save_cover_lookup_notification_tasks(interrupted_snapshots, config=config)
+        for task_snapshot, task_revision in interrupted_snapshots:
+            _save_cover_lookup_notification_task(
+                task_snapshot,
+                config=config,
+                expected_revision=task_revision,
+            )
 
         interrupt_stale_cover_lookup_notifications(
             dict(config),
@@ -1065,10 +1045,9 @@ def mark_cover_lookup_notifications_action_taken_for_track_paths(
     requested_paths = _cover_lookup_task_track_path_keys({"track_paths": track_paths})
     if not requested_paths:
         return []
-    persisted_items = load_cover_lookup_notifications(config)
     tasks_by_id = {
         str(task.get("id") or "").strip(): task
-        for task in persisted_items
+        for task in load_cover_lookup_notifications(config)
         if str(task.get("id") or "").strip()
     }
     with _COVER_LOOKUP_TASKS_LOCK:
@@ -1087,11 +1066,15 @@ def mark_cover_lookup_notifications_action_taken_for_track_paths(
     ]
     if any(not is_terminal_cover_lookup_task(task) for task in matching_tasks):
         return []
-    return _mark_cover_lookup_tasks_action_taken(
-        [str(task.get("id") or "") for task in matching_tasks],
-        config=config,
-        persisted_items=persisted_items,
-    )
+    marked = []
+    for task in matching_tasks:
+        updated = mark_cover_lookup_task_notification_action_taken(
+            str(task.get("id") or ""),
+            config=config,
+        )
+        if updated is not None:
+            marked.append(updated)
+    return marked
 
 
 def mark_cover_lookup_task_notification_action_taken(
@@ -1099,38 +1082,9 @@ def mark_cover_lookup_task_notification_action_taken(
     *,
     config: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
-    marked = _mark_cover_lookup_tasks_action_taken([task_id], config=config)
-    return marked[0] if marked else None
-
-
-def _mark_cover_lookup_tasks_action_taken(
-    task_ids: list[str],
-    *,
-    config: Mapping[str, object] | None,
-    persisted_items: list[dict[str, object]] | None = None,
-) -> list[dict[str, object]]:
-    """Marks terminal tasks as acted on, reading and writing notifications once."""
-    normalized_ids = [task_id for task_id in (str(value or "").strip() for value in task_ids) if task_id]
-    if not normalized_ids:
-        return []
-    if persisted_items is None:
-        persisted_items = load_cover_lookup_notifications(config) if config is not None else []
-    persisted_by_id: dict[str, dict[str, object]] = {}
-    for item in persisted_items:
-        persisted_by_id.setdefault(str(item.get("id") or "").strip(), item)
-    marked: list[tuple[dict[str, object], int]] = []
-    for normalized_task_id in normalized_ids:
-        merged = _action_taken_snapshot(normalized_task_id, persisted_by_id.get(normalized_task_id))
-        if merged is not None:
-            marked.append(merged)
-    _save_cover_lookup_notification_tasks(marked, config=config)
-    return [task for task, _revision in marked]
-
-
-def _action_taken_snapshot(
-    normalized_task_id: str,
-    persisted_match: dict[str, object] | None,
-) -> tuple[dict[str, object], int] | None:
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        return None
     updated_task: dict[str, object] | None = None
     task_revision = 0
     with _COVER_LOOKUP_TASKS_LOCK:
@@ -1147,6 +1101,11 @@ def _action_taken_snapshot(
             updated_task = dict(task)
             task_revision = _COVER_LOOKUP_TASK_REVISIONS.get(normalized_task_id, 0) + 1
             _COVER_LOOKUP_TASK_REVISIONS[normalized_task_id] = task_revision
+    persisted_items = load_cover_lookup_notifications(config) if config is not None else []
+    persisted_match = next(
+        (item for item in persisted_items if str(item.get("id") or "").strip() == normalized_task_id),
+        None,
+    )
     source_task = updated_task or persisted_match
     if source_task is None:
         return None
@@ -1163,7 +1122,12 @@ def _action_taken_snapshot(
         with _COVER_LOOKUP_TASKS_LOCK:
             task_revision = _COVER_LOOKUP_TASK_REVISIONS.get(normalized_task_id, 0) + 1
             _COVER_LOOKUP_TASK_REVISIONS[normalized_task_id] = task_revision
-    return merged, task_revision
+    _save_cover_lookup_notification_task(
+        merged,
+        config=config,
+        expected_revision=task_revision,
+    )
+    return merged
 
 
 def finalize_cover_lookup_task_canceled(

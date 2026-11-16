@@ -9386,7 +9386,7 @@
     "expectedContracts": [
       "musicbrainz-series-album-details-block"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",
@@ -9401,7 +9401,7 @@
     "expectedContracts": [
       "musicbrainz-series-album-details-block"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",
@@ -9416,7 +9416,7 @@
     "expectedContracts": [
       "musicbrainz-series-sidebar-button"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",

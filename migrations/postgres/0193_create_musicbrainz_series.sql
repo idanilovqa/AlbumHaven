@@ -21,8 +21,10 @@ create table if not exists integration.musicbrainz_series (
     case
       when coalesce(series_type, '') ~* '(award|ceremony|event|tour)' then 'featured_in'
       when member_count >= 50 then 'featured_in'
-      -- List-like names: "Best" alone or "Best of <year>", never "Best of Bowie".
-      when name ~* '(1001|\mgreatest\M|\mbest\M(?!\s+of\s)|\mbest\s+of\s+[0-9]{4}\M|\mtop\s+[0-9]+|\messential|\maward|hall of fame|\mbillboard\M|\mcharts?\M|\mrewind\M|\myear[-‐ ]end\M|\mof the year\M|\mreaders[''’]?\s+poll\M|\mcritics?\M)' then 'featured_in'
+      -- List-like names (owner 2026-11-15): lists, rankings, charts, certifications and
+      -- colour-vinyl pressings. "Best" alone or "Best of <year>", never "Best of Bowie";
+      -- "Gold" only as a certification or a vinyl colour.
+      when name ~* '(1001|\mgreatest\M|\mbest\M(?!\s+of\s)|\mbest\s+of\s+[0-9]{4}\M|\messential|\maward|hall of fame|\mbillboard\M|\mcharts?\M|\mrewind\M|\myear[-‐ ]end\M|\mof the year\M|\mreaders[''’]?\s+poll\M|\mcritics?\M|\malb(um|ums|en)\s+des\s+jahres\M|\malbums?\s+de\s+l[''’]\s*ann(é|e)e\M|\mtop\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|hundred)\M|\m([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|hundred)\s+(best|worst|favou?rites?|loudest)\M|\mhonou?rable\s+mentions?\M|\mdisques\s+(d[''’]\s*|de\s+)(or|platine|diamant)\M|\mcertifications?\M|\mcertified\s+((double|triple|quadruple)\s+)?(gold|platinum|diamond)\M|\m(gold|platinum|diamond)\s+(albums|records|discs|certified|certifications?)\M|\m(gold|silver|clear|pink|red|blue|black|white|green|yellow|orange|purple|splatter|marbled|grey|gray|transparent|translucent|opaque|colou?red)(\s+[a-z]+)?\s+vinyl\M)' then 'featured_in'
       else 'series'
     end
   ) stored,

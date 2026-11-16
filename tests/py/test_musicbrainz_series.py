@@ -99,13 +99,24 @@ def _list_name_pattern():
     "Justin Stranzl: Best of 1999", "Dave Marsh: Top 40 Albums of 1964", "Essential Jazz", "Juno Award winners",
     "Rock and Roll Hall of Fame", "Billboard 200: 2022-02-12", "UK Albums Chart", "Official Charts: 1985",
     "The Wire: 2005 Rewind", "Year-End Albums 2019", "Year End Top Albums", "Album of the Year",
-    "Readers' Poll 2010", "Readers\u2019 Poll", "Village Voice Critics", "Critic's Choice"])
+    "Readers' Poll 2010", "Readers\u2019 Poll", "Village Voice Critics", "Critic's Choice",
+    "plattentests.de \u2013 Album des Jahres 2025", "Musikexpress: Alben des Jahres", "Gala de l'ADISQ: Album de l'année",
+    "Album de l\u2019ann\u00e9e", "Criminal Records Jameson: Top Ten Albums of 2009", "Z-Trip's Top Nine 80s Records",
+    "Top 10 of the decade", "Q Magazine: 20 Loudest Albums of All Time", "Westword: The Ten Worst Concept Albums",
+    "Stereogum Readers\u2019 10 Favorite Albums of 2018", "Angry Robot: 10 Favourite 80s Albums",
+    "TheNeedleDrop: Honorable Mentions of 2023", "Honourable Mention", "Albums \u201cdisques d\u2019or\u201d",
+    "Albums \u201cdisques de platine\u201d", "disques d'diamant", "RIAA certifications", "Platinum certified albums",
+    "Music Canada Certified Double Diamond Albums", "certified Gold", "Gold Albums of Sweden", "Gold Vinyl",
+    "Clear Vinyl", "Pink Vinyl", "Purple Translucent Vinyl", "Red Opaque Vinyl", "Splatter vinyl series"])
 def test_a_list_or_chart_name_is_featured_in(name):
     assert _list_name_pattern().search(name)
 
 
 @pytest.mark.parametrize("name", [
     "Best of Bowie", "Colossus Projects", "Chartreuse Sessions", "The Rewinder Tapes", "Topographic Oceans",
-    "The Bestiary Saga", "King Crimson Collectors' Club", "Billboards and Bricks", "Pixar soundtracks"])
+    "Over the Top Saga", "The Bestiary Saga", "King Crimson Collectors' Club", "Billboards and Bricks",
+    "Pixar soundtracks", "Gold \u2013 The Albums", "Spandau Ballet: Gold", "Golden Earring Remasters",
+    "Spider-Man 2", "PostWax Year 1", "The 7 Samurai Trilogy", "Tuonen Tyt\u00e4r II", "Album Series",
+    "Vinyl Classics", "Red Hot Chili Peppers Archive"])
 def test_a_band_series_or_a_lookalike_word_is_not(name):
     assert not _list_name_pattern().search(name)

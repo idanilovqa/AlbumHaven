@@ -28,10 +28,13 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
 });
 
 test('shared page headers keep Back before the title on desktop', () => {
-  assert.match(
-    mobileLayoutCss,
-    /@media \(min-width: 901px\)[\s\S]*?\.page-gallery-bar__back\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;[^}]*\}[\s\S]*?\.page-gallery-bar \.gallery-bar__title\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*\}/,
-  );
+  // The desktop page-header composition moved to gallery-main.css (a943cda48): Back sits in the
+  // leading 40px column and the title and summary move to column 2.
+  const galleryMainCss = fs.readFileSync(path.join(__dirname, '../../music_app/static/css/gallery-main.css'), 'utf8');
+  const desktop = galleryMainCss.match(/@media \(min-width: 901px\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(desktop, /\.gallery-bar\.page-gallery-bar:has\(> \.page-gallery-bar__back\)\s*\{[^}]*grid-template-columns:\s*40px minmax\(0, 1fr\) auto/);
+  assert.match(desktop, /\.page-gallery-bar__back\s*\{[^}]*position:\s*absolute;[^}]*left:\s*0/);
+  assert.match(desktop, /\.page-gallery-bar:has\(> \.page-gallery-bar__back\) :is\(\.gallery-bar__title, \.gallery-bar__summary\)\s*\{[^}]*grid-column:\s*2/);
 });
 
 test('Admin navigation offers My account instead of unavailable placeholders', () => {
@@ -76,7 +79,7 @@ test('Account identity selector belongs to its account content, not duplicate mo
   const source = readProjectFile('tests', 'e2e', 'phase7', 'poms', 'authPages.js');
   const assignment = source.match(/this\.signedInIdentity\s*=\s*([^;]+);/)?.[1];
   assert.equal(assignment, `page.locator('.account-main [data-gallery-bar-instance="page"] .gallery-bar__summary')`);
-  assert.match(accountTemplate, /<section class="account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
+  assert.match(accountTemplate, /<section class="settings-main account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
   // No first()/nth()/visibility fallback: duplicate identities within the owning
   // account surface must still fail Playwright's strict locator assertions.
   assert.doesNotMatch(assignment, /first\(|nth\(|:visible|filter\(/);
@@ -90,4 +93,10 @@ test('disabled shared buttons are visibly inactive and pointer-hover checkbox ou
   assert.ok(checkboxHover);
   assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
   assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);
+});
+
+test('the Password page uses the shared Settings page frame, not its own insets', () => {
+  // Owner 2026-11-15: "Passwrod page, for example has too much padding on its own, and header is completely askeed."
+  const accountCss = fs.readFileSync(path.join(__dirname, '../../music_app/static/css/account.css'), 'utf8');
+  assert.doesNotMatch(accountCss, /\.account-main\s*\{[^}]*padding/);
 });

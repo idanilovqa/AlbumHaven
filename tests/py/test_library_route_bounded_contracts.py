@@ -989,3 +989,61 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
 
     measure_scale_pair(run=run, **_registered(interaction_id))
 
+
+@pytest.mark.parametrize("interaction_id", [
+    "py:routes/api_read_asgi_routes.py#utilities_problematic_files",
+    "py:services/problematic_albums.py#_run_problematic_albums_prewarm",
+])
+def test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count(
+    library_app, tmp_path, monkeypatch, interaction_id,
+):
+    """The in-memory Problematic Files summary covers every album: one
+    deliberate whole-library pass per published library. Repeated requests and
+    prewarm triggers coalesce into that one pass and then converge on its
+    cached payload, however many arrive."""
+    from music_app.services import problematic_albums
+
+    builds = [0]
+    build = problematic_albums.build_problematic_albums_read_payload
+
+    def counted_build(**kwargs):
+        builds[0] += 1
+        return build(**kwargs)
+
+    monkeypatch.setattr(problematic_albums, "build_problematic_albums_read_payload", counted_build)
+    # The Postgres rule-state store holds no ignored repairs for this library.
+    monkeypatch.setattr(problematic_albums, "load_ignored_repair_keys", lambda _config: set())
+    submitted: list = []
+    monkeypatch.setattr(
+        problematic_albums, "_PROBLEMATIC_ALBUMS_PREWARM_EXECUTOR",
+        SimpleNamespace(submit=lambda function, *args, **kwargs: submitted.append((function, args, kwargs))),
+    )
+    config, logger = library_app.state.config, library_app.state.logger
+
+    def run(trigger_count: int) -> OperationCounts:
+        builds[0] = 0
+        submitted.clear()
+        # A freshly published library of 120 tracks in 28 albums.
+        _album_paths, counts = _repairable_library(library_app, tmp_path / f"library-{trigger_count}", 120)
+        state = library_app.state.library_state
+        state.update({"scan_in_progress": False, "covers_in_progress": False})
+        for _wave in range(2):
+            if interaction_id.endswith("#utilities_problematic_files"):
+                for _request in range(trigger_count):
+                    status, _headers, body = run_asgi_request(library_app, "GET", "/utilities/problematic-files")
+                    assert status == 200, body
+                    assert "broadcast::tender buttons" in {item["key"] for item in decode_json(body)["items"]}
+            else:
+                queued = [
+                    problematic_albums.queue_problematic_albums_prewarm(library_state=state, config=config, logger=logger)
+                    for _trigger in range(trigger_count)
+                ]
+                counts.queue_claims += sum(queued)
+                while submitted:
+                    function, args, kwargs = submitted.pop(0)
+                    function(*args, **kwargs)
+                assert problematic_albums.has_cached_problematic_albums_payload(state, config=config)
+        counts.builder_calls = builds[0]
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction_id))

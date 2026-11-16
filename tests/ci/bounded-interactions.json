@@ -8744,14 +8744,32 @@
         "py:music_app/routes/api_read_asgi_routes.py#utilities_problematic_files:route:GET /utilities/problematic-files"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/routes/api_problematic_albums.py",
+        "music_app/services/problematic_albums.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 1,
+        "membership_rows": 0,
+        "candidate_rows": 28
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
+      "testIdentity": "test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#view_data",
@@ -12968,14 +12986,32 @@
         "py:music_app/services/problematic_albums.py#_run_problematic_albums_prewarm:background:executor"
       ],
       "owners": [
-        "music_app/services/problematic_albums.py"
+        "music_app/services/problematic_albums.py",
+        "music_app/routes/api_problematic_albums.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "builder_calls": 1,
+        "queue_claims": 1,
+        "membership_rows": 0,
+        "candidate_rows": 28
+      },
+      "growth": {
+        "metric": "builder_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
+      "testIdentity": "test_problematic_files_summary_contract_builds_once_per_library_publication_at_production_trigger_count",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/relation_projection_postgres.py#_cancel_active_connection_on_request.<locals>.cancel_active_connection",

@@ -528,8 +528,9 @@ def _library_collection(node: ast.AST, is_state, aliases: dict[str, str], collec
             node = node.args[0]
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in VIEW_METHODS and not node.args:
             node = node.func.value
-        elif isinstance(node, ast.BoolOp):
-            found = [_library_collection(value, is_state, aliases, collections) for value in node.values]
+        elif isinstance(node, (ast.BoolOp, ast.IfExp)):
+            values = node.values if isinstance(node, ast.BoolOp) else [node.body, node.orelse]
+            found = [_library_collection(value, is_state, aliases, collections) for value in values]
             return next((item for item in found if item), None)
         else:
             break

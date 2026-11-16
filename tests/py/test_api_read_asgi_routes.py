@@ -9,6 +9,7 @@ from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
+from starlette.concurrency import run_in_threadpool
 from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import decode_json as _decode_json
@@ -3350,7 +3351,7 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
         worker_calls.append(function)
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     def fail_hydrate(*_args, **_kwargs):
         raise AssertionError("Postgres album-details should not hydrate file-backed library state first")
@@ -3417,7 +3418,7 @@ def test_asgi_album_details_finds_the_playing_album_by_its_track_file(
     built: list[int] = []
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeSnapshotRepository:
         def __init__(self, _config):
@@ -3528,7 +3529,7 @@ def test_asgi_album_details_resolves_a_stale_identity_through_shared_lineage(
     detail_calls = []
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeLineageRepository:
         def __init__(self, config):
@@ -3608,7 +3609,7 @@ def test_asgi_album_details_accepts_matching_current_id_and_key_before_lineage(
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeBrowseRepository:
         def __init__(self, _config):
@@ -3672,7 +3673,7 @@ def test_asgi_album_details_resolves_lineage_first_for_a_known_stale_client_iden
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     choices = [
         {
@@ -3759,7 +3760,7 @@ def test_asgi_album_details_uses_valid_key_when_numeric_id_is_stale(
     detail_calls = []
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeBrowseRepository:
         def __init__(self, _config):
@@ -3831,7 +3832,7 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     choices = [
         {

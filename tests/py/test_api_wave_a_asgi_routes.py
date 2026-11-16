@@ -7,6 +7,7 @@ from threading import Event, Timer
 from types import SimpleNamespace
 
 import pytest
+from starlette.concurrency import run_in_threadpool
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import configure_test_bootstrap_actor
@@ -448,7 +449,7 @@ def test_asgi_library_settings_import_album_ratings_offloads_postgres_work(
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
         threadpool_calls.append((function, args, kwargs))
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     monkeypatch.setattr(
         asgi_routes,

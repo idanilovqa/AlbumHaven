@@ -79,7 +79,7 @@ test('album-only empty state requires its predetermined reasons and excludes vis
   const expected = problemDetailExpectation(response);
   assert.doesNotThrow(() => expectProblematicRenderedIdentity(actual(expected), response, expected, false));
   assert.throws(() => expectProblematicRenderedIdentity(actual(expected), response, expected, true));
-  for (const change of [{ emptyText: '' }, { albumReasons: [] }, { visibleRenderedPaths: ['/wrong'] }]) {
+  for (const change of [{ emptyText: 'No per-track problems found.' }, { albumReasons: [] }, { visibleRenderedPaths: ['/wrong'] }]) {
     assert.throws(() => expectProblematicRenderedIdentity({ ...actual(expected), ...change }, response, expected, false));
   }
 });

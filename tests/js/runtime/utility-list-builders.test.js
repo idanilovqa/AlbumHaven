@@ -7298,7 +7298,11 @@ test('album-only detected problems retain their disabled exception action withou
 
   assert.match(html, /Undecoded characters \("\?" in Album\)/);
   assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS/);
-  assert.match(html, /Only album-level problems found\. No per-track problems\./);
+  assert.doesNotMatch(html, /No per-track problems|Detected problems/);
+  context.state.utility.duplicateCopyRemovalPending = { albumKey: 'neal morse::problem-album' };
+  assert.match(context.buildProblematicAlbumDetail(null), /A copy of this album is going to be deleted\. You can browse other entries\./);
+  context.state.utility.duplicateCopyRemovalPending = null;
+  assert.match(context.buildProblematicAlbumDetail(null), /Select an album to inspect/);
   assert.doesNotMatch(html, /problematic-track-problems|utility-detected-table/);
   assert.match(html, /data-open-exclusion-confirm="1" disabled aria-disabled="true"/);
   assert.match(html, />Create Exception</);

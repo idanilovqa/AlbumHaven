@@ -94,13 +94,14 @@ export class UtilityProblematicFilesActions {
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailOpenInExplorerButton);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailEditTagsButton);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailDiscogsButton);
-    await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detectedProblemsHeading);
     if (await this.utilityProblematicFilesTab.trackProblemsTable.count()) {
+      await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detectedProblemsHeading);
       await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.trackProblemsTable);
       const headers = await this.utilityProblematicFilesTab.trackProblemHeaders.allTextContents();
       assert.deepEqual(headers.map(text => text.trim()), ['Track / file', 'Problems', 'Suggested edits']);
     } else {
-      await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.noTrackProblems);
+      // Owner 2026-11-16: an album without per-track problems shows no Detected problems section at all.
+      await expect(this.utilityProblematicFilesTab.detectedProblemsHeading).toHaveCount(0);
     }
   }
 

@@ -130,6 +130,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
+  if (selectedProblematicMissing && state.utility.duplicateCopyRemovalPending) {
+    // Owner 2026-11-16: nothing is selected while a duplicate copy is deleted; the loader holds the detail pane.
+    renderTree('');
+    els.detail.innerHTML = buildProblematicAlbumDetail(null);
+    return;
+  }
+
   if (
     selectedProblematicMissing
     && state.utility.selectedProblematicKey

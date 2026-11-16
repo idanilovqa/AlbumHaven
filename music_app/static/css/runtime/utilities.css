@@ -902,6 +902,8 @@
 .utility-empty-state.compact {
   min-height: 80px;
 }
+.utility-empty-state.utility-duplicate-removal-pending { flex-direction: column; gap: 4px; }
+.utility-duplicate-removal-pending .repair-progress-spinner { width: 32px; height: 32px; margin: 0 0 8px; border-width: 3px; }
 .utility-empty-state[hidden] {
   display: none;
 }
@@ -2094,16 +2096,13 @@
 .utility-problem-suggestion { user-select: none; touch-action: pan-y; }
 #utility-modal .utility-detail-header { grid-template-columns: 88px minmax(0, 1fr) auto; }
 .utility-detail-summary { min-width: 0; overflow-wrap: anywhere; }
-.utility-detail-header > .utility-detail-cover { grid-column: 1; grid-row: 1 / span 2; }
+.utility-detail-header > .utility-detail-cover { grid-column: 1; grid-row: 1; }
 .utility-detail-header > .utility-detail-summary { grid-column: 2; grid-row: 1; }
-.utility-detail-service-actions { grid-column: 3; grid-row: 1; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
-.utility-detail-service-actions .action-button { border: 0; background: transparent; box-shadow: none; }
-.utility-detail-context-actions { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: start; gap: 8px; margin: 0; }
+.utility-detail-header > .utility-detail-header-actions { grid-column: 3; grid-row: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.utility-detail-service-actions,
+.utility-detail-context-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 @media (max-width: 760px) {
   #utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"] .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr) auto; }
-  .utility-detail-header > .utility-detail-cover { grid-column: 1; grid-row: 1 / span 2; }
-  .utility-detail-header > .utility-detail-context-actions { grid-column: 2 / -1; grid-row: 2; }
-  .utility-detail-header > .utility-detail-summary { grid-column: 2; grid-row: 1; }
 }
 
 .utility-rule-problem-labels { flex-wrap: wrap; }.utility-rule-target { display: flex; align-items: center; gap: 10px; min-width: 0; }

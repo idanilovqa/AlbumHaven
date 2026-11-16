@@ -482,8 +482,7 @@ function buildDetectedProblemsHtml(album) {
   const selected = Object.values(state.utility.proposalSelections || {}).some(Boolean);
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
-    <h4 class="utility-detail-section-title">Detected problems</h4>
-    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${table ? `<h4 class="utility-detail-section-title">Detected problems</h4><div class="utility-detected-table">${table}</div>` : ''}
     ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', variant: 'primary', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
@@ -583,6 +582,12 @@ function buildDuplicateCopyReviewHtml(album, idPrefix = 'problematic-duplicate-r
 
 function buildProblematicAlbumDetail(album) {
   if (!album) {
+    if (state.utility.duplicateCopyRemovalPending) {
+      return `<div class="utility-empty-state utility-duplicate-removal-pending" role="status" aria-live="polite">
+        <div class="repair-progress-spinner" aria-hidden="true"></div>
+        <div>A copy of this album is going to be deleted. You can browse other entries.</div>
+      </div>`;
+    }
     return '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
   }
   const reasons = Array.isArray(album.problem_reasons) ? album.problem_reasons : [];
@@ -630,15 +635,17 @@ function buildProblematicAlbumDetail(album) {
           </button>
         ` : ''}
       </div>
+      <div class="utility-detail-header-actions">
         <div class="utility-detail-service-actions">
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', presentation: 'bare', className: 'ui-external-link--discogs', iconClass: 'ui-external-link__icon', attributes: { 'data-find-on-discogs': '1' } })}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on MusicBrainz', title: 'Find on MusicBrainz', presentation: 'bare', className: 'ui-external-link--musicbrainz', iconClass: 'ui-external-link__icon', attributes: { 'data-open-musicbrainz-url': buildMusicBrainzReleaseSearchUrl(album) } })}
         </div>
         <div class="utility-detail-context-actions">
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
-          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
-          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', presentation: 'bare', className: 'track-modal-folder album-details-header__action', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
+          ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', presentation: 'bare', className: 'album-details-header__action', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
+          ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', presentation: 'bare', className: 'track-modal-edit-tags album-details-header__action', iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
         </div>
+      </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}

@@ -99,7 +99,7 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
     const problems = new UtilityProblematicFilesTab(page, testInfo);
     await new UtilityProblematicFilesActions(problems).selectAlbumByTitle('Boundary Arrival');
     await expect(problems.detailTitle).toContainText('Boundary Arrival');
-    await expect(problems.detectedProblemsHeading).toBeVisible();
+    await expect(problems.detectedProblemsHeading).toHaveCount(0);
     await expect(problems.albumProblemPills.first()).toBeVisible();
     await expect(problems.excludeProblemButton).toBeVisible();
     await expectControl(problems.detailEditTagsButton, allowed.has('edit'));

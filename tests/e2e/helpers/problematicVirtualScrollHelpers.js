@@ -21,7 +21,7 @@ export function problemDetailExpectation(payload) {
     trackPaths: (payload.tracks || []).map(track => String(track.path || '')),
     renderedPaths: [...paths],
     albumReasons: albumRows.map(row => row.reason === 'Missing year' ? row.reason : row.display_reason || row.reason),
-    emptyText: albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.',
+    emptyText: '',
   };
 }
 

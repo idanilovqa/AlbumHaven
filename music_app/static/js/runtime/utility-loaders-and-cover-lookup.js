@@ -595,6 +595,11 @@ async function performDuplicateCopyRemoval(album, copy) {
       danger: true,
     });
     if (!confirmed) return false;
+    // Owner 2026-11-16: the album leaves the list at once and a loader takes its place while the copy is deleted.
+    state.utility.problematicFiles = (state.utility.problematicFiles || []).filter((item) => String(item?.key || '') !== albumKey);
+    if (String(state.utility.selectedProblematicKey || '') === albumKey) state.utility.selectedProblematicKey = '';
+    state.utility.duplicateCopyRemovalPending = { albumKey };
+    if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
     const response = await fetch('/utilities/problematic-files/duplicate-copy-remove', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -609,13 +614,9 @@ async function performDuplicateCopyRemoval(album, copy) {
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Unable to delete the duplicate copy.');
     }
+    state.utility.duplicateCopyRemovalPending = null;
     await loadProblematicFiles(true);
-    // Owner 2026-11-16: a resolved album leaves the list and its details give way to the empty state.
-    const stillListed = (state.utility.problematicFiles || []).some((item) => String(item?.key || '') === albumKey);
-    if (!stillListed && String(state.utility.selectedProblematicKey || '') === albumKey) {
-      state.utility.selectedProblematicKey = '';
-      if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
-    }
+    if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
     showToast(
       payload.cleanup_pending ? payload.message : 'Duplicate copy deleted.',
       payload.cleanup_pending ? 'error' : 'success',
@@ -627,6 +628,12 @@ async function performDuplicateCopyRemoval(album, copy) {
   } catch (error) {
     console.error('[AlbumHaven][Utilities] Failed to delete duplicate copy.', error);
     showToast(error.message || 'Unable to delete the duplicate copy.', 'error', 4000);
+    if (state.utility.duplicateCopyRemovalPending) {
+      // The album comes back to the list when the deletion fails.
+      state.utility.duplicateCopyRemovalPending = null;
+      await Promise.resolve(loadProblematicFiles(true)).catch(() => {});
+      if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
+    }
     return false;
   } finally {
     duplicateCopyRemovalBusy = false;

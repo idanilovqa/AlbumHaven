@@ -38,9 +38,6 @@ export class UtilityProblematicFilesTab extends BasePage {
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');
-    this.noTrackProblems = page.locator('#utility-problematic-detail .utility-detail-meta').filter({
-      hasText: /^(Only album-level problems found\. )?No per-track problems( found| match the selected filters)?\.$/u,
-    });
     this.suggestedEditChoices = page.locator('#utility-problematic-detail [data-problem-suggestion-id]');
     this.suggestedEditRows = this.suggestedEditChoices;
     this.suggestedEditsApplyButton = page.locator('#utility-problematic-detail [data-apply-problem-suggestions]');

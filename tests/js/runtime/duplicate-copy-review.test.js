@@ -420,6 +420,7 @@ test('authorized Delete previews, confirms exact whole folder, removes, and refr
   const confirmations = [];
   const refreshes = [];
   const toasts = [];
+  let duringRemoval = null;
   const c = {
     console,
     URL,
@@ -435,6 +436,8 @@ test('authorized Delete previews, confirms exact whole folder, removes, and refr
         indexed_audio_file_count: 2, other_file_count: 3, surviving_copy_count: 1,
         confirmation_ref: 'dcc1.7.confirm',
       } }) };
+      duringRemoval = { keys: c.state.utility.problematicFiles.map(item => item.key),
+        selected: c.state.utility.selectedProblematicKey, pending: c.state.utility.duplicateCopyRemovalPending };
       return { ok: true, status: 200, json: async () => ({ ok: true, result: { retired_file_count: 2 } }) };
     },
   };
@@ -444,6 +447,7 @@ test('authorized Delete previews, confirms exact whole folder, removes, and refr
     { filename: 'utility-loaders-and-cover-lookup.js' });
   c.loadProblematicFiles = async (...args) => { refreshes.push(['problematic', ...args]); c.state.utility.problematicFiles = []; };
   c.state.utility.selectedProblematicKey = 'album:key';
+  c.state.utility.problematicFiles = [{ key: 'album:key' }, { key: 'other:key' }];
   let detailRenders = 0;
   c.renderUtilityModalContent = () => { detailRenders += 1; };
   const selected = { copy_number: 2, copy_ref: 'dcr1.7.copy', folder_name: 'Second copy' };
@@ -461,9 +465,34 @@ test('authorized Delete previews, confirms exact whole folder, removes, and refr
   });
   assert.deepEqual(refreshes.map(item => item[0]), ['problematic', 'view']);
   assert.equal(toasts.at(-1)[1], 'success');
-  // Owner 2026-11-16: the resolved album leaves the list and its details show the empty state.
+  // Owner 2026-11-16: the album leaves the list at once, nothing is selected and the loader shows until it finishes.
+  assert.deepEqual(JSON.parse(JSON.stringify(duringRemoval)), { keys: ['other:key'], selected: '', pending: { albumKey: 'album:key' } });
+  assert.equal(c.state.utility.duplicateCopyRemovalPending, null);
   assert.equal(c.state.utility.selectedProblematicKey, '');
-  assert.equal(detailRenders, 1);
+  assert.equal(detailRenders, 2);
+});
+
+test('a failed duplicate removal brings the album back to the list', async () => {
+  const toasts = [];
+  const c = { console, URL, state: { view: {}, utility: {} }, buildApiUrl: () => '/view-data', fetchAndRender: async () => {},
+    showToast: (...args) => { toasts.push(args); }, showAppConfirmDialog: async () => true,
+    fetch: async (url) => (/preview/.test(url)
+      ? { ok: true, json: async () => ({ ok: true, preview: { confirmation_ref: 'c' } }) }
+      : { ok: false, status: 409, json: async () => ({ ok: false, error: 'Folder is in use.' }) }) };
+  c.window = c;
+  vm.createContext(c);
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'utility-loaders-and-cover-lookup.js'), 'utf8'), c,
+    { filename: 'utility-loaders-and-cover-lookup.js' });
+  c.loadProblematicFiles = async () => { c.state.utility.problematicFiles = [{ key: 'album:key' }]; };
+  c.renderUtilityModalContent = () => {};
+  c.state.utility.problematicFiles = [{ key: 'album:key' }];
+  c.state.utility.selectedProblematicKey = 'album:key';
+
+  assert.equal(await c.performDuplicateCopyRemoval({ key: 'album:key' }, { copy_ref: 'r' }), false);
+
+  assert.equal(c.state.utility.duplicateCopyRemovalPending, null);
+  assert.deepEqual(c.state.utility.problematicFiles.map(item => item.key), ['album:key']);
+  assert.deepEqual(toasts.at(-1).slice(0, 2), ['Folder is in use.', 'error']);
 });
 
 test('utility delegation consumes duplicate Delete without toggling its disclosure', () => {

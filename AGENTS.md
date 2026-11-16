@@ -177,8 +177,10 @@ operate, or contribute to the application.
   invalidation owner.
 - The ASGI test client (`tests/py/asgi_testing.py`) fails any request during
   which the event loop is blocked for more than 250 ms and prints the loop
-  thread's stack sampled while it was blocked. It has no opt-out: a test that
-  needs to wait uses `await asyncio.sleep(...)`.
+  thread's stack sampled while it was blocked. A stall every sample of which is
+  inside import machinery (a module's first import) is not counted. It has no
+  opt-out: a test that needs to wait uses `await asyncio.sleep(...)`, and a
+  test double for `run_in_threadpool` still runs the work off the loop.
 - Before calling an interaction implemented, run
   `npm run test:bounded-interactions` (or with `--changed-paths <file>` for the
   owners you changed) at production-calibration cardinality. Record the exact

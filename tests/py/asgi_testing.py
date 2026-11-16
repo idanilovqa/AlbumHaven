@@ -26,21 +26,35 @@ class EventLoopStall(AssertionError):
     """A request blocked the event loop, so every other request would have waited."""
 
 
+def _importing(frame) -> bool:
+    """Whether the stack is inside import machinery (a first import of a module)."""
+    while frame is not None:
+        if "importlib" in frame.f_code.co_filename:
+            return True
+        frame = frame.f_back
+    return False
+
+
 class EventLoopWatchdog:
     """Fails a request during which the event loop is blocked for over 250 ms.
 
     A heartbeat task records how late the loop runs it. A sampler thread reads
     the loop thread's stack through `sys._current_frames()` while the heartbeat
-    is overdue, so the failure names the blocking call. A test that needs to
-    wait must `await asyncio.sleep(...)`, never block the loop.
+    is overdue, so the failure names the blocking call. A stall every sample of
+    which is inside import machinery is a test process's first import of a
+    module, not request work, and is not counted; an unsampled stall is. A test
+    that needs to wait must `await asyncio.sleep(...)`, never block the loop.
     """
 
     def __init__(self) -> None:
         self._loop_thread = threading.get_ident()
         self._last_beat = time.monotonic()
         self._worst_stall = 0.0
-        self._sampled_stall = 0.0
         self._stack = ""
+        # The stacks sampled during each stall, keyed by the beat it started at,
+        # each marked when it was inside import machinery.
+        self._samples: dict[float, list[tuple[str, bool]]] = {}
+        self._samples_lock = threading.Lock()
         self._done = threading.Event()
         self._sampler = threading.Thread(target=self._sample, name="asgi-event-loop-watchdog", daemon=True)
         self._heartbeat: asyncio.Task | None = None
@@ -67,7 +81,14 @@ class EventLoopWatchdog:
 
     def _observe(self) -> None:
         now = time.monotonic()
-        self._worst_stall = max(self._worst_stall, now - self._last_beat - _HEARTBEAT_SECONDS)
+        stall = now - self._last_beat - _HEARTBEAT_SECONDS
+        with self._samples_lock:
+            samples = self._samples.pop(self._last_beat, [])
+        if stall > EVENT_LOOP_STALL_LIMIT_SECONDS and samples and all(importing for _stack, importing in samples):
+            stall = 0.0
+        if stall > self._worst_stall:
+            self._worst_stall = stall
+            self._stack = next((stack for stack, importing in reversed(samples) if not importing), "")
         self._last_beat = now
 
     async def _beat(self) -> None:
@@ -77,13 +98,14 @@ class EventLoopWatchdog:
 
     def _sample(self) -> None:
         while not self._done.wait(_SAMPLE_SECONDS):
-            stalled = time.monotonic() - self._last_beat
-            if stalled < EVENT_LOOP_STALL_LIMIT_SECONDS / 2 or stalled <= self._sampled_stall:
+            beat = self._last_beat
+            if time.monotonic() - beat < EVENT_LOOP_STALL_LIMIT_SECONDS / 2:
                 continue
             frame = sys._current_frames().get(self._loop_thread)
             if frame is not None:
-                self._stack = "".join(traceback.format_stack(frame))
-                self._sampled_stall = stalled
+                sample = ("".join(traceback.format_stack(frame)), _importing(frame))
+                with self._samples_lock:
+                    self._samples.setdefault(beat, []).append(sample)
 
 
 class _BootstrapOwnerResolver:

@@ -820,9 +820,12 @@ def test_asgi_integrations_lastfm_enrichment_uses_route_sources(app, monkeypatch
     statistics_calls = []
     statistics = {"local_playcount": 12, "total_listening_seconds": 1800.0}
 
+    from starlette.concurrency import run_in_threadpool
+
     async def fake_run_in_threadpool(function, *args, **kwargs):
         threadpool_calls.append((function, args, kwargs))
-        return function(*args, **kwargs)
+        # Still off the event loop: the payload's first mimetypes lookup reads the registry.
+        return await run_in_threadpool(function, *args, **kwargs)
 
     def fail_if_retried(*_args, **_kwargs):
         raise AssertionError("GET /utilities/integrations must not retry pending scrobbles")

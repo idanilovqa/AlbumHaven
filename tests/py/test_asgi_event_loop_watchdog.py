@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import sys
 import time
 
 import pytest
@@ -45,3 +47,37 @@ def test_work_handed_to_a_thread_keeps_the_event_loop_free():
     status, _headers, _body = run_asgi_request(offloading_app, "GET", "/offloaded")
 
     assert status == 204
+
+
+def _slow_module(tmp_path, monkeypatch, name: str) -> str:
+    """A module whose first import blocks for 0.4 s, like a cold heavy import."""
+    (tmp_path / f"{name}.py").write_text("import time\ntime.sleep(0.4)\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+    return name
+
+
+def test_a_first_import_during_a_request_is_not_counted_as_request_work(tmp_path, monkeypatch):
+    module = _slow_module(tmp_path, monkeypatch, "watchdog_cold_import")
+
+    async def importing_app(_scope, _receive, send):
+        importlib.import_module(module)
+        await _respond(send)
+
+    status, _headers, _body = run_asgi_request(importing_app, "GET", "/importing")
+
+    assert status == 204
+
+
+def test_blocking_work_in_the_same_stall_as_an_import_still_fails(tmp_path, monkeypatch):
+    module = _slow_module(tmp_path, monkeypatch, "watchdog_cold_import_then_block")
+
+    async def importing_then_blocking_app(_scope, _receive, send):
+        importlib.import_module(module)
+        time.sleep(0.4)
+        await _respond(send)
+
+    with pytest.raises(EventLoopStall) as stall:
+        run_asgi_request(importing_then_blocking_app, "GET", "/importing-then-blocking")
+
+    assert "time.sleep(0.4)" in str(stall.value)

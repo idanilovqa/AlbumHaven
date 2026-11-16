@@ -1,10 +1,18 @@
 # Changelog
 
-## 0.11.11 - 2026-11-15
+## 0.11.13 - 2026-11-16
 
 - Instant return in ordinary browsers (HTTPS or localhost): the library loads from the server as before, and a copy of the last view kept in the browser appears instead when the server cannot be reached, fails at its gateway, or has not answered within 1.5 seconds. That view is read-only with the existing Offline notice and updates in place once the server answers. Private windows and plain-HTTP addresses other than localhost behave as before.
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
+
+## 0.11.12 - 2026-11-15
+
+- Gapless playback: when an album plays on into its next track, the near-silent MP3 decoder padding at the end of one track and the start of the next (MP3s without encoder gapless metadata) is removed, so the transition no longer pauses. Only edges at most 64 ms long, below -40 dBFS and at least 20 dB under the neighbouring audio are trimmed; seeks, loops, skips and moves into another album keep every sample. Web and Android behave the same.
+
+## 0.11.11 - 2026-11-15
+
+- Android Sandbox app: Update offers the build each sandbox serves. One waiting build installs at once, switching to its sandbox (and signing in there) when it belongs to another; two or more open a build sheet. An older build is rebuilt under a newer version code by the owner's one-tap rebuild, so no uninstall is needed. Sandbox promotions now name their sandbox, branch and label; a `test_build` pull request names its sandbox with one `sandbox<N>` label. The Stable app is unchanged.
 
 ## 0.11.10 - 2026-11-15
 

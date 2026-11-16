@@ -8543,7 +8543,10 @@ function normalizeStreamingContinuityOptions(options = {}) {
     .includes(options.kind) ? options.kind : 'queued-next';
   const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
   const endSeconds = Math.max(startSeconds, Number(options.endSeconds) || 0);
-  return { kind, startSeconds, endSeconds };
+  if (kind !== 'queued-next') return { kind, startSeconds, endSeconds };
+  return {
+    kind, startSeconds, endSeconds, consecutiveAlbumBoundary: options.consecutiveAlbumBoundary === true,
+  };
 }
 
 function streamingContinuityIdentity(track, options) {
@@ -9603,6 +9606,15 @@ function handleStreamingWorkletMessage(message) {
       },
       'processor-protocol-reject',
     );
+    return;
+  }
+  if (message.type === 'boundary-padding') {
+    const { edge, streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident } = message;
+    engine.diagnostics.boundaryPadding = {
+      ...engine.diagnostics.boundaryPadding,
+      [edge]: { streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident },
+    };
+    publishStreamingDiagnostics();
     return;
   }
   if (message.type === 'buffered-seek-reserved') {
@@ -11050,7 +11062,19 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
   }
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
-    return engine.roles.continuity;
+    const prepared = engine.roles.continuity;
+    // A queue that changed under the prepared successor may change whether it is consecutive.
+    if (normalized.kind === 'queued-next'
+        && prepared.continuityOptions.consecutiveAlbumBoundary !== normalized.consecutiveAlbumBoundary) {
+      prepared.continuityOptions = normalized;
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: engine.generation,
+        active: true,
+        consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
+      });
+    }
+    return prepared;
   }
   if (engine.pendingPromotion) {
     engine.pendingContinuityTrack = track;
@@ -11086,6 +11110,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
       type: 'expect-continuity',
       generation: engine.generation,
       active: true,
+      consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
     });
   }
   if (normalized.kind !== 'queued-next') {
@@ -12502,6 +12527,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.album_details.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
+    "updates.choose.v1": "optional",
     "downloads.link.v1": "optional",
     "files.save.v1": "optional",
     "app.copy.v1": "optional"
@@ -27715,10 +27741,13 @@ const ANDROID_SANDBOX_CHOICES = Array.from({ length: 99 }, (_, index) => ({
 }));
 
 const ANDROID_UPDATES_CAPABILITY = 'updates.manual.v1';
+const ANDROID_CHOOSE_CAPABILITY = 'updates.choose.v1';
 const ANDROID_SANDBOX_CAPABILITY = 'sandbox.select.v1';
 
 // `update` is the shell's latest `updates.state` payload; null until the handshake reports one.
-const androidSettings = { status: null, switching: false, update: null };
+// `builds` is the sandbox app's `updates.builds` summary: the installed build and the builds of
+// every sandbox Update would offer.
+const androidSettings = { status: null, switching: false, update: null, builds: null };
 
 function androidVersionLabel(info) {
   return `${info.variant === 'sandbox' ? 'Sandbox' : 'Stable'} · ${info.versionName} (${info.versionCode})`;
@@ -27729,6 +27758,8 @@ function androidVersionLabel(info) {
 function androidUpdateMenuView() {
   const update = androidSettings.update;
   if (!update || !hasAndroidCapability(ANDROID_UPDATES_CAPABILITY)) return null;
+  const choice = androidBuildChoiceView(update);
+  if (choice) return choice;
   switch (update.state) {
     case 'checking': return ['Checking…', null];
     case 'upToDate': return ['No updates available', 'check'];
@@ -27745,6 +27776,30 @@ function androidUpdateMenuView() {
     case 'failed': return ['Update failed. Try again', update.versionName ? 'download' : 'check'];
     default: return ['Check for update', 'check'];
   }
+}
+
+// The sandbox app's Update row while no update runs: one waiting build installs from its sandbox
+// (switching to it when it is another's); two or more, or only an older one, open the shell's
+// native build sheet. Null when no sandbox has a build this app does not have.
+function androidBuildChoiceView(update) {
+  const builds = androidSettings.builds;
+  const resting = ['idle', 'upToDate', 'available'].includes(update.state)
+    || (update.state === 'failed' && !update.versionName);
+  if (!resting || !hasAndroidCapability(ANDROID_CHOOSE_CAPABILITY) || !Number.isInteger(builds?.count) || builds.count < 1) {
+    return null;
+  }
+  const single = builds.single;
+  if (single) {
+    return [`Update to build ${single.versionCode}`, 'choose',
+      single.thisSandbox ? single.title : `From sandbox${single.sandbox} · switches sandbox`];
+  }
+  const waiting = builds.count === 1 ? '1 sandbox has a build' : `${builds.count} sandboxes have builds`;
+  return ['Choose app build', 'choose', `${waiting} · installed ${builds.installedVersionCode}`];
+}
+
+function setAndroidBuilds(builds) {
+  if (builds && typeof builds === 'object') androidSettings.builds = builds;
+  renderAndroidUpdateMenuItem();
 }
 
 // The row is changed in place, so an open menu keeps its focus while progress arrives. A menu
@@ -27841,6 +27896,7 @@ function buildAndroidSettingsHtml(info) {
 // the sandbox it just connected to.
 function adoptAndroidSettingsHandshake(info) {
   if (info.updates) androidSettings.update = info.updates;
+  if (info.builds) androidSettings.builds = info.builds;
   renderAndroidUpdateMenuItem();
   const connectedSlot = info.sandbox?.connectedSlot;
   if (connectedSlot) {
@@ -27936,6 +27992,7 @@ function initAndroidSettings() {
   if (!isAndroidShell()) return;
   document.addEventListener('click', handleAndroidSettingsClick);
   androidBridge.events.set('updates.state', setAndroidUpdate);
+  androidBridge.events.set('updates.builds', setAndroidBuilds);
   connectAndroidSettings();
 }
 
@@ -39361,6 +39418,18 @@ function peekNextQueuedTrack() {
   return queue.tracks[nextIndex];
 }
 
+// Natural playback into `track` crosses a consecutive album boundary only when `track` is the very
+// next entry of the current album's queue; a continuation into another album never qualifies.
+function isConsecutiveAlbumSuccessor(track) {
+  const queue = state.player.playbackQueue;
+  if (!track || !queue?.albumRef || !Array.isArray(queue.tracks)) return false;
+  const currentPath = String(state.player.current?.path || '');
+  const currentIndex = currentPath
+    ? queue.tracks.findIndex((item) => String(item.path || '') === currentPath)
+    : -1;
+  return currentIndex >= 0 && queue.tracks[currentIndex + 1] === track;
+}
+
 function getNextQueuedTrack() {
   const queue = state.player.playbackQueue;
   const nextTrack = peekNextQueuedTrack();
@@ -45205,6 +45274,16 @@ function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
   });
 }
 
+// Only the queue owner knows whether `track` follows the current one inside the same album.
+function queuedNextContinuityOptions(track) {
+  return {
+    kind: 'queued-next',
+    startSeconds: 0,
+    consecutiveAlbumBoundary: typeof isConsecutiveAlbumSuccessor === 'function'
+      && isConsecutiveAlbumSuccessor(track),
+  };
+}
+
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -45236,7 +45315,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       || selectedTrackPath !== String(state.player.current?.path || '')) return;
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
-      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+      : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
@@ -45385,7 +45464,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
-    await scheduleStreamingContinuity(subsequentTrack);
+    await scheduleStreamingContinuity(subsequentTrack, queuedNextContinuityOptions(subsequentTrack));
   }
   if (typeof promoteWaveformPeaks === 'function') {
     try {
@@ -45562,9 +45641,7 @@ function setLoopActive(active) {
       ? peekNextQueuedTrack()
       : null;
     if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
-        kind: 'queued-next', startSeconds: 0,
-      });
+      const result = scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack));
       if (typeof observeStreamingFacadeCallback === 'function') {
         observeStreamingFacadeCallback(result, 'loop-disable-continuity-error');
       }

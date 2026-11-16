@@ -959,6 +959,9 @@ export async function readGaplessPlaybackDiagnostics(page) {
           : 0,
       },
       boundaryCapture: diagnostics.boundaryCapture || null,
+      boundaryPadding: diagnostics.boundaryPadding
+        ? JSON.parse(JSON.stringify(diagnostics.boundaryPadding))
+        : null,
       currentStreamId: Number(streaming.roles?.current?.streamId || 0),
       continuityStreamId: Number(streaming.roles?.continuity?.streamId || 0),
       roleDiagnostics: {

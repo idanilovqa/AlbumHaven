@@ -149,14 +149,17 @@ class DiscogsMetadataClient:
         if found["classification"] != "complete":
             return found
         payload = found["payload"]
-        tracks = [
-            {"position": str(track.get("position") or ""), "disc": _disc(track.get("position")),
-             "title": str(track.get("title") or ""),
-             "length": duration_ms(track.get("duration")), "artists": _credits(track.get("artists"))}
-            for track in payload.get("tracklist") or []
-            # Headings and index entries are not tracks.
-            if isinstance(track, dict) and str(track.get("type_") or "track") == "track"
-        ]
+        tracks, section = [], None
+        for track in payload.get("tracklist") or []:
+            kind = str(track.get("type_") or "track") if isinstance(track, dict) else ""
+            if kind == "heading":
+                # A heading names the tracks after it, up to the next heading (S8 sub-sections).
+                section = str(track.get("title") or "").strip() or None
+            elif kind == "track":
+                # Index entries are not tracks either.
+                tracks.append({"position": str(track.get("position") or ""), "disc": _disc(track.get("position")),
+                               "title": str(track.get("title") or ""), "length": duration_ms(track.get("duration")),
+                               "artists": _credits(track.get("artists")), "section": section})
         return {"classification": "complete", "release": {
             "id": int(release_id), "title": str(payload.get("title") or ""),
             "year": str(payload.get("year") or "") or None,

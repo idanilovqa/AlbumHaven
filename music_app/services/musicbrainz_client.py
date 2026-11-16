@@ -184,23 +184,28 @@ def project_artist(
     }
 
 
-_DISCOGS_ARTIST_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/artist/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
+_DISCOGS_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/(artist|release)/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
 
 
 def discogs_artist_id(relations: object) -> int | None:
-    """The Discogs artist ID from MusicBrainz url-rels.
+    """The Discogs artist ID from MusicBrainz url-rels."""
+    return discogs_link_id(relations, "artist")
 
-    Only current "discogs" URL relations to a discogs.com artist page count. When
-    they name several different Discogs artists, none is chosen.
+
+def discogs_link_id(relations: object, kind: str) -> int | None:
+    """The Discogs ``kind`` ("artist" or "release") ID from MusicBrainz url-rels.
+
+    Only current "discogs" URL relations to a discogs.com page of that kind count. When
+    they name several different Discogs entities, none is chosen.
     """
     found = set()
     for relation in relations if isinstance(relations, list) else []:
         if not isinstance(relation, dict) or relation.get("type") != "discogs" or relation.get("ended"):
             continue
         url = relation.get("url")
-        match = _DISCOGS_ARTIST_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
-        if match:
-            found.add(int(match.group(1)))
+        match = _DISCOGS_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
+        if match and match.group(1) == kind:
+            found.add(int(match.group(2)))
     return found.pop() if len(found) == 1 else None
 
 
@@ -653,6 +658,18 @@ class MusicBrainzClient:
             "artist_credit": _artist_credit(payload.get("artist-credit")), "media": media,
             "series": _series_parts(payload.get("relations")),
         }}
+
+    def lookup_release_discogs_id(self, release_mbid: object) -> JsonDict:
+        """The Discogs release a MusicBrainz release links to, for its tracklist headings (S8)."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "url-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete",
+                "discogs_release_id": discogs_link_id(payload.get("relations"), "release")}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
         """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.

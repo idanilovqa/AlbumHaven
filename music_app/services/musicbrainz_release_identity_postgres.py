@@ -317,7 +317,8 @@ def _album_row(album: dict[str, object], releases: dict[str, object]) -> dict[st
             "disc_position": album.get("disc_position"),
             "diagnostic": diagnostic if diagnostic in DIAGNOSTICS else None,
             "main_disc_count": main.get("main_disc_count"), "main_disc_source": main.get("source"),
-            "track_artists": album.get("track_artists") or [], "signals": list(album.get("signals") or [])}
+            "track_artists": album.get("track_artists") or [], "track_sections": album.get("track_sections") or [],
+            "signals": list(album.get("signals") or [])}
 
 
 _UPSERT_GROUP = """
@@ -371,20 +372,21 @@ _REPLACE_ALBUMS = _active_library_cte() + """
       cross join jsonb_to_recordset(%(rows)s::jsonb) as rows(
         local_album_id bigint, state text, artist_mbid uuid, release_group_mbid uuid, release_mbid uuid,
         original_release_mbid uuid, disc_position integer, diagnostic text, main_disc_count integer,
-        main_disc_source text, track_artists jsonb, signals text[])
+        main_disc_source text, track_artists jsonb, track_sections jsonb, signals text[])
       join library.local_albums albums
         on albums.library_id = job.library_id and albums.artist_id = job.local_artist_id
        and albums.id = rows.local_album_id
     ), stored as (
       insert into library.local_album_musicbrainz_releases (
         library_id, album_key, state, artist_mbid, release_group_mbid, release_mbid, original_release_mbid,
-        disc_position, diagnostic, main_disc_count, main_disc_source, track_artists, signals, decision_source,
-        matcher_version, observed_at, created_at, updated_at)
+        disc_position, diagnostic, main_disc_count, main_disc_source, track_artists, track_sections, signals,
+        decision_source, matcher_version, observed_at, created_at, updated_at)
       select incoming.library_id, incoming.album_key, incoming.state,
              (select mbid from integration.musicbrainz_artists where mbid = incoming.artist_mbid),
              incoming.release_group_mbid, incoming.release_mbid, incoming.original_release_mbid,
              incoming.disc_position, incoming.diagnostic, incoming.main_disc_count, incoming.main_disc_source,
-             coalesce(incoming.track_artists, '[]'::jsonb), coalesce(incoming.signals, '{}'::text[]), 'automatic',
+             coalesce(incoming.track_artists, '[]'::jsonb), coalesce(incoming.track_sections, '[]'::jsonb),
+             coalesce(incoming.signals, '{}'::text[]), 'automatic',
              %(matcher_version)s, %(observed_at)s, %(observed_at)s, %(observed_at)s
       from incoming
       on conflict (library_id, album_key) do update
@@ -393,6 +395,7 @@ _REPLACE_ALBUMS = _active_library_cte() + """
           original_release_mbid = excluded.original_release_mbid, disc_position = excluded.disc_position,
           diagnostic = excluded.diagnostic, main_disc_count = excluded.main_disc_count,
           main_disc_source = excluded.main_disc_source, track_artists = excluded.track_artists,
+          track_sections = excluded.track_sections,
           signals = excluded.signals, matcher_version = excluded.matcher_version,
           observed_at = excluded.observed_at, updated_at = excluded.updated_at
       where library.local_album_musicbrainz_releases.decision_source <> 'manual'

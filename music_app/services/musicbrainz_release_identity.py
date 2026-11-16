@@ -45,10 +45,16 @@ from music_app.services.musicbrainz_enrichment import (
     _match_tracks_alone,
     retry_delay,
 )
+from music_app.services.tracklist_sections import (
+    discogs_sections,
+    local_discs,
+    musicbrainz_sections,
+    wants_discogs_sections,
+)
 
 # 2: release groups and releases are looked up with the series they are part of (S6), so
-# decisions stored before that are made again.
-RELEASE_MATCHER_VERSION = 2
+# decisions stored before that are made again. 3: tracklist sub-sections (S8).
+RELEASE_MATCHER_VERSION = 3
 # Per artist group: the shared browses plus, per album, its tracklists and the lookups of
 # the chosen release group and release.
 _BASE_REQUESTS = 40
@@ -137,6 +143,7 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
             continue
         result["track_artists"] = display_track_artists(album.get("tracks") or [], release)
         discs = local_discs(album.get("tracks") or [])
+        result["track_sections"] = musicbrainz_sections(discs, release)
         original = None
         if len(discs) > 1 and not result.get("disc_position"):
             found = mirror.call("original_release_id", result["release_group_mbid"])
@@ -253,14 +260,6 @@ def _disc_agrees(local_tracks: list[dict[str, object]], medium: dict[str, object
     return "track_count" in signals and bool(signals & {"track_list", "durations"})
 
 
-def local_discs(tracks: list[dict[str, object]]) -> list[list[dict[str, object]]]:
-    """The album's tracks grouped by disc number (an untagged disc counts as disc 1), in order."""
-    discs: dict[int, list[dict[str, object]]] = {}
-    for track in tracks:
-        discs.setdefault(int(track.get("disc_number") or 1), []).append(track)
-    return [sorted(discs[number], key=lambda track: int(track.get("track_number") or 0)) for number in sorted(discs)]
-
-
 def main_disc_count(local_discs: list[list[dict[str, object]]], *, original: dict[str, object] | None,
                     matched: dict[str, object] | None) -> dict[str, object] | None:
     """How many of the local album's discs, in order, are the main album (owner 2026-11-08).
@@ -332,10 +331,12 @@ def display_track_artists(local_tracks: list[dict[str, object]], release: dict[s
 class MusicBrainzAlbumReleaseProcessor:
     """Runs one album-release job: the leased artist's albums, per MusicBrainz artist."""
 
-    def __init__(self, *, repository, client, now=None, lease_duration=None, max_attempts: int = 6,
+    def __init__(self, *, repository, client, discogs=None, now=None, lease_duration=None, max_attempts: int = 6,
                  sweep_interval=None) -> None:
         self._repository = repository
         self._client = client
+        # Only with the operator's Discogs key: sub-section headings MusicBrainz lacks (S8).
+        self._discogs = discogs
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._lease_duration = lease_duration or timedelta(minutes=10)
         self._max_attempts = max_attempts
@@ -378,12 +379,33 @@ class MusicBrainzAlbumReleaseProcessor:
                 if classification == "rate_limited" and delay is not None:
                     result["cooldown_seconds"] = delay.total_seconds()
                 return result
+            self._add_discogs_sections(context, outcome)
             outcomes.append({**outcome, "artist_mbid": context.get("artist_mbid")})
         self._repository.record(job_id=job_id, worker_id=worker_id, outcomes=outcomes, observed_at=observed_at)
         self._repository.finish(job_id=job_id, worker_id=worker_id, state="succeeded", classification="complete",
                                 observed_at=observed_at)
         self._size_new_series(observed_at)
         return {"processed": True, "state": "succeeded", "job_id": job_id}
+
+    def _add_discogs_sections(self, context: dict[str, object], outcome: dict[str, object]) -> None:
+        """A certainly matched album titled "A / B" whose MusicBrainz release names no media
+        takes its sub-sections from the Discogs release MusicBrainz links to. A failed or
+        missing answer leaves it without sub-sections until its next re-check."""
+        if self._discogs is None:
+            return
+        albums = {album.get("id"): album for album in context.get("albums") or [] if isinstance(album, dict)}
+        for result in outcome.get("albums") or []:
+            album = albums.get(result.get("local_album_id")) or {}
+            release = (outcome.get("releases") or {}).get(result.get("release_mbid") or "")
+            if not release or not wants_discogs_sections(album.get("title"), release):
+                continue
+            link = self._client.lookup_release_discogs_id(result["release_mbid"])
+            if not link.get("discogs_release_id"):
+                continue
+            found = self._discogs.release(link["discogs_release_id"])
+            if found.get("classification") == "complete":
+                result["track_sections"] = discogs_sections(local_discs(album.get("tracks") or []),
+                                                            found["release"]["tracks"])
 
     def _size_new_series(self, observed_at) -> None:
         """A list or an award names far more albums than a real album series (owner

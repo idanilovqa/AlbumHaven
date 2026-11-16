@@ -160,6 +160,7 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
         base_url=str(config.get("MUSICBRAINZ_BASE_URL") or ""),
         user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven"),
     )
+    discogs = _discogs_client(config)
     processor = MusicBrainzEnrichmentChain(
         MusicBrainzArtistEnrichmentProcessor(
             repository=repository,
@@ -169,8 +170,9 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
         MusicBrainzAlbumReleaseProcessor(
             repository=MusicBrainzReleaseIdentityPostgresRepository(config),
             client=client,
+            discogs=discogs,
         ),
-        _discogs_fallback_processor(config, client),
+        _discogs_fallback_processor(config, client, discogs),
     )
     return MusicBrainzEnrichmentWorker(
         processor=processor,
@@ -185,17 +187,23 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
     )
 
 
-def _discogs_fallback_processor(config: Mapping[str, object], client: MusicBrainzClient):
+def _discogs_client(config: Mapping[str, object]):
     """Only with the operator's Discogs key: Discogs is asked only about what MusicBrainz lacks."""
     if not (str(config.get("DISCOGS_CONSUMER_KEY") or "").strip()
             and str(config.get("DISCOGS_CONSUMER_SECRET") or "").strip()):
         return None
     from music_app.services.discogs_metadata import DiscogsMetadataClient, discogs_get_json
+
+    user_agent = str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven")
+    return DiscogsMetadataClient(lambda path, params: discogs_get_json(path, params, user_agent=user_agent))
+
+
+def _discogs_fallback_processor(config: Mapping[str, object], client: MusicBrainzClient, discogs):
+    if discogs is None:
+        return None
     from music_app.services.musicbrainz_discogs_fallback import DiscogsFallbackProcessor
     from music_app.services.musicbrainz_discogs_fallback_postgres import DiscogsFallbackPostgresRepository
 
-    user_agent = str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven")
-    discogs = DiscogsMetadataClient(lambda path, params: discogs_get_json(path, params, user_agent=user_agent))
     return DiscogsFallbackProcessor(repository=DiscogsFallbackPostgresRepository(config), discogs=discogs,
                                     musicbrainz=client)
 

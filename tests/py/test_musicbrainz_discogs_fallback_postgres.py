@@ -144,3 +144,21 @@ def test_an_artist_whose_fallback_used_up_its_retries_rests_a_week(monkeypatch):
     assert repository.enqueue(reason="test", observed_at=NOW + timedelta(hours=1)) == 0
     # The negative: after a week it is tried again.
     assert repository.enqueue(reason="test", observed_at=NOW + timedelta(days=8)) == 1
+
+
+def test_a_fallback_albums_sub_sections_are_stored_and_shown_after_the_musicbrainz_ones(monkeypatch):
+    """S8: Discogs headings of the fallback release; MusicBrainz's own sections win."""
+    from music_app.services.library_browse_postgres import _album_track_sections
+
+    setup_url, repository, ids, albums = _seed(monkeypatch)
+    sections = [{"disc_number": 1, "track_number": 1, "section": "Where Dead Angels Lie"}]
+
+    def outcome(context):
+        found = _found(context, hints=[])
+        found["albums"][0]["track_sections"] = sections
+        return found
+
+    _run(monkeypatch, repository, outcome).process_next(worker_id="w")
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _album_track_sections(connection, albums["crows"]) == sections
+        assert _album_track_sections(connection, albums["found"]) == []

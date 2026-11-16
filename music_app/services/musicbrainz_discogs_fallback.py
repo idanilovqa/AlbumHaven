@@ -28,6 +28,7 @@ from music_app.services.musicbrainz_evidence import (
     name_keys,
     title_agreement,
 )
+from music_app.services.tracklist_sections import discogs_sections, local_discs
 
 _MAX_ARTISTS = 3
 _MAX_RELEASES_PER_ALBUM = 2
@@ -152,7 +153,8 @@ def _certain_album(album, agreement, release, year) -> dict[str, object] | None:
                     "discogs_release_id": release["id"], "discogs_master_id": release.get("master_id"),
                     "discogs_title": release["title"], "discogs_year": release.get("year"), "disc_position": disc,
                     # The whole release is stored; ``disc_position`` names the disc that matched.
-                    "barcodes": release["barcodes"], "signals": sorted(signals), "tracks": release["tracks"]}
+                    "barcodes": release["barcodes"], "signals": sorted(signals), "tracks": release["tracks"],
+                    "track_sections": discogs_sections(local_discs(album.get("tracks") or []), tracks)}
     return None
 
 

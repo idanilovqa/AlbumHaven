@@ -8716,20 +8716,22 @@
       "proof": "contract",
       "cardinalities": {
         "small": 20,
-        "production": 1000
+        "production": 160000
       },
       "budgets": {
+        "returned_rows": 107,
+        "sql_statements": 11,
         "filesystem_enumerations": 0,
-        "stat_calls": 6,
+        "stat_calls": 0,
         "open_calls": 0,
         "media_parses": 0
       },
       "growth": {
-        "metric": "stat_calls",
+        "metric": "sql_statements",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size",
-      "testIdentity": "test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_root_gallery_route_contract_reads_one_published_page_at_production_track_count",
+      "testIdentity": "test_root_gallery_route_contract_reads_one_published_page_at_production_track_count",
       "performanceTargets": [
         "all-artists",
         "selected-artist",
@@ -9846,17 +9848,19 @@
         "production": 1000
       },
       "budgets": {
-        "filesystem_enumerations": 3,
-        "stat_calls": 12,
-        "open_calls": 3,
-        "media_parses": 3
+        "candidate_rows": 0,
+        "membership_rows": 0,
+        "filesystem_enumerations": 1,
+        "stat_calls": 18,
+        "open_calls": 0,
+        "media_parses": 0
       },
       "growth": {
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_cover_state.py::test_cover_gallery_contract_reads_only_the_selected_album_at_production_library_size",
-      "testIdentity": "test_cover_gallery_contract_reads_only_the_selected_album_at_production_library_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
@@ -10008,17 +10012,19 @@
         "production": 1000
       },
       "budgets": {
-        "builder_calls": 1,
-        "candidate_rows": 2,
+        "candidate_rows": 0,
+        "membership_rows": 0,
         "filesystem_enumerations": 0,
-        "stat_calls": 0
+        "stat_calls": 25,
+        "open_calls": 4,
+        "media_parses": 1
       },
       "growth": {
-        "metric": "candidate_rows",
+        "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_api_wave_d_asgi_routes.py::test_selected_cover_inventory_contract_builds_only_the_selected_album_at_production_library_size tests/py/test_album_local_cover_integrity.py::test_album_build_contract_repairs_only_contaminated_albums_at_production_track_count tests/py/test_cover_workflow.py::test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size tests/py/test_move_planner.py::test_move_availability_contract_probes_one_artist_folder_at_production_artist_count",
-      "testIdentity": "test_selected_cover_inventory_contract_builds_only_the_selected_album_at_production_library_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size",
       "rollback": "Revert fix(covers) request-local inventory and fix(move) artist probe, with their contracts."
     },
     {
@@ -10096,16 +10102,19 @@
         "production": 1000
       },
       "budgets": {
-        "filesystem_enumerations": 1,
-        "stat_calls": 14,
-        "open_calls": 0
+        "candidate_rows": 0,
+        "membership_rows": 0,
+        "filesystem_enumerations": 0,
+        "stat_calls": 12,
+        "open_calls": 0,
+        "media_parses": 0
       },
       "growth": {
         "metric": "stat_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_cover_workflow.py::test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size",
-      "testIdentity": "test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
@@ -10924,20 +10933,22 @@
       "proof": "contract",
       "cardinalities": {
         "small": 20,
-        "production": 1000
+        "production": 160000
       },
       "budgets": {
+        "returned_rows": 23,
+        "sql_statements": 11,
         "filesystem_enumerations": 0,
-        "stat_calls": 6,
+        "stat_calls": 0,
         "open_calls": 0,
         "media_parses": 0
       },
       "growth": {
-        "metric": "stat_calls",
+        "metric": "sql_statements",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size",
-      "testIdentity": "test_display_cover_variant_queue_contract_probes_a_fixed_cover_count_at_production_page_size",
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_root_gallery_route_contract_reads_one_published_page_at_production_track_count",
+      "testIdentity": "test_root_gallery_route_contract_reads_one_published_page_at_production_track_count",
       "performanceTargets": [
         "all-artists",
         "selected-artist",

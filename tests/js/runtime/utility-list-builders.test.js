@@ -8066,3 +8066,21 @@ test('watchSaveTask hydrates an open merged destination from canonical visible s
   assert.equal(context.state.modalReleases[0].tracks.length, 17);
   assert.equal(context.state.modalReleases[0].preview_only, false);
 });
+
+test('PF Discogs and MusicBrainz buttons open a known artist page and search only when the artist is unknown', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const opened = [];
+  context.window.open = (url) => { opened.push(url); };
+  context.buildDiscogsSearchUrl = () => 'https://www.discogs.com/search/?q=fallback';
+  const unknown = { album_artist: 'Dreamscape', name: 'Trance-Like State', year: 1997 };
+  const known = { ...unknown, musicbrainz_artist: {
+    musicbrainz_url: 'https://musicbrainz.org/artist/0d2b2d0a-0000-4000-8000-000000000001',
+    discogs_url: 'https://www.discogs.com/artist/12345',
+  } };
+  assert.match(context.buildMusicBrainzReleaseSearchUrl(unknown), /^https:\/\/musicbrainz\.org\/search\?query=Dreamscape/);
+  assert.equal(context.buildMusicBrainzReleaseSearchUrl(known), known.musicbrainz_artist.musicbrainz_url);
+  context.openAlbumOnDiscogs(unknown);
+  context.openAlbumOnDiscogs(known);
+  context.openAlbumOnDiscogs({ ...unknown, musicbrainz_artist: { musicbrainz_url: known.musicbrainz_artist.musicbrainz_url } });
+  assert.deepEqual(opened, ['https://www.discogs.com/search/?q=fallback', 'https://www.discogs.com/artist/12345', 'https://www.discogs.com/search/?q=fallback']);
+});

@@ -18925,3 +18925,32 @@ def test_searched_library_loose_tracks_filter_the_stored_list_by_the_search_rule
     assert [t["title"] for t in _filter_loose_tracks_by_query(tracks, "машина")] == ["Lambada"]
     assert _filter_loose_tracks_by_query(tracks, "") == tracks
     assert _filter_loose_tracks_by_query(tracks, "zzz-no-match") == []
+
+
+def test_album_musicbrainz_artist_carries_known_discogs_artist_page() -> None:
+    from music_app.services import library_browse_postgres as browse
+
+    class Rows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class Connection:
+        def __init__(self, discogs_id):
+            self.discogs_id = discogs_id
+            self.sql = ""
+
+        def execute(self, sql, params):
+            self.sql = sql
+            return Rows([{"mbid": "0d2b2d0a-0000-4000-8000-000000000001", "canonical_name": "Dreamscape",
+                          "disambiguation": None, "discogs_artist_id": self.discogs_id,
+                          "tag_differs": False, "split": False}])
+
+    connection = Connection(12345)
+    known = browse._album_musicbrainz_artist(connection, 7)
+    assert "artist.discogs_artist_id" in connection.sql
+    assert known["musicbrainz_url"] == "https://musicbrainz.org/artist/0d2b2d0a-0000-4000-8000-000000000001"
+    assert known["discogs_url"] == "https://www.discogs.com/artist/12345"
+    assert "discogs_url" not in browse._album_musicbrainz_artist(Connection(None), 7)

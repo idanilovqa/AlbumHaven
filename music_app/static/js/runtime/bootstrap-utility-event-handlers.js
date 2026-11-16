@@ -28,7 +28,7 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
   if (
-    String(state.coverLookup.modal.collectionName || '').trim()
+    String(state.coverLookup?.modal?.collectionName || '').trim()
     && event.target.closest('[data-confirm-cover-lookup-delete="1"]')
   ) {
     event.preventDefault();

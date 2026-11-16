@@ -3113,9 +3113,8 @@ class PostgresLibraryBrowseRepository:
         return None
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
-        albums = _problematic_album_projection_payloads(
-            self._load_problematic_file_rows(album_key=str(album_key or ""))
-        )
+        rows = self._load_problematic_file_rows(album_key=str(album_key or ""))
+        albums = _problematic_album_projection_payloads(rows)
         requested_keys = set(_problematic_album_key_candidates(str(album_key or "")))
         for album in albums:
             if str(album.get("key") or "") not in requested_keys:
@@ -3123,6 +3122,13 @@ class PostgresLibraryBrowseRepository:
             album["_suggestion_aliases"] = self._load_relation_alias_maps().get("alias_to_canonical", {})
             detail = _problematic_album_detail_payload(album)
             if detail is not None:
+                album_id = next((row.get("album_id") for row in map(_row_mapping, rows) if row.get("album_id")), None)
+                if album_id:
+                    # The Discogs/MusicBrainz buttons open a known artist page instead of a search.
+                    with self._connect_to_database() as connection:
+                        musicbrainz_artist = _album_musicbrainz_artist(connection, album_id)
+                    if musicbrainz_artist:
+                        detail["musicbrainz_artist"] = musicbrainz_artist
                 return detail
         missing_albums = _missing_album_projection_payloads(
             self._load_missing_album_rows(album_key=str(album_key or ""))
@@ -8697,7 +8703,7 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     rows = connection.execute(
         """
         select identity.artist_mbid::text as mbid, artist.canonical_name, artist.disambiguation,
-               identity.tag_differs, artist_match.state = 'per_album' as split
+               artist.discogs_artist_id, identity.tag_differs, artist_match.state = 'per_album' as split
         from library.local_albums album
         join library.local_album_artist_identities identity
           on identity.library_id = album.library_id and identity.album_key = album.album_key
@@ -8711,9 +8717,13 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     row = _row_mapping(rows[0]) if rows else {}
     if not row.get("mbid"):
         return None
-    return {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
-            "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
-            "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
+    identity = {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
+                "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
+                "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
+    discogs_artist_id = row.get("discogs_artist_id")
+    if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
+        identity["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"
+    return identity
 
 
 def _artist_musicbrainz_projection(

@@ -23923,10 +23923,13 @@ function openAlbumOnDiscogs(album) {
     showRepairAlert('No album selected for Discogs search.', 'error');
     return;
   }
-  window.open(buildDiscogsSearchUrl(album), '_blank', 'noopener,noreferrer');
+  // Owner 2026-11-16: a known Discogs artist opens its page; only an unknown one falls back to a search.
+  window.open(album.musicbrainz_artist?.discogs_url || buildDiscogsSearchUrl(album), '_blank', 'noopener,noreferrer');
 }
 
 function buildMusicBrainzReleaseSearchUrl(album) {
+  // Owner 2026-11-16: a certain MusicBrainz artist opens its page; only an unknown one falls back to a search.
+  if (album?.musicbrainz_artist?.musicbrainz_url) return album.musicbrainz_artist.musicbrainz_url;
   const query = [album?.album_artist, album?.name, album?.year]
     .map(value => String(value ?? '').trim()).filter(Boolean).join(' ');
   return `https://musicbrainz.org/search?query=${encodeURIComponent(query)}&type=release&method=indexed`;
@@ -49985,7 +49988,7 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
   if (
-    String(state.coverLookup.modal.collectionName || '').trim()
+    String(state.coverLookup?.modal?.collectionName || '').trim()
     && event.target.closest('[data-confirm-cover-lookup-delete="1"]')
   ) {
     event.preventDefault();

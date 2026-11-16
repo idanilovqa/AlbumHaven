@@ -916,7 +916,8 @@ function isCurrentNonAlbumModalRequest(options = {}) {
 }
 
 function closeNonAlbumPageOnTreeNavigation(event) {
-  if (!event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists]')) return;
+  // The tree's artists and All artists, and the logo (the library landing page, owner 2026-11-15).
+  if (!event.target?.closest?.('#sidebar-list [data-sidebar-artist], #sidebar-list [data-sidebar-all-artists], [data-library-home="1"]')) return;
   const overlay = document.querySelector('#non-album-modal:not([hidden])');
   if (!['is-mobile-page', 'non-album-modal--page'].some(name => overlay?.classList.contains(name))) return;
   // Close in place, never by history traversal: a Back step lands after the artist's

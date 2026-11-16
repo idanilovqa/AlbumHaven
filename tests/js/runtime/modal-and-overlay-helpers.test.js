@@ -2730,3 +2730,21 @@ test('closing Loose Tracks clears its Custom Collections selection', () => {
 
   assert.equal(overlayHiddenWhenSynced, true);
 });
+
+for (const mobile of [false, true]) {
+  test(`${mobile ? 'phone' : 'desktop'}: the logo closes Loose Tracks in place`, () => {
+    // Owner 2026-11-15: the logo selected All artists but left Loose Tracks on screen.
+    const { context } = loadHelper();
+    const overlay = new FakeElement('non-album-modal');
+    overlay.classList.add(mobile ? 'is-mobile-page' : 'non-album-modal--page');
+    const calls = [];
+    context.document.querySelector = selector => (selector === '#non-album-modal:not([hidden])' ? overlay : null);
+    context.prepareMobileGalleryNavigation = () => { calls.push('in-place'); return mobile; };
+    context.closeNonAlbumModal = () => calls.push('closed');
+    const logo = { closest: selector => (selector.includes('[data-library-home="1"]') ? logo : null) };
+
+    context.closeNonAlbumPageOnTreeNavigation({ target: logo });
+
+    assert.deepEqual(calls, mobile ? ['in-place'] : ['in-place', 'closed']);
+  });
+}

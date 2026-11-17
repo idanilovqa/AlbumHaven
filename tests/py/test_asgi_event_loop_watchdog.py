@@ -3,13 +3,19 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.metadata
+import re
 import sys
 import threading
 import time
 
 import pytest
 
-from tests.py.asgi_testing import EventLoopStall, run_asgi_request, run_asgi_request_async
+from tests.py.asgi_testing import (
+    EVENT_LOOP_STALL_LIMIT_SECONDS,
+    EventLoopStall,
+    run_asgi_request,
+    run_asgi_request_async,
+)
 
 
 async def _respond(send) -> None:
@@ -183,3 +189,94 @@ def test_reading_package_metadata_is_request_work_not_import_machinery():
     finally:
         importlib.metadata.Distribution.from_name = real_distribution
     assert not _importing(captured["frame"])
+
+
+@pytest.fixture
+def slow_collection_graph():
+    """A heap large enough that one full collection takes over 0.35 s here:
+    a collector pause sized by the test process, not by request code."""
+    import gc
+
+    graph: list[list] = []
+    while True:
+        graph.extend([] for _ in range(500_000))
+        started = time.perf_counter()
+        gc.collect()
+        if time.perf_counter() - started > 0.35 or len(graph) >= 16_000_000:
+            break
+    yield graph
+    graph.clear()
+    gc.collect()
+
+
+def _timed_collection() -> float:
+    import gc
+
+    started = time.perf_counter()
+    gc.collect()
+    return time.perf_counter() - started
+
+
+def test_a_long_garbage_collection_on_the_loop_thread_is_not_request_work(slow_collection_graph):
+    collected = []
+
+    async def collecting_app(_scope, _receive, send):
+        collected.append(_timed_collection())
+        await _respond(send)
+
+    status, _headers, _body = run_asgi_request(collecting_app, "GET", "/collecting")
+
+    assert collected[0] > EVENT_LOOP_STALL_LIMIT_SECONDS
+    assert status == 204
+
+
+def _burn_holding_the_gil(seconds: float) -> None:
+    deadline = time.thread_time() + seconds
+    while time.thread_time() < deadline:
+        pass
+
+
+@pytest.mark.parametrize("block", ["sleep", "gil_cpu"])
+def test_blocking_beside_a_garbage_collection_still_fails_and_reports_the_collection(slow_collection_graph, block):
+    """Only the collection is taken out: 0.3 s of the request's own blocking,
+    sampled or holding the GIL, still fails, and the failure says how much
+    collection time was not counted."""
+    collected = []
+
+    async def collecting_then_blocking_app(_scope, _receive, send):
+        collected.append(_timed_collection())
+        if block == "sleep":
+            time.sleep(0.3)
+        else:
+            _burn_holding_the_gil(0.3)
+        await _respond(send)
+
+    interval = sys.getswitchinterval()
+    if block == "gil_cpu":
+        sys.setswitchinterval(5.0)  # The loop thread keeps the GIL, as a long C call would.
+    try:
+        with pytest.raises(EventLoopStall) as stall:
+            run_asgi_request(collecting_then_blocking_app, "GET", f"/collecting-then-{block}")
+    finally:
+        sys.setswitchinterval(interval)
+
+    reported = re.search(r"; (\d+) ms of garbage collection on the loop thread not counted\)", str(stall.value))
+    assert reported is not None, str(stall.value)
+    assert int(reported.group(1)) >= int(collected[0] * 1000) - 20
+    if block == "sleep":
+        assert "time.sleep(0.3)" in str(stall.value)
+
+
+def test_a_short_gil_holding_block_without_a_collection_still_fails():
+    async def gil_holding_app(_scope, _receive, send):
+        _burn_holding_the_gil(0.3)
+        await _respond(send)
+
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(5.0)
+    try:
+        with pytest.raises(EventLoopStall) as stall:
+            run_asgi_request(gil_holding_app, "GET", "/gil-short")
+    finally:
+        sys.setswitchinterval(interval)
+    assert "; 0 ms of garbage collection on the loop thread not counted)" in str(stall.value)

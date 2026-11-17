@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import sys
 import threading
@@ -94,15 +95,20 @@ class EventLoopWatchdog:
     is counted) or the operating system did not schedule it (machine load,
     which spends almost none of it and is not counted). Only the loop thread's
     CPU time counts: worker threads busy while the loop thread waits for the
-    processor never make a scheduling delay look like a block. A test that needs to wait must
-    `await asyncio.sleep(...)`, never block the loop.
+    processor never make a scheduling delay look like a block. Garbage
+    collection on the loop thread is not request work either: its wall and CPU
+    time are taken out of the stall and of the loop thread's CPU before either
+    is compared with the limit, and a failure reports how much was taken out.
+    A test that needs to wait must `await asyncio.sleep(...)`, never block the loop.
     """
 
     def __init__(self) -> None:
         self._loop_thread = threading.get_ident()
         self._last_beat = time.monotonic()
         self._last_beat_cpu = time.thread_time()
+        self._last_beat_collections = _LOOP_COLLECTIONS.totals(self._loop_thread)
         self._worst_stall = 0.0
+        self._worst_stall_collection = 0.0
         self._stack = ""
         # The stacks sampled during each stall, keyed by the beat it started at,
         # each marked when it was inside import machinery.
@@ -111,6 +117,8 @@ class EventLoopWatchdog:
         self._heartbeat: asyncio.Task | None = None
 
     async def __aenter__(self) -> EventLoopWatchdog:
+        _LOOP_COLLECTIONS.watch(self._loop_thread)
+        self._last_beat_collections = _LOOP_COLLECTIONS.totals(self._loop_thread)
         self._last_beat = time.monotonic()
         self._last_beat_cpu = time.thread_time()
         self._heartbeat = asyncio.get_running_loop().create_task(self._beat())
@@ -120,12 +128,15 @@ class EventLoopWatchdog:
     async def __aexit__(self, exc_type, exc, tb) -> bool:
         _SAMPLER.remove(self)
         self._observe()
+        _LOOP_COLLECTIONS.unwatch(self._loop_thread)
         self._heartbeat.cancel()
         await asyncio.gather(self._heartbeat, return_exceptions=True)
         if exc_type is None and self._worst_stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
             raise EventLoopStall(
                 f"the request blocked the event loop for {self._worst_stall * 1000:.0f} ms "
-                f"(limit {EVENT_LOOP_STALL_LIMIT_SECONDS * 1000:.0f} ms); loop thread stack while blocked:\n"
+                f"(limit {EVENT_LOOP_STALL_LIMIT_SECONDS * 1000:.0f} ms; "
+                f"{self._worst_stall_collection * 1000:.0f} ms of garbage collection on the loop thread "
+                f"not counted); loop thread stack while blocked:\n"
                 f"{self._stack or '<not sampled>'}"
             )
         return False
@@ -133,19 +144,24 @@ class EventLoopWatchdog:
     def _observe(self) -> None:
         now = time.monotonic()
         now_cpu = time.thread_time()
-        stall = now - self._last_beat - _HEARTBEAT_SECONDS
+        collections = _LOOP_COLLECTIONS.totals(self._loop_thread)
+        collection_wall = collections[0] - self._last_beat_collections[0]
+        collection_cpu = collections[1] - self._last_beat_collections[1]
+        stall = now - self._last_beat - _HEARTBEAT_SECONDS - collection_wall
         with self._samples_lock:
             samples = self._samples.pop(self._last_beat, [])
         if stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
             if samples and all(importing for _stack, importing in samples):
                 stall = 0.0
-            elif not samples and now_cpu - self._last_beat_cpu < EVENT_LOOP_STALL_LIMIT_SECONDS:
+            elif not samples and now_cpu - self._last_beat_cpu - collection_cpu < EVENT_LOOP_STALL_LIMIT_SECONDS:
                 stall = 0.0
         if stall > self._worst_stall:
             self._worst_stall = stall
+            self._worst_stall_collection = collection_wall
             self._stack = next((stack for stack, importing in reversed(samples) if not importing), "")
         self._last_beat = now
         self._last_beat_cpu = now_cpu
+        self._last_beat_collections = collections
 
     async def _beat(self) -> None:
         while True:
@@ -170,6 +186,52 @@ class EventLoopWatchdog:
 
 
 _SAMPLER = _StackSampler()
+
+
+class _LoopThreadCollections:
+    """Wall and CPU time the garbage collector spends on each watched loop
+    thread. A collection pauses whichever thread allocates, for as long as the
+    whole test process's heap takes, not the request's code, so it is measured
+    and taken out of a stall instead of being charged to the request. The
+    callback runs inside the collector and takes no lock; each thread writes
+    only its own entries."""
+
+    def __init__(self) -> None:
+        self._watchers: dict[int, int] = {}
+        self._started: dict[int, tuple[float, float]] = {}
+        self._totals: dict[int, tuple[float, float]] = {}
+        gc.callbacks.append(self._on_collection)
+
+    def watch(self, thread: int) -> None:
+        self._watchers[thread] = self._watchers.get(thread, 0) + 1
+
+    def unwatch(self, thread: int) -> None:
+        remaining = self._watchers.get(thread, 0) - 1
+        if remaining > 0:
+            self._watchers[thread] = remaining
+        else:
+            self._watchers.pop(thread, None)
+            self._started.pop(thread, None)
+
+    def totals(self, thread: int) -> tuple[float, float]:
+        """(wall, CPU) seconds of collection on `thread` so far."""
+        return self._totals.get(thread, (0.0, 0.0))
+
+    def _on_collection(self, phase: str, _info: dict) -> None:
+        thread = threading.get_ident()
+        if thread not in self._watchers:
+            return
+        if phase == "start":
+            self._started[thread] = (time.monotonic(), time.thread_time())
+        elif (started := self._started.pop(thread, None)) is not None:
+            wall, cpu = self.totals(thread)
+            self._totals[thread] = (
+                wall + time.monotonic() - started[0],
+                cpu + time.thread_time() - started[1],
+            )
+
+
+_LOOP_COLLECTIONS = _LoopThreadCollections()
 
 
 class _BootstrapOwnerResolver:

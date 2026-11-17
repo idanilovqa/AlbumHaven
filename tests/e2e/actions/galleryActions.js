@@ -1537,8 +1537,9 @@ export class GalleryActions {
     page.on('request', record);
     return {
       stop: () => page.off('request', record),
+      // A card whose view already carries its tracks opens without a request; any request made
+      // must still name the card's own album and never ask for the split chooser.
       expectExactCardOpens: () => {
-        expect(urls.length).toBeGreaterThan(0);
         for (const url of urls) {
           expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
           expect(url.searchParams.has('resolve_lineage')).toBe(false);

@@ -37661,11 +37661,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
         ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
-          <button class="cover-lookup-art-preview-button" type="button" ${previewAttrs} aria-label="${previewButtonLabel}">
-            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-              <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
-            </svg>
-          </button>
+          ${buildCoverLookupPreviewButtonHtml(previewAttrs, previewButtonLabel)}
           ${isActive ? `<span class="cover-lookup-art-check">${state.coverLookup.modal.orderedSelectionMode ? orderedSelectionIndex + 1 : '&#10003;'}</span>` : ''}
           ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.candidate_cover_ref || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
           ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
@@ -37896,6 +37892,15 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
   </div>`;
 }
 
+// The magnifier that opens a Cover Look Up card full size; album and collection cards share it (owner 2026-11-17).
+function buildCoverLookupPreviewButtonHtml(attributes, label) {
+  return `<button class="cover-lookup-art-preview-button" type="button" ${attributes} aria-label="${escapeHtml(label)}">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
+            </svg>
+          </button>`;
+}
+
 function buildCustomCollectionCoverLookupCard(item) {
   if (!String(item?.image_url || '').trim()) return '';
   const label = String(item?.filename || 'Collection artwork');
@@ -37903,9 +37908,7 @@ function buildCustomCollectionCoverLookupCard(item) {
     <div class="cover-lookup-art-card is-active" data-cover-lookup-item-key="collection:current">
       <span class="cover-lookup-art-preview">
         <img class="cover-lookup-art-preview-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(label)}">
-        <button class="cover-lookup-art-preview-button" type="button" data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(item.image_url)}" data-cover-alt="${escapeHtml(label)}" aria-label="View full-size ${escapeHtml(label)}">
-          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 1 0 10.5 4Z" fill="currentColor"></path></svg>
-        </button>
+        ${buildCoverLookupPreviewButtonHtml(`data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(item.image_url)}" data-cover-alt="${escapeHtml(label)}"`, 'Open full-size cover art')}
         <span class="cover-lookup-art-check">&#10003;</span>
         <button class="cover-lookup-art-delete" type="button" data-delete-custom-collection-artwork="1" aria-label="Delete collection artwork">&#128465;</button>
       </span>

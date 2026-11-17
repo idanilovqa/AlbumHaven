@@ -4,6 +4,26 @@
 
 - Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Pausing while offline keeps the received audio, and Play while still offline plays it on while the app keeps asking the server for playback every 2 seconds, instead of failing with "Playback ownership is unavailable". Only another device taking over playback stops it.
 
+## 0.11.17 - 2026-11-17
+
+- Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.
+
+## 0.11.16 - 2026-11-17
+
+- The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".
+
+## 0.11.15 - 2026-11-16
+
+- Settings choice lists (the Android app's sandbox server picker and Library settings' path choices) are at least as wide as their button and grow to fit their longest choice, up to the screen width, so no choice such as "sandbox10" is cut off.
+
+## 0.11.14 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. 0.11.13 was merged before its pipeline's final gate ran, and that gate cannot run after a merge, so this release merges only once its complete pipeline has passed.
+
+## 0.11.13 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. The stable promotion needs a commit whose complete PR pipeline passed; 0.11.12's pipeline could not finish after its admin merge.
+
 ## 0.11.12 - 2026-11-15
 
 - Gapless playback: when an album plays on into its next track, the near-silent MP3 decoder padding at the end of one track and the start of the next (MP3s without encoder gapless metadata) is removed, so the transition no longer pauses. Only edges at most 64 ms long, below -40 dBFS and at least 20 dB under the neighbouring audio are trimmed; seeks, loops, skips and moves into another album keep every sample. Web and Android behave the same.

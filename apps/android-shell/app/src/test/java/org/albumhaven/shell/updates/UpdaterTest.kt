@@ -286,6 +286,27 @@ class UpdaterTest {
         updater.download()
         ports.downloadDone!!(DownloadResult.Failed)
         assertEquals(UpdateError.DOWNLOAD_FAILED, (updater.state as UpdateState.Failed).error)
+
+        updater.download()
+        ports.downloadDone!!(DownloadResult.NoSpace)
+        assertEquals(UpdateState.Failed(UpdateError.DOWNLOAD_FAILED, INSUFFICIENT_STORAGE, manifest(), 1_000_000L), updater.state)
+    }
+
+    @Test
+    fun `a full phone while staging is reported as insufficient storage`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.NoSpace)
+        assertEquals(UpdateState.Failed(UpdateError.INSTALL_FAILED, INSUFFICIENT_STORAGE, manifest(), store.lastCheckedAtMs), updater.state)
+    }
+
+    @Test
+    fun `a full phone while installing is reported as insufficient storage`() {
+        val updater = ready()
+        updater.install { it() }
+        ports.stageDone!!(StageResult.Staged(4))
+        updater.onInstallStatus(4, InstallStatus.NoSpace)
+        assertEquals(UpdateState.Failed(UpdateError.INSTALL_FAILED, INSUFFICIENT_STORAGE, manifest(), store.lastCheckedAtMs), updater.state)
     }
 
     @Test

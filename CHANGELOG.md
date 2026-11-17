@@ -4,6 +4,10 @@
 
 - The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
 
+## 0.11.22 - 2026-11-17
+
+- Playback no longer stalls when the browser's kept-track cache is slow to answer: a track's start waits at most half a second for it and otherwise streams from the server.
+
 ## 0.11.21 - 2026-11-17
 
 - Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.

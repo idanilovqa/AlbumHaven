@@ -128,6 +128,11 @@ def test_plan_holds_a_listen_that_needs_reauthentication_until_reconnect():
     (LastfmError("Unavailable", retryable=True, http_status=503), (True, "not_sent")),
     (LastfmError("Internal error", retryable=True, http_status=500), (False, "uncertain")),
     (LastfmError("Gateway timeout", retryable=True, http_status=504), (False, "uncertain")),
+    # A 500 or 504 stays uncertain even when its body carries a retryable Last.fm error code.
+    (LastfmError("Operation failed (Last.fm error 16)", code=16, retryable=True, http_status=500),
+     (False, "uncertain")),
+    (LastfmError("Service Offline (Last.fm error 11)", code=11, retryable=True, http_status=504),
+     (False, "uncertain")),
 ])
 def test_failed_batch_is_resent_only_when_last_fm_cannot_have_recorded_it(error, expected):
     assert failed_batch_disposition(error) == expected

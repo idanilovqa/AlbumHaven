@@ -202,7 +202,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
   // read on every request, never cached); the reload that follows is warm.
   // Only listed albums carry the label in the list response; correction-only albums arrive in
   // pages when the filter is chosen.
-  test('Problematic Files stays ready with stored MusicBrainz data corrections', async ({
+  test('Problematic Files and the Edits Queue stay ready with 64,000 stored MusicBrainz data corrections', async ({
     galleryActions,
     page,
     problematicFilesFocusedLocalReport,
@@ -215,6 +215,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       seedMusicBrainzCorrections({ listedAlbums: 300, syntheticAlbums: CORRECTION_ALBUMS - 300 })
     ));
     expect(seeded.albums).toBe(CORRECTION_ALBUMS);
+    expect(seeded.rows, 'about 64,000 stored rows, as on sandbox6').toBeGreaterThan(60000);
 
     const open = async (label) => {
       await galleryActions.goto('/');
@@ -250,6 +251,18 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       return Date.now() - startedAt;
     });
     const filterOutcome = evaluateTimingBudget(filterMs, READY_BUDGET);
+
+    // Settings → Edits Queue → Data Correction: the kinds, then page 1 of the largest kind.
+    const editsQueueMs = await stepLogger.step('Open Edits Queue until its first page of applied changes is visible', async () => {
+      const startedAt = Date.now();
+      await page.locator('[data-utility-tab="edits-queue"]').click();
+      const kind = page.locator('[data-edits-queue-open-kind="case"]');
+      await kind.waitFor({ state: 'visible', timeout: 60000 });
+      await kind.click();
+      await page.locator('[data-edits-queue-album-row]').first().waitFor({ state: 'visible', timeout: 60000 });
+      return Date.now() - startedAt;
+    });
+    const editsQueueOutcome = evaluateTimingBudget(editsQueueMs, READY_BUDGET);
     expect(pageRequests.map((url) => new URL(url).searchParams.get('offset')), 'page 1 only').toEqual(['0']);
     expect(await utilityProblematicFilesActions.readErrorToastCount()).toBe(0);
 
@@ -259,6 +272,8 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       coldReadyMs: cold.readyMs,
       warmReadyMs: warm.readyMs,
       filterPageOneVisibleMs: filterMs,
+      editsQueueFirstPageMs: editsQueueMs,
+      storedCorrectionRows: seeded.rows,
       completeResponseBytes: completeBytes,
       completeResponseItems: complete.items.length,
       correctionPageRequests: pageRequests.length,
@@ -270,6 +285,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       ['problematic-files-corrections-cold', 'Problematic Files ready, cold, with 10,800 corrections', cold.readyMs],
       ['problematic-files-corrections-warm', 'Problematic Files ready, warm, with 10,800 corrections', warm.readyMs],
       ['problematic-files-corrections-filter', 'Data Correction Needed page 1 visible', filterMs],
+      ['edits-queue-corrections-first-page', 'Edits Queue applied changes page 1 visible', editsQueueMs],
     ]) {
       await problematicFilesFocusedLocalReport.recordTimingCheckpoint({ key, label, timingMs, details: metrics });
     }
@@ -296,5 +312,6 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     expectTimingBudgetOutcome(expect, coldOutcome, 'Problematic Files readiness, cold, with corrections');
     expectTimingBudgetOutcome(expect, warmOutcome, 'Problematic Files readiness, warm, with corrections');
     expectTimingBudgetOutcome(expect, filterOutcome, 'Data Correction Needed page 1 visible');
+    expectTimingBudgetOutcome(expect, editsQueueOutcome, 'Edits Queue applied changes page 1 visible');
   });
 });

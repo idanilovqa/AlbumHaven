@@ -25,7 +25,6 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     _row_mapping,
     _transaction,
 )
-from music_app.services.musicbrainz_corrections_postgres import MusicBrainzCorrectionsPostgresRepository
 from music_app.services.musicbrainz_release_identity import DIAGNOSTICS, RELEASE_MATCHER_VERSION
 from music_app.services.tracklist_sections import section_retry_at
 
@@ -237,6 +236,8 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                     "rows": json.dumps([_album_row(album, releases, observed) for album in albums]),
                 }).fetchone()
         # The decided albums' data corrections (S4), stored for Problematic Files.
+        from music_app.services.musicbrainz_corrections_postgres import MusicBrainzCorrectionsPostgresRepository
+
         try:
             MusicBrainzCorrectionsPostgresRepository(
                 {"ALBUM_HAVEN_APP_DATABASE_URL": self._database_url}, connect=self._connect,
@@ -540,13 +541,18 @@ def album_track_pairing(connection: Any, *, library_id: int, album_key: str) -> 
         """,
         {"library_id": library_id, "album_key": album_key},
     ).fetchone()
-    if not row:
+    return parse_track_pairing(_row_mapping(row)) if row else None
+
+
+def parse_track_pairing(row: Mapping[str, object]) -> dict[str, object] | None:
+    """album_track_pairing's answer from a decision row with release_mbid, match_quality,
+    track_pairing and track_order_differs (None before the album was re-checked)."""
+    if not row.get("match_quality"):
         return None
-    row = _row_mapping(row)
     pairing = row.get("track_pairing")
     if isinstance(pairing, str):
         pairing = json.loads(pairing)
-    return {"release_mbid": row["release_mbid"], "match_quality": row["match_quality"],
-            "track_order_differs": bool(row["track_order_differs"]),
+    return {"release_mbid": row.get("release_mbid"), "match_quality": row["match_quality"],
+            "track_order_differs": bool(row.get("track_order_differs")),
             "pairing": {(int(item["disc_number"]), int(item["track_number"])):
                         (int(item["release_disc"]), int(item["release_position"])) for item in pairing or []}}

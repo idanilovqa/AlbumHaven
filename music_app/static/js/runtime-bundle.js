@@ -5345,15 +5345,20 @@ function normalizeAlbumDetailsLayout(value) {
 
 // The MusicBrainz artist an album certainly belongs to replaces a tag that names someone
 // else. Display only: the tag itself changes only through an approved tag edit.
-function albumDisplayArtist(album) {
+function albumIdentityArtist(album) {
   const tagged = album?.album_artist || album?.artist || '';
   const identity = album?.musicbrainz_artist;
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
+// An applied MusicBrainz data correction (S4) shows in place of the album artist tag.
+function albumDisplayArtist(album) {
+  return album?.display_artist || albumIdentityArtist(album);
+}
+
 function albumTaggedArtistNote(album) {
   const tagged = album?.album_artist || album?.artist || '';
-  if (albumDisplayArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
+  if (albumIdentityArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
   // A name shared by several MusicBrainz artists (Amarok): say which one this album is.
   const identity = album?.musicbrainz_artist;
   return identity?.split && identity.canonical_name
@@ -5590,7 +5595,7 @@ function syncMobileAlbumComposition(album) {
       const artist = albumDisplayArtist(album);
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
-        title: album.display_name || album.name || 'Album',
+        title: album.display_title || album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
         eyebrowRomanized: albumDetailsRomanizedArtist(album),
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),
@@ -37676,17 +37681,17 @@ function handleMusicBrainzLookupEvent(event) {
 
 // BEGIN js/runtime/musicbrainz-corrections.js
 
-// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4). Problematic Files
-// shows an album's "Data Correction Needed" label with each proposed change, and "Add to
-// queue" keeps it for Bulk Correction. Display only: nothing here writes tags. Bulk
-// Correction and "Apply changes" arrive with PR 53.
+// MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4; owner 2026-11-16,
+// "Data Correction flow"). Problematic Files shows an album's "Data Correction Needed" label and
+// its changes. Trivial ones apply to the display automatically ("Applied automatically", Undo per
+// album); the rest wait for approval. Display only: nothing here writes tags (Bulk Correction, PR 53).
 const MUSICBRAINZ_DATA_CORRECTION_LABEL = 'Data Correction Needed';
 const EDITS_QUEUE_TABS = { 'data-correction': 'Data Correction', 'musicbrainz-lookup': 'MusicBrainz Look Up' };
-const editsQueue = { tab: 'data-correction', corrections: null, settings: null, lookups: null, queueStartsAt: null,
-  loading: null, failed: false, busy: false };
+const editsQueue = { tab: 'data-correction', section: 'applied', kinds: null, pages: {}, openKind: null,
+  settings: null, lookups: null, queueStartsAt: null, loading: null, failed: false, busy: false };
 
-// Until the owner decides, albums listed only for a correction show when the "Data
-// Correction Needed" filter is chosen; true shows them by default.
+// Owner 2026-11-16: albums listed only for a correction show only under the "Data Correction
+// Needed" filter; true shows them by default.
 const MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT = false;
 
 function isMusicBrainzCorrectionProblem(item) {
@@ -37757,64 +37762,71 @@ function canReviewMusicBrainzCorrections() {
   return window.AlbumHavenCapabilities?.allows?.('library.metadata_matches.review') === true;
 }
 
-// The mockups' sentence: "MusicBrainz credits this album to Alan Parsons, not The Alan Parsons
-// Project." names the files' artist only when one name contains the other.
-function describeMusicBrainzCorrection(corrections) {
-  const albumArtist = corrections.find((item) => item.field === 'album_artist');
-  const title = corrections.find((item) => item.field === 'album');
-  const trackTitles = corrections.filter((item) => item.field === 'title').length;
-  const related = (left, right) => left.toLowerCase().includes(right.toLowerCase());
+// Owner 2026-11-16, "Data Correction flow": the kinds, how they are named, and which are
+// approved per album only (artist changes, and albums sent to review whole).
+const MUSICBRAINZ_CORRECTION_KINDS = Object.freeze({
+  case: 'Case only', spacing: 'Spacing only', case_spacing: 'Case and spacing', punctuation: 'Punctuation and symbols',
+  accents: 'Accents', small_edit: 'Small edit (2 letters or fewer)', edition_suffix: 'Edition or version suffix',
+  track_title: 'Track title: substantial change', album_title: 'Album title: substantial change',
+  track_artist_renamed: 'Track artist: a different name', track_artist_joined: 'Track artist: featured or joined credit',
+  album_artist_renamed: 'Album artist: a different name', album_artist_joined: 'Album artist: featured or joined credit',
+  whole_album: 'Whole albums to review',
+});
+const MUSICBRAINZ_PER_ALBUM_ONLY = new Set(['track_artist_renamed', 'track_artist_joined', 'album_artist_renamed',
+  'album_artist_joined', 'whole_album']);
+const MUSICBRAINZ_ROW_STATES = Object.freeze({
+  applied: 'Applied', undone: 'Undone', pending: 'Waiting for approval', skipped: 'Skipped' });
+
+function describeMusicBrainzCorrection(correction) {
+  const auto = Number(correction.auto_count || 0);
+  const review = Number(correction.review_count || 0);
+  if (correction.review_whole) {
+    return 'Many titles differ from MusicBrainz, so nothing was applied automatically: review the whole album in Settings → Edits Queue.';
+  }
   return [
-    albumArtist ? `MusicBrainz credits this album to ${albumArtist.proposed}${
-      related(albumArtist.current, albumArtist.proposed) || related(albumArtist.proposed, albumArtist.current)
-        ? `, not ${albumArtist.current}` : ''}.` : '',
-    title ? `MusicBrainz titles this album “${title.proposed}”.` : '',
-    trackTitles ? `${trackTitles} track title${trackTitles === 1 ? ' differs' : 's differ'} from MusicBrainz.` : '',
-    !albumArtist && !title && !trackTitles ? 'MusicBrainz credits some tracks to other artists.' : '',
-    'Add it to Settings → Edits Queue; your files stay unchanged until you run Bulk Correction there.',
+    auto ? `${auto} change${auto === 1 ? ' was' : 's were'} applied automatically (display only; your files are unchanged).` : '',
+    review ? `${review} change${review === 1 ? ' waits' : 's wait'} for your approval in Settings → Edits Queue.` : '',
   ].filter(Boolean).join(' ');
 }
 
-function buildMusicBrainzCorrectionTableHtml(corrections) {
+function buildMusicBrainzCorrectionTableHtml(rows, id = 'musicbrainz-data-correction') {
   return buildUtilityCompactTable({
-    id: 'musicbrainz-data-correction',
-    ariaLabel: 'Suggested correction',
-    columns: 'minmax(140px,.8fr) minmax(160px,1fr) minmax(160px,1fr)',
+    id,
+    ariaLabel: 'Data correction',
+    columns: 'minmax(140px,.8fr) minmax(160px,1fr) minmax(160px,1fr) minmax(110px,.6fr)',
     columnsConfig: [
       { key: 'tag', label: 'Tag' }, { key: 'now', label: 'In your files' }, { key: 'mb', label: 'MusicBrainz' },
+      { key: 'state', label: 'Status' },
     ],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', selection: 'none',
-    rows: corrections.map((item, index) => ({
-      key: `${item.field}-${index}`,
+    rows: rows.map((row, index) => ({
+      key: `${row.field}-${row.disc_number}-${row.track_number}-${index}`,
       cells: {
-        tag: escapeHtml(item.label),
-        now: escapeHtml(item.current),
-        mb: buildAlertLabelHtml({ severity: 'info', message: item.proposed }),
+        tag: escapeHtml(row.label),
+        now: escapeHtml(row.current_value),
+        mb: buildAlertLabelHtml({ severity: 'info', message: row.proposed_value }),
+        state: escapeHtml(MUSICBRAINZ_ROW_STATES[row.state] || ''),
       },
     })),
   });
 }
 
-// The label, explanation, table and "Add to queue" (G: owner 2026-11-15). A listed album
-// shows them beneath its detected problems.
+// The label, what happened, and the rows. Problematic Files has no action of its own: changes
+// apply automatically or wait in Settings → Edits Queue (no "Add to queue").
 function buildMusicBrainzCorrectionHtml(album, { heading = false } = {}) {
   const correction = album.musicbrainz_correction;
-  const corrections = Array.isArray(correction?.corrections) ? correction.corrections : [];
-  if (!corrections.length) return '';
-  const queued = Boolean(correction.queued_at);
-  const action = canReviewMusicBrainzCorrections() ? ButtonComponent.renderButton({
-    label: queued ? 'In the queue' : 'Add to queue', variant: 'primary', disabled: queued || editsQueue.busy,
-    attributes: { 'data-queue-musicbrainz-correction': correction.album_key },
-  }) : '';
+  const rows = Array.isArray(correction?.corrections) ? correction.corrections : [];
+  if (!rows.length) return '';
+  const summary = { ...correction, auto_count: rows.filter((row) => row.mode === 'auto').length,
+    review_count: rows.filter((row) => row.mode === 'review').length };
   return `<div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: 'warning', message: MUSICBRAINZ_DATA_CORRECTION_LABEL })}</div>
     ${heading ? '<h4 class="utility-detail-section-title">Detected problems</h4>' : ''}
-    <p class="utility-detail-meta">${escapeHtml(describeMusicBrainzCorrection(corrections))}</p>
-    <div class="utility-detected-table">${buildMusicBrainzCorrectionTableHtml(corrections)}</div>
-    ${action ? `<div class="utility-detected-actions">${action}</div>` : ''}`;
+    <p class="utility-detail-meta">${escapeHtml(describeMusicBrainzCorrection(summary))}</p>
+    <div class="utility-detected-table">${buildMusicBrainzCorrectionTableHtml(rows)}</div>`;
 }
 
-// An album listed only because it needs a correction: the row's facts, then its correction,
-// compared when it is opened.
+// An album listed only because it needs a correction: the row's facts, then its stored rows,
+// loaded when it is opened.
 function buildMusicBrainzCorrectionProblemDetail(item) {
   if (item.musicbrainz_correction_failed) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load this data correction.' });
@@ -37823,15 +37835,12 @@ function buildMusicBrainzCorrectionProblemDetail(item) {
     return '<div class="utility-empty-state">Loading the data correction…</div>';
   }
   const title = String(item.name || 'Unknown Album');
-  const fileTypes = Array.isArray(item.file_types) && item.file_types.length ? item.file_types.join(', ') : 'Unknown';
   return `<div class="utility-detail-header">
       <div class="utility-detail-cover">${buildUtilityAlbumArtbox(item, { label: `Album cover for ${title}` })}</div>
       <div class="utility-detail-summary">
         <h3 class="utility-detail-title">${escapeHtml(title)}</h3>
         <div class="utility-detail-meta">${escapeHtml(item.album_artist || 'Unknown Artist')}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(item.year ?? 'Unknown')}</div>
-        <div class="utility-detail-meta">Tracks: ${escapeHtml(item.track_count ?? 0)}</div>
-        <div class="utility-detail-meta">File types: ${escapeHtml(fileTypes)}</div>
       </div>
     </div>
     ${buildMusicBrainzCorrectionHtml(item, { heading: true })}`;
@@ -37845,8 +37854,7 @@ async function loadMusicBrainzCorrectionDetail(item) {
       { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload?.correction) throw new Error('unavailable');
-    const { track_count: trackCount, file_types: fileTypes, ...correction } = payload.correction;
-    Object.assign(item, { musicbrainz_correction: correction, track_count: trackCount, file_types: fileTypes,
+    Object.assign(item, { musicbrainz_correction: { ...item.musicbrainz_correction, ...payload.correction },
       musicbrainz_correction_failed: false });
   } catch {
     item.musicbrainz_correction_failed = true;
@@ -37854,49 +37862,6 @@ async function loadMusicBrainzCorrectionDetail(item) {
     item.musicbrainz_correction_loading = false;
   }
   if (state.utility.activeTab === 'problematic-files') renderProblematicFiles({ preserveProblematicTree: true });
-}
-
-async function queueMusicBrainzCorrection(albumKey) {
-  if (editsQueue.busy || !albumKey) return false;
-  editsQueue.busy = true;
-  try {
-    const response = await fetch('/api/musicbrainz/corrections/queue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ album_key: albumKey }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.detail || 'The correction could not be added. Try again shortly.');
-    (state.utility.problematicFiles || []).forEach((item) => {
-      if (item?.musicbrainz_correction?.album_key === albumKey) item.musicbrainz_correction.queued_at = payload.queued_at;
-    });
-    editsQueue.corrections = null;
-    showToast('Correction added to Settings → Edits Queue.', 'info', 3200);
-    return true;
-  } catch (error) {
-    showToast(error?.message || 'The correction could not be added. Try again shortly.', 'error', 3200);
-    return false;
-  } finally {
-    editsQueue.busy = false;
-    if (state.utility.activeTab === 'problematic-files') renderProblematicFiles({ preserveProblematicTree: true });
-  }
-}
-
-// Edits Queue rows: "Album artist and 12 track artists: Christian Vander → Magma" (E1).
-function summarizeMusicBrainzCorrections(corrections) {
-  const titles = corrections.filter((item) => item.field === 'title');
-  const changes = new Map();
-  corrections.filter((item) => item.field !== 'title').forEach((item) => {
-    const change = `${item.current} → ${item.proposed}`;
-    const name = item.field === 'artist'
-      ? `${item.tracks.length} track artist${item.tracks.length === 1 ? '' : 's'}`
-      : item.field === 'album' ? 'Album title' : 'Album artist';
-    changes.set(change, [...(changes.get(change) || []), name]);
-  });
-  const parts = [...changes].map(([change, names]) => `${names.join(' and ')}: ${change}`);
-  if (titles.length === 1) parts.push(`Track title: ${titles[0].current} → ${titles[0].proposed}`);
-  else if (titles.length) parts.push(`${titles.length} track titles`);
-  return parts.join('; ');
 }
 
 function formatEditsQueueTime(value) {
@@ -37907,38 +37872,75 @@ function formatEditsQueueTime(value) {
     ? `today ${time}` : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-// The album-versions list (E1/E2): cover, name and one line, then open and remove.
-function buildEditsQueueEntryHtml({ kind, id, title, subtitle, album = null }) {
+// The album-versions list (E1/E2): cover, name and one line, then the entry's own actions.
+function buildEditsQueueEntryHtml({ title, subtitle, album = null, attributes = {}, actionsHtml = '', bodyHtml = '' }) {
   // Responses name covers by reference (cover_ref), never by path.
   const cover = album?.cover_ref
     ? buildUtilityAlbumArtbox(album, { label: `Artwork for ${title}` })
     : '<span class="version-picker-option-cover-placeholder">No cover</span>';
-  const entry = { 'data-edits-queue-kind': kind, 'data-edits-queue-id': String(id) };
-  return `<div class="version-picker-option" data-open-edits-queue-entry="1" ${Object.entries(entry)
+  return `<div class="version-picker-option edits-queue-entry" ${Object.entries(attributes)
     .map(([name, value]) => `${name}="${escapeHtml(value)}"`).join(' ')}>
     <span class="version-picker-option-cover">${cover}</span>
     <span class="version-picker-option-meta">
       <span class="version-picker-option-name">${escapeHtml(title)}</span>
       <span class="version-picker-option-subtitle">${escapeHtml(subtitle)}</span>
+      ${bodyHtml}
     </span>
-    <span class="version-picker-option-actions">
-      ${ButtonComponent.renderActionButton({ ariaLabel: `Open ${title}`, title: 'Open', icon: 'external',
-    presentation: 'bare', attributes: { ...entry, 'data-open-edits-queue-entry': '1' } })}
-      ${ButtonComponent.renderActionButton({ ariaLabel: `Remove ${title} from the queue`, title: 'Remove from queue',
-    icon: 'delete', semantic: 'destructive', disabled: editsQueue.busy,
-    attributes: { ...entry, 'data-remove-edits-queue-entry': '1' } })}
-    </span>
+    <span class="version-picker-option-actions">${actionsHtml}</span>
   </div>`;
 }
 
+function buildEditsQueueAlbumHtml(album, section, kind) {
+  const busy = editsQueue.busy || !canReviewMusicBrainzCorrections();
+  const button = (action, label, variant = 'secondary') => ButtonComponent.renderButton({
+    label, variant, size: 'small', disabled: busy,
+    attributes: { 'data-edits-queue-album-action': action, 'data-edits-queue-album': album.album_key } });
+  const applied = album.rows.some((row) => row.state === 'applied');
+  const actions = section === 'applied'
+    ? (applied ? button('undo', 'Undo') : '')
+    : `${button('approve', 'Approve', 'primary')}${button('skip', 'Skip')}`;
+  return buildEditsQueueEntryHtml({
+    title: album.album_title || 'Unknown Album', album,
+    subtitle: [album.artist_name, album.year].filter(Boolean).join(' · '),
+    attributes: { 'data-edits-queue-album-row': album.album_key },
+    actionsHtml: actions,
+    bodyHtml: buildMusicBrainzCorrectionTableHtml(album.rows, `edits-queue-${section}-${kind}-${album.album_key}`),
+  });
+}
+
+function buildEditsQueueKindHtml(section, group) {
+  const open = editsQueue.openKind === group.kind;
+  const page = editsQueue.pages[`${section}:${group.kind}`];
+  const approveKind = section === 'review' && !MUSICBRAINZ_PER_ALBUM_ONLY.has(group.kind) && canReviewMusicBrainzCorrections()
+    ? ButtonComponent.renderButton({ label: 'Approve kind', variant: 'primary', size: 'small', disabled: editsQueue.busy,
+      attributes: { 'data-edits-queue-approve-kind': group.kind } }) : '';
+  const albums = open && page
+    ? `<div class="version-picker-list">${page.albums.map((album) => buildEditsQueueAlbumHtml(album, section, group.kind)).join('')}</div>
+      ${page.nextOffset !== null ? ButtonComponent.renderButton({ label: 'Show more', disabled: editsQueue.busy,
+    attributes: { 'data-edits-queue-more': group.kind } }) : ''}`
+    : open ? '<div class="utility-empty-state">Loading…</div>' : '';
+  return `<section class="edits-queue-kind" data-edits-queue-kind-group="${escapeHtml(group.kind)}">
+    <div class="edits-queue-kind-heading">
+      ${ButtonComponent.renderButton({ label: `${MUSICBRAINZ_CORRECTION_KINDS[group.kind] || group.kind} · ${group.albums} album${group.albums === 1 ? '' : 's'}, ${group.rows} change${group.rows === 1 ? '' : 's'}`,
+    quiet: true, attributes: { 'data-edits-queue-open-kind': group.kind, 'aria-expanded': String(open) } })}
+      ${approveKind}
+    </div>
+    ${albums}
+  </section>`;
+}
+
 function buildEditsQueueCorrectionsHtml() {
-  const items = editsQueue.corrections || [];
   const settings = editsQueue.settings || {};
   const nextRun = settings.auto_submit_bulks ? formatEditsQueueTime(settings.next_run_at) : '';
-  const intro = items.length
-    ? `${items.length} approved correction${items.length === 1 ? ' is' : 's are'} waiting. Bulk Correction writes them to your files through Edit Tags. Open an entry to see the album; remove it to drop the correction.`
-    : 'No corrections are waiting. Add one from an album labelled Data Correction Needed in Problematic Files.';
-  return `<p class="utility-detail-meta">${escapeHtml(intro)}</p>
+  const section = editsQueue.section;
+  const groups = editsQueue.kinds || [];
+  const sections = `<div class="in-page-tabs edits-queue-sections" role="tablist" aria-label="Data Correction">${[
+    ['applied', 'Applied automatically'], ['review', 'Waiting for approval']]
+    .map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === section}" data-edits-queue-section="${key}">${label}</button>`).join('')}</div>`;
+  const intro = section === 'applied'
+    ? 'Trivial changes (case, spacing, punctuation, accents, small typos) are shown in place of your tags automatically. Your files are unchanged until Bulk Correction writes them. Undo an album to show its tags again.'
+    : 'These changes wait for you. Approve a whole kind, or approve or skip album by album; artist changes are approved per album only.';
+  return `${sections}<p class="utility-detail-meta">${escapeHtml(intro)}</p>
     <div class="utility-detected-actions edits-queue-controls">
       <div class="edits-queue-auto-submit">
         ${buildGallerySwitchHtml({ id: 'edits-queue-auto-submit', label: 'Auto submit bulks',
@@ -37949,10 +37951,8 @@ function buildEditsQueueCorrectionsHtml() {
       <span title="Bulk Correction arrives soon.">${ButtonComponent.renderButton({
     label: 'Bulk Correction', variant: 'primary', disabled: true, title: 'Bulk Correction arrives soon.' })}</span>
     </div>
-    <div class="version-picker-list">${items.map((item) => buildEditsQueueEntryHtml({
-    kind: 'correction', id: item.entry_id, title: item.album_title || 'Unknown Album', album: item,
-    subtitle: `${[item.artist_name, item.year].filter(Boolean).join(' · ')} — ${summarizeMusicBrainzCorrections(item.corrections || [])}`,
-  })).join('')}</div>`;
+    ${groups.length ? groups.map((group) => buildEditsQueueKindHtml(section, group)).join('')
+    : `<div class="utility-empty-state">${section === 'applied' ? 'Nothing has been applied automatically.' : 'Nothing is waiting for approval.'}</div>`}`;
 }
 
 function buildEditsQueueLookupsHtml() {
@@ -37968,9 +37968,16 @@ function buildEditsQueueLookupsHtml() {
     const when = [`queued ${formatEditsQueueTime(item.requested_at)}`, startsAt ? `starts by itself at ${startsAt}` : '']
       .filter(Boolean).join(', ');
     const cover = album && typeof getIndexedAlbum === 'function' ? getIndexedAlbum(item.album_key) : null;
+    const title = (album ? item.album_title : item.artist_name) || 'Unknown';
+    const entry = { 'data-edits-queue-lookup': String(item.request_id) };
     return buildEditsQueueEntryHtml({
-      kind: 'lookup', id: item.request_id, title: (album ? item.album_title : item.artist_name) || 'Unknown',
-      album: cover, subtitle: `${facts.filter(Boolean).join(' · ')} — ${when}`,
+      title, album: cover, subtitle: `${facts.filter(Boolean).join(' · ')} — ${when}`,
+      attributes: { ...entry, 'data-open-edits-queue-lookup': '1' },
+      actionsHtml: `${ButtonComponent.renderActionButton({ ariaLabel: `Open ${title}`, title: 'Open', icon: 'external',
+        presentation: 'bare', attributes: { ...entry, 'data-open-edits-queue-lookup': '1' } })}
+        ${ButtonComponent.renderActionButton({ ariaLabel: `Remove ${title} from the queue`, title: 'Remove from queue',
+        icon: 'delete', semantic: 'destructive', disabled: editsQueue.busy,
+        attributes: { ...entry, 'data-remove-edits-queue-lookup': '1' } })}`,
     });
   }).join('')}</div>`;
 }
@@ -37982,7 +37989,7 @@ function buildEditsQueueHtml() {
   let body;
   if (editsQueue.failed) {
     body = buildOnPageAlertHtml({ severity: 'error', title: 'Edits Queue unavailable', message: 'Unable to load the Edits Queue. Try again shortly.' });
-  } else if (!editsQueue.corrections || !editsQueue.lookups) {
+  } else if (!editsQueue.kinds || !editsQueue.lookups) {
     body = '<div class="utility-empty-state">Loading the Edits Queue…</div>';
   } else {
     body = editsQueue.tab === 'data-correction' ? buildEditsQueueCorrectionsHtml() : buildEditsQueueLookupsHtml();
@@ -37998,22 +38005,27 @@ function renderUtilityEditsQueue() {
   els.detail.innerHTML = buildEditsQueueHtml();
 }
 
+const readEditsQueueJson = (url) => fetch(url, { headers: { Accept: 'application/json' } }).then(async (response) => {
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.detail || 'Unavailable');
+  return payload;
+});
+
 async function loadUtilityEditsQueue(force = false) {
   if (editsQueue.loading) return editsQueue.loading;
-  if (!force && editsQueue.corrections && editsQueue.lookups) {
+  if (!force && editsQueue.kinds && editsQueue.lookups) {
     renderUtilityEditsQueue();
     return null;
   }
   renderUtilityEditsQueue();
-  const read = (url) => fetch(url, { headers: { Accept: 'application/json' } }).then(async (response) => {
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.detail || 'Unavailable');
-    return payload;
-  });
-  editsQueue.loading = Promise.all([read('/api/musicbrainz/corrections/queue'), read('/api/musicbrainz/lookups')])
+  editsQueue.loading = Promise.all([
+    readEditsQueueJson(`/api/musicbrainz/corrections/edits?section=${editsQueue.section}`),
+    readEditsQueueJson('/api/musicbrainz/lookups'),
+  ])
     .then(([queue, lookups]) => {
-      editsQueue.corrections = Array.isArray(queue.items) ? queue.items : [];
+      editsQueue.kinds = Array.isArray(queue.kinds) ? queue.kinds : [];
       editsQueue.settings = queue.settings || {};
+      editsQueue.pages = {};
       editsQueue.lookups = Array.isArray(lookups.queued) ? lookups.queued : [];
       editsQueue.queueStartsAt = lookups.queue_starts_at || null;
       editsQueue.failed = false;
@@ -38023,7 +38035,28 @@ async function loadUtilityEditsQueue(force = false) {
       editsQueue.loading = null;
       if (state.utility.activeTab === 'edits-queue') renderUtilityEditsQueue();
     });
-  return editsQueue.loading;
+  const loading = editsQueue.loading;
+  await loading;
+  if (editsQueue.openKind && editsQueue.kinds?.some((group) => group.kind === editsQueue.openKind)) {
+    await loadEditsQueueKindPage(editsQueue.openKind);
+  }
+  return loading;
+}
+
+const EDITS_QUEUE_PAGE_SIZE = 50;
+
+async function loadEditsQueueKindPage(kind, { more = false } = {}) {
+  const key = `${editsQueue.section}:${kind}`;
+  const previous = more ? editsQueue.pages[key] : null;
+  const offset = previous?.nextOffset ?? 0;
+  try {
+    const payload = await readEditsQueueJson(`/api/musicbrainz/corrections/edits/${encodeURIComponent(kind)}?section=${editsQueue.section}&offset=${offset}&limit=${EDITS_QUEUE_PAGE_SIZE}`);
+    editsQueue.pages[key] = { albums: [...(previous?.albums || []), ...(payload.albums || [])],
+      nextOffset: payload.next_offset ?? null };
+  } catch (error) {
+    showToast(error?.message || 'Unable to load these changes.', 'error', 3200);
+  }
+  if (state.utility.activeTab === 'edits-queue') renderUtilityEditsQueue();
 }
 
 async function sendEditsQueueChange(url, options, failure) {
@@ -38049,31 +38082,33 @@ async function setEditsQueueAutoSubmit(on) {
   renderUtilityEditsQueue();
 }
 
-async function removeEditsQueueEntry(kind, id) {
-  const url = kind === 'lookup' ? `/api/musicbrainz/lookups/${encodeURIComponent(id)}`
-    : `/api/musicbrainz/corrections/queue/${encodeURIComponent(id)}`;
-  const albumKey = kind === 'correction'
-    ? (editsQueue.corrections || []).find((entry) => String(entry.entry_id) === String(id))?.album_key : null;
-  const removed = await sendEditsQueueChange(url, { method: 'DELETE' }, 'The entry could not be removed.');
-  if (removed && kind === 'lookup' && typeof refreshMusicBrainzLookupNotifications === 'function') {
+// Undo, approve or skip one album; approve a whole kind (never artist kinds). Remembered.
+async function decideEditsQueueAlbum(action, albumKey) {
+  const done = await sendEditsQueueChange(`/api/musicbrainz/corrections/albums/${action}`,
+    { method: 'POST', body: JSON.stringify({ album_key: albumKey }) }, 'The change could not be saved.');
+  if (done) showToast({ undo: 'Undone: the tags show again.', approve: 'Approved.', skip: 'Skipped.' }[action], 'info', 2400);
+  await loadUtilityEditsQueue(true);
+}
+
+async function approveEditsQueueKind(kind) {
+  if (MUSICBRAINZ_PER_ALBUM_ONLY.has(kind)) return;
+  const done = await sendEditsQueueChange(`/api/musicbrainz/corrections/kinds/${encodeURIComponent(kind)}/approve`,
+    { method: 'POST', body: '{}' }, 'The kind could not be approved.');
+  if (done) showToast(`Approved ${done.decided} change${done.decided === 1 ? '' : 's'}.`, 'info', 2400);
+  await loadUtilityEditsQueue(true);
+}
+
+async function removeEditsQueueLookup(id) {
+  const removed = await sendEditsQueueChange(`/api/musicbrainz/lookups/${encodeURIComponent(id)}`,
+    { method: 'DELETE' }, 'The entry could not be removed.');
+  if (removed && typeof refreshMusicBrainzLookupNotifications === 'function') {
     void refreshMusicBrainzLookupNotifications({ force: true });
-  }
-  if (removed && albumKey) {
-    // Problematic Files offers "Add to queue" again.
-    (state.utility.problematicFiles || []).forEach((item) => {
-      if (item?.musicbrainz_correction?.album_key === albumKey) item.musicbrainz_correction.queued_at = null;
-    });
   }
   await loadUtilityEditsQueue(true);
 }
 
 // Open: an album in album details; an artist at its Problematic Files entry.
-function openEditsQueueEntry(kind, id) {
-  if (kind === 'correction') {
-    const item = (editsQueue.corrections || []).find((entry) => String(entry.entry_id) === String(id));
-    if (item) openTrackModal({ key: item.album_key, name: item.album_title, album_artist: item.artist_name, year: item.year, preview_only: true, tracks: [] });
-    return;
-  }
+function openEditsQueueLookup(id) {
   const item = (editsQueue.lookups || []).find((entry) => String(entry.request_id) === String(id));
   if (!item) return;
   if (item.target_kind === 'album') {
@@ -38085,37 +38120,39 @@ function openEditsQueueEntry(kind, id) {
 
 function handleMusicBrainzCorrectionEvent(event) {
   const target = event.target;
-  const queue = target?.closest?.('[data-queue-musicbrainz-correction]');
-  if (queue) {
-    event.preventDefault();
-    void queueMusicBrainzCorrection(queue.getAttribute('data-queue-musicbrainz-correction'));
-    return true;
-  }
   if (!target?.closest?.('.edits-queue')) return false;
-  const tab = target.closest('[data-edits-queue-tab]');
-  if (tab) {
-    event.preventDefault();
-    editsQueue.tab = tab.getAttribute('data-edits-queue-tab');
-    renderUtilityEditsQueue();
-    return true;
+  const control = (selector) => target.closest(selector);
+  const actions = [
+    ['[data-edits-queue-tab]', (node) => { editsQueue.tab = node.getAttribute('data-edits-queue-tab'); renderUtilityEditsQueue(); }],
+    ['[data-edits-queue-section]', (node) => {
+      editsQueue.section = node.getAttribute('data-edits-queue-section');
+      editsQueue.openKind = null;
+      void loadUtilityEditsQueue(true);
+    }],
+    ['#edits-queue-auto-submit', (node) => { if (!node.disabled) void setEditsQueueAutoSubmit(node.getAttribute('aria-checked') !== 'true'); }],
+    ['[data-edits-queue-open-kind]', (node) => {
+      const kind = node.getAttribute('data-edits-queue-open-kind');
+      editsQueue.openKind = editsQueue.openKind === kind ? null : kind;
+      renderUtilityEditsQueue();
+      if (editsQueue.openKind) void loadEditsQueueKindPage(kind);
+    }],
+    ['[data-edits-queue-more]', (node) => { void loadEditsQueueKindPage(node.getAttribute('data-edits-queue-more'), { more: true }); }],
+    ['[data-edits-queue-approve-kind]', (node) => { void approveEditsQueueKind(node.getAttribute('data-edits-queue-approve-kind')); }],
+    ['[data-edits-queue-album-action]', (node) => {
+      void decideEditsQueueAlbum(node.getAttribute('data-edits-queue-album-action'), node.getAttribute('data-edits-queue-album'));
+    }],
+    ['[data-remove-edits-queue-lookup]', (node) => { if (!node.disabled) void removeEditsQueueLookup(node.getAttribute('data-edits-queue-lookup')); }],
+    ['[data-open-edits-queue-lookup]', (node) => openEditsQueueLookup(node.getAttribute('data-edits-queue-lookup'))],
+  ];
+  for (const [selector, run] of actions) {
+    const node = control(selector);
+    if (node) {
+      event.preventDefault();
+      run(node);
+      return true;
+    }
   }
-  const autoSubmit = target.closest('#edits-queue-auto-submit');
-  if (autoSubmit) {
-    event.preventDefault();
-    if (!autoSubmit.disabled) void setEditsQueueAutoSubmit(autoSubmit.getAttribute('aria-checked') !== 'true');
-    return true;
-  }
-  const entry = target.closest('[data-remove-edits-queue-entry], [data-open-edits-queue-entry]');
-  if (!entry) return false;
-  event.preventDefault();
-  const kind = entry.getAttribute('data-edits-queue-kind');
-  const id = entry.getAttribute('data-edits-queue-id');
-  if (entry.hasAttribute('data-remove-edits-queue-entry')) {
-    if (!entry.disabled) void removeEditsQueueEntry(kind, id);
-  } else {
-    openEditsQueueEntry(kind, id);
-  }
-  return true;
+  return false;
 }
 
 // END js/runtime/musicbrainz-corrections.js
@@ -40082,7 +40119,7 @@ function renderTrackModalRelease(album) {
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
       artistRomanized: albumDetailsRomanizedArtist(album),
-      album: album.display_name || album.name || 'Album',
+      album: album.display_title || album.display_name || album.name || 'Album',
       alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),
@@ -40464,8 +40501,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         : duration;
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
-      const displayTitle = String(trackRow?.title || track.title || '').trim();
-      const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
+      // An applied MusicBrainz data correction (S4) shows in place of the tag; the tag stays.
+      const displayTitle = String(track.display_title || trackRow?.title || track.title || '').trim();
+      const taggedSecondary = String(trackRow?.secondary_artist || '').trim();
+      const secondaryArtist = taggedSecondary && track.display_artist ? String(track.display_artist) : taggedSecondary;
       return {
         path: trackPath,
         src,

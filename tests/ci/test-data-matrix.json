@@ -3559,12 +3559,12 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files stays ready with stored MusicBrainz data corrections",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files and the Edits Queue stay ready with 64,000 stored MusicBrainz data corrections",
     "profile": "utility-problematic-files",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
     "databaseScenarios": [
-      "utility-problematic-files:musicbrainz-data-corrections-10800"
+      "utility-problematic-files:musicbrainz-data-corrections-10800-albums-64k-rows"
     ],
     "filesystemScenarios": [
       "media:utility-problematic-files"
@@ -3572,7 +3572,8 @@
     "expectedContracts": [
       "problematic-files-ready-with-corrections",
       "correction-rows-outside-list-response",
-      "correction-filter-page-one"
+      "correction-filter-page-one",
+      "edits-queue-first-page-64k-rows"
     ],
     "mutationOwnership": {
       "databaseIdentity": "utility-problematic-files:musicbrainz-corrections"
@@ -9536,7 +9537,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/musicbrainzCorrections.spec.js",
-    "case": "D1: a data correction entry shows its label, the change table and Add to queue, without Apply changes",
+    "case": "D1: a data correction entry shows its label and its changes with their status, and no Add to queue",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9545,13 +9546,13 @@
     "expectedContracts": [
       "musicbrainz-data-correction-entry"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/musicbrainzCorrections.spec.js",
-    "case": "E1: the Edits Queue is one page: Data Correction list, Auto submit bulks off, Bulk Correction visibly disabled",
+    "case": "E1: Applied automatically lists kinds and pages albums with Undo; Auto submit bulks off; Bulk Correction visibly disabled",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9560,7 +9561,22 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-data-correction"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "E3: Waiting for approval offers Approve kind, while artist kinds and whole albums are approved per album only",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-review-approval"
+    ],
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",
@@ -9596,7 +9612,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/musicbrainzCorrections.spec.js",
-    "case": "P1: on a phone the Edits Queue Data Correction list keeps the switch, Bulk Correction and open/remove within the screen",
+    "case": "P1: on a phone the applied changes keep the switch, Bulk Correction and Undo within the screen",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9605,7 +9621,7 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-phone-data-correction"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",

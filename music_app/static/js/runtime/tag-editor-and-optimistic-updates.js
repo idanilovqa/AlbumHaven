@@ -1958,7 +1958,7 @@ function renderTrackModalRelease(album) {
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
       artistRomanized: albumDetailsRomanizedArtist(album),
-      album: album.display_name || album.name || 'Album',
+      album: album.display_title || album.display_name || album.name || 'Album',
       alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),
@@ -2340,8 +2340,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         : duration;
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
-      const displayTitle = String(trackRow?.title || track.title || '').trim();
-      const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
+      // An applied MusicBrainz data correction (S4) shows in place of the tag; the tag stays.
+      const displayTitle = String(track.display_title || trackRow?.title || track.title || '').trim();
+      const taggedSecondary = String(trackRow?.secondary_artist || '').trim();
+      const secondaryArtist = taggedSecondary && track.display_artist ? String(track.display_artist) : taggedSecondary;
       return {
         path: trackPath,
         src,

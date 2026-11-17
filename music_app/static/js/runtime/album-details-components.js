@@ -7,15 +7,20 @@ function normalizeAlbumDetailsLayout(value) {
 
 // The MusicBrainz artist an album certainly belongs to replaces a tag that names someone
 // else. Display only: the tag itself changes only through an approved tag edit.
-function albumDisplayArtist(album) {
+function albumIdentityArtist(album) {
   const tagged = album?.album_artist || album?.artist || '';
   const identity = album?.musicbrainz_artist;
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
+// An applied MusicBrainz data correction (S4) shows in place of the album artist tag.
+function albumDisplayArtist(album) {
+  return album?.display_artist || albumIdentityArtist(album);
+}
+
 function albumTaggedArtistNote(album) {
   const tagged = album?.album_artist || album?.artist || '';
-  if (albumDisplayArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
+  if (albumIdentityArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
   // A name shared by several MusicBrainz artists (Amarok): say which one this album is.
   const identity = album?.musicbrainz_artist;
   return identity?.split && identity.canonical_name
@@ -252,7 +257,7 @@ function syncMobileAlbumComposition(album) {
       const artist = albumDisplayArtist(album);
       identity.innerHTML = buildAlbumDetailsHeaderHtml({
         variant: 'copy', titleId: 'mobile-album-identity-title', subtitleId: 'mobile-album-identity-summary',
-        title: album.display_name || album.name || 'Album',
+        title: album.display_title || album.display_name || album.name || 'Album',
         eyebrow: centered ? [artist, album.display_year || album.year].filter(Boolean).join(' • ') : artist,
         eyebrowRomanized: albumDetailsRomanizedArtist(album),
         subtitle: centered ? '' : [album.display_year || album.year, album.total_duration_display].filter(Boolean).join(' • '),

@@ -10,8 +10,8 @@ const { resolvePlaywrightPython } = require('../../../scripts/playwright-python.
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-// MusicBrainz Delivery 2, S4, at the measured sandbox6 scale (about 10,800 albums need a data
-// correction). Synthetic only: listed fixture albums and synthetic albums get certain release
+// MusicBrainz Delivery 2, S4, at the measured sandbox6 scale (about 10,800 albums and 64,000
+// stored correction rows). Synthetic only: listed fixture albums and synthetic albums get certain release
 // decisions whose release titles differ from their tags, then the application's own refresh
 // stores each album's correction count. Idempotent for a reused prepared fixture.
 const SEED = String.raw`
@@ -67,11 +67,23 @@ MusicBrainzCorrectionsPostgresRepository(
     {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
     connect=lambda url: psycopg.connect(url, row_factory=dict_row)).refresh()
 with psycopg.connect(database_url, row_factory=dict_row) as connection:
+    # sandbox6 stores about 64,000 rows: give each synthetic album five automatic track-title
+    # case changes beside its compared album-title row (idempotent; no tracks or files added).
+    connection.execute(
+        "insert into library.local_album_musicbrainz_correction_rows (library_id, album_key, field, disc_number,"
+        " track_number, current_value, proposed_value, kind, mode)"
+        " select stored.library_id, stored.album_key, 'title', 1, n, 'track ' || n, 'Track ' || n, 'case', 'auto'"
+        " from library.local_album_musicbrainz_corrections stored cross join generate_series(1, 5) n"
+        " where stored.album_key like 's4-correction::%%' and stored.auto_count = 0")
+    connection.execute(
+        "update library.local_album_musicbrainz_corrections set auto_count = 5, correction_count = correction_count + 5"
+        " where album_key like 's4-correction::%%' and auto_count = 0")
     stored = connection.execute(
         "select count(*) filter (where correction_count > 0) as needing,"
-        " count(*) filter (where correction_count > 0 and album_key not like 's4-correction::%%') as listed"
+        " count(*) filter (where correction_count > 0 and album_key not like 's4-correction::%%') as listed,"
+        " (select count(*) from library.local_album_musicbrainz_correction_rows) as rows"
         " from library.local_album_musicbrainz_corrections").fetchone()
-print(json.dumps({"albums": stored["needing"], "fixtureAlbums": stored["listed"]}))
+print(json.dumps({"albums": stored["needing"], "fixtureAlbums": stored["listed"], "rows": stored["rows"]}))
 `;
 
 /** Store about 10,800 data corrections in the isolated performance database. */

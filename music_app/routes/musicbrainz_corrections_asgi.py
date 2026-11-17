@@ -1,8 +1,10 @@
 """MusicBrainz data corrections in Problematic Files and the Edits Queue (Delivery 2, S4).
 
-Owner-only, like every MusicBrainz action. Problematic Files labels an album "Data
-Correction Needed" and shows its proposed correction; "Add to queue" keeps it for Bulk
-Correction in Settings → Edits Queue. Nothing here writes tags.
+Owner-only, like every MusicBrainz action (owner 2026-11-16, "Data Correction flow").
+Problematic Files labels an album "Data Correction Needed" and shows its changes; Settings →
+Edits Queue lists the automatic ones ("Applied automatically", Undo per album) and those
+waiting for approval (per kind, per album, or skip; artist changes per album only). Nothing
+here writes tags.
 """
 from __future__ import annotations
 
@@ -19,8 +21,10 @@ from music_app.routes.musicbrainz_enrichment_asgi import (
     _request_object,
     _require_current_library_owner,
 )
+from music_app.services.musicbrainz_correction_kinds import ARTIST_KINDS, REVIEW_KINDS
 from music_app.services.musicbrainz_corrections import (
     DATA_CORRECTION_LABEL,
+    SECTIONS,
     build_musicbrainz_correction_service,
 )
 
@@ -28,9 +32,9 @@ router = APIRouter(prefix="/api/musicbrainz/corrections")
 
 _UNAVAILABLE = "MusicBrainz corrections are unavailable."
 _PAGE_LIMIT = 200
-_QUEUE_FIELDS = ("entry_id", "album_key", "album_title", "artist_name", "year", "cover_path", "release_mbid",
-                 "corrections", "queued_at")
-_CORRECTION_FIELDS = ("field", "label", "current", "proposed", "tracks")
+_ROW_FIELDS = ("field", "label", "disc_number", "track_number", "current_value", "proposed_value", "kind", "mode",
+               "state")
+_ALBUM_ACTIONS = {"undo": "undo_album", "approve": "approve_album", "skip": "skip_album"}
 
 
 @router.get("")
@@ -42,8 +46,7 @@ async def get_album_correction(album_key: str, request: Request):
     album = await _call(request, "get_correction", album_key=album_key)
     if not isinstance(album, Mapping):
         raise HTTPException(404, "This album has no data correction.")
-    return {"correction": {**_correction_payload(album), "track_count": album.get("track_count"),
-                           "file_types": list(album.get("file_types") or [])}}
+    return {"correction": _correction_payload(album)}
 
 
 @router.get("/albums")
@@ -62,42 +65,55 @@ async def list_correction_albums(request: Request, offset: int = 0, limit: int =
             "next_offset": offset + len(items) if items and offset + len(items) < total else None}
 
 
-@router.get("/queue")
-async def list_correction_queue(request: Request):
+@router.get("/edits")
+async def get_edits_queue(request: Request, section: str = "applied"):
+    """The Edits Queue's Data Correction tab: each kind with its album and row counts."""
     await _require_current_library_owner(request)
-    result = await _call(request, "list_queue")
-    if not isinstance(result, Mapping):
-        raise _unavailable()
+    if section not in SECTIONS:
+        raise HTTPException(400, "Invalid Edits Queue section.")
+    result = await _call(request, "edits_queue", section=section)
     settings = result.get("settings") or {}
-    return {
-        "items": [{**{field: row.get(field) for field in _QUEUE_FIELDS},
-                   "corrections": _corrections(row.get("corrections"))}
-                  for row in result.get("items") or () if isinstance(row, Mapping)],
-        "settings": {"auto_submit_bulks": settings.get("auto_submit_bulks") is True,
-                     "next_run_at": settings.get("next_run_at")},
-    }
+    return {"section": section,
+            "kinds": [{field: row.get(field) for field in ("kind", "albums", "rows")} for row in result.get("kinds") or ()],
+            "settings": {"auto_submit_bulks": settings.get("auto_submit_bulks") is True,
+                         "next_run_at": settings.get("next_run_at")}}
 
 
-@router.post("/queue")
-async def queue_correction(request: Request):
+@router.get("/edits/{kind}")
+async def get_edits_queue_page(kind: str, request: Request, section: str = "applied", offset: int = 0,
+                               limit: int = 50):
+    """A page of albums of one kind, each with its rows."""
+    await _require_current_library_owner(request)
+    if section not in SECTIONS or offset < 0 or not 1 <= limit <= _PAGE_LIMIT:
+        raise HTTPException(400, "Invalid page.")
+    albums = await _call(request, "edits_queue_page", section=section, kind=kind, offset=offset, limit=limit + 1)
+    return {"albums": [{**{field: album.get(field) for field in ("album_key", "album_title", "artist_name", "year",
+                                                                  "cover_path")},
+                        "rows": _rows(album.get("rows"))} for album in albums[:limit]],
+            "next_offset": offset + limit if len(albums) > limit else None}
+
+
+@router.post("/albums/{action}")
+async def decide_album(action: str, request: Request):
+    """Undo an album's applied changes, or approve or skip its waiting ones; remembered."""
     actor = await _require_current_library_owner(request)
     body = await _request_object(request)
     album_key = body.get("album_key") if isinstance(body, Mapping) and set(body) == {"album_key"} else None
-    if not isinstance(album_key, str) or not 0 < len(album_key.strip()) <= 1024:
+    if action not in _ALBUM_ACTIONS or not isinstance(album_key, str) or not 0 < len(album_key.strip()) <= 1024:
         raise HTTPException(400, "Invalid data correction request.")
-    result = await _call(request, "queue_correction", album_key=album_key, actor_account_id=actor.account_id)
-    if not isinstance(result, Mapping):
-        raise HTTPException(404, "This album has no data correction.")
-    return JSONResponse({"entry_id": result.get("entry_id"), "queued_at": result.get("queued_at")},
-                        status_code=201)
+    decided = await _call(request, _ALBUM_ACTIONS[action], album_key=album_key, actor_account_id=actor.account_id)
+    if not decided:
+        raise HTTPException(404, "Nothing to change for this album.")
+    return {"decided": decided}
 
 
-@router.delete("/queue/{entry_id}")
-async def remove_queued_correction(entry_id: int, request: Request):
-    await _require_current_library_owner(request)
-    if await _call(request, "remove_queued", entry_id=entry_id) is not True:
-        raise HTTPException(404, "Queued correction was not found.")
-    return {"removed": True}
+@router.post("/kinds/{kind}/approve")
+async def approve_kind(kind: str, request: Request):
+    """Approve every waiting change of one kind. Artist changes are refused: per album only."""
+    actor = await _require_current_library_owner(request)
+    if kind not in REVIEW_KINDS or kind in ARTIST_KINDS or await _request_object(request) != {}:
+        raise HTTPException(400, "This kind is approved per album only.")
+    return {"decided": await _call(request, "approve_kind", kind=kind, actor_account_id=actor.account_id)}
 
 
 @router.put("/settings")
@@ -142,7 +158,7 @@ def project_correction_problems_into_problematic_files(request: Request, payload
 
 
 def project_correction_into_problematic_detail(request: Request, payload: object) -> object:
-    """A loaded album detail carries its label and full correction, compared for this album."""
+    """A loaded album detail carries its label and its stored rows."""
     if not isinstance(payload, dict) or not payload.get("key") \
             or not _is_current_library_owner(getattr(request.state, "current_actor", None)):
         return payload
@@ -164,11 +180,12 @@ def _label(item: dict[str, object], correction: dict[str, object]) -> None:
 
 
 def _correction_payload(album: Mapping[str, object]) -> dict[str, object]:
-    """The correction a row carries: its count always, its changes once compared."""
-    payload = {"album_key": str(album["album_key"]), "release_mbid": album.get("release_mbid"),
-               "queued_at": album.get("queued_at"), "correction_count": album.get("correction_count")}
+    """The correction a row carries: its counts always, its rows once the album is opened."""
+    payload = {"album_key": str(album["album_key"]),
+               **{field: album.get(field) for field in ("correction_count", "auto_count", "review_count",
+                                                        "review_whole") if field in album}}
     if "corrections" in album:
-        payload["corrections"] = _corrections(album.get("corrections"))
+        payload["corrections"] = _rows(album.get("corrections"))
         payload["correction_count"] = len(payload["corrections"])
     return payload
 
@@ -188,8 +205,8 @@ def _problematic_correction_item(album: Mapping[str, object]) -> dict[str, objec
     }
 
 
-def _corrections(value: object) -> list[dict[str, object]]:
-    return [{field: item.get(field) for field in _CORRECTION_FIELDS}
+def _rows(value: object) -> list[dict[str, object]]:
+    return [{field: item.get(field) for field in _ROW_FIELDS}
             for item in value or () if isinstance(item, Mapping)] if isinstance(value, (list, tuple)) else []
 
 

@@ -2199,3 +2199,9 @@
 .edits-queue-body { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
 .edits-queue-controls { justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .edits-queue-auto-submit { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* Data Correction kinds (owner 2026-11-16): a heading per kind, its albums beneath. */
+.edits-queue-sections { margin-top: 4px; }
+.edits-queue-kind { display: flex; flex-direction: column; gap: 8px; }
+.edits-queue-kind-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.edits-queue-entry { align-items: flex-start; cursor: default; }
+.edits-queue-entry .version-picker-option-meta { flex: 1 1 auto; }

@@ -115,6 +115,9 @@ _USER_STATE = {
         library_id, target_kind, local_artist_id, album_key, mode, state, requested_at)
         select library_id, 'album', artist_id, album_key, 'queue', 'queued', now()
         from library.local_albums where id = %(album_id)s""",
+    "musicbrainz_correction_decision": """insert into library.local_album_musicbrainz_correction_decisions (
+        library_id, album_key, field, current_value, proposed_value, decision, decided_at)
+        values (%(library_id)s, %(album_key)s, 'album', 'Silent Running', 'Silent Runnings', 'undone', now())""",
     "musicbrainz_correction": """with release as (
           insert into integration.musicbrainz_releases (mbid, title, refreshed_at)
           values ('7b0d4c2e-0000-4000-8000-00000000c0de', 'Silent Running', now()) returning mbid)

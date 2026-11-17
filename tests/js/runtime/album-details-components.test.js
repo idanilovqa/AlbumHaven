@@ -408,9 +408,10 @@ test('Album Details callers use presentation-only title and year values', () => 
   );
   const mobileSource = fs.readFileSync(path.join(runtimeRoot, 'album-details-components.js'), 'utf8');
 
-  assert.match(tagEditorSource, /album:\s*album\.display_name\s*\|\|\s*album\.name/);
+  // An applied MusicBrainz data correction (display_title) comes first (S4).
+  assert.match(tagEditorSource, /album:\s*album\.display_title\s*\|\|\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(tagEditorSource, /year:\s*album\.display_year\s*\|\|\s*album\.year/);
-  assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
+  assert.match(mobileSource, /title:\s*album\.display_title\s*\|\|\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
 });
 

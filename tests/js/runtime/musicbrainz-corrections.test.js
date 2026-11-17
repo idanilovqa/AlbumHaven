@@ -8,16 +8,16 @@ const repoRoot = path.join(__dirname, '..', '..', '..');
 const read = (relative) => fs.readFileSync(path.join(repoRoot, relative), 'utf8');
 const ButtonComponent = require(path.join(repoRoot, 'music_app/static/js/button-component.js'));
 
-const ARTIST = { field: 'album_artist', label: 'Album artist', current: 'Christian Vander', proposed: 'Magma', tracks: [] };
-const TRACK_ARTISTS = { field: 'artist', label: 'Artist (12 tracks)', current: 'Christian Vander', proposed: 'Magma',
-  tracks: Array.from({ length: 12 }, (_, index) => ({ disc_number: 1, track_number: index + 1 })) };
+const CASE_ROW = { field: 'title', label: 'Track 1 title', disc_number: 1, track_number: 1, current_value: 'carry on',
+  proposed_value: 'Carry On', kind: 'case', mode: 'auto', state: 'applied' };
+const ARTIST_ROW = { field: 'album_artist', label: 'Album artist', disc_number: 0, track_number: 0,
+  current_value: 'Christian Vander', proposed_value: 'Magma', kind: 'album_artist_renamed', mode: 'review', state: 'pending' };
 
 function correctionItem(overrides = {}) {
   return {
     key: 'musicbrainz-correction:wurdah', entity_kind: 'musicbrainz_correction', name: 'Wurdah Ïtah',
-    album_artist: 'Christian Vander', year: 1974, track_count: 12, file_types: ['FLAC'],
-    problem_reasons: ['Data Correction Needed'],
-    musicbrainz_correction: { album_key: 'wurdah', release_mbid: 'r1', queued_at: null, corrections: [ARTIST, TRACK_ARTISTS] },
+    album_artist: 'Christian Vander', year: 1974, problem_reasons: ['Data Correction Needed'],
+    musicbrainz_correction: { album_key: 'wurdah', correction_count: 2, corrections: [CASE_ROW, ARTIST_ROW] },
     detail_loaded: false, ...overrides,
   };
 }
@@ -68,43 +68,22 @@ function loadContext({ items = [], responses = {}, owner = true, activeTab = 'pr
 
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-test('an album needing a correction shows its label, each change and Add to queue, never Apply changes', () => {
+test('a correction shows its label, what was applied and what waits, with no Add to queue and no Apply changes', () => {
   const { context } = loadContext();
   const html = context.buildMusicBrainzCorrectionProblemDetail(correctionItem());
 
   assert.match(html, /alert-label--warning[^>]*>Data Correction Needed</);
-  assert.match(text(html), /Year: 1974 Tracks: 12 File types: FLAC/);
-  assert.match(text(html), /Detected problems MusicBrainz credits this album to Magma\. Add it to Settings → Edits Queue/);
-  assert.match(text(html), /Tag In your files MusicBrainz Album artist Christian Vander Magma Artist \(12 tracks\) Christian Vander Magma/);
-  assert.match(html, /data-queue-musicbrainz-correction="wurdah"[^>]*><span class="ui-button__content">Add to queue</);
-  assert.doesNotMatch(html, /Apply changes/);
+  assert.match(text(html), /1 change was applied automatically \(display only; your files are unchanged\)\. 1 change waits for your approval in Settings → Edits Queue\./);
+  assert.match(text(html), /Track 1 title carry on Carry On Applied Album artist Christian Vander Magma Waiting for approval/);
+  assert.doesNotMatch(html, /Add to queue|Apply changes|data-queue-musicbrainz-correction/);
 });
 
-test('a credited-as name says which name the files carry; track titles are counted', () => {
+test('an album sent to review whole says nothing was applied', () => {
   const { context } = loadContext();
-  const credited = context.describeMusicBrainzCorrection([{ ...ARTIST, current: 'The Alan Parsons Project', proposed: 'Alan Parsons' }]);
-  const titles = context.describeMusicBrainzCorrection([
-    { field: 'title', current: 'A', proposed: 'B', tracks: [] }, { field: 'title', current: 'C', proposed: 'D', tracks: [] }]);
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', review_whole: true,
+    corrections: [{ ...CASE_ROW, mode: 'review', state: 'pending' }] } });
 
-  assert.match(credited, /^MusicBrainz credits this album to Alan Parsons, not The Alan Parsons Project\./);
-  assert.match(titles, /^2 track titles differ from MusicBrainz\./);
-});
-
-test('a queued correction reads In the queue and cannot be added twice', () => {
-  const { context } = loadContext();
-  const item = correctionItem();
-  item.musicbrainz_correction.queued_at = '2026-11-16T10:20:00Z';
-
-  assert.match(context.buildMusicBrainzCorrectionHtml(item), /disabled[^>]*><span class="ui-button__content">In the queue</);
-});
-
-test('without the review capability the correction is shown but cannot be queued', () => {
-  const { context } = loadContext({ owner: false });
-
-  const html = context.buildMusicBrainzCorrectionHtml(correctionItem());
-
-  assert.match(html, /Data Correction Needed/);
-  assert.doesNotMatch(html, /data-queue-musicbrainz-correction/);
+  assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /nothing was applied automatically: review the whole album/);
 });
 
 test('an album with no corrections shows nothing', () => {
@@ -128,47 +107,13 @@ test('a listed album shows the correction beneath its own detected problems', ()
   const html = context.buildProblematicAlbumDetail(album);
 
   assert.ok(html.indexOf('Missing year') < html.indexOf('Data Correction Needed'));
-  assert.match(html, /Add to queue/);
+  assert.doesNotMatch(html, /Add to queue/);
 });
 
-test('Add to queue sends only the album key and marks every row for that album queued', async () => {
-  const item = correctionItem();
-  const { context, requests, toasts, renders } = loadContext({ items: [item], responses: {
-    'POST /api/musicbrainz/corrections/queue': { status: 201, body: { entry_id: 4, queued_at: '2026-11-16T10:20:00Z' } } } });
-
-  assert.equal(await context.queueMusicBrainzCorrection('wurdah'), true);
-
-  assert.deepEqual(requests, [['POST', '/api/musicbrainz/corrections/queue', { album_key: 'wurdah' }]]);
-  assert.equal(item.musicbrainz_correction.queued_at, '2026-11-16T10:20:00Z');
-  assert.deepEqual(toasts, [['info', 'Correction added to Settings → Edits Queue.']]);
-  assert.deepEqual(renders, ['problematic-files']);
-});
-
-test('a refused Add to queue says why and leaves the row unqueued', async () => {
-  const item = correctionItem();
-  const { context, toasts } = loadContext({ items: [item], responses: {
-    'POST /api/musicbrainz/corrections/queue': { status: 404, body: { detail: 'This album has no data correction.' } } } });
-
-  assert.equal(await context.queueMusicBrainzCorrection('wurdah'), false);
-
-  assert.equal(item.musicbrainz_correction.queued_at, null);
-  assert.deepEqual(toasts, [['error', 'This album has no data correction.']]);
-});
-
-test('queue rows summarize their changes as in the approved mockup', () => {
-  const { context } = loadContext();
-
-  assert.equal(context.summarizeMusicBrainzCorrections([ARTIST, TRACK_ARTISTS]),
-    'Album artist and 12 track artists: Christian Vander → Magma');
-  assert.equal(context.summarizeMusicBrainzCorrections([
-    { field: 'album', current: 'Secret', proposed: 'The Secret', tracks: [] },
-    { field: 'title', current: 'A', proposed: 'B', tracks: [{}] }, { field: 'title', current: 'C', proposed: 'D', tracks: [{}] }]),
-  'Album title: Secret → The Secret; 2 track titles');
-});
-
-const QUEUE = { items: [{ entry_id: 4, album_key: 'wurdah', album_title: 'Wurdah Ïtah', artist_name: 'Christian Vander', year: 1974,
-  cover_ref: null, corrections: [ARTIST, TRACK_ARTISTS], queued_at: '2026-11-16T10:20:00Z' }],
-settings: { auto_submit_bulks: false, next_run_at: null } };
+const APPLIED = { section: 'applied', kinds: [{ kind: 'case', albums: 1, rows: 1 }], settings: { auto_submit_bulks: false, next_run_at: null } };
+const REVIEW = { section: 'review', kinds: [{ kind: 'edition_suffix', albums: 3, rows: 5 }, { kind: 'album_artist_renamed', albums: 1, rows: 1 },
+  { kind: 'whole_album', albums: 1, rows: 6 }], settings: { auto_submit_bulks: false, next_run_at: null } };
+const ALBUM = { album_key: 'wurdah', album_title: 'Wurdah Ïtah', artist_name: 'Christian Vander', year: 1974, cover_ref: null };
 const LOOKUPS = { queued: [
   { request_id: 9, target_kind: 'album', album_key: 'live', album_title: 'Live At Budokan', artist_name: 'Dream Theater', year: 2004, requested_at: '2026-11-16T10:20:00Z' },
   { request_id: 10, target_kind: 'artist', local_artist_id: 41, artist_name: 'Ktzat Acheret', requested_at: '2026-11-16T10:22:00Z' }],
@@ -176,25 +121,70 @@ queue_starts_at: '2026-11-16T11:20:00Z', batches: [] };
 
 function queueContext(extra = {}) {
   return loadContext({ activeTab: 'edits-queue', responses: {
-    'GET /api/musicbrainz/corrections/queue': { status: 200, body: QUEUE },
+    'GET /api/musicbrainz/corrections/edits?section=applied': { status: 200, body: APPLIED },
+    'GET /api/musicbrainz/corrections/edits?section=review': { status: 200, body: REVIEW },
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50': { status: 200,
+      body: { albums: [{ ...ALBUM, rows: [CASE_ROW] }], next_offset: 50 } },
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&offset=50&limit=50': { status: 200,
+      body: { albums: [{ ...ALBUM, album_key: 'secret', album_title: 'The Secret', rows: [CASE_ROW] }], next_offset: null } },
     'GET /api/musicbrainz/lookups': { status: 200, body: LOOKUPS }, ...extra } });
 }
 
-test('the Edits Queue lists corrections with the switch off and Bulk Correction disabled, saying it arrives soon', async () => {
-  const { context, detail } = queueContext();
-
+test('Applied automatically lists kinds; opening one pages its albums with their rows and Undo', async () => {
+  const { context, detail, requests } = queueContext();
   await context.loadUtilityEditsQueue(true);
 
-  assert.match(detail.innerHTML, /role="tab" aria-selected="true" data-edits-queue-tab="data-correction">Data Correction</);
-  assert.match(detail.innerHTML, /data-edits-queue-tab="musicbrainz-lookup">MusicBrainz Look Up</);
-  assert.match(text(detail.innerHTML), /1 approved correction is waiting\./);
+  assert.match(detail.innerHTML, /data-edits-queue-section="applied"[^>]*>Applied automatically</);
+  assert.match(text(detail.innerHTML), /Case only · 1 album, 1 change/);
   assert.match(detail.innerHTML, /id="edits-queue-auto-submit" role="switch" aria-checked="false">Auto submit bulks/);
-  assert.match(text(detail.innerHTML), /Off: Bulk Correction runs only when you click it\./);
-  assert.match(detail.innerHTML, /<span title="Bulk Correction arrives soon\.">[^]*?disabled aria-disabled="true"[^>]*><span class="ui-button__content">Bulk Correction</);
-  assert.match(text(detail.innerHTML), /Wurdah Ïtah Christian Vander · 1974 — Album artist and 12 track artists: Christian Vander → Magma/);
-  assert.match(detail.innerHTML, /class="version-picker-option" data-open-edits-queue-entry="1" data-edits-queue-kind="correction" data-edits-queue-id="4"/);
-  assert.match(detail.innerHTML, /data-remove-edits-queue-entry="1"/);
-  assert.doesNotMatch(detail.innerHTML, /Apply changes/);
+  assert.match(detail.innerHTML, /title="Bulk Correction arrives soon\."/);
+
+  context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-open-kind': 'case' }), preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(text(detail.innerHTML), /Wurdah Ïtah Christian Vander · 1974 .*carry on Carry On Applied/);
+  assert.match(detail.innerHTML, /data-edits-queue-album-action="undo" data-edits-queue-album="wurdah"/);
+
+  context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-more': 'case' }), preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(text(detail.innerHTML), /The Secret/);
+  assert.deepEqual(requests.filter(([, url]) => url.includes('/edits/case')).map(([, url]) => new URL(url, 'http://x').searchParams.get('offset')), ['0', '50']);
+});
+
+test('Waiting for approval offers Approve kind except for artist kinds and whole albums', async () => {
+  const { context, detail } = queueContext();
+  vm.runInContext("editsQueue.section = 'review'", context);
+  await context.loadUtilityEditsQueue(true);
+
+  assert.match(detail.innerHTML, /data-edits-queue-approve-kind="edition_suffix"/);
+  assert.doesNotMatch(detail.innerHTML, /data-edits-queue-approve-kind="album_artist_renamed"/);
+  assert.doesNotMatch(detail.innerHTML, /data-edits-queue-approve-kind="whole_album"/);
+  assert.match(text(detail.innerHTML), /Whole albums to review · 1 album, 6 changes/);
+});
+
+test('an artist kind is never approved as a kind, even if asked', async () => {
+  const { context, requests } = queueContext();
+
+  await context.approveEditsQueueKind('album_artist_renamed');
+
+  assert.equal(requests.some(([method]) => method === 'POST'), false);
+});
+
+test('undo, approve and skip send the album; approving a kind sends the kind', async () => {
+  const { context, requests } = queueContext({
+    'POST /api/musicbrainz/corrections/albums/undo': { status: 200, body: { decided: 1 } },
+    'POST /api/musicbrainz/corrections/albums/skip': { status: 200, body: { decided: 2 } },
+    'POST /api/musicbrainz/corrections/kinds/edition_suffix/approve': { status: 200, body: { decided: 5 } } });
+  await context.loadUtilityEditsQueue(true);
+
+  await context.decideEditsQueueAlbum('undo', 'wurdah');
+  await context.decideEditsQueueAlbum('skip', 'secret');
+  await context.approveEditsQueueKind('edition_suffix');
+
+  assert.deepEqual(requests.filter(([method]) => method === 'POST').map(([, url, body]) => [url, body]), [
+    ['/api/musicbrainz/corrections/albums/undo', { album_key: 'wurdah' }],
+    ['/api/musicbrainz/corrections/albums/skip', { album_key: 'secret' }],
+    ['/api/musicbrainz/corrections/kinds/edition_suffix/approve', {}],
+  ]);
 });
 
 test('the MusicBrainz Look Up tab lists queued look ups with their start time', async () => {
@@ -204,7 +194,6 @@ test('the MusicBrainz Look Up tab lists queued look ups with their start time', 
 
   assert.match(text(detail.innerHTML), /Live At Budokan Release · Dream Theater · 2004 — queued .*, starts by itself at /);
   assert.match(text(detail.innerHTML), /Ktzat Acheret Artist — queued /);
-  assert.match(text(detail.innerHTML), /Queued look ups start together an hour after the oldest was added\./);
 });
 
 // A click target whose closest() answers the given attributes, inside the Edits Queue.
@@ -222,69 +211,56 @@ function closest(attributes, { disabled = false } = {}) {
   };
 }
 
-test('switching Auto submit bulks on saves it and shows the next run', async () => {
-  const { context, requests, detail } = queueContext({ 'PUT /api/musicbrainz/corrections/settings': {
-    status: 200, body: { settings: { auto_submit_bulks: true, next_run_at: '2026-11-16T11:20:00Z' } } } });
-  await context.loadUtilityEditsQueue(true);
-  const target = closest({ id: 'edits-queue-auto-submit', 'aria-checked': 'false' });
-
-  assert.equal(context.handleMusicBrainzCorrectionEvent({ target, preventDefault() {} }), true);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.deepEqual(requests.at(-1), ['PUT', '/api/musicbrainz/corrections/settings', { auto_submit_bulks: true }]);
-  assert.match(detail.innerHTML, /aria-checked="true">Auto submit bulks/);
-  assert.match(text(detail.innerHTML), /Runs every hour\. Next run: /);
-});
-
-test('removing a correction or a look up deletes that entry and reloads the queue', async () => {
-  const item = correctionItem();
-  item.musicbrainz_correction.queued_at = '2026-11-16T10:20:00Z';
-  const { context, requests, renders } = queueContext({
-    'DELETE /api/musicbrainz/corrections/queue/4': { status: 200, body: { removed: true } },
-    'DELETE /api/musicbrainz/lookups/9': { status: 200, body: { removed: true } } });
-  context.state.utility.problematicFiles = [item];
+test('removing a look up deletes it and reloads the queue', async () => {
+  const { context, requests, renders } = queueContext({ 'DELETE /api/musicbrainz/lookups/9': { status: 200, body: { removed: true } } });
   await context.loadUtilityEditsQueue(true);
 
-  await context.removeEditsQueueEntry('correction', '4');
-  await context.removeEditsQueueEntry('lookup', '9');
+  await context.removeEditsQueueLookup('9');
 
-  const deletes = requests.filter(([method]) => method === 'DELETE').map(([, url]) => url);
-  assert.deepEqual(deletes, ['/api/musicbrainz/corrections/queue/4', '/api/musicbrainz/lookups/9']);
-  assert.equal(item.musicbrainz_correction.queued_at, null, 'Problematic Files offers Add to queue again');
+  assert.deepEqual(requests.filter(([method]) => method === 'DELETE').map(([, url]) => url), ['/api/musicbrainz/lookups/9']);
   assert.ok(renders.includes('notifications'));
 });
 
-test('a failed removal says so and keeps the entry', async () => {
-  const { context, toasts, detail } = queueContext({
-    'DELETE /api/musicbrainz/corrections/queue/4': { status: 503, body: { detail: 'MusicBrainz corrections are unavailable.' } } });
-  await context.loadUtilityEditsQueue(true);
-
-  await context.removeEditsQueueEntry('correction', '4');
-
-  assert.deepEqual(toasts, [['error', 'MusicBrainz corrections are unavailable.']]);
-  assert.match(text(detail.innerHTML), /Wurdah Ïtah/);
-});
-
-test('opening an entry opens the album, or the artist at its Problematic Files entry', async () => {
+test('opening a look up opens the album, or the artist at its Problematic Files entry', async () => {
   const { context, opened } = queueContext();
   await context.loadUtilityEditsQueue(true);
 
-  context.openEditsQueueEntry('correction', '4');
-  context.openEditsQueueEntry('lookup', '9');
-  context.openEditsQueueEntry('lookup', '10');
+  context.openEditsQueueLookup('9');
+  context.openEditsQueueLookup('10');
 
-  assert.deepEqual(opened.map(([kind, value]) => (kind === 'album' ? value.key : value)), ['wurdah', 'live', 'musicbrainz-artist:41']);
-  assert.equal(opened[0][1].preview_only, true);
+  assert.deepEqual(opened.map(([kind, value]) => (kind === 'album' ? value.key : value)), ['live', 'musicbrainz-artist:41']);
 });
 
 test('an unavailable queue shows an error instead of an empty list', async () => {
   const { context, detail } = loadContext({ activeTab: 'edits-queue', responses: {
-    'GET /api/musicbrainz/corrections/queue': { status: 503, body: {} } } });
+    'GET /api/musicbrainz/corrections/edits?section=applied': { status: 503, body: {} } } });
 
   await context.loadUtilityEditsQueue(true);
 
   assert.match(detail.innerHTML, /Edits Queue unavailable/);
-  assert.doesNotMatch(detail.innerHTML, /version-picker-option/);
+});
+
+test('album details show the applied value beside the tag, and the tag editor keeps the real tags', () => {
+  const context = { console, ButtonComponent };
+  vm.createContext(context);
+  for (const file of ['music_app/static/js/runtime/markup-format-helpers.js', 'music_app/static/js/runtime/alert-components.js',
+    'music_app/static/js/runtime/album-details-components.js']) vm.runInContext(read(file), context);
+  const loaders = read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js');
+  const start = loaders.indexOf('function getTrackTagInitialValues(');
+  vm.runInContext(`${loaders.slice(start).split(/\r?\n\}\r?\n/)[0]}\n}\nthis.getTrackTagInitialValues = getTrackTagInitialValues;`, context);
+  const album = { name: 'wurdah itah', display_title: 'Wurdah Ïtah', album_artist: 'christian vander', display_artist: 'Christian Vander' };
+  const track = { title: 'malawelekaahm', display_title: 'Malawêlekaahm', artist: 'christian vander', display_artist: 'Christian Vander' };
+
+  assert.equal(context.albumDisplayArtist(album), 'Christian Vander');
+  assert.equal(context.albumTaggedArtistNote(album), '', 'a case correction is not a different artist');
+  const values = context.getTrackTagInitialValues(track, album);
+  assert.equal(values.title, 'malawelekaahm');
+  assert.equal(values.artist, 'christian vander');
+  assert.equal(values.album_artist, 'christian vander');
+  assert.equal(values.album, 'wurdah itah');
+  const table = read('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js');
+  assert.match(table, /const displayTitle = String\(track\.display_title \|\| trackRow\?\.title \|\| track\.title \|\| ''\)\.trim\(\);/);
+  assert.match(table, /playbackTitle: String\(track\.title \|\| ''\)\.trim\(\),/);
 });
 
 test('the album details header shows a.k.a. titles dimmed after the title and before the year', () => {
@@ -328,21 +304,17 @@ test('albums listed only for a correction show only under the Data Correction Ne
     /^const MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT = false;$/m);
 });
 
-test('an album listed only for a correction loads its changes when opened', async () => {
-  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', release_mbid: 'r1', queued_at: null, correction_count: 2 } });
-  delete item.track_count;
-  delete item.file_types;
+test('an album listed only for a correction loads its stored rows when opened', async () => {
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', correction_count: 2 } });
   const { context, requests, renders } = loadContext({ items: [item], responses: {
     'GET /api/musicbrainz/corrections?album_key=wurdah': { status: 200, body: { correction: {
-      album_key: 'wurdah', release_mbid: 'r1', queued_at: null, correction_count: 2, corrections: [ARTIST, TRACK_ARTISTS],
-      track_count: 12, file_types: ['FLAC'] } } } } });
+      album_key: 'wurdah', correction_count: 2, corrections: [CASE_ROW, ARTIST_ROW] } } } } });
 
   assert.match(context.buildMusicBrainzCorrectionProblemDetail(item), /Loading the data correction/);
   await context.loadMusicBrainzCorrectionDetail(item);
 
   assert.deepEqual(requests, [['GET', '/api/musicbrainz/corrections?album_key=wurdah', undefined]]);
-  assert.equal(item.track_count, 12);
-  assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /Artist \(12 tracks\) Christian Vander Magma/);
+  assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /Album artist Christian Vander Magma Waiting for approval/);
   assert.deepEqual(renders, ['problematic-files']);
 });
 

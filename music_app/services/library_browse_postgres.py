@@ -1899,6 +1899,10 @@ class PostgresLibraryBrowseRepository:
         musicbrainz_series = _album_musicbrainz_series(connection, first_row_payload.get("album_id"))
         if musicbrainz_series:
             detail_album["musicbrainz_series"] = musicbrainz_series
+        # Applied MusicBrainz data corrections (S4) beside the tag values, never over them.
+        from music_app.services.musicbrainz_correction_display import apply_correction_display
+
+        apply_correction_display(connection, detail_album, album_id=first_row_payload.get("album_id"))
         _annotate_album_payload_problematic_tracks([detail_album], rows)
         detail_album["poor_art_quality"] = (
             "Poor art quality" in _problematic_album_reasons(detail_album)

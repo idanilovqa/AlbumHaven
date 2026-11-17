@@ -31,6 +31,7 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
         "library.local_album_discogs_releases",
         # Data correction summaries (S4), recomputed from tags and the release decision.
         "library.local_album_musicbrainz_corrections",
+        "library.local_album_musicbrainz_correction_rows",
     }
 )
 # Tables whose foreign key to library.local_albums may hold a user decision;
@@ -46,6 +47,8 @@ GUARDED_ALBUM_CHILD_TABLES = frozenset(
         # The owner's MusicBrainz lookups (S5) and approved data corrections (S4).
         "ops.musicbrainz_lookup_requests",
         "ops.musicbrainz_correction_queue",
+        # The owner's undo, skip and approval of data corrections (S4).
+        "library.local_album_musicbrainz_correction_decisions",
     }
 )
 
@@ -115,6 +118,11 @@ RETIREMENT_GUARDS: tuple[tuple[str, str], ...] = (
       select 1 from ops.musicbrainz_correction_queue as correction
       where correction.library_id = album.library_id
         and correction.album_key = album.album_key)"""),
+    # An undo, skip or approval of a data correction.
+    ("musicbrainz_correction_decision", """not exists (
+      select 1 from library.local_album_musicbrainz_correction_decisions as correction_decision
+      where correction_decision.library_id = album.library_id
+        and correction_decision.album_key = album.album_key)"""),
     ("cover_lookup_task", """not exists (
       select 1 from ops.cover_lookup_tasks as cover_task
       where cover_task.library_id = album.library_id

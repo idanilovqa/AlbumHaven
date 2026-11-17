@@ -389,6 +389,7 @@ def _album_row(album: dict[str, object], releases: dict[str, object], observed: 
     unavailable = bool(album.get("discogs_sections_unavailable"))
     original = album.get("original_release_mbid")
     diagnostic = album.get("diagnostic")
+    edition = album.get("edition") if album.get("state") == "release" else None
     return {"local_album_id": album.get("local_album_id"), "state": album.get("state"),
             "artist_mbid": album.get("artist_mbid"), "release_group_mbid": album.get("release_group_mbid"),
             "release_mbid": album.get("release_mbid"),
@@ -400,7 +401,10 @@ def _album_row(album: dict[str, object], releases: dict[str, object], observed: 
             "signals": list(album.get("signals") or []),
             # Discogs did not answer: a fresh retry schedule starts now.
             "discogs_section_first_failed_at": observed.isoformat() if unavailable else None,
-            "discogs_section_retry_at": section_retry_at(observed, observed).isoformat() if unavailable else None}
+            "discogs_section_retry_at": section_retry_at(observed, observed).isoformat() if unavailable else None,
+            "match_quality": (edition or {}).get("match_quality"),
+            "track_pairing": (edition or {}).get("track_pairing") or [],
+            "track_order_differs": bool((edition or {}).get("track_order_differs"))}
 
 
 _UPSERT_GROUP = """
@@ -455,7 +459,8 @@ _REPLACE_ALBUMS = _active_library_cte() + """
         local_album_id bigint, state text, artist_mbid uuid, release_group_mbid uuid, release_mbid uuid,
         original_release_mbid uuid, disc_position integer, diagnostic text, main_disc_count integer,
         main_disc_source text, track_artists jsonb, track_sections jsonb, signals text[],
-        discogs_section_first_failed_at timestamptz, discogs_section_retry_at timestamptz)
+        discogs_section_first_failed_at timestamptz, discogs_section_retry_at timestamptz,
+        match_quality text, track_pairing jsonb, track_order_differs boolean)
       join library.local_albums albums
         on albums.library_id = job.library_id and albums.artist_id = job.local_artist_id
        and albums.id = rows.local_album_id
@@ -464,6 +469,7 @@ _REPLACE_ALBUMS = _active_library_cte() + """
         library_id, album_key, state, artist_mbid, release_group_mbid, release_mbid, original_release_mbid,
         disc_position, diagnostic, main_disc_count, main_disc_source, track_artists, track_sections, signals,
         discogs_section_attempts, discogs_section_first_failed_at, discogs_section_retry_at,
+        match_quality, track_pairing, track_order_differs,
         decision_source, matcher_version, observed_at, created_at, updated_at)
       select incoming.library_id, incoming.album_key, incoming.state,
              (select mbid from integration.musicbrainz_artists where mbid = incoming.artist_mbid),
@@ -472,7 +478,9 @@ _REPLACE_ALBUMS = _active_library_cte() + """
              coalesce(incoming.track_artists, '[]'::jsonb), coalesce(incoming.track_sections, '[]'::jsonb),
              coalesce(incoming.signals, '{}'::text[]),
              case when incoming.discogs_section_first_failed_at is null then 0 else 1 end,
-             incoming.discogs_section_first_failed_at, incoming.discogs_section_retry_at, 'automatic',
+             incoming.discogs_section_first_failed_at, incoming.discogs_section_retry_at,
+             incoming.match_quality, coalesce(incoming.track_pairing, '[]'::jsonb),
+             coalesce(incoming.track_order_differs, false), 'automatic',
              %(matcher_version)s, %(observed_at)s, %(observed_at)s, %(observed_at)s
       from incoming
       on conflict (library_id, album_key) do update
@@ -489,6 +497,8 @@ _REPLACE_ALBUMS = _active_library_cte() + """
           discogs_section_attempts = excluded.discogs_section_attempts,
           discogs_section_first_failed_at = excluded.discogs_section_first_failed_at,
           discogs_section_retry_at = excluded.discogs_section_retry_at,
+          match_quality = excluded.match_quality, track_pairing = excluded.track_pairing,
+          track_order_differs = excluded.track_order_differs,
           signals = excluded.signals, matcher_version = excluded.matcher_version,
           observed_at = excluded.observed_at, updated_at = excluded.updated_at
       where library.local_album_musicbrainz_releases.decision_source <> 'manual'
@@ -513,3 +523,30 @@ _REPLACE_ALBUMS = _active_library_cte() + """
     )
     select count(*)::integer as stored from stored;
 """
+
+
+def album_track_pairing(connection: Any, *, library_id: int, album_key: str) -> dict[str, object] | None:
+    """How a certainly matched album's local tracks pair with its MusicBrainz edition, for the
+    data correction (S4): ``release_mbid`` (the edition), ``match_quality`` and, when
+    ``reordered``, ``pairing`` from (disc_number, track_number) to (release_disc,
+    release_position). ``order_exact`` pairs by position; ``ambiguous`` pairs nothing and goes
+    to review. None when the album has no certain release or was decided before track order."""
+    row = connection.execute(
+        """
+        select release_mbid::text as release_mbid, match_quality, track_pairing, track_order_differs
+        from library.local_album_musicbrainz_releases
+        where library_id = %(library_id)s and album_key = %(album_key)s and state = 'release'
+          and match_quality is not null
+        """,
+        {"library_id": library_id, "album_key": album_key},
+    ).fetchone()
+    if not row:
+        return None
+    row = _row_mapping(row)
+    pairing = row.get("track_pairing")
+    if isinstance(pairing, str):
+        pairing = json.loads(pairing)
+    return {"release_mbid": row["release_mbid"], "match_quality": row["match_quality"],
+            "track_order_differs": bool(row["track_order_differs"]),
+            "pairing": {(int(item["disc_number"]), int(item["track_number"])):
+                        (int(item["release_disc"]), int(item["release_position"])) for item in pairing or []}}

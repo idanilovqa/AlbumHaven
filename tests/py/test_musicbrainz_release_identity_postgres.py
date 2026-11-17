@@ -327,3 +327,32 @@ def test_an_unavailable_discogs_check_keeps_the_headings_and_is_retried_until_an
             "select discogs_section_attempts, discogs_section_retry_at, track_sections"
             " from library.local_album_musicbrainz_releases where album_key = 'rel-cry'").fetchone()
     assert (row["discogs_section_attempts"], row["discogs_section_retry_at"], row["track_sections"]) == (0, None, [])
+
+
+def test_the_matched_edition_stores_its_track_order_for_the_data_correction(monkeypatch):
+    """Owner 2026-11-16: the edition is the stored release; a reordered album keeps its
+    pairing and the note, and S4 reads them back. A non-release decision stores none."""
+    from music_app.services.musicbrainz_release_identity_postgres import album_track_pairing
+
+    setup_url, repository, ids, _albums = _seed(monkeypatch)
+    from music_app.services import musicbrainz_release_identity as module
+    pairing = [{"disc_number": 1, "track_number": 1, "release_disc": 1, "release_position": 2},
+               {"disc_number": 1, "track_number": 2, "release_disc": 1, "release_position": 1}]
+
+    def outcome(context):
+        result = _outcome(context)
+        for album in result["albums"]:
+            album["edition"] = {"match_quality": "reordered", "track_pairing": pairing, "track_order_differs": True}
+        return result
+
+    monkeypatch.setattr(module, "resolve_album_releases", lambda context, client: outcome(context))
+    processor = MusicBrainzAlbumReleaseProcessor(repository=repository, client=FakeResolverClient(), now=lambda: NOW)
+    repository.enqueue(reason="test", observed_at=NOW, local_artist_id=ids["angra"], force=True)
+    processor.process_next(worker_id="w")
+    with isolatedPostgres._connect(setup_url) as connection:
+        library_id = connection.execute("select library_id from library.local_albums where album_key = 'rel-cry'"
+                                        ).fetchone()["library_id"]
+        assert album_track_pairing(connection, library_id=library_id, album_key="rel-cry") == {
+            "release_mbid": RELEASE, "match_quality": "reordered", "track_order_differs": True,
+            "pairing": {(1, 1): (1, 2), (1, 2): (1, 1)}}
+        assert album_track_pairing(connection, library_id=library_id, album_key="rel-holy") is None

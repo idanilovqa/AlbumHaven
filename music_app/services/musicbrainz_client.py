@@ -519,6 +519,23 @@ class MusicBrainzClient:
         ]
         return {"classification": "complete", "tracks": tracks, "release_id": release_id, "other_releases": others}
 
+    def release_group_editions(self, release_group_id: object) -> JsonDict:
+        """The group's releases with their audio track counts and dates (the editions the
+        track-order choice compares), from the same browse ``release_group_tracks`` reads."""
+        group = _valid_mbid(release_group_id)
+        if not group:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"release-group": group, "inc": "media", "fmt": "json", "limit": 25})
+        payload, transport = self.get_json(f"{self.base_url}/release?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete", "releases": [
+            {"id": _valid_mbid(release.get("id")), "date": _text(release.get("date")) or None,
+             "track_count": sum(_integer(medium.get("track-count")) for medium in release.get("media") or []
+                                if isinstance(medium, dict) and _is_audio_medium(medium))}
+            for release in payload.get("releases") or []
+            if isinstance(release, dict) and _valid_mbid(release.get("id"))]}
+
     def browse_release_discs(self, mbid: object, *, max_pages: int = 3, page_size: int = 100) -> JsonDict:
         """An artist's releases with their discs (title, position, format, track count),
         so a local album can match one disc of a box set."""

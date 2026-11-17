@@ -124,14 +124,20 @@ def test_plan_holds_a_listen_that_needs_reauthentication_until_reconnect():
     (LastfmError("Connection refused", retryable=True, error_kind="network_error", request_sent=False),
      (True, "not_sent")),
     # Last.fm answered that it did not process the request.
+    (LastfmError("Request timeout", retryable=True, http_status=408), (True, "not_sent")),
+    (LastfmError("Too early", retryable=True, http_status=425), (True, "not_sent")),
     (LastfmError("Rate limited", retryable=True, http_status=429), (True, "not_sent")),
     (LastfmError("Unavailable", retryable=True, http_status=503), (True, "not_sent")),
     (LastfmError("Internal error", retryable=True, http_status=500), (False, "uncertain")),
+    # A gateway may have passed the request on before it failed.
+    (LastfmError("Bad gateway", retryable=True, http_status=502), (False, "uncertain")),
     (LastfmError("Gateway timeout", retryable=True, http_status=504), (False, "uncertain")),
-    # A 500 or 504 stays uncertain even when its body carries a retryable Last.fm error code.
+    # A 500, 502 or 504 stays uncertain even when its body carries a retryable Last.fm error code.
     (LastfmError("Operation failed (Last.fm error 16)", code=16, retryable=True, http_status=500),
      (False, "uncertain")),
     (LastfmError("Service Offline (Last.fm error 11)", code=11, retryable=True, http_status=504),
+     (False, "uncertain")),
+    (LastfmError("Service Offline (Last.fm error 11)", code=11, retryable=True, http_status=502),
      (False, "uncertain")),
 ])
 def test_failed_batch_is_resent_only_when_last_fm_cannot_have_recorded_it(error, expected):

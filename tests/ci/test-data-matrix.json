@@ -10454,7 +10454,7 @@
     "expectedContracts": [
       "no genre shows no genre pill and no placeholder text in the gallery header or on a card"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -10469,6 +10469,6 @@
     "expectedContracts": [
       "a real genre still shows its pill in the gallery header and on a card"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   }
 ]

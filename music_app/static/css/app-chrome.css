@@ -45,7 +45,6 @@
 }
 .shell-layout { height: calc(100dvh - var(--player-height)); }
 .shell-layout { --app-sidebar-width: var(--compact-rail-width, 320px); }
-.shell-layout.is-artist-tree-folded .app-bar-brand { margin-left: 0; justify-self: center; }
 .settings-host.settings-shell { height: 100dvh; }
 #app-shell ~ .settings-host.settings-shell { height: calc(100dvh - var(--player-height)); }
 

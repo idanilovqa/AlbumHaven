@@ -16217,13 +16217,14 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const albumIdQuery = Number.isInteger(albumId) && albumId > 0
     ? `&album_id=${encodeURIComponent(String(albumId))}`
     : '';
+  const lineageQuery = options.resolveLineage === true ? '&resolve_lineage=1' : '';
   const albumKeyUrl = `/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`;
   const requestOptions = {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
   };
-  let response = await fetch(`${albumKeyUrl}${albumIdQuery}`, requestOptions);
+  let response = await fetch(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
@@ -16247,6 +16248,7 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
     error.status = response.status;
+    if (Array.isArray(payload?.current_releases)) error.currentReleases = payload.current_releases;
     throw error;
   }
   return payload.album;
@@ -16321,13 +16323,37 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
-// Albums this session edited: their rows were rendered optimistically and their cards already
-// carry the current identity, so neither needs reloading by identity.
+// Albums this session edited: their rows were rendered optimistically, so they are not reloaded
+// by identity, and a split they made is followed by name and year.
 const locallyEditedAlbumKeys = new Set();
 
 function rememberLocallyEditedAlbum(album) {
   const albumKey = String(getAlbumRequestKey(album) || '').trim();
   if (albumKey) locallyEditedAlbumKeys.add(albumKey);
+}
+
+// This session's own edit can split an album whose card or open modal still names the old
+// identity. Its name and year still identify the release the user meant, so follow that one
+// without asking; any other case returns null and goes back to the gallery's cards.
+async function findLocallyEditedSplitRelease(albumKey, album) {
+  if (!locallyEditedAlbumKeys.has(albumKey)) return null;
+  let releases;
+  try {
+    return await fetchTrackModalAlbumDetails(albumKey, {
+      albumId: album?.album_id || album?.id,
+      resolveLineage: true,
+    });
+  } catch (error) {
+    releases = error.currentReleases || [];
+  }
+  const matches = releases.filter((release) => (
+    String(release?.name || '') === String(album?.name || '')
+    && String(release?.year || '') === String(album?.year || '')
+  ));
+  if (matches.length !== 1) return null;
+  const key = matches[0].album_key || matches[0].key;
+  rememberLocallyEditedAlbum({ key });
+  return { ...matches[0], key, preview_only: true, tracks: [] };
 }
 
 async function refreshOpenTrackModalAfterInventoryMutation() {
@@ -16360,8 +16386,11 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
     )
   ) return false;
   if (loadError?.status === 404) {
-    // The view that triggered this refresh already shows the current releases.
-    closeTrackModalForChangedAlbum();
+    const release = await findLocallyEditedSplitRelease(albumKey, openAlbum);
+    if (els.overlay.hidden || state.modalReleases?.[state.modalReleaseIndex] !== currentAlbum) return false;
+    // Otherwise the view that triggered this refresh already shows the current releases.
+    if (release) openTrackModal(release);
+    else closeTrackModalForChangedAlbum();
     return true;
   }
   if (loadError) throw loadError;
@@ -16487,9 +16516,15 @@ function openTrackModal(album, options = {}) {
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
-    }).catch((error) => {
+    }).catch(async (error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (error.status === 404) {
+        const release = await findLocallyEditedSplitRelease(albumKey, albumWithPlaybackContext);
+        if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
+        if (release) {
+          openTrackModal(release);
+          return;
+        }
         closeTrackModalForChangedAlbum();
         if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
           refreshCurrentViewAfterBackgroundCompletion().catch((refreshError) => {

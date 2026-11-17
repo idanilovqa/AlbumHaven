@@ -170,6 +170,8 @@ export class ArtistPageSettingsActions {
     const timeout = options.timeout || 10000;
     await expect(this.artistPageSettings.nonAlbumTracksEditTagsButton).toBeVisible({ timeout });
     await this.artistPageSettings.nonAlbumTracksEditTagsButton.click();
-    await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden({ timeout });
+    // The editor opens over Loose Tracks, which stays open to return to after the edit.
+    await expect(this.artistPageSettings.tagEditorModal).toBeVisible({ timeout });
+    await expect(this.artistPageSettings.nonAlbumTracksModal).toBeVisible({ timeout });
   }
 }

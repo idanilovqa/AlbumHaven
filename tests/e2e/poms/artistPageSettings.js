@@ -15,6 +15,7 @@ export class ArtistPageSettings extends BasePage {
     this.combineSimilarArtistsButton = page.locator(this.combineSimilarArtistsButtonSelector);
     this.nonAlbumTracksButton = page.locator(this.nonAlbumTracksButtonSelector);
     this.nonAlbumTracksModal = page.locator(this.nonAlbumTracksModalSelector);
+    this.tagEditorModal = page.locator('#tag-editor-modal');
     this.nonAlbumTrackRows = page.locator(this.nonAlbumTrackRowSelector);
     this.nonAlbumTrackTitles = page.locator(this.nonAlbumTrackTitleSelector);
     this.nonAlbumTrackSections = this.nonAlbumTracksModal.locator('.album-track-table__disc');

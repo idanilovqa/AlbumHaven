@@ -1094,8 +1094,16 @@ export class GalleryPage extends BasePage {
       || (pendingPayloadRead && !liveProjectionReady)
       || (observationChanged && !liveProjectionReady)
       || domChanged;
+    // A target artist with no group at all (an excluded release's only owner) leaves no target
+    // evidence; the complete response's own artists then prove which surface was applied.
+    const surfaceArtists = canonicalEvidence.observedArtists.length || !canonicalEvidence.canonicalInventoryComplete
+      ? canonicalEvidence.observedArtists
+      : ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].flatMap((field) => (
+        (Array.isArray(payload?.[field]) ? payload[field] : [])
+          .map((group) => String(group?.artist || group?.artist_display || '').trim())
+      )).filter(Boolean);
     const canonicalApplied = canonicalEvidence.canonicalReadyMatch || liveProjectionReady || hasAppliedCanonicalArtistSurface(
-      canonicalEvidence.observedArtists,
+      surfaceArtists,
       finalAttachedArtists,
       {
         loaderVisible,

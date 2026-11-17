@@ -20,6 +20,7 @@ from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumRele
 from music_app.services.track_transliteration import (
     apply_track_transliterations,
     fallback_transliteration,
+    latin_search_key,
     needs_transliteration,
     track_transliterations,
     transliteration_media,
@@ -32,6 +33,7 @@ CASES = _FIXTURE["cases"]
 JAPANESE_TITLES = ["桜花抄", "想い出は遠くの日々", "焦燥", "雪の駅", "Kiss", "カナエの気持ち", "夢", "空と海の詩",
                    "届かない気持ち", "End Theme", "One more time, One more chance (piano version)"]
 NOW = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+JAPANESE = {"language": "jpn"}  # A stored answer: a Japanese release with no Latin pseudo-release.
 
 
 def _replay_client(asked=None):
@@ -61,7 +63,7 @@ def fallbacks(monkeypatch):
     """Stand-ins answering as cutlet 0.5.2 and pypinyin 0.55.0 do for these titles."""
     romaji = {"桜花抄": "Ouka shou", "焦燥": "Shousou", "天門": "Tenmon", "Hello 世界": "Hello sekai",
               "カナエの気持ち": "Kanae no kimochi", "夢": "Yume"}
-    pinyin = {"天门": ["tiān", "mén"], "你好 Love": ["nǐ", "hǎo", " Love"], "你好，世界": ["nǐ", "hǎo", "，", "shì", "jiè"]}
+    pinyin = {"天门": ["tiān", "mén"], "天門": ["tiān", "mén"], "桜花抄": ["yīng", "huā", "chāo"], "你好 Love": ["nǐ", "hǎo", " Love"], "你好，世界": ["nǐ", "hǎo", "，", "shì", "jiè"]}
     monkeypatch.setitem(sys.modules, "cutlet", types.SimpleNamespace(
         Cutlet=lambda: types.SimpleNamespace(romaji=lambda text: romaji[text])))
     monkeypatch.setitem(sys.modules, "pypinyin", types.SimpleNamespace(
@@ -92,12 +94,21 @@ def test_latin_cyrillic_digits_and_punctuation_need_none(title):
 def test_the_linked_transliteration_is_chosen_and_the_translation_beside_it_is_not():
     found = _replay_client().lookup_release_transliteration(CASES["release_with_transliteration"])
     # "English transliteration", not "5 Centimeters Per Second" ("English translation").
-    assert found == {"classification": "complete", "transliteration_mbid": CASES["transliteration"]}
+    assert found == {"classification": "complete", "transliteration_mbid": CASES["transliteration"], "language": "jpn"}
 
 
 def test_a_release_linking_no_transliteration_has_none():
     found = _replay_client().lookup_release_transliteration(CASES["release_without_transliteration"])
-    assert found == {"classification": "complete", "transliteration_mbid": None}
+    assert found == {"classification": "complete", "transliteration_mbid": None, "language": "jpn"}
+
+
+def test_a_release_without_a_musicbrainz_language_gives_none():
+    """Owner 2026-11-17 ("Use MB language"): the recorded release with its language removed."""
+    key = f"/release/{CASES['release_with_transliteration']}?inc=release-rels&fmt=json"
+    release = {**_FIXTURE["responses"][key], "text-representation": {"script": "Jpan"}}
+    client = MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2", user_agent="Test",
+                               get_json=lambda _url, _agent, **_kwargs: (release, OK))
+    assert client.lookup_release_transliteration(CASES["release_with_transliteration"])["language"] == ""
 
 
 def _relation(mbid, *, script="Latn", language="jpn", note="", direction="forward", kind="transl-tracklisting"):
@@ -167,11 +178,11 @@ def test_musicbrainz_wins_over_cutlet(fallbacks):
     shown = track_transliterations(_tracks(["桜花抄", "想い出は遠くの日々", "焦燥"]), stored=_stored())
     assert shown == {(1, 1): "Oukashou", (1, 2): "Omoide wa Tooku no Hibi", (1, 3): "Shousou"}
     # cutlet alone would say "Ouka shou".
-    assert track_transliterations(_tracks(["桜花抄"]), album_title="秒速5センチメートル")[(1, 1)] == "Ouka shou"
+    assert track_transliterations(_tracks(["桜花抄"]), stored=JAPANESE)[(1, 1)] == "Ouka shou"
 
 
 def test_without_musicbrainz_japanese_falls_back_to_cutlet_when_installed(fallbacks):
-    shown = track_transliterations(_tracks(["桜花抄", "Hello 世界", "Kiss", "カナエの気持ち"]))
+    shown = track_transliterations(_tracks(["桜花抄", "Hello 世界", "Kiss", "カナエの気持ち"]), stored=JAPANESE)
     assert shown == {(1, 1): "Ouka shou", (1, 2): "Hello sekai", (1, 4): "Kanae no kimochi"}
 
 
@@ -179,9 +190,13 @@ def test_without_musicbrainz_or_the_fallbacks_nothing_is_shown(no_fallbacks):
     assert track_transliterations(_tracks(["桜花抄", "Hello 世界", "天门"])) == {}
 
 
-def test_ideographs_are_japanese_on_an_album_with_kana_and_chinese_otherwise(fallbacks):
-    assert track_transliterations(_tracks(["天門", "カナエの気持ち"]))[(1, 1)] == "Tenmon"
-    assert track_transliterations(_tracks(["天門"]), album_title="秒速5センチメートル") == {(1, 1): "Tenmon"}
+def test_ideographs_are_japanese_only_when_the_musicbrainz_language_is_japanese(fallbacks):
+    """Owner 2026-11-17 ("Use MB language"): romaji for a Japanese release, pinyin otherwise."""
+    assert track_transliterations(_tracks(["天門"]), stored=JAPANESE) == {(1, 1): "Tenmon"}
+    for other in ({"language": "zho"}, {"language": ""}, None):
+        assert track_transliterations(_tracks(["天門"]), stored=other) == {(1, 1): "Tiān mén"}
+    # Kana elsewhere on the album no longer makes its ideographs Japanese; kana is always romaji.
+    assert track_transliterations(_tracks(["天門", "カナエの気持ち"])) == {(1, 1): "Tiān mén", (1, 2): "Kanae no kimochi"}
     assert fallback_transliteration("天门", japanese=False) == "Tiān mén"
     assert fallback_transliteration("你好 Love", japanese=False) == "Nǐ hǎo Love"
     assert fallback_transliteration("你好，世界", japanese=False) == "Nǐ hǎo， shì jiè"
@@ -192,7 +207,8 @@ def test_the_installed_libraries_give_the_approved_mockups_forms():
     pytest.importorskip("cutlet")
     pytest.importorskip("pypinyin")
     module._cutlet.cache_clear()
-    assert track_transliterations(_tracks(["桜花抄", "想い出は遠くの日々", "Kiss", "カナエの気持ち", "Кино", "사랑"])) == {
+    assert track_transliterations(_tracks(["桜花抄", "想い出は遠くの日々", "Kiss", "カナエの気持ち", "Кино", "사랑"]),
+                                  stored=JAPANESE) == {
         (1, 1): "Ouka shou", (1, 2): "Omoide wa tooku no hibi", (1, 4): "Kanae no kimochi"}
     assert fallback_transliteration("天门", japanese=False) == "Tiān mén"
 
@@ -206,16 +222,32 @@ def test_other_scripts_show_only_musicbrainz_and_cyrillic_never_shows_anything(f
 
 
 def test_an_answer_still_not_in_latin_script_is_never_shown(fallbacks, monkeypatch):
-    unchanged = {"match_quality": "order_exact", "pairing": {}, "media": [{"position": 1, "tracks": [
+    unchanged = {"match_quality": "order_exact", "pairing": {}, "language": "jpn", "media": [{"position": 1, "tracks": [
         {"position": 1, "title": "Hello 世界"}]}]}
     # MusicBrainz's copy of the original title gives way to the fallback (a Japanese album).
-    assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged, album_title="カナエ") == {
+    assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged) == {
         (1, 1): "Hello sekai"}
     monkeypatch.setitem(sys.modules, "cutlet", types.SimpleNamespace(
         Cutlet=lambda: types.SimpleNamespace(romaji=lambda text: "桜花 shou")))
     module._cutlet.cache_clear()
     assert fallback_transliteration("桜花抄", japanese=True) is None
-    assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged, album_title="カナエ") == {}
+    assert track_transliterations(_tracks(["Hello 世界"]), stored=unchanged) == {}
+
+
+# Search keys: a Latin form and a query fold alike (owner 2026-11-17, "exact pronunciation") --
+
+@pytest.mark.parametrize("query", ["tian men", "Tian Men", "tianmen", "TIĀN-MÉN", "Ｔｉａｎ ｍｅｎ"])
+def test_a_plain_query_folds_to_the_tone_marked_forms_key(query):
+    assert latin_search_key(query) == latin_search_key("Tiān mén") == "tianmen"
+
+
+@pytest.mark.parametrize("text", ["天门", "", "♪ — ★", None])
+def test_text_with_nothing_latin_folds_to_no_key(text):
+    assert latin_search_key(text) == ""
+
+
+def test_a_different_pronunciation_keeps_a_different_key():
+    assert latin_search_key("Tiān mǎ") != latin_search_key("Tiān mén")
 
 
 # Album details payload --------------------------------------------------------------------
@@ -267,6 +299,10 @@ class _Repository:
     def store_transliteration(self, **kwargs):
         self.stored.append(kwargs)
 
+    def refresh_latin_titles(self, *, now):
+        self.refreshed = getattr(self, "refreshed", 0) + 1
+        return self.latin_due if hasattr(self, "latin_due") else 0
+
 
 def _lane(due, client=None):
     repository, asked = _Repository(due), []
@@ -285,6 +321,7 @@ def test_a_due_release_asks_its_link_then_its_transliteration_once_and_stores_it
     assert (row["release_mbid"], row["transliteration_mbid"]) == (CASES["release_with_transliteration"],
                                                                   CASES["transliteration"])
     assert row["media"][0]["tracks"][0] == {"position": 1, "title": "Oukashou"}
+    assert row["language"] == "jpn"
 
 
 def test_a_release_linking_none_is_stored_as_none_after_one_ask():
@@ -296,7 +333,7 @@ def test_a_release_linking_none_is_stored_as_none_after_one_ask():
 def test_a_release_whose_titles_need_no_latin_form_is_stored_without_asking():
     _result, stored, asked = _lane({"release_mbid": CASES["release_without_transliteration"],
                                     "titles": ["Kiss", "Кино", "Song’s — Remix"]})
-    assert asked == [] and stored[0]["transliteration_mbid"] is None
+    assert asked == [] and (stored[0]["transliteration_mbid"], stored[0]["language"]) == (None, "")
 
 
 def test_a_failed_ask_stores_nothing_and_ends_the_pass():
@@ -314,3 +351,18 @@ def test_a_failed_ask_stores_nothing_and_ends_the_pass():
 
 def test_nothing_due_is_idle():
     assert _lane(None)[0] == {"processed": False, "state": "idle"}
+
+
+def test_an_idle_lane_refreshes_due_latin_titles_and_reports_the_work():
+    repository = _Repository(None)
+    repository.latin_due = 3
+    result = MusicBrainzAlbumReleaseProcessor(repository=repository, client=_replay_client(),
+                                              now=lambda: NOW).process_next(worker_id="w")
+    assert (result, repository.refreshed) == ({"processed": True, "state": "succeeded"}, 1)
+
+
+def test_a_stored_answer_ends_the_pass_before_any_latin_refresh():
+    repository = _Repository({"release_mbid": CASES["release_without_transliteration"], "titles": ["Kiss"]})
+    MusicBrainzAlbumReleaseProcessor(repository=repository, client=_replay_client(), now=lambda: NOW).process_next(
+        worker_id="w")
+    assert len(repository.stored) == 1 and not hasattr(repository, "refreshed")

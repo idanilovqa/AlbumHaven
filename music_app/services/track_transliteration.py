@@ -6,15 +6,18 @@ Latin always shows its Latin form after it, "桜花抄 • Oukashou"; a Latin ti
 
 The Latin form comes from MusicBrainz first: the Latin pseudo-release its "transl-tracklisting"
 relationship links to the album's matched release, fetched once per release by the album
-release lane and stored (0252). Without one, a Japanese title falls back to cutlet and a
-Chinese one to pypinyin (both in requirements.txt, owner 2026-11-17 "Add both"; an install
-without them simply shows no fallback). Other scripts (Korean, Greek, Arabic…) show only
-MusicBrainz's form. Display only: tags, keys, sorting and search keep the real titles.
+release lane and stored (0252). Without one, a title with kana falls back to cutlet, and one
+of ideographs only to cutlet when the release's MusicBrainz language is Japanese, else to
+pypinyin with tone marks (owner 2026-11-17: "Use MB language", "exact pronunciation"; both in
+requirements.txt; an install without them simply shows no fallback). Other scripts (Korean,
+Greek, Arabic…) show only MusicBrainz's form. Tags, keys and sorting keep the real titles;
+search also finds a track by its Latin form folded like a query (0255, latin_search_key).
 """
 from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 from collections.abc import Iterable, Mapping
 from functools import lru_cache
 from typing import Any
@@ -132,17 +135,25 @@ def _musicbrainz_titles(tracks: list[Mapping[str, object]], stored: Mapping[str,
     return titles
 
 
+def latin_search_key(text: object) -> str:
+    """A Latin form or a search query folded alike (0255): without tone marks or accents,
+    lower case, letters and digits only, so "Tiān mén", "tian men" and "tianmen" meet."""
+    decomposed = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(character for character in decomposed.casefold()
+                   if character.isascii() and character.isalnum())
+
+
 def track_transliterations(tracks: Iterable[Mapping[str, object]], *, stored: Mapping[str, object] | None = None,
-                           album_title: object = None) -> dict[tuple[int, int], str]:
+                           ) -> dict[tuple[int, int], str]:
     """The Latin form to show beside each local (disc, track) whose title needs one:
-    MusicBrainz's stored pseudo-release title first, else the installed fallback. An album
-    with kana in any title is Japanese, so its ideograph-only titles are read as Japanese."""
+    MusicBrainz's stored pseudo-release title first, else the installed fallback. Ideographs
+    are read as Japanese only when the release's MusicBrainz language is Japanese."""
     tracks = [track for track in tracks if isinstance(track, Mapping)]
     wanted = [track for track in tracks if needs_transliteration(track.get("title"))]
     if not wanted:
         return {}
     musicbrainz = _musicbrainz_titles(tracks, stored)
-    japanese = any(_has(text, _KANA) for text in (album_title, *(track.get("title") for track in tracks)))
+    japanese = (stored or {}).get("language") == "jpn"
     shown = {}
     for track in wanted:
         local = (int(track.get("disc_number") or 1), int(track.get("track_number") or 0))
@@ -155,22 +166,22 @@ def track_transliterations(tracks: Iterable[Mapping[str, object]], *, stored: Ma
 
 
 def stored_transliteration(connection: Any, album_id: object) -> dict[str, object] | None:
-    """The album's certain release's stored Latin pseudo-release with its track pairing; None
-    when MusicBrainz has none or it was not fetched yet."""
+    """The album's certain release's stored answer: its Latin pseudo-release with the track
+    pairing, when MusicBrainz links one, and its language. None when not fetched yet."""
     from music_app.services.musicbrainz_enrichment_postgres import _row_mapping
     from music_app.services.musicbrainz_release_identity_postgres import parse_track_pairing
 
     row = connection.execute(
         """
         select decision.release_mbid::text as release_mbid, decision.match_quality, decision.track_pairing,
-               decision.track_order_differs, decision.disc_position, transliteration.media
+               decision.track_order_differs, decision.disc_position, transliteration.media,
+               transliteration.language
         from library.local_albums album
         join library.local_album_musicbrainz_releases decision
           on decision.library_id = album.library_id and decision.album_key = album.album_key
          and decision.state = 'release'
         join integration.musicbrainz_release_transliterations transliteration
-          on transliteration.release_mbid = decision.release_mbid
-         and transliteration.transliteration_mbid is not null
+          on transliteration.release_mbid = decision.release_mbid and transliteration.checked_at is not null
         where album.id = %(album_id)s
         """,
         {"album_id": album_id},
@@ -178,7 +189,8 @@ def stored_transliteration(connection: Any, album_id: object) -> dict[str, objec
     if not row:
         return None
     row = _row_mapping(row)
-    return {**(parse_track_pairing(row) or {}), "disc_position": row.get("disc_position"), "media": row.get("media")}
+    return {**(parse_track_pairing(row) or {}), "disc_position": row.get("disc_position"), "media": row.get("media"),
+            "language": row.get("language") or ""}
 
 
 def apply_track_transliterations(connection: Any, album: dict[str, object] | None, *,
@@ -188,10 +200,66 @@ def apply_track_transliterations(connection: Any, album: dict[str, object] | Non
     rows = [row for row in (album or {}).get("track_rows") or [] if isinstance(row, dict)]
     if not album_id or not any(needs_transliteration(row.get("title")) for row in rows):
         return album
-    shown = track_transliterations(rows, stored=stored_transliteration(connection, album_id),
-                                   album_title=album.get("name"))
+    shown = track_transliterations(rows, stored=stored_transliteration(connection, album_id))
     for row in rows:
         latin = shown.get((int(row.get("disc_number") or 1), int(row.get("track_number") or 0)))
         if latin:
             row["title_transliteration"] = latin
     return album
+
+
+# Albums with a track whose title may need a Latin form (the claim's test, refined in Python)
+# and no current row for it: none yet, its title changed, or the album's release decision or
+# MusicBrainz answer is newer than the row.
+_DUE_LATIN_ALBUMS_SQL = r"""
+    select distinct albums.id as album_id, albums.library_id, albums.album_key
+    from library.local_albums albums
+    join library.local_tracks tracks on tracks.library_id = albums.library_id and tracks.album_id = albums.id
+    left join library.local_track_latin_titles latin on latin.track_id = tracks.id
+    left join library.local_album_musicbrainz_releases decision
+      on decision.library_id = albums.library_id and decision.album_key = albums.album_key and decision.state = 'release'
+    left join integration.musicbrainz_release_transliterations transliteration
+      on transliteration.release_mbid = decision.release_mbid
+    where albums.library_id = any(%(library_ids)s)
+      and ((tracks.title ~ '[^\x01-ɏЀ-ԯḀ-ỿ -⁯]'
+            and (latin.track_id is null
+                 or latin.computed_at < greatest(decision.updated_at, transliteration.updated_at)))
+           or (latin.track_id is not null and latin.source_title is distinct from tracks.title))
+    order by albums.id
+    limit %(limit)s
+"""
+
+
+def refresh_latin_titles(connection: Any, *, library_ids: list[int], limit: int, now: object) -> list[str]:
+    """Store the shown Latin form and its search key of each track of up to ``limit`` due
+    albums (0255); a track needing none keeps no row, one with no known form a null one.
+    Returns the refreshed albums' keys."""
+    from music_app.services.musicbrainz_enrichment_postgres import _row_mapping
+
+    albums = [_row_mapping(row) for row in connection.execute(
+        _DUE_LATIN_ALBUMS_SQL, {"library_ids": library_ids, "limit": limit}).fetchall()]
+    for album in albums:
+        tracks = [_row_mapping(row) for row in connection.execute(
+            "select id, disc_number, track_number, title from library.local_tracks where album_id = %(album_id)s",
+            {"album_id": album["album_id"]}).fetchall()]
+        shown = track_transliterations(tracks, stored=stored_transliteration(connection, album["album_id"]))
+        rows = []
+        for track in tracks:
+            if not needs_transliteration(track.get("title")):
+                continue
+            latin = shown.get((int(track.get("disc_number") or 1), int(track.get("track_number") or 0)))
+            key = latin_search_key(latin) or None
+            rows.append({"track_id": track["id"], "title": str(track.get("title") or ""),
+                         "latin": latin if key else None, "key": key})
+        connection.execute(
+            "delete from library.local_track_latin_titles where track_id = any(%(track_ids)s)"
+            " and track_id <> all(%(kept)s)",
+            {"track_ids": [track["id"] for track in tracks], "kept": [row["track_id"] for row in rows]})
+        for row in rows:
+            connection.execute(
+                "insert into library.local_track_latin_titles (track_id, library_id, source_title, latin, search_key,"
+                " computed_at) values (%(track_id)s, %(library_id)s, %(title)s, %(latin)s, %(key)s, %(now)s)"
+                " on conflict (track_id) do update set source_title = excluded.source_title, latin = excluded.latin,"
+                " search_key = excluded.search_key, computed_at = excluded.computed_at",
+                {**row, "library_id": album["library_id"], "now": now})
+    return [str(album["album_key"]) for album in albums]

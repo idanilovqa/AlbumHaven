@@ -75,6 +75,7 @@ from music_app.services.non_album_view_payloads import (
     is_loose_track_album_value,
 )
 from music_app.services.runtime_shutdown import create_daemon_executor
+from music_app.services.track_transliteration import latin_search_key
 from music_app.services.utility_rule_fallbacks import fallback_version_album_payload
 from music_app.services.utils import (
     MOJIBAKE_CANDIDATE_PATTERN,
@@ -3533,8 +3534,10 @@ class PostgresLibraryBrowseRepository:
             and len(query.encode("utf-8").hex()) >= 3
             else None
         )
+        latin_key = latin_search_key(query) if "%" not in query and "_" not in query else ""
         params = {
             "query_like": f"%{query}%",
+            "query_latin_like": f"%{latin_key}%" if latin_key else None,
             "include_missing": include_missing,
             "search_artist_keys": (
                 _missing_album_search_artist_keys(
@@ -10658,6 +10661,15 @@ def _search_preview_sql(
                  and {corrected_artist_prefilter_sql}lower(btrim(coalesce(library.local_tracks.corrected_artist, '')))
                  like lower(%(query_like)s) escape '')
         ),
+        -- A track found by its Latin form ("Tiān mén"), folded like the query (0255): no
+        -- query_latin_like (a query with nothing Latin to fold) finds none.
+        latin_title_track_matches as materialized (
+          select library.local_tracks.library_id, library.local_tracks.album_id, library.local_tracks.id as track_id
+          from library.local_track_latin_titles
+          join library.local_tracks on library.local_tracks.id = library.local_track_latin_titles.track_id
+          where library.local_track_latin_titles.search_key is not null
+            and library.local_track_latin_titles.search_key like %(query_latin_like)s
+        ),
         file_name_matches as materialized (
             select
               library.local_track_files.track_id,
@@ -10681,6 +10693,8 @@ def _search_preview_sql(
             track_title_matches.album_id,
             track_title_matches.track_id
           from track_title_matches
+          union
+          select library_id, album_id, track_id from latin_title_track_matches
           union
           select
             library.local_tracks.library_id,

@@ -181,13 +181,11 @@ _ALBUM_ROWS_SQL = _active_library_cte() + f"""
 """
 
 # The Edits Queue: "applied" (the automatic history) or "review" (waiting), by kind, then a
-# page of albums with their rows. Albums sent to review whole form their own group. A page
-# reads only its kind's rows (%(kind)s is null for the counts). A row has at most one decision
-# (its primary key is _DECISION_MATCH), so one join gives _STATE_SQL's state without three
-# probes per row. "rows" is materialized before the state filter: Postgres cannot estimate
-# that filter and otherwise probes the stored albums once per row (measured 400 ms of 640).
+# page of albums with their rows. Albums sent to review whole form their own group. These are
+# a page's rows with their state, for its albums only (%(album_keys)s). A row has at most one
+# decision (its primary key is _DECISION_MATCH), so one join gives _STATE_SQL's state.
 _GROUP_SQL = _active_library_cte() + f"""
-    , rows as materialized (
+    , rows as (
       select correction.*, stored.review_whole,
              case decision.decision when 'approved' then 'applied' when 'undone' then 'undone'
                                     when 'skipped' then 'skipped'
@@ -198,8 +196,8 @@ _GROUP_SQL = _active_library_cte() + f"""
       join library.local_album_musicbrainz_corrections stored
         on stored.library_id = correction.library_id and stored.album_key = correction.album_key
       left join library.local_album_musicbrainz_correction_decisions decision on {_DECISION_MATCH}
-      where (%(kind)s::text is null or %(kind)s::text = '{WHOLE_ALBUM_GROUP}' or correction.kind = %(kind)s::text)
-        and (%(album_keys)s::text[] is null or correction.album_key = any(%(album_keys)s::text[]))
+      where correction.album_key = any(%(album_keys)s::text[])
+        and (%(kind)s::text = '{WHOLE_ALBUM_GROUP}' or correction.kind = %(kind)s::text)
     ), listed as (
       select case when %(section)s = 'review' and review_whole then '{WHOLE_ALBUM_GROUP}' else kind end as grouping,
              rows.*
@@ -208,14 +206,67 @@ _GROUP_SQL = _active_library_cte() + f"""
          or (%(section)s = 'review' and state = 'pending')
     )
 """
-_KIND_COUNTS_SQL = _GROUP_SQL + """
+# A section's rows by group, without each row's state: _STATE_SQL's rules restated per section.
+# "applied": automatic rows (applied or undone; one skipped never shows) and review rows
+# approved; "review": review rows with no decision, grouped whole when the album is reviewed
+# whole. One kind (or the whole-album group) when %(kind)s is set. A decision matters only on
+# its own album, so an album without one takes its rows straight from the (library, mode,
+# kind, album) index, and only albums with decisions are checked row by row (measured: each
+# row's state cost a page 1.3 s on CI with 10,800 albums).
+_SECTION_ROWS_SQL = _active_library_cte() + f"""
+    , decided_albums as materialized (
+      select distinct decision.library_id, decision.album_key, decision.decision
+      from library.local_album_musicbrainz_correction_decisions decision
+      join active_library on active_library.library_id = decision.library_id
+    ), section_rows as (
+      select correction.library_id, correction.album_key, correction.kind as grouping
+      from library.local_album_musicbrainz_correction_rows correction
+      join active_library on active_library.library_id = correction.library_id
+      where %(section)s = 'applied' and correction.mode = 'auto'
+        and (%(kind)s::text is null or correction.kind = %(kind)s::text)
+        and not exists (select 1 from decided_albums where decided_albums.library_id = correction.library_id
+                          and decided_albums.album_key = correction.album_key and decided_albums.decision = 'skipped')
+      union all
+      select correction.library_id, correction.album_key, correction.kind
+      from (select distinct library_id, album_key from decided_albums where decision = 'skipped') skipped
+      join library.local_album_musicbrainz_correction_rows correction
+        on correction.library_id = skipped.library_id and correction.album_key = skipped.album_key
+      where %(section)s = 'applied' and correction.mode = 'auto'
+        and (%(kind)s::text is null or correction.kind = %(kind)s::text)
+        and not exists (select 1 from library.local_album_musicbrainz_correction_decisions decision
+                        where {_DECISION_MATCH} and decision.decision = 'skipped')
+      union all
+      select correction.library_id, correction.album_key, correction.kind
+      from library.local_album_musicbrainz_correction_decisions decision
+      join active_library on active_library.library_id = decision.library_id
+      join library.local_album_musicbrainz_correction_rows correction on {_DECISION_MATCH}
+      where %(section)s = 'applied' and correction.mode = 'review' and decision.decision = 'approved'
+        and (%(kind)s::text is null or correction.kind = %(kind)s::text)
+      union all
+      select correction.library_id, correction.album_key,
+             case when stored.review_whole then '{WHOLE_ALBUM_GROUP}' else correction.kind end
+      from library.local_album_musicbrainz_correction_rows correction
+      join active_library on active_library.library_id = correction.library_id
+      join library.local_album_musicbrainz_corrections stored
+        on stored.library_id = correction.library_id and stored.album_key = correction.album_key
+      where %(section)s = 'review' and correction.mode = 'review'
+        and (%(kind)s::text is null
+             or (%(kind)s::text = '{WHOLE_ALBUM_GROUP}' and stored.review_whole)
+             or (correction.kind = %(kind)s::text and not stored.review_whole))
+        and (not exists (select 1 from decided_albums where decided_albums.library_id = correction.library_id
+                           and decided_albums.album_key = correction.album_key)
+             or not exists (select 1 from library.local_album_musicbrainz_correction_decisions decision
+                            where {_DECISION_MATCH}))
+    )
+"""
+_KIND_COUNTS_SQL = _SECTION_ROWS_SQL + """
     select grouping as kind, count(distinct album_key)::integer as albums, count(*)::integer as rows
-    from listed group by grouping order by grouping;
+    from section_rows group by grouping order by grouping;
 """
 # A page is two reads: its albums' keys, then only those albums' rows (by the album index).
-_KIND_PAGE_ALBUMS_SQL = _GROUP_SQL + """
+_KIND_PAGE_ALBUMS_SQL = _SECTION_ROWS_SQL + """
     , kind_albums as (
-      select library_id, album_key from listed where grouping = %(kind)s group by library_id, album_key
+      select library_id, album_key from section_rows group by library_id, album_key
     )
     select kind_albums.album_key
     from kind_albums
@@ -388,12 +439,7 @@ class MusicBrainzCorrectionsPostgresRepository:
 
     def _changed(self, album_keys: tuple[str, ...]) -> None:
         """Search, gallery and Problematic Files caches follow the changed corrected values."""
-        on_change = self._on_change or _ON_CHANGE.get(self._database_url)
-        if album_keys and on_change is not None:
-            try:
-                on_change(album_keys)
-            except Exception:
-                _logger.warning("Caches could not be invalidated after a data correction changed.")
+        notify_searchable_values_changed(self._database_url, album_keys, on_change=self._on_change)
 
     def list_summaries(self, *, album_keys: Iterable[str] | None = None, offset: int = 0,
                        limit: int | None = None) -> dict[str, object]:
@@ -415,11 +461,10 @@ class MusicBrainzCorrectionsPostgresRepository:
     def kinds(self, *, section: str) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:
             return [_row_mapping(row) for row in connection.execute(
-                _KIND_COUNTS_SQL, {"section": section, "kind": None, "album_keys": None}).fetchall()]
+                _KIND_COUNTS_SQL, {"section": section, "kind": None}).fetchall()]
 
     def kind_page(self, *, section: str, kind: str, offset: int, limit: int) -> list[dict[str, object]]:
-        params = {"section": section, "kind": kind, "album_keys": None,
-                  "offset": max(0, int(offset)), "limit": max(1, int(limit))}
+        params = {"section": section, "kind": kind, "offset": max(0, int(offset)), "limit": max(1, int(limit))}
         with self._connect(self._database_url) as connection:
             keys = [_row_mapping(row)["album_key"] for row in connection.execute(_KIND_PAGE_ALBUMS_SQL, params)]
             rows = [_row_mapping(row) for row in connection.execute(
@@ -498,6 +543,20 @@ _REFRESH_ENABLED: set[str] = set()
 _REFRESH_RUNNING: dict[str, bool] = {}
 # What invalidates search, gallery and Problematic Files caches when corrected values change.
 _ON_CHANGE: dict[str, Callable[[tuple[str, ...]], None]] = {}
+
+
+def notify_searchable_values_changed(database_url: object, album_keys: Iterable[str], *,
+                                     on_change: Callable[[tuple[str, ...]], None] | None = None) -> None:
+    """Drop the search, gallery and Problematic Files caches of albums whose searchable values
+    changed (corrected values, S4; Latin titles, S7, 0255), with the invalidation the
+    application registered for this database at startup."""
+    album_keys = tuple(sorted({str(key) for key in album_keys}))
+    on_change = on_change or _ON_CHANGE.get(str(database_url or "").strip())
+    if album_keys and on_change is not None:
+        try:
+            on_change(album_keys)
+        except Exception:
+            _logger.warning("Caches could not be invalidated after searchable values changed.")
 
 
 def enable_background_correction_refresh(database_url: object,

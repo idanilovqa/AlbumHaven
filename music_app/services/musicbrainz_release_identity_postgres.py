@@ -312,7 +312,8 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
 
     def claim_transliteration(self, *, now: datetime) -> dict[str, object] | None:
         """One certain release whose Latin tracklist (S7) is due, with its local albums' track
-        titles: never asked, or asked more than 30 days ago, and not failed in the last day.
+        titles: never asked, asked more than 30 days ago or before its language was stored
+        (0255), and not failed in the last day.
         Only releases with a title beyond Latin and Cyrillic letters are considered (the
         caller decides exactly). The row is written now, its ``failed_at`` holding it for a
         day, so another lane skips it and a crash or failure rests it."""
@@ -326,7 +327,7 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                 on albums.library_id = decision.library_id and albums.album_key = decision.album_key
               left join integration.musicbrainz_release_transliterations transliteration
                 on transliteration.release_mbid = decision.release_mbid
-              where (transliteration.checked_at is null
+              where (transliteration.checked_at is null or transliteration.language is null
                      or transliteration.checked_at < %(now)s - interval '""" + _STALE_AFTER + r"""')
                 and (transliteration.failed_at is null or transliteration.failed_at < %(now)s - interval '1 day')
                 and exists (select 1 from library.local_tracks tracks
@@ -340,6 +341,7 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
               select release_mbid, %(now)s, %(now)s, %(now)s from due
               on conflict (release_mbid) do update set failed_at = excluded.failed_at, updated_at = excluded.updated_at
               where (integration.musicbrainz_release_transliterations.checked_at is null
+                     or integration.musicbrainz_release_transliterations.language is null
                      or integration.musicbrainz_release_transliterations.checked_at
                         < %(now)s - interval '""" + _STALE_AFTER + r"""')
                 and (integration.musicbrainz_release_transliterations.failed_at is null
@@ -369,18 +371,35 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
         return {"release_mbid": row["release_mbid"], "titles": json.loads(titles) if isinstance(titles, str) else titles}
 
     def store_transliteration(self, *, release_mbid: str, transliteration_mbid: str | None,
-                              media: list[dict[str, object]], observed_at: datetime) -> None:
+                              media: list[dict[str, object]], language: str, observed_at: datetime) -> None:
         """MusicBrainz's answer for a claimed release: its Latin pseudo-release and tracklist,
-        or none. A failure stores nothing, so the claim rests the release a day."""
+        or none, and its language ("" for none). A failure stores nothing, so the claim rests
+        the release a day."""
         with self._connect(self._database_url) as connection:
             connection.execute(
                 "update integration.musicbrainz_release_transliterations"
                 " set transliteration_mbid = %(transliteration_mbid)s::uuid, media = %(media)s::jsonb,"
+                "     language = %(language)s,"
                 "     checked_at = %(observed_at)s, failed_at = null, updated_at = %(observed_at)s"
                 " where release_mbid = %(release_mbid)s::uuid",
-                {"release_mbid": release_mbid, "transliteration_mbid": transliteration_mbid,
+                {"release_mbid": release_mbid, "transliteration_mbid": transliteration_mbid, "language": language,
                  "media": json.dumps(media if transliteration_mbid else [], ensure_ascii=False),
                  "observed_at": _aware_utc(observed_at)})
+
+    def refresh_latin_titles(self, *, now: datetime, limit: int = 25) -> int:
+        """The active library's due albums' Latin titles and search keys (0255); how many.
+        Search finds tracks by them, so those albums' cached searches are dropped."""
+        from music_app.services.musicbrainz_corrections_postgres import notify_searchable_values_changed
+        from music_app.services.track_transliteration import refresh_latin_titles
+
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                library_ids = [int(_row_mapping(row)["library_id"]) for row in connection.execute(
+                    _active_library_cte() + " select library_id from active_library").fetchall()]
+                album_keys = refresh_latin_titles(connection, library_ids=library_ids, limit=limit,
+                                                  now=_aware_utc(now)) if library_ids else []
+        notify_searchable_values_changed(self._database_url, album_keys)
+        return len(album_keys)
 
     def unsized_series(self, *, limit: int, now: datetime) -> list[str]:
         """Series whose size can still decide their kind, never counted or last counted more

@@ -445,7 +445,14 @@ class MusicBrainzAlbumReleaseProcessor:
                                                      lease_duration=self._lease_duration)
         if not job:
             retried = self._retry_discogs_sections(observed_at)
-            return retried if retried["processed"] else self._store_transliteration(observed_at)
+            if retried["processed"]:
+                return retried
+            stored = self._store_transliteration(observed_at)
+            if stored["processed"]:
+                return stored
+            # Network-free: the Latin titles search finds tracks by (0255).
+            refreshed = self._repository.refresh_latin_titles(now=observed_at)
+            return {"processed": True, "state": "succeeded"} if refreshed else stored
         job_id = int(job["id"])
         outcomes = []
         for context in self._repository.load_context(job_id=job_id, worker_id=worker_id):
@@ -533,19 +540,19 @@ class MusicBrainzAlbumReleaseProcessor:
         due = self._repository.claim_transliteration(now=observed_at)
         if not due:
             return {"processed": False, "state": "idle"}
-        transliteration_mbid, media = None, []
+        transliteration_mbid, media, language = None, [], ""
         if any(needs_transliteration(title) for title in due.get("titles") or []):
             linked = self._client.lookup_release_transliteration(due["release_mbid"])
             if linked.get("classification") != "complete":
                 return {"processed": False, "state": "idle"}
-            transliteration_mbid = linked.get("transliteration_mbid")
+            transliteration_mbid, language = linked.get("transliteration_mbid"), linked.get("language") or ""
             if transliteration_mbid:
                 found = self._client.lookup_release_tracklist(transliteration_mbid)
                 if found.get("classification") != "complete":
                     return {"processed": False, "state": "idle"}
                 media = transliteration_media(found["release"])
         self._repository.store_transliteration(release_mbid=due["release_mbid"], transliteration_mbid=transliteration_mbid,
-                                               media=media, observed_at=observed_at)
+                                               media=media, language=language, observed_at=observed_at)
         return {"processed": True, "state": "succeeded"}
 
     def _size_new_series(self, observed_at) -> None:

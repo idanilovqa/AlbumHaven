@@ -77,6 +77,9 @@ class Repository:
     def claim_transliteration(self, **_kwargs):
         return None
 
+    def refresh_latin_titles(self, **_kwargs):
+        return 0
+
 
 def test_a_manual_only_album_claim_never_sweeps_the_library():
     repository = Repository()

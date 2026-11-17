@@ -4353,6 +4353,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
 
             production_params = {
                 "query_like": "%joseph%",
+                "query_latin_like": "%joseph%",
                 "category_count": 0,
                 "visible_categories": [],
                 "include_missing": True,

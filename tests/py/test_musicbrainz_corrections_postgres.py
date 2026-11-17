@@ -239,8 +239,8 @@ def test_only_a_waiting_lookup_can_be_removed(monkeypatch):
 def _search(setup_url, query):
     from music_app.services.library_browse_postgres import _search_preview_sql
 
-    params = {"query_like": f"%{query}%", "category_count": 0, "visible_categories": [], "include_missing": True,
-              "search_artist_keys": []}
+    params = {"query_like": f"%{query}%", "query_latin_like": None, "category_count": 0, "visible_categories": [],
+              "include_missing": True, "search_artist_keys": []}
     with isolatedPostgres._connect(setup_url) as connection:
         return {row["album_key"] for row in connection.execute(_search_preview_sql(), params).fetchall()}
 

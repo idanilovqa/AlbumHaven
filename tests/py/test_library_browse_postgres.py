@@ -5622,6 +5622,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
     )
     assert executed[search_sql_index + 1] == {
         "query_like": "%tender%",
+        "query_latin_like": "%tender%",
         "query_utf8_prefilter": "tender",
         "include_missing": True,
         "search_artist_keys": [],
@@ -8651,6 +8652,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
     assert [executed[0], executed[2]] == [
         {
             "query_like": "%Ария%",
+            "query_latin_like": None,
             "query_utf8_prefilter": "Ария",
             "include_missing": True,
             "search_artist_keys": [],
@@ -8659,6 +8661,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
         },
         {
             "query_like": "%Ария%",
+            "query_latin_like": None,
             "query_utf8_prefilter": "Ария",
             "include_missing": True,
             "search_artist_keys": [],

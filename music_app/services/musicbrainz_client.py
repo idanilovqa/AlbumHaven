@@ -752,7 +752,8 @@ class MusicBrainzClient:
                 "discogs_release_id": discogs_link_id(payload.get("relations"), "release")}
 
     def lookup_release_transliteration(self, release_mbid: object) -> JsonDict:
-        """The Latin pseudo-release holding a release's transliterated tracklist (S7), or None."""
+        """The Latin pseudo-release holding a release's transliterated tracklist (S7), or None,
+        and the release's MusicBrainz language ("jpn"; "" when it gives none)."""
         normalized = _valid_mbid(release_mbid)
         if not normalized:
             return {"classification": "invalid_request"}
@@ -760,7 +761,10 @@ class MusicBrainzClient:
         payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
         if not isinstance(payload, dict):
             return {"classification": _transport_classification(transport), "transport": transport}
-        return {"classification": "complete", "transliteration_mbid": latin_transliteration_id(payload)}
+        representation = payload.get("text-representation")
+        language = _text(representation.get("language")) if isinstance(representation, dict) else ""
+        return {"classification": "complete", "transliteration_mbid": latin_transliteration_id(payload),
+                "language": language if re.fullmatch(r"[a-z]{3}", language) else ""}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
         """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.

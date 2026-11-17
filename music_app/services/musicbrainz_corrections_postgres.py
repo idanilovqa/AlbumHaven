@@ -2,8 +2,9 @@
 
 A correction compares an album's tags with the release it certainly is (decision state
 ``release``): the album title, the album artist, and each track's title and artist against
-the release track at its own disc and position. Spelling that differs only in case, spacing
-or typographic punctuation is not a correction. Everything is computed from stored data on
+the release track at its own disc and position. Case, spacing (doubled, leading or trailing
+spaces), accents, typos and edition suffixes are corrections (owner 2026-11-16); curly
+against straight quotes, apostrophes and dashes are not, for now. Everything is computed from stored data on
 read; nothing here asks MusicBrainz or writes media tags. "Add to queue" keeps the owner's
 approved snapshot until Bulk Correction (PR 53) writes it through Edit Tags.
 """
@@ -28,10 +29,10 @@ _TYPOGRAPHIC = ("’‘ʼ`´“”„–—‐‑", "'''''\"\"\"----")
 
 
 def _comparable_sql(expression: str) -> str:
-    """``expression`` without case, repeated spacing or typographic punctuation."""
+    """``expression`` with typographic punctuation as plain ASCII; case and spacing count."""
     source, target = (part.replace("'", "''") for part in _TYPOGRAPHIC)
-    return (f"replace(lower(btrim(regexp_replace(translate(normalize(coalesce({expression}, ''), NFC), "
-            f"'{source}', '{target}'), '\\s+', ' ', 'g'))), '…', '...')")
+    return (f"replace(translate(normalize(coalesce({expression}, ''), NFC), '{source}', '{target}'), "
+            f"'…', '...')")
 
 
 def _credit_sql(expression: str) -> str:

@@ -300,3 +300,17 @@ test('the album details header shows a.k.a. titles dimmed after the title and be
   assert.match(html, /Wurdah Ïtah <span class="album-details-header__aka">\(a\.k\.a\. Tristan et Iseult\)<\/span> <span aria-hidden="true">•<\/span> 1974/);
   assert.doesNotMatch(plain, /a\.k\.a\./);
 });
+
+test('phones list the Edits Queue only for whoever may review MusicBrainz corrections (owner 2026-11-16)', () => {
+  const source = read('music_app/static/js/runtime/mobile-navigation.js');
+  const start = source.indexOf('const MOBILE_UTILITY_SECTIONS');
+  const end = source.indexOf('function mobileUtilitySubsectionAttribute');
+  const context = { window: {} };
+  vm.createContext(context);
+  vm.runInContext(`${source.slice(start, end)}\nthis.sections = MOBILE_UTILITY_SECTIONS; this.allowed = mobileUtilityTabAllowed;`, context);
+
+  assert.deepEqual({ ...context.sections['edits-queue'] }, { label: 'Edits Queue', action: 'library.metadata_matches.review' });
+  assert.deepEqual(Object.keys(context.sections).slice(0, 2), ['problematic-files', 'edits-queue']);
+  assert.equal(context.allowed('edits-queue', { 'library.metadata_matches.review': true }), true);
+  assert.equal(context.allowed('edits-queue', { 'library.problems.read': true }), false);
+});

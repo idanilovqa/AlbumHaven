@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+import pytest
+
 from music_app.services.musicbrainz_corrections import MusicBrainzCorrectionService
 from music_app.services.musicbrainz_corrections_postgres import MusicBrainzCorrectionsPostgresRepository
 from music_app.services.musicbrainz_lookup_queue_postgres import MusicBrainzLookupQueuePostgresRepository
@@ -49,11 +51,11 @@ def _corrections(monkeypatch):
         connection.execute(
             "insert into integration.musicbrainz_release_groups (mbid, title, refreshed_at) values (%s, 'Angels Cry', %s)",
             (GROUP, NOW))
-        # Spelling aside (case, spacing, typographic apostrophe) the first track agrees;
-        # the second track's title and artist differ.
-        connection.execute("update library.local_tracks set title = 'Don''t  Despair' where track_key = 'rel-cry-1'")
-        _store_release(connection, RELEASE, "angels cry", _credit("Angra"),
-                       [_medium(1, ("don’t despair", "Angra"), ("Carry On", "Angra", "Andre Matos"))])
+        # Only a typographic apostrophe differs on the first track, so it agrees; the second
+        # track's title and artist differ.
+        connection.execute("update library.local_tracks set title = 'Don''t Despair' where track_key = 'rel-cry-1'")
+        _store_release(connection, RELEASE, "Angels Cry", _credit("Angra"),
+                       [_medium(1, ("Don’t Despair", "Angra"), ("Carry On", "Angra", "Andre Matos"))])
         _decide(connection, "rel-cry")
         # One disc of a box set: local disc 1 is the release's second medium.
         _store_release(connection, BOX, "Holy Land Box", _credit("Angra"),
@@ -112,7 +114,7 @@ def test_add_to_queue_keeps_the_snapshot_and_remove_drops_it(monkeypatch):
     with isolatedPostgres._connect(setup_url) as connection:
         tracks = connection.execute("select title from library.local_tracks where track_key like 'rel-cry-%%'"
                                     " order by track_key").fetchall()
-    assert [row["title"] for row in tracks] == ["Don't  Despair", "Song 2"], "queueing never changes tags"
+    assert [row["title"] for row in tracks] == ["Don't Despair", "Song 2"], "queueing never changes tags"
 
     assert service.remove_queued(entry_id=queued["entry_id"]) is True
     assert service.remove_queued(entry_id=queued["entry_id"]) is False
@@ -145,3 +147,31 @@ def test_only_a_waiting_lookup_can_be_removed(monkeypatch):
     assert lookups.remove_queued(request_id=running["request_id"]) is False
     assert lookups.remove_queued(request_id=waiting["request_id"]) is True
     assert lookups.list_lookups()["queued"] == []
+
+
+# Owner 2026-11-16: case, spacing, accents, typos and edition suffixes are corrections;
+# curly against straight punctuation is not, for now.
+@pytest.mark.parametrize("local,remote,proposed", [
+    ("Carry on", "Carry On", True),
+    ("Carry  On", "Carry On", True),
+    ("Carry On ", "Carry On", True),
+    (" Carry On", "Carry On", True),
+    ("Carry On", "Cárry On", True),
+    ("Cary On", "Carry On", True),
+    ("Carry On (Live)", "Carry On", True),
+    ("Carry On", "Carry On", False),
+    ("Don't Despair", "Don’t Despair", False),
+    ('The "Crazy" Ones', "The “Crazy” Ones", False),
+    ("Track - One", "Track – One", False),
+])
+def test_each_correction_rule(monkeypatch, local, remote, proposed):
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_tracks set title = %s where track_key = 'rel-cry-2'", (local,))
+        connection.execute("update integration.musicbrainz_releases set media = %s where mbid = %s", (json.dumps(
+            [_medium(1, ("Don’t Despair", "Angra"), (remote, "Angra"))]), RELEASE))
+
+    albums = MusicBrainzCorrectionService(repository).list_corrections(album_key="rel-cry")
+
+    rows = [(item["current"], item["proposed"]) for album in albums for item in album["corrections"]]
+    assert rows == ([(local, remote)] if proposed else [])

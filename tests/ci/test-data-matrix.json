@@ -9541,6 +9541,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "P1: on a phone the Edits Queue Data Correction list keeps the switch, Bulk Correction and open/remove within the screen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-phone-data-correction"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "P2: on a phone the Edits Queue MusicBrainz Look Up list keeps open/remove within the screen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-phone-lookups"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/mobileGalleryHeaderTruncation.spec.js",
     "case": "mobile gallery header truncates long artist names without truncating artist separators",
     "profile": null,

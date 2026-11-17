@@ -52802,6 +52802,8 @@ function initMobileNavigation() {
 
 const MOBILE_UTILITY_SECTIONS = Object.freeze({
   'problematic-files': { label: 'Problematic Files', action: 'library.problems.read' },
+  // Owner 2026-11-16: phones too.
+  'edits-queue': { label: 'Edits Queue', action: 'library.metadata_matches.review' },
   rules: { label: 'Rules', action: 'library.rules.read' },
   loops: { label: 'Loops', action: 'library.loops.read' },
   'log-history': { label: 'Log History', action: 'library.logs.read' },

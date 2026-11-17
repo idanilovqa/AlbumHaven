@@ -17,10 +17,10 @@ const ARTIST = { field: 'album_artist', label: 'Album artist', current: 'Christi
 const TRACK_ARTISTS = { field: 'artist', label: 'Artist (12 tracks)', current: 'Christian Vander', proposed: 'Magma',
   tracks: Array.from({ length: 12 }, (_, index) => ({ disc_number: 1, track_number: index + 1 })) };
 
-async function mount(page, { width = 1440, height = 900 } = {}) {
+async function mount(page, { width = 1440, height = 900, phone = false } = {}) {
   await page.setViewportSize({ width, height });
   await page.setContent(`<!doctype html><html><body class="has-dark-theme">
-    <div class="utility-modal" id="utility-modal" data-active-tab="edits-queue">
+    <div class="utility-modal${phone ? ' is-mobile-page' : ''}" id="utility-modal" data-active-tab="edits-queue">
       <div class="utility-modal-dialog" role="dialog" aria-label="Settings">
         <div class="utility-modal-body">
           <aside class="utility-sidebar"><div class="utility-list" id="utility-problematic-list"></div></aside>
@@ -151,3 +151,33 @@ test('I1: album details show the a.k.a. title dimmed, at the title size, after t
   expect(styles[1].size).toBe(styles[0].size);
   expect(styles[1].color).not.toBe(styles[0].color);
 });
+
+// Owner 2026-11-16: phones too, on the phone settings page (pending owner approval).
+for (const tab of ['data-correction', 'musicbrainz-lookup']) {
+  test(`P${tab === 'data-correction' ? 1 : 2}: on a phone the Edits Queue ${tab === 'data-correction'
+    ? 'Data Correction list keeps the switch, Bulk Correction and open/remove' : 'MusicBrainz Look Up list keeps open/remove'} within the screen`, async ({ page }) => {
+    await mount(page, { width: 390, height: 844, phone: true });
+    await showQueue(page, tab);
+    const detail = page.locator('#utility-problematic-detail');
+
+    await expect(page.locator('.utility-sidebar')).toBeHidden();
+    await expect(detail.getByRole('tab')).toHaveText(['Data Correction', 'MusicBrainz Look Up']);
+    if (tab === 'data-correction') {
+      await expect(detail.getByRole('switch', { name: 'Auto submit bulks' })).toBeVisible();
+      await expect(detail.getByRole('button', { name: 'Bulk Correction' })).toBeDisabled();
+    }
+    const rows = detail.locator('.version-picker-option');
+    await expect(rows).toHaveCount(2);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    for (const index of [0, 1]) {
+      for (const name of [/^Open /, /^Remove /]) {
+        const box = await rows.nth(index).getByRole('button', { name }).boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(390);
+      }
+      const name = await rows.nth(index).locator('.version-picker-option-name').boundingBox();
+      expect(name.width).toBeGreaterThan(80);
+    }
+  });
+}

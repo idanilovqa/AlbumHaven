@@ -255,12 +255,22 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     const filterOutcome = evaluateTimingBudget(filterMs, READY_BUDGET);
 
     // Settings → Edits Queue → Data Correction: the kinds, then page 1 of the largest kind.
+    // Each MusicBrainz request's server time is kept as evidence for where the time goes.
+    const editsQueueRequests = [];
+    page.on('requestfinished', (request) => {
+      const { pathname, search } = new URL(request.url());
+      if (!pathname.startsWith('/api/musicbrainz/')) return;
+      const timing = request.timing();
+      editsQueueRequests.push(`${pathname}${search} ${Math.round(timing.responseEnd - timing.requestStart)} ms`);
+    });
+    let kindsVisibleMs = null;
     const editsQueueMs = await stepLogger.step('Open Edits Queue until its first page of applied changes is visible', async () => {
       const startedAt = Date.now();
       const editsQueue = new UtilityEditsQueueTab(page);
       await utilityTabBarActions.openTab('edits-queue');
       const kind = editsQueue.kindButton('case');
       await kind.waitFor({ state: 'visible', timeout: 60000 });
+      kindsVisibleMs = Date.now() - startedAt;
       await kind.click();
       await editsQueue.albumRows.first().waitFor({ state: 'visible', timeout: 60000 });
       return Date.now() - startedAt;
@@ -276,6 +286,8 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       warmReadyMs: warm.readyMs,
       filterPageOneVisibleMs: filterMs,
       editsQueueFirstPageMs: editsQueueMs,
+      editsQueueKindsVisibleMs: kindsVisibleMs,
+      editsQueueRequests,
       storedCorrectionRows: seeded.rows,
       completeResponseBytes: completeBytes,
       completeResponseItems: complete.items.length,
@@ -292,6 +304,11 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     ]) {
       await problematicFilesFocusedLocalReport.recordTimingCheckpoint({ key, label, timingMs, details: metrics });
     }
+    problematicFilesFocusedLocalReport.recordTextCheckpoint({
+      key: 'edits-queue-corrections-requests',
+      label: `Edits Queue kinds visible in ${kindsVisibleMs} ms; MusicBrainz requests`,
+      valueText: editsQueueRequests.join('; '),
+    });
     problematicFilesFocusedLocalReport.recordTextCheckpoint({
       key: 'problematic-files-corrections-response-size',
       label: 'Complete Problematic Files response with corrections stored',

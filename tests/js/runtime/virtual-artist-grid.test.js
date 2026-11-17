@@ -7245,6 +7245,28 @@ test('a root window refresh holds the scroll offset over the artists it drops un
   assert.equal(visibleTop(), -50);
 });
 
+test('a root window refresh keeps an absolute scroll position over the same artists', () => {
+  const { context, scrollEl, virtualGrid, frames, runNextFrame } = loadCountedGallery(400);
+  const groups = Array.from(context.state.view.artist_groups);
+  const sectionOf = artist => virtualGrid.sections.find(section => section.group.artist === artist);
+  const before = sectionOf('Artist 300').top;
+  scrollEl.scrollTop = before + 50;
+  const heldScrollTop = scrollEl.scrollTop;
+  context.isPagedRootGallery = () => true;
+  const shown = groups.slice(290, 340);
+  context.state.view = { ...context.state.view, artist_groups: shown, gallery_page: { has_previous: true } };
+  // A tag save restores its captured scroll coordinates rather than a visible card.
+  virtualGrid.setGroups([], [], shown, {
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: heldScrollTop },
+    holdGalleryScrollTop: true,
+  });
+  while (frames.size) runNextFrame();
+  assert.equal(scrollEl.scrollTop, heldScrollTop);
+  assert.equal(sectionOf('Artist 300').top, before, 'the restored coordinates still show the same artist');
+});
+
 test('a root gallery continuation drops the measured shift of the artist it replaces', async () => {
   const gallery = loadCountedRootContinuation(40);
   const { context, prepareNextPage, virtualGrid } = gallery;

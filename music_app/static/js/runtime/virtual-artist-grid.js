@@ -1144,9 +1144,9 @@ class VirtualArtistGrid {
     const rootHasEarlierPages = preserveScroll
       && typeof isPagedRootGallery === 'function' && isPagedRootGallery(state.view)
       && Boolean(state.view.gallery_page?.has_previous);
-    const holdsLeadingExtent = rootHasEarlierPages && Boolean(preservedAnchor);
-    const scrollTopBeforeGroups = Number(this.scrollEl?.scrollTop || 0);
-    if (!rootHasEarlierPages) this._leadingExtent = 0;
+    const previousLeadingExtent = rootHasEarlierPages ? this._leadingExtent : 0;
+    const previousSectionByKey = this.sectionByKey;
+    this._leadingExtent = 0;
     const sections = [];
     const renderedPrimaryGroups = buildDisplayGroups(primaryGroups);
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
@@ -1204,6 +1204,13 @@ class VirtualArtistGrid {
     );
     this.lastKey = '';
     this.recalculate();
+    if (rootHasEarlierPages) {
+      this.setLeadingExtent(this.resolveLeadingExtent(
+        previousSectionByKey,
+        previousLeadingExtent,
+        options.holdGalleryScrollTop === true,
+      ));
+    }
     if (!preserveScroll && this.scrollEl) {
       this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
@@ -1283,13 +1290,6 @@ class VirtualArtistGrid {
           if (preservedAnchor?.albumKey && Math.abs(Number(this.scrollEl.scrollTop || 0) - previousScrollTop) > 1) {
             this.render(true);
             this.restoreScrollAnchor(preservedAnchor);
-          }
-          if (holdsLeadingExtent) {
-            this.holdScrollTopWithLeadingExtent(
-              scrollTopBeforeGroups,
-              options.holdGalleryScrollTop === true,
-              preservedAnchor,
-            );
           }
           this._pendingStabilizationScroll = {
             generation: this._stabilizeGeneration,
@@ -1500,16 +1500,19 @@ class VirtualArtistGrid {
   }
 
   // A root window refresh that drops the loaded artists above it holds their
-  // height as empty space, so the scroll offset stays where it was while earlier
-  // pages remain to load. Only such a refresh (`mayGrow`) widens it; any other
-  // mounted render only narrows it, as earlier pages arrive above the window.
-  holdScrollTopWithLeadingExtent(scrollTop, mayGrow, anchor) {
-    const extent = Math.max(0, this._leadingExtent + scrollTop - Number(this.scrollEl.scrollTop || 0));
-    if (Math.abs(extent - this._leadingExtent) < 1 / 64 || (!mayGrow && extent > this._leadingExtent)) return;
-    this.setLeadingExtent(extent);
-    this.render(true);
-    if (anchor) this.restoreScrollAnchor(anchor);
-    else this.scrollEl.scrollTop = scrollTop;
+  // height as empty space while earlier pages remain to load, so the first
+  // artist both layouts show keeps its previous top and every scroll position,
+  // absolute or anchored, stays where it was. Only such a refresh (`mayGrow`)
+  // widens the space; any other mounted render only narrows it, as earlier
+  // pages arrive above the window.
+  resolveLeadingExtent(previousSectionByKey, previousExtent, mayGrow) {
+    for (const section of this.sections) {
+      const previous = section.kind === 'artist' ? previousSectionByKey?.get(section.sectionKey) : null;
+      if (!previous) continue;
+      const extent = Math.max(0, Number(previous.top || 0) - Number(section.top || 0));
+      return mayGrow ? extent : Math.min(previousExtent, extent);
+    }
+    return 0;
   }
 
   hasDeferredMountedGroupUpdate() {

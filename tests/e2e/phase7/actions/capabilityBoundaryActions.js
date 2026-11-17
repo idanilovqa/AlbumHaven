@@ -56,6 +56,8 @@ export async function assertCapabilityBoundary(page, profile, testInfo) {
     await expectControl(covers.coverLookup.addImageButton, !profile.providerOnly);
     await expectControl(covers.coverLookup.manualExtractButton, !profile.providerOnly);
     await expectControl(covers.coverLookup.activeLocalCoverCard, !profile.providerOnly);
+    // Owner 2026-11-17: covers are never edited on TV, so Cover Look Up there has no Save.
+    await expectControl(covers.coverLookup.saveRemoteButton, !profile.providerOnly);
     await expectControl(ui.coverDelete.first(), allowed.has('delete'));
     await covers.closeModal();
   }

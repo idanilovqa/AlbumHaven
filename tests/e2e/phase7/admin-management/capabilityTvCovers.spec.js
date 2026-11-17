@@ -1,14 +1,13 @@
 import { assertCapabilityBoundary } from '../actions/capabilityBoundaryActions.js';
-import { enrollCapabilityMember, openCapabilityFixtureAlbum } from '../actions/capabilityEditorActions.js';
-import { prepareDesktopCoverCandidates, decodedArtworkEvidence } from '../actions/capabilityCoverActions.js';
+import { enrollCapabilityMember } from '../actions/capabilityEditorActions.js';
+import { prepareDesktopCoverCandidates } from '../actions/capabilityCoverActions.js';
 import { CapabilityCoverLookup } from '../poms/capabilityCoverLookup.js';
 import { test, expect } from '../support/baseFixtures.js';
-import { coverPathForReference } from '../../helpers/coverReferences.js';
 
 test.use({ userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/537.36 TV Safari/537.36' });
 
-test('FTC-CAP-AUDIT-014 TV selects real provider artwork while hiding retained manual candidates', async ({
-  page, freshBrowserSession, galleryActions, trackModalActions, coverLookupActions,
+test('FTC-CAP-AUDIT-014 TV shows provider artwork but never saves a cover', async ({
+  page, freshBrowserSession, galleryActions, coverLookupActions,
 }, testInfo) => {
   const editor = await enrollCapabilityMember(page, freshBrowserSession, ['Change covers'], {
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
@@ -30,23 +29,10 @@ test('FTC-CAP-AUDIT-014 TV selects real provider artwork while hiding retained m
   const local = tvLookup.localCandidate(desktop.localReference);
   await expect(local).toHaveCount(1);
   await expect(local).toBeHidden();
-  const selectedImage = await coverLookupActions.readRemoteCandidateEvidence(desktop.providerId);
-  const selected = await decodedArtworkEvidence(page, selectedImage.src);
-  const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(desktop.providerId);
-  expect(saved.ok).toBe(true);
-  expect(saved.optimistic_cover_ref).toBeTruthy();
-  await coverLookupActions.openDrawer();
-  await coverLookupActions.waitForTaskStatus(desktop.taskTitle, 'Art chosen');
-  await coverLookupActions.closeDrawer();
-  await page.reload();
-  await openCapabilityFixtureAlbum(galleryActions);
-  await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
-  const artwork = await coverLookupActions.readDisplayedImageEvidence(
-    trackModalActions.trackModal.detailedCoverImage, 'TV-selected provider artwork',
-    { expectedCoverPath: await coverPathForReference(saved.optimistic_cover_ref) },
-  );
-  const persisted = await decodedArtworkEvidence(page, artwork.src);
-  expect(persisted).toEqual(selected);
+  // Owner 2026-11-17: covers are never edited on TV. Picking a cover offers no Save.
+  await coverLookupActions.selectRemoteCandidateById(desktop.providerId);
+  await expect(lookup.saveRemoteButton).toBeHidden();
+  await coverLookupActions.closeModal();
   await desktop.tracks.openCoverLookup();
   await desktop.actions.waitForModalResultsReady();
   await expect(desktop.lookup.remoteCoverCardById(desktop.manualId)).toBeVisible();

@@ -563,14 +563,11 @@ export class CoverLookupActions {
 
   async saveSelectedRemoteCandidate(options = {}) {
     const timeout = options.timeout || 30000;
-    // An album whose saved cover selection loaded saves through its ordered selection;
-    // other albums use the single remote-cover save.
-    const responsePromise = this.coverLookup.page.waitForResponse((response) => {
-      const method = response.request().method();
-      const pathname = new URL(response.url()).pathname;
-      return (method === 'POST' && pathname === '/utilities/cover-lookup/save-remote')
-        || (method === 'PUT' && /^\/albums\/\d+\/selected-covers$/u.test(pathname));
-    }, { timeout });
+    // Every Cover Look Up choice is saved as the album's cover selection.
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'PUT'
+      && /^\/albums\/\d+\/selected-covers$/u.test(new URL(response.url()).pathname)
+    ), { timeout });
     await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
     await this.coverLookup.saveRemoteButton.click();
     const response = await responsePromise;
@@ -582,27 +579,18 @@ export class CoverLookupActions {
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
     const requestPayload = response.request().postDataJSON();
-    // Both saves name the chosen candidate, the lookup it came from and its provider.
-    const ordered = Array.isArray(requestPayload?.references);
-    const savedCover = ordered
-      ? (payload.selected_covers || []).find((cover) => cover?.kind === 'remote') || null
-      : null;
-    const reference = ordered
-      ? requestPayload.references.find((item) => item?.kind === 'remote') || {}
-      : {};
+    const savedCover = (payload.selected_covers || []).find((cover) => cover?.kind === 'remote') || null;
+    const reference = (requestPayload.references || []).find((item) => item?.kind === 'remote') || {};
     return {
       ...payload,
       payload,
       requestPayload,
-      ordered,
       savedCover,
-      candidateId: ordered ? String(reference.candidate_id || '') : String(requestPayload.candidate_id || ''),
-      lookupTaskId: ordered ? String(requestPayload.lookup_task_id || '') : String(requestPayload.task_id || ''),
-      snapshotGeneration: ordered
-        ? String(reference.candidate_generation || '')
-        : String(requestPayload.snapshot_generation || ''),
-      remoteSource: ordered ? String(savedCover?.source || '') : String(payload.optimistic_remote_source || ''),
-      lookupTask: ordered ? payload.lookup_task || null : payload.task || null,
+      candidateId: String(reference.candidate_id || ''),
+      lookupTaskId: String(requestPayload.lookup_task_id || ''),
+      snapshotGeneration: String(reference.candidate_generation || ''),
+      remoteSource: String(savedCover?.source || ''),
+      lookupTask: payload.lookup_task || null,
     };
   }
 
@@ -1597,8 +1585,8 @@ export class CoverLookupActions {
       label: 'selected local cover source',
     });
     const saveResponsePromise = this.coverLookup.page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && new URL(response.url()).pathname === '/utilities/cover-lookup/local-select'
+      response.request().method() === 'PUT'
+      && /^\/albums\/\d+\/selected-covers$/u.test(new URL(response.url()).pathname)
     ), { timeout });
 
     await this.coverLookup.localCoverActionWithin(candidateCard).click();
@@ -1631,15 +1619,12 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
-    const selectedCoverPath = await this.coverReferences.coverPathForReference(String(payload.selected_cover_ref || '').trim());
-    if (!selectedCoverPath) {
-      throw new Error('Local cover selection did not return an authoritative cover path.');
-    }
+    // The selection names the chosen file itself; nothing is copied over cover.jpg.
     return {
       candidate,
       candidateFullSize,
-      selectedCoverPath,
-      updatedAlbum: payload.updated_album || null,
+      selectedCoverPath: candidate.sourcePath,
+      payload,
       immediateCoverState,
     };
   }
@@ -1659,8 +1644,8 @@ export class CoverLookupActions {
       { timeout },
     );
     const saveResponsePromise = this.coverLookup.page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && new URL(response.url()).pathname === '/utilities/cover-lookup/save-remote'
+      response.request().method() === 'PUT'
+      && /^\/albums\/\d+\/selected-covers$/u.test(new URL(response.url()).pathname)
     ), { timeout });
 
     await this.coverLookup.localCoverActionWithin(candidateCard).click();

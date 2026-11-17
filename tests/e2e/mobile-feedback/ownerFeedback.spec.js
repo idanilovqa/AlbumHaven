@@ -106,16 +106,15 @@ test('cover selection saves before closing, reopens with saved artwork, and back
   expect(findBox.x + findBox.width).toBeLessThan(saveBox.x);
   expect(findBox.width).toBeLessThan(180);
   await snapshot('93-cover-selection-footer');
-  const saved = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/local-select'));
+  const saved = page.waitForResponse(response => response.request().method() === 'PUT'
+    && /\/albums\/\d+\/selected-covers$/u.test(new URL(response.url()).pathname));
   await covers.saveRemoteButton.click();
   const response = await saved;
   expect(response.ok()).toBe(true);
-  const data = await response.json();
   await expect(covers.modal).not.toBeVisible();
   const gallery = page.waitForResponse(response => response.url().endsWith('/utilities/cover-lookup/gallery'));
   await details.coverLookupButton.click();
   const reopened = await (await gallery).json();
-  expect(reopened.local_covers.find(cover => cover.is_active).cover_revision).toBe(data.updated_album.cover_revision);
   expect(reopened.selected_source_cover_ref).toBe(selectedReference);
   await expect(covers.activeLocalCoverCard).toHaveAttribute('data-select-local-cover', selectedReference);
   await expect(covers.localCoverCards).toHaveCount(2);

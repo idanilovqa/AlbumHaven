@@ -343,7 +343,6 @@ require('node:test')('existing local and remote card actions produce backend ref
 require('node:test')('footer Save uses ordered persistence when the reference list changed', async () => {
   const context = loadRuntime();
   let ordered = 0;
-  let legacy = 0;
   context.state.coverLookup.modal = {
     orderedCoverSelections: [local('front')],
     orderedCoverBaseline: '[]',
@@ -352,17 +351,17 @@ require('node:test')('footer Save uses ordered persistence when the reference li
     selectedRemoteId: '',
   };
   context.saveOrderedCoverSelection = async () => { ordered += 1; };
-  context.saveLocalCoverFromLookup = async () => { legacy += 1; };
 
   await context.saveCoverFromLookup();
 
   assert.equal(ordered, 1);
-  assert.equal(legacy, 0);
 });
 
-require('node:test')('loaded ordered selection never falls through to stale legacy selection state', async () => {
+require('node:test')('an unchanged selection saves nothing, whatever other card state remains', async () => {
   const context = loadRuntime();
-  let legacy = 0;
+  const requests = [];
+  context.fetch = async (url) => { requests.push(url); return { ok: true, json: async () => ({ ok: true }) }; };
+  context.isCoverLookupLocalMutationPending = () => false;
   const front = local('front');
   context.state.coverLookup.modal = {
     orderedSelectionLoaded: true,
@@ -372,12 +371,44 @@ require('node:test')('loaded ordered selection never falls through to stale lega
     pendingLocalPath: front.reference.path,
     selectedRemoteId: 'stale-candidate',
   };
-  context.saveLocalCoverFromLookup = async () => { legacy += 1; };
-  context.saveRemoteCoverFromLookup = async () => { legacy += 1; };
 
   await context.saveCoverFromLookup();
 
-  assert.equal(legacy, 0);
+  assert.deepEqual(requests, []);
+});
+
+require('node:test')('a pick made before the album cover selection loads cannot be saved', async () => {
+  const context = loadRuntime();
+  const saveButton = {};
+  const requests = [];
+  context.document = { getElementById: (id) => (id === 'cover-lookup-save-remote-button' ? saveButton : null) };
+  context.getCoverLookupModalElements = () => ({ overlay: { querySelectorAll: () => [] } });
+  context.isCoverLookupLocalMutationPending = () => false;
+  context.fetch = async (url) => { requests.push(url); return { ok: true, json: async () => ({ ok: true }) }; };
+  Object.assign(context.state.coverLookup.modal, {
+    orderedSelectionLoaded: false, orderedCoverSelections: [], orderedCoverBaseline: '[]',
+    selectedRemoteId: 'candidate-2', pendingLocalRef: 'ref-front', pendingPastedImageId: '', saving: false,
+  });
+
+  context.syncCoverLookupSaveButton();
+  await context.saveCoverFromLookup();
+
+  assert.equal(saveButton.disabled, true);
+  assert.deepEqual(requests, [], 'no other save exists to fall back to');
+});
+
+require('node:test')('a cover selection that cannot load explains why Save is unavailable', async () => {
+  const context = loadRuntime();
+  let rendered = 0;
+  const album = { album_id: 72 };
+  context.renderCoverLookupModal = () => { rendered += 1; };
+  context.state.coverLookup.modal = { album };
+  context.fetch = async () => ({ ok: false, json: async () => ({ ok: false, error: 'unavailable' }) });
+
+  assert.equal(await context.loadOrderedCoverSelectionForAlbum(album), false);
+  assert.match(context.state.coverLookup.modal.statusText, /could not be loaded/);
+  assert.equal(context.state.coverLookup.modal.statusTone, 'error');
+  assert.equal(rendered, 1);
 });
 
 require('node:test')('selection sync numbers selected cards and marks only remaining cards limited', () => {
@@ -474,7 +505,6 @@ require('node:test')('Save enables only when ordered references change', () => {
   };
   context.getCoverLookupModalElements = () => ({ overlay: { querySelectorAll: () => [] } });
   context.isCoverLookupLocalMutationPending = () => false;
-  context.hasPendingLocalCoverSelection = () => false;
   context.state.coverLookup.tasks = [];
   Object.assign(context.state.coverLookup.modal, {
     orderedCoverSelections: [front],
@@ -495,7 +525,7 @@ require('node:test')('Save enables only when ordered references change', () => {
   assert.equal(saveButton.disabled, false);
 });
 
-require('node:test')('loaded ordered selection ignores stale legacy dirty flags', () => {
+require('node:test')('loaded ordered selection ignores other card state', () => {
   const context = loadRuntime();
   const saveButton = {};
   const front = local('front');
@@ -504,7 +534,6 @@ require('node:test')('loaded ordered selection ignores stale legacy dirty flags'
   };
   context.getCoverLookupModalElements = () => ({ overlay: { querySelectorAll: () => [] } });
   context.isCoverLookupLocalMutationPending = () => false;
-  context.hasPendingLocalCoverSelection = () => true;
   context.state.coverLookup.tasks = [];
   Object.assign(context.state.coverLookup.modal, {
     orderedSelectionLoaded: true,

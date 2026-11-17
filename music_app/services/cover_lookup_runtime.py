@@ -11,12 +11,6 @@ from pathlib import Path
 from threading import Event, Lock
 import time
 
-from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
-from music_app.services.cache import run_cover_mutation_for_config
-from music_app.services.cover_mutation import CoverMutationEffect, CoverMutationFinalizationError, CoverMutationCommitUncertainError
-from music_app.services.state import run_authoritative_cover_commit_for_state
-from music_app.services.repair_previews import build_problematic_album_detail_payload
-from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -32,11 +26,9 @@ from music_app.services.cover_lookup_tasks import (
     discard_cover_lookup_future,
     finalize_cover_lookup_task_canceled,
     register_cover_lookup_future,
-    request_cover_lookup_task_stop,
     update_cover_lookup_task,
 )
 from music_app.services.cover_provider_candidates import (
-    SelectedRemoteImage,
     normalize_remote_image_url,
     selected_remote_image_from_lookup_match,
 )
@@ -50,20 +42,11 @@ from music_app.services.cover_provider_registry import (
 )
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.cover_workflow import (
-    begin_prepared_remote_cover_promotion,
-    prepare_remote_cover_bytes_for_authoritative_write,
-    cover_promotion_effect,
-    decode_image_bytes,
-    download_remote_cover_to_folder,
     resolve_album_write_root_from_track_paths,
 )
 
 
 _COVER_LOOKUP_EXECUTOR = create_daemon_executor(max_workers=4, thread_name_prefix="albumhaven-cover-lookup")
-_COVER_LOOKUP_SAVE_EXECUTOR = create_daemon_executor(
-    max_workers=2,
-    thread_name_prefix="albumhaven-cover-save",
-)
 _COVER_LOOKUP_PROVIDER_EXECUTOR = create_daemon_executor(
     max_workers=4,
     thread_name_prefix="albumhaven-cover-provider",
@@ -273,60 +256,6 @@ def queue_cover_lookup_task(
     )
     register_cover_lookup_future(task_id, future, config=config)
     return task_id
-
-
-def queue_cover_lookup_save_remote_task(
-    task_id: str,
-    album_root,
-    requested_track_paths: set[str],
-    candidate_id: str,
-    selected_match: dict[str, object],
-    *,
-    config: Mapping[str, object],
-    logger,
-    library_state: dict[str, object],
-    user_agent: str | None = None,
-    save_generation: str,
-    cover_selection_origin: str = "user",
-    notification_action_taken: bool = True,
-    apply_cover_selection_for_tracks,
-) -> None:
-    expected_album_id = select_scan_cache_adapter(dict(config)).assert_legacy_cover_mutation_allowed(
-        track_paths=requested_track_paths,
-    )["album_id"]
-    resolved_user_agent = str(user_agent or config["MUSICBRAINZ_USER_AGENT"])
-    update_cover_lookup_task(
-        task_id,
-        config=config,
-        status="running",
-        progress=100,
-        progress_label="Saving art",
-        message="Saving selected cover art.",
-        result_kind="",
-        persisted=False,
-        finalization_failed=False,
-        finished_at=None,
-        selected_candidate_id=candidate_id,
-        save_generation=save_generation,
-        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
-    )
-    future = _COVER_LOOKUP_SAVE_EXECUTOR.submit(
-        _run_cover_lookup_save_remote_task,
-        task_id,
-        config,
-        logger,
-        library_state,
-        resolved_user_agent,
-        album_root,
-        requested_track_paths,
-        candidate_id,
-        selected_remote_image_from_lookup_match(selected_match),
-        cover_selection_origin=cover_selection_origin,
-        notification_action_taken=notification_action_taken,
-        apply_cover_selection_for_tracks=apply_cover_selection_for_tracks,
-        expected_album_id=expected_album_id,
-    )
-    register_cover_lookup_future(task_id, future, config=config)
 
 
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:
@@ -1129,263 +1058,3 @@ def _run_cover_lookup_task(
         )
     finally:
         discard_cover_lookup_future(task_id)
-
-
-def _run_cover_lookup_save_remote_task(
-    task_id: str,
-    config: Mapping[str, object],
-    logger,
-    library_state: dict[str, object],
-    user_agent: str,
-    album_root,
-    requested_track_paths: set[str],
-    candidate_id: str,
-    selected_image: SelectedRemoteImage,
-    *,
-    cover_selection_origin: str = "user",
-    notification_action_taken: bool = True,
-    apply_cover_selection_for_tracks,
-    expected_album_id: int | None = None,
-) -> None:
-    phase_timings, phase_counts = _runtime_phase_metrics_for_task(task_id)
-    committed_updates = None
-    persistence_outcome: bool | None = False
-    try:
-        validated_album_root = _validated_remote_selection_album_root(
-            config,
-            album_root,
-            requested_track_paths,
-        )
-        if validated_album_root is None:
-            phase_started = time.perf_counter()
-            update_cover_lookup_task(
-                task_id,
-                config=config,
-                status="failed",
-                progress=100,
-                progress_label="Save failed",
-                finished_at=datetime.now(timezone.utc).isoformat(),
-                message="Album root could not be resolved",
-                result_kind="save-failed",
-                persisted=False,
-                finalization_failed=False,
-            )
-            _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-            _publish_save_runtime_phase_metrics(
-                task_id,
-                config=config,
-                timings=phase_timings,
-                counts=phase_counts,
-            )
-            return
-        scope = select_scan_cache_adapter(dict(config)).assert_legacy_cover_mutation_allowed(
-            track_paths=requested_track_paths,
-        )
-        if expected_album_id is not None and scope["album_id"] != expected_album_id:
-            raise OrderedCoverSelectionConflict("Album identity changed before artwork could be saved.")
-        expected_album_id = scope["album_id"]
-
-        def commit_and_publish(commit_action, effect):
-            def publish():
-                nonlocal committed_updates, persistence_outcome
-                result = commit_action()
-                persistence_outcome = True
-                changes = dict(effect.value)
-                if not _callback_accepts_parameter(apply_cover_selection_for_tracks, "local_cover_dimensions"):
-                    changes.pop("local_cover_dimensions", None)
-                if _callback_accepts_parameter(apply_cover_selection_for_tracks, "cover_revision"):
-                    changes["cover_revision"] = effect.selection.get("cover_revision")
-                if _callback_accepts_parameter(apply_cover_selection_for_tracks, "include_problematic_album"):
-                    changes["include_problematic_album"] = False
-                if _callback_accepts_parameter(apply_cover_selection_for_tracks, "schedule_cache_update"):
-                    changes["schedule_cache_update"] = False
-                committed_updates = _apply_cover_selection_for_tracks(
-                    apply_cover_selection_for_tracks, requested_track_paths,
-                    config=config, logger=logger, library_state=library_state, **changes,
-                )
-                return result
-
-            return run_authoritative_cover_commit_for_state(library_state, publish)
-
-        def published_updates():
-            updated_albums, _ = committed_updates
-            album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
-            problematic = build_problematic_album_detail_payload(
-                album_key, config=config, library_state=library_state, logger=logger,
-            ) if album_key else None
-            return updated_albums, problematic
-
-        selection_options = {
-            "cover_selection_origin": cover_selection_origin,
-            "explicit_selection": cover_selection_origin == "user",
-        }
-        if selected_image.display_only:
-            phase_started = time.perf_counter()
-            linked_fields = {
-                "remote_cover_url": selected_image.url,
-                "remote_cover_thumbnail_url": selected_image.thumbnail_url or selected_image.url,
-                "remote_cover_source": selected_image.source,
-                "remote_cover_source_label": selected_image.source_label,
-                "remote_cover_album_url": selected_image.album_url,
-                "remote_cover_width": selected_image.width,
-                "remote_cover_height": selected_image.height,
-            }
-            result = run_cover_mutation_for_config(
-                config, track_paths=requested_track_paths, album_root=validated_album_root,
-                source_paths=(), expected_album_id=expected_album_id,
-                selection_options=selection_options,
-                mutate=lambda fresh_scope: CoverMutationEffect(
-                    selection={"selected_cover_path": None, "cover_revision": None, **linked_fields},
-                    value={"cover_path": None, "local_cover_dimensions": (None, None), **linked_fields},
-                ),
-                commit_guard=commit_and_publish,
-            )
-            if any(value for key, value in result.items() if key.startswith("blocked_by_")):
-                raise RuntimeError("Remote cover selection changed before commit.")
-            updated_albums, updated_problematic_album = published_updates()
-            update_cover_lookup_task(
-                task_id, config=config, status="completed", progress=100,
-                progress_label="Completed", finished_at=datetime.now(timezone.utc).isoformat(),
-                selected_candidate_id=candidate_id, notification_action_taken=notification_action_taken,
-                message="Selected remote cover art saved as a linked artwork source.",
-                result_kind="cover-updated", updated_albums=updated_albums,
-                persisted=True, finalization_failed=False,
-                updated_problematic_album=updated_problematic_album,
-            )
-            _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-            request_cover_lookup_task_stop(task_id)
-            _publish_save_runtime_phase_metrics(task_id, config=config, timings=phase_timings, counts=phase_counts)
-            return
-        phase_started = time.perf_counter()
-
-        def write_persist_and_apply(folder: Path, raw_bytes: bytes) -> Path | None:
-            prepared = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes)
-            if prepared is None:
-                return None
-            decoded = decode_image_bytes(prepared)
-            if decoded is None:
-                return None
-            image, width, height = decoded
-            image.close()
-
-            def mutate(fresh_scope):
-                promotion = begin_prepared_remote_cover_promotion(
-                    folder, prepared,
-                    reserved_cover_variant_path=fresh_scope["reserved_cover_variant_path"],
-                )
-                if promotion is None:
-                    raise RuntimeError("Prepared remote cover could not be written.")
-                effect = cover_promotion_effect(promotion, local_cover_width=width, local_cover_height=height)
-                effect.value = {"cover_path": promotion.cover_path, "local_cover_dimensions": (width, height)}
-                return effect
-
-            result = run_cover_mutation_for_config(
-                config, track_paths=requested_track_paths, album_root=folder,
-                source_paths=(folder / "cover.jpg",), affected_paths=(folder / "cover.jpg",),
-                reserve_variant_bytes=prepared,
-                expected_album_id=expected_album_id, selection_options=selection_options,
-                mutate=mutate, commit_guard=commit_and_publish,
-            )
-            if any(value for key, value in result.items() if key.startswith("blocked_by_")):
-                return None
-            return result["value"]["cover_path"]
-
-        # Downloaders must separate fetching from the guarded writer. An old
-        # combined collaborator is not safe to invoke as a compatibility bypass.
-        written, detail = download_remote_cover_to_folder(
-            folder=validated_album_root, image_url=selected_image.url,
-            user_agent=user_agent, write_cover_func=write_persist_and_apply,
-        )
-        _record_runtime_phase(phase_timings, phase_counts, "fetch", phase_started, count=1)
-        if written is None:
-            phase_started = time.perf_counter()
-            update_cover_lookup_task(
-                task_id,
-                config=config,
-                status="failed",
-                progress=100,
-                progress_label="Save failed",
-                finished_at=datetime.now(timezone.utc).isoformat(),
-                message="Selected cover could not be downloaded.",
-                result_kind="save-failed",
-                persisted=False,
-                finalization_failed=False,
-            )
-            _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-            _publish_save_runtime_phase_metrics(
-                task_id,
-                config=config,
-                timings=phase_timings,
-                counts=phase_counts,
-            )
-            return
-        phase_started = time.perf_counter()
-        updated_albums, updated_problematic_album = published_updates()
-        update_cover_lookup_task(
-            task_id,
-            config=config,
-            status="completed",
-            progress=100,
-            progress_label="Completed",
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            selected_candidate_id=candidate_id,
-            notification_action_taken=notification_action_taken,
-            message="Selected cover art saved.",
-            result_kind="cover-updated",
-            persisted=True,
-            finalization_failed=False,
-            updated_albums=updated_albums,
-            updated_problematic_album=updated_problematic_album,
-        )
-        _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-        request_cover_lookup_task_stop(task_id)
-        _publish_save_runtime_phase_metrics(
-            task_id,
-            config=config,
-            timings=phase_timings,
-            counts=phase_counts,
-        )
-    except Exception as exc:
-        if isinstance(exc, CoverMutationCommitUncertainError):
-            persistence_outcome = None
-        elif isinstance(exc, CoverMutationFinalizationError):
-            persistence_outcome = True
-        log_exception = getattr(logger, "exception", None)
-        if callable(log_exception):
-            log_exception(
-                "Remote cover selection failed task_id=%s candidate_id=%s source=%s",
-                task_id,
-                candidate_id,
-                selected_image.source,
-            )
-        phase_started = time.perf_counter()
-        update_cover_lookup_task(
-            task_id,
-            config=config,
-            status="failed",
-            progress=100,
-            progress_label="Save failed",
-            persisted=persistence_outcome,
-            finalization_failed=persistence_outcome is True,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            message=(
-                "Reload this album and use the full cover selection to change its artwork."
-                if isinstance(exc, OrderedCoverSelectionConflict)
-                else "Cover save confirmation was interrupted. Reload this album to check before retrying."
-                if isinstance(exc, CoverMutationCommitUncertainError)
-                else "Failed to save selected cover art."
-            ),
-            result_kind=(
-                "ordered-cover-selection-conflict"
-                if isinstance(exc, OrderedCoverSelectionConflict)
-                else "save-confirmation-uncertain" if isinstance(exc, CoverMutationCommitUncertainError)
-                else "save-failed"
-            ),
-        )
-        _record_runtime_phase(phase_timings, phase_counts, "persistence", phase_started, count=1)
-        _publish_save_runtime_phase_metrics(
-            task_id,
-            config=config,
-            timings=phase_timings,
-            counts=phase_counts,
-        )

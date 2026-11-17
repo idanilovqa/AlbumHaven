@@ -120,13 +120,18 @@ def test_current_library_owner_fact_matches_only_the_active_library():
     ] is True
 
 
-def test_tv_projects_provider_only_cover_controls_without_hiding_lookup():
+def test_tv_never_edits_covers_but_keeps_lookup():
+    # Owner 2026-11-17: covers are not edited on TV, even by the owner.
     value = projection(["owner", "admin"], "tv", bootstrap=True)
-    selectors = {".cover-lookup-manual-add", "[data-select-local-cover]", "[data-select-pasted-cover]"}
+    selectors = {".cover-lookup-manual-add", "[data-select-local-cover]", "[data-select-pasted-cover]",
+                 "[data-save-cover-lookup-remote]", "[data-delete-local-cover]",
+                 "[data-choose-cover-lookup-files]", "[data-add-cover-lookup-remote]",
+                 "[data-fetch-problematic-cover]", '[data-status-action="fetch-covers"]'}
     assert selectors <= set(value["denied_selectors"])
     assert value["allowed_actions"]["library.covers.lookup"] is True
-    assert value["allowed_actions"]["library.covers.write"] is True
-    assert set(value["cover_provider_groups"]) == {"services", "cover_art_archive"}
+    for action in ("library.covers.write", "library.covers.upload", "library.covers.link",
+                   "library.covers.delete", "library.covers.fetch", "library.covers.fetch.cancel"):
+        assert value["allowed_actions"].get(action) is not True, action
     desktop = projection(["owner", "admin"], bootstrap=True)
     assert not selectors.intersection(desktop["denied_selectors"])
 

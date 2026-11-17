@@ -111,14 +111,13 @@ for (const outcome of ['success', 'success without gallery', 'error']) {
   });
 }
 
-for (const mutation of ['save', 'delete']) {
+// A cover selection Save is one request with its own busy state; a local file deletion owns the album.
+for (const mutation of ['delete']) {
   for (const outcome of ['success', 'error']) {
     test(`${mutation} ${outcome} keeps reopened same-album mutations exclusive, then releases its draft`, async () => {
       const h = harness(), a = album('A');
       await h.open(a);
-      const pending = mutation === 'save'
-        ? h.context.saveLocalCoverFromLookup('/A/source.jpg')
-        : h.context.deleteLocalCoverFromLookup(a.cover_ref);
+      const pending = h.context.deleteLocalCoverFromLookup(a.cover_ref);
       h.context.closeCoverLookupModal();
       await h.open(clone(a));
       h.draft('A');
@@ -128,8 +127,7 @@ for (const mutation of ['save', 'delete']) {
       assert.equal(h.remove.disabled, true);
       h.context.openCoverLookupDeleteConfirm('/A/source.jpg');
       assert.equal(h.confirm.hidden, true, 'native delete confirmation is blocked while the claim is active');
-      const denied = [h.context.saveLocalCoverFromLookup('/A/newer.jpg'),
-        h.context.deleteLocalCoverFromLookup('/A/newer.jpg'), h.context.saveCoverFromLookup()];
+      const denied = [h.context.deleteLocalCoverFromLookup('/A/newer.jpg'), h.context.saveCoverFromLookup()];
       assert.equal(h.requests.length, 1, 'no overlapping same-album mutation may reach the server');
       await Promise.all(denied);
       const reads = h.galleries.length;
@@ -144,103 +142,13 @@ for (const mutation of ['save', 'delete']) {
       assert.equal(h.galleries.length, reads + 1, 'reopened album gets its own authoritative read');
       assert.equal(h.context.state.coverLookup.modal.album.cover_revision, outcome === 'success' ? 'A-settled' : 'A-old');
       assert.ok(h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === (outcome === 'success' ? '/A/settled.jpg' : '/A/cover.jpg')));
-      const next = h.context.saveLocalCoverFromLookup('/A/newer.jpg');
+      const next = h.context.deleteLocalCoverFromLookup('/A/newer.jpg');
       assert.equal(h.requests.length, 2, 'settlement releases the original claim');
       await h.settle(1);
       await next;
     });
   }
 }
-
-for (const outcome of ['success', 'error']) {
-  test(`old Save ${outcome} cannot clear a different album's newer pending Save`, async () => {
-    const h = harness();
-    await h.open(album('A'));
-    const first = h.context.saveLocalCoverFromLookup('/A/source.jpg');
-    h.context.closeCoverLookupModal();
-    assert.equal(h.context.state.coverLookup.modal.saving, false, 'Close releases the finished modal busy state');
-    await h.open(album('B'));
-    const second = h.context.saveLocalCoverFromLookup('/B/source.jpg');
-    assert.equal(h.requests.length, 2, 'independent albums may proceed');
-    const optimistic = h.context.state.coverLookup.optimisticAlbumCovers['/B/track.mp3'];
-    const token = h.context.state.coverRefreshTokens['/B/source.jpg'];
-    await h.settle(0, outcome);
-    await first;
-    assert.equal(h.context.state.coverLookup.modal.saving, true);
-    assert.equal(h.context.isCoverLookupLocalMutationPending(), true);
-    assert.equal(h.save.disabled, true);
-    assert.equal(h.overlay.hidden, false);
-    assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/B/track.mp3'], optimistic);
-    assert.equal(h.context.state.coverRefreshTokens['/B/source.jpg'], token);
-    await h.settle(1);
-    await second;
-    assert.equal(h.context.state.coverLookup.modal.saving, false);
-    assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
-    assert.equal(h.painted.get('B'), 'B-settled');
-  });
-}
-
-test('local mutation claim spans image preload and releases after synchronous setup failure', async () => {
-  const h = harness(), a = album('A');
-  await h.open(a);
-  let finishPreload;
-  h.context.preloadCoverLookupAlbumImage = () => new Promise(resolve => { finishPreload = resolve; });
-  const pending = h.context.saveLocalCoverFromLookup('/A/source.jpg');
-  await h.settle(0);
-  await new Promise(resolve => setImmediate(resolve));
-  h.context.closeCoverLookupModal();
-  await h.open(clone(a));
-  const denied = h.context.deleteLocalCoverFromLookup('/A/source.jpg');
-  assert.equal(h.requests.length, 1);
-  await denied;
-  finishPreload(true);
-  await pending;
-  h.context.applyOptimisticLocalCoverSelection = () => { throw new Error('Setup failed'); };
-  await h.context.saveLocalCoverFromLookup('/A/newer.jpg');
-  assert.equal(h.context.state.coverLookup.modal.saving, false);
-  assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
-  assert.equal(h.remove.disabled, false);
-  assert.equal(h.notifications.at(-1)[1], 'error');
-});
-
-test('successful local save completes when the authoritative image preload stalls', async () => {
-  const h = harness(), a = album('A');
-  await h.open(a);
-  h.context.state.coverLookup.modal.taskId = 'task-a';
-  h.context.preloadCoverLookupAlbumImage = () => new Promise(() => {});
-  h.context.setTimeout = callback => {
-    queueMicrotask(callback);
-    return 1;
-  };
-  h.context.clearTimeout = () => {};
-  const acknowledged = [];
-  let closeCount = 0;
-  h.context.markCoverLookupTaskActionTaken = (taskId, selectedAlbum) => {
-    acknowledged.push([taskId, selectedAlbum.name]);
-  };
-  h.context.renderCoverLookupDrawer = () => {};
-  h.context.closeCoverLookupModal = () => { closeCount += 1; };
-
-  const pending = h.context.saveLocalCoverFromLookup('/A/source.jpg');
-  const optimisticKey = h.context.getAlbumPathSignature(a);
-  const optimisticCover = h.context.state.coverLookup.optimisticAlbumCovers[optimisticKey];
-  await h.settle(0);
-  const outcome = await Promise.race([
-    pending.then(() => 'settled'),
-    new Promise(resolve => setImmediate(() => resolve('pending'))),
-  ]);
-
-  assert.equal(outcome, 'settled');
-  assert.equal(h.context.state.coverLookup.modal.saving, false);
-  assert.equal(h.context.isCoverLookupLocalMutationPending(), false);
-  assert.deepEqual(acknowledged, [['task-a', 'A']]);
-  assert.equal(closeCount, 1);
-  assert.strictEqual(
-    h.context.state.coverLookup.optimisticAlbumCovers[optimisticKey],
-    optimisticCover,
-    'timeout must keep the selected image visible',
-  );
-});
 
 test('a pre-mutation gallery response cannot restore the deleted cover', async () => {
   const h = harness(), a = album('A');
@@ -290,34 +198,6 @@ for (const outcome of ['success', 'error']) {
     await again;
   });
 }
-
-test('a reopened reconciliation read cannot overwrite a subsequently admitted local save', async () => {
-  const h = harness(), a = album('A');
-  await h.open(a);
-  const first = h.context.deleteLocalCoverFromLookup(a.cover_ref);
-  h.context.closeCoverLookupModal();
-  await h.open(clone(a));
-  const originalFetch = h.context.fetch;
-  let settleGallery;
-  h.context.fetch = (url, options) => url === '/utilities/cover-lookup/gallery'
-    ? new Promise(resolve => { settleGallery = resolve; }) : originalFetch(url, options);
-  await h.settle(0);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(typeof settleGallery, 'function');
-  const second = h.context.saveLocalCoverFromLookup('/A/newer.jpg');
-  assert.equal(h.requests.length, 2);
-  const cards = clone(h.context.state.coverLookup.modal.localCovers);
-  const optimistic = h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'];
-  settleGallery({ ok: true, json: async () => ({ ok: true, local_covers: [{ candidate_cover_ref: '/A/stale.jpg' }] }) });
-  await first;
-  assert.deepEqual(clone(h.context.state.coverLookup.modal.localCovers), cards);
-  assert.strictEqual(h.context.state.coverLookup.optimisticAlbumCovers['/A/track.mp3'], optimistic);
-  assert.equal(h.context.state.coverLookup.modal.saving, true);
-  assert.equal(h.context.isCoverLookupLocalMutationPending(), true);
-  assert.equal(h.save.disabled, true);
-  await h.settle(1);
-  await second;
-});
 
 for (const [label, generation, candidates, expected] of [
   ['remapped', 'generation-1', [{ id: 'persisted-choice', url: 'https://example.test/choice.jpg' }], 'persisted-choice'],
@@ -395,6 +275,27 @@ test('new task completion auto-selects its best candidate when the user made no 
   assert.equal(h.context.state.coverLookup.modal.selectedRemoteId, generationBChoice.id);
 });
 
+// The album's saved cover selection has loaded (empty), so a choice saves through it.
+function loadEmptyCoverSelection(h) {
+  h.context.crypto = { randomUUID: () => 'mutation-a' };
+  Object.assign(h.context.state.coverLookup.modal.album, { album_id: 72 });
+  Object.assign(h.context.state.coverLookup.modal, {
+    orderedSelectionLoaded: true, orderedCoverSelections: [], orderedCoverBaseline: '[]', orderedCoversRevision: 0,
+  });
+}
+
+// A choice retained from generation A saves through, and answers, the lookup that published it.
+function expectGenerationASave(h, choice) {
+  assert.equal(h.requests[0].url, '/albums/72/selected-covers');
+  assert.deepEqual(h.requests[0].body, {
+    expected_revision: 0,
+    mutation_id: 'mutation-a',
+    references: [{ kind: 'remote', candidate_id: choice.id, candidate_generation: 'generation-a-task' }],
+    lookup_task_id: 'generation-a-task',
+  });
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true, selected_covers_revision: 1, selected_covers: [] }) });
+}
+
 test('a retained candidate saves through the generation that published it', async () => {
   const h = harness(), a = album('A');
   const generationAChoice = generationChoice('generation-a');
@@ -417,17 +318,12 @@ test('a retained candidate saves through the generation that published it', asyn
     candidates: [],
   });
 
+  loadEmptyCoverSelection(h);
   h.context.selectRemoteCoverFromLookup(generationAChoice.id);
   const pending = h.context.saveCoverFromLookup();
 
   assert.equal(h.requests.length, 1);
-  assert.deepEqual(h.requests[0].body, {
-    album: a,
-    task_id: 'generation-a-task',
-    candidate_id: generationAChoice.id,
-    snapshot_generation: 'generation-a-task',
-  });
-  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true }) });
+  expectGenerationASave(h, generationAChoice);
   await pending;
 });
 
@@ -455,6 +351,7 @@ for (const terminalStatus of ['completed', 'failed']) {
     });
     h.context.state.coverLookup.modal.candidateGeneration = 'generation-a-snapshot';
 
+    loadEmptyCoverSelection(h);
     h.context.selectRemoteCoverFromLookup(generationAChoice.id);
     assert.equal(
       h.context.state.coverLookup.modal.remoteSelectionOverrideGeneration,
@@ -488,13 +385,7 @@ for (const terminalStatus of ['completed', 'failed']) {
 
     const pending = h.context.saveCoverFromLookup();
     assert.equal(h.requests.length, 1);
-    assert.deepEqual(h.requests[0].body, {
-      album: a,
-      task_id: 'generation-a-task',
-      candidate_id: generationAChoice.id,
-      snapshot_generation: 'generation-a-task',
-    });
-    h.requests[0].resolve({ ok: true, json: async () => ({ ok: true }) });
+    expectGenerationASave(h, generationAChoice);
     await pending;
   });
 }

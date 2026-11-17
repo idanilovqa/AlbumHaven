@@ -163,6 +163,12 @@ def action_capabilities(action: str) -> frozenset[str]:
     return frozenset(names)
 
 
+TV_DENIED_COVER_ACTIONS = frozenset({
+    "library.covers.write", "library.covers.upload", "library.covers.link",
+    "library.covers.delete", "library.covers.fetch", "library.covers.fetch.cancel",
+})
+
+
 def client_allows_action(action: str, surface: str, *, administrator: bool) -> bool:
     """Availability and client limits narrow durable authority, including owners."""
     if action.startswith("system.preview_storage."):
@@ -174,7 +180,8 @@ def client_allows_action(action: str, surface: str, *, administrator: bool) -> b
         return False
     if surface == "tv" and capabilities & {"practice", "admin"}:
         return False
-    if surface == "tv" and action in {"library.covers.upload", "library.covers.link"}:
+    # Owner 2026-11-17: covers are never edited on TV. Looking them up stays available.
+    if surface == "tv" and action in TV_DENIED_COVER_ACTIONS:
         return False
     if surface in {"private_web", "cloud_web"} and "edit" in capabilities and not administrator:
         return False

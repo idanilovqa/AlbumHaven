@@ -75,74 +75,12 @@ def route_context(monkeypatch, tmp_path, cover_unit_transports):
     monkeypatch.setattr(routes, "_app_config", lambda request: config)
     monkeypatch.setattr(routes, "_app_logger", lambda request: None)
     monkeypatch.setattr(routes, "_library_state", lambda request: state)
-    monkeypatch.setattr(routes, "resolve_authoritative_album_track_paths", lambda *args, **kwargs: paths)
     monkeypatch.setattr(routes, "validate_local_cover_source", lambda *args, **kwargs: source)
     monkeypatch.setattr(routes, "ranked_local_cover_candidates", lambda *args, **kwargs: [])
     monkeypatch.setattr(routes, "prepare_pasted_cover_bytes", lambda data: b"prepared")
     monkeypatch.setattr(routes, "decode_image_bytes", lambda data: None)
     request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
     return SimpleNamespace(root=root, source=source, paths=paths, payload=payload, request=request, state=state, config=config)
-
-
-@pytest.mark.parametrize("handler,effect", [
-    ("utilities_cover_lookup_local_select", "begin_local_image_promotion"),
-    ("utilities_cover_lookup_pasted_image_save", "begin_prepared_remote_cover_promotion"),
-    ("utilities_cover_lookup_local_delete", "delete_local_cover_effect"),
-])
-def test_ordered_route_conflicts_before_media_mutation(monkeypatch, route_context, handler, effect):
-    calls = []
-    guard(monkeypatch, routes, calls)
-    monkeypatch.setattr(routes, effect, forbidden)
-    response = asyncio.run(getattr(routes, handler)(route_context.request))
-    assert response.status_code == 409
-    body = json.loads(response.body)
-    assert body["ok"] is False
-    assert body["code"] == "ordered_cover_selection_conflict"
-    assert calls[0]["track_paths"] == route_context.paths
-    if handler.endswith("local_delete"):
-        assert Path(calls[0]["deleting_source_path"]) == route_context.source
-    assert route_context.source.read_bytes() == b"unchanged secondary"
-
-
-@pytest.mark.parametrize("source", ["task", "snapshot"])
-def test_ordered_remote_save_conflicts_before_task_creation_update_or_queue(monkeypatch, route_context, source):
-    calls = []
-    guard(monkeypatch, routes, calls)
-    match = {"id": "candidate", "source": "spotify", "lookup_group": "services", "url": "https://example.test/cover.jpg"}
-    task = {"possible_matches": [match], "track_paths": list(route_context.paths)}
-    monkeypatch.setattr(routes, "cover_lookup_result", lambda task_id: task if source == "task" else None)
-    monkeypatch.setattr(routes, "load_cover_lookup_notification", lambda *args: None)
-    repository = SimpleNamespace(get_for_album_context=lambda **kwargs: {"search_generation": "generation", "candidates": [match]})
-    monkeypatch.setattr(routes, "_resolved_snapshot_album_context", lambda *args: (repository, 72, None))
-    monkeypatch.setattr(routes, "_task_matches_album_context", lambda *args, **kwargs: True)
-    for name in ("create_cover_lookup_task", "update_cover_lookup_task", "queue_cover_lookup_save_remote_task"):
-        monkeypatch.setattr(routes, name, forbidden)
-    response = asyncio.run(routes.utilities_cover_lookup_save_remote(route_context.request))
-    assert response.status_code == 409
-    assert json.loads(response.body)["code"] == "ordered_cover_selection_conflict"
-    assert calls[0]["track_paths"] == route_context.paths
-
-
-@pytest.mark.parametrize("display_only", [False, True])
-def test_queued_remote_worker_rechecks_before_download_or_link_persistence(monkeypatch, tmp_path, display_only):
-    calls, updates = [], []
-    guard(monkeypatch, runtime, calls)
-    paths = {str(tmp_path / "track.flac")}
-    monkeypatch.setattr(runtime, "_validated_remote_selection_album_root", lambda *args: tmp_path)
-    monkeypatch.setattr(runtime, "cover_lookup_result", lambda *args: {})
-    monkeypatch.setattr(runtime, "update_cover_lookup_task", lambda task_id, **kwargs: updates.append(kwargs))
-    monkeypatch.setattr(runtime, "_publish_save_runtime_phase_metrics", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runtime, "download_remote_cover_to_folder", forbidden)
-    monkeypatch.setattr(runtime, "begin_prepared_remote_cover_promotion", forbidden)
-    monkeypatch.setattr(runtime, "prepare_remote_cover_bytes_for_authoritative_write", forbidden)
-    runtime._run_cover_lookup_save_remote_task(
-        "task", {}, None, {}, "IsolatedTests/1.0", tmp_path, paths, "candidate",
-        SelectedRemoteImage(url="https://example.test/cover.jpg", display_only=display_only),
-        apply_cover_selection_for_tracks=forbidden,
-    )
-    assert calls == [{"track_paths": paths}]
-    assert updates[-1]["status"] == "failed"
-    assert updates[-1]["result_kind"] == "ordered-cover-selection-conflict"
 
 
 def test_automatic_writer_checks_before_persistence_or_promotion(monkeypatch, tmp_path):
@@ -175,8 +113,6 @@ def test_recovery_checks_before_persistence_and_preserves_runtime(monkeypatch, t
         )
     assert calls == [{"track_paths": {path}}]
     assert state["file_cache"][path] == entry
-
-
 
 
 def test_unrelated_local_delete_retains_existing_route_behavior(monkeypatch, route_context):
@@ -269,35 +205,6 @@ def test_refresh_job_checks_current_database_before_provider_or_media(monkeypatc
     assert downloaded is False
     assert detail["reason"] == "ordered_cover_selection_conflict"
     assert detail["selection_conflict"] is True
-
-
-@pytest.mark.parametrize("handler,effect", [
-    ("utilities_cover_lookup_local_select", "begin_local_image_promotion"),
-    ("utilities_cover_lookup_pasted_image_save", "begin_prepared_remote_cover_promotion"),
-    ("utilities_cover_lookup_local_delete", "delete_local_cover_effect"),
-])
-@pytest.mark.parametrize("error,status", [(ValueError("private-path-secret"), 409), (OSError("database-secret"), 503)])
-def test_unavailable_or_unresolved_preflight_is_nondisclosing_and_has_no_media_effects(
-    monkeypatch, route_context, handler, effect, error, status,
-):
-    def check(**kwargs):
-        raise error
-    monkeypatch.setattr(routes, "select_scan_cache_adapter", lambda config:
-        SimpleNamespace(assert_legacy_cover_mutation_allowed=check))
-    monkeypatch.setattr(routes, "run_cover_mutation_for_config", lambda *args, **kwargs: check())
-    monkeypatch.setattr(routes, effect, forbidden)
-    response = asyncio.run(getattr(routes, handler)(route_context.request))
-    assert response.status_code == status
-    assert json.loads(response.body)["ok"] is False
-    assert b"secret" not in response.body
-
-
-def test_tv_local_denial_precedes_repository_preflight(monkeypatch):
-    monkeypatch.setattr(routes, "select_scan_cache_adapter", forbidden)
-    monkeypatch.setattr(routes, "_app_config", forbidden)
-    request = Request({"type": "http", "method": "POST", "path": "/", "headers": [(b"user-agent", b"SMART-TV Tizen")]})
-    response = asyncio.run(routes.utilities_cover_lookup_local_select(request))
-    assert response.status_code == 403
 
 
 @pytest.mark.parametrize("kind,status,expected_error,persisted", [

@@ -644,6 +644,18 @@ class MusicBrainzClient:
             return {"classification": _transport_classification(transport), "transport": transport}
         return {"classification": "complete", "series": {"id": normalized, "member_count": count}}
 
+    def lookup_series_links(self, series_mbid: object) -> JsonDict:
+        """A series' URL relationships (Wikipedia, Wikidata), for its general information."""
+        normalized = _valid_mbid(series_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "url-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/series/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        relations = payload.get("relations")
+        return {"classification": "complete", "relations": relations if isinstance(relations, list) else []}
+
     def original_release_id(self, release_group_mbid: object) -> JsonDict:
         """The release group's original release: the earliest dated official release
         (undated and unofficial ones only when nothing else exists), and the fewest audio

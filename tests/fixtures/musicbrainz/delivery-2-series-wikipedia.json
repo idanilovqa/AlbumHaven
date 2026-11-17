@@ -1,0 +1,146 @@
+{
+  "about": "Series general information from Wikipedia (MusicBrainz Delivery 2, S6). The MusicBrainz url-rels shape was read once from the local mirror (series 45dcf1d4..., 2026-11-17); every other answer is written by hand in the documented MusicBrainz, Wikidata wbgetentities and Wikipedia REST summary shapes. Nothing here was fetched from Wikipedia or Wikidata.",
+  "cases": {
+    "direct_wikipedia": "00000000-0000-4000-8000-0000000002a1",
+    "wikidata_enwiki": "45dcf1d4-4b03-4afb-a57c-dfe6c03bcab1",
+    "wikidata_without_enwiki": "00000000-0000-4000-8000-0000000002a2",
+    "no_link": "520f6fcd-251d-46cd-83a9-0bc725d42333",
+    "ended_link_only": "00000000-0000-4000-8000-0000000002a3",
+    "disambiguation": "00000000-0000-4000-8000-0000000002a4"
+  },
+  "musicbrainz": {
+    "/series/00000000-0000-4000-8000-0000000002a1?inc=url-rels&fmt=json": {
+      "id": "00000000-0000-4000-8000-0000000002a1",
+      "name": "Grammy Award for Best Rock Album",
+      "type": "Award ceremony",
+      "relations": [
+        {"target-type": "url", "type": "wikidata", "direction": "forward", "ended": false,
+         "url": {"id": "a2a1", "resource": "https://www.wikidata.org/wiki/Q1542147"}},
+        {"target-type": "url", "type": "wikipedia", "direction": "forward", "ended": false,
+         "url": {"id": "a2a2", "resource": "https://de.wikipedia.org/wiki/Grammy_Award_for_Best_Rock_Album"}},
+        {"target-type": "url", "type": "wikipedia", "direction": "forward", "ended": false,
+         "url": {"id": "a2a3", "resource": "https://en.wikipedia.org/wiki/Grammy_Award_for_Best_Rock_Album"}}
+      ]
+    },
+    "/series/45dcf1d4-4b03-4afb-a57c-dfe6c03bcab1?inc=url-rels&fmt=json": {
+      "name": "1001 Albums You Must Hear Before You Die",
+      "type-id": "4c1c4949-7b6c-3a2d-9d54-a50a27e4fa77",
+      "disambiguation": "2013 edition",
+      "relations": [
+        {"target-type": "url", "source-credit": "", "type": "official homepage", "target-credit": "",
+         "type-id": "b79eb9a5-46df-492d-b107-1f1fea71b0eb", "direction": "forward", "begin": null, "end": null,
+         "attribute-values": {},
+         "url": {"id": "4550f133-4442-426e-a622-fc83e54b58a7",
+                 "resource": "https://archive.org/details/1001albumsyoumus0000unse_s5b9"},
+         "ended": false, "attribute-ids": {}, "attributes": []},
+        {"source-credit": "", "target-type": "url", "target-credit": "", "type-id": "a1eecd98-f2f2-420b-ba8e-e5bc61697869",
+         "type": "wikidata", "end": null, "attribute-values": {}, "direction": "forward", "begin": null,
+         "attributes": [],
+         "url": {"resource": "https://www.wikidata.org/wiki/Q164932", "id": "c03e01c6-3f10-49ff-86e8-64e494665c8c"},
+         "ended": false, "attribute-ids": {}}
+      ],
+      "id": "45dcf1d4-4b03-4afb-a57c-dfe6c03bcab1",
+      "type": "Release group series"
+    },
+    "/series/00000000-0000-4000-8000-0000000002a2?inc=url-rels&fmt=json": {
+      "id": "00000000-0000-4000-8000-0000000002a2",
+      "name": "Les 100 meilleurs albums de rock français",
+      "type": "Release group series",
+      "relations": [
+        {"target-type": "url", "type": "wikidata", "direction": "forward", "ended": false,
+         "url": {"id": "a2b1", "resource": "https://www.wikidata.org/wiki/Q3236051"}}
+      ]
+    },
+    "/series/520f6fcd-251d-46cd-83a9-0bc725d42333?inc=url-rels&fmt=json": {
+      "id": "520f6fcd-251d-46cd-83a9-0bc725d42333",
+      "name": "Colossus Projects",
+      "type": "Release group series",
+      "relations": [
+        {"target-type": "url", "type": "official homepage", "direction": "forward", "ended": false,
+         "url": {"id": "a2c1", "resource": "https://www.colossus.fi/"}}
+      ]
+    },
+    "/series/00000000-0000-4000-8000-0000000002a3?inc=url-rels&fmt=json": {
+      "id": "00000000-0000-4000-8000-0000000002a3",
+      "name": "An Old Chart",
+      "type": "Release group series",
+      "relations": [
+        {"target-type": "url", "type": "wikipedia", "direction": "forward", "ended": true,
+         "url": {"id": "a2d1", "resource": "https://en.wikipedia.org/wiki/An_Old_Chart"}}
+      ]
+    },
+    "/series/00000000-0000-4000-8000-0000000002a4?inc=url-rels&fmt=json": {
+      "id": "00000000-0000-4000-8000-0000000002a4",
+      "name": "Essentials",
+      "type": "Release group series",
+      "relations": [
+        {"target-type": "url", "type": "wikipedia", "direction": "forward", "ended": false,
+         "url": {"id": "a2e1", "resource": "https://en.wikipedia.org/wiki/Essentials"}}
+      ]
+    }
+  },
+  "wikimedia": {
+    "https://en.wikipedia.org/api/rest_v1/page/summary/Grammy_Award_for_Best_Rock_Album": {
+      "type": "standard",
+      "title": "Grammy Award for Best Rock Album",
+      "lang": "en",
+      "extract": "The Grammy Award for Best Rock Album is an award presented at the Grammy Awards to recording artists for quality albums in the rock music genre.",
+      "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Grammy_Award_for_Best_Rock_Album"}}
+    },
+    "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q164932&props=sitelinks%2Furls&format=json": {
+      "entities": {
+        "Q164932": {
+          "type": "item",
+          "id": "Q164932",
+          "sitelinks": {
+            "commonswiki": {"site": "commonswiki", "title": "Category:1001 Albums", "badges": [],
+                            "url": "https://commons.wikimedia.org/wiki/Category:1001_Albums"},
+            "dewiki": {"site": "dewiki", "title": "1001 Albums You Must Hear Before You Die", "badges": [],
+                       "url": "https://de.wikipedia.org/wiki/1001_Albums_You_Must_Hear_Before_You_Die"},
+            "enwiki": {"site": "enwiki", "title": "1001 Albums You Must Hear Before You Die", "badges": [],
+                       "url": "https://en.wikipedia.org/wiki/1001_Albums_You_Must_Hear_Before_You_Die"}
+          }
+        }
+      },
+      "success": 1
+    },
+    "https://en.wikipedia.org/api/rest_v1/page/summary/1001_Albums_You_Must_Hear_Before_You_Die": {
+      "type": "standard",
+      "title": "1001 Albums You Must Hear Before You Die",
+      "lang": "en",
+      "extract": "1001 Albums You Must Hear Before You Die is a musical reference book first published in 2005,\nwith reviews of albums chosen by a panel of music critics.",
+      "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/1001_Albums_You_Must_Hear_Before_You_Die"}}
+    },
+    "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q3236051&props=sitelinks%2Furls&format=json": {
+      "entities": {
+        "Q3236051": {
+          "type": "item",
+          "id": "Q3236051",
+          "sitelinks": {
+            "frwikiquote": {"site": "frwikiquote", "title": "Rock français", "badges": [],
+                            "url": "https://fr.wikiquote.org/wiki/Rock_fran%C3%A7ais"},
+            "itwiki": {"site": "itwiki", "title": "I 100 migliori album del rock francese", "badges": [],
+                       "url": "https://it.wikipedia.org/wiki/I_100_migliori_album_del_rock_francese"},
+            "frwiki": {"site": "frwiki", "title": "Les 100 meilleurs albums de rock français", "badges": [],
+                       "url": "https://fr.wikipedia.org/wiki/Les_100_meilleurs_albums_de_rock_fran%C3%A7ais"}
+          }
+        }
+      },
+      "success": 1
+    },
+    "https://fr.wikipedia.org/api/rest_v1/page/summary/Les_100_meilleurs_albums_de_rock_fran%C3%A7ais": {
+      "type": "standard",
+      "title": "Les 100 meilleurs albums de rock français",
+      "lang": "fr",
+      "extract": "Les 100 meilleurs albums de rock français est une liste publiée par le magazine Rolling Stone.",
+      "content_urls": {"desktop": {"page": "https://fr.wikipedia.org/wiki/Les_100_meilleurs_albums_de_rock_fran%C3%A7ais"}}
+    },
+    "https://en.wikipedia.org/api/rest_v1/page/summary/Essentials": {
+      "type": "disambiguation",
+      "title": "Essentials",
+      "lang": "en",
+      "extract": "Essentials may refer to:",
+      "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Essentials"}}
+    }
+  }
+}

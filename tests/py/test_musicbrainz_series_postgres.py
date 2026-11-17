@@ -405,6 +405,51 @@ def test_the_owner_marks_a_series_from_the_tree_and_the_tree_regroups(monkeypatc
                                   (COLEZO,)).fetchone()["owner_kind"] == "hidden"
 
 
+def test_a_series_wikipedia_introduction_is_looked_up_for_library_series_only_and_shown_only_when_stored(
+        monkeypatch):
+    """Owner 2026-11-17: a series' information comes only from Wikipedia; nothing without a
+    link. Looked up once, again after 90 days; a failure rests a day, then backs off."""
+    from music_app.services.musicbrainz_series_wikipedia import REFRESH_AFTER
+    from music_app.services.musicbrainz_series_wikipedia_postgres import SeriesWikipediaPostgresRepository
+
+    setup_url, _albums = _seed_library(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        # A series no album of the library is part of is never looked up.
+        connection.execute("insert into integration.musicbrainz_series (mbid, name, series_type, refreshed_at)"
+                           " values ('00000000-0000-4000-8000-0000000002ff', 'Elsewhere', 'Release group series', %s)",
+                           (NOW,))
+    repository = SeriesWikipediaPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
+    browse = _browse(setup_url)
+
+    def due(at):
+        return set(repository.due_series(limit=10, now=at, refresh_after=REFRESH_AFTER))
+
+    assert due(NOW) == {COLOSSUS, COLEZO, METAL_LIST}
+    found = {"language": "en", "title": "Metal", "url": "https://en.wikipedia.org/wiki/Metal", "extract": "A list."}
+    repository.store(mbid=METAL_LIST, found=found, observed_at=NOW)
+    repository.store(mbid=COLOSSUS, found=False, observed_at=NOW)
+    repository.store(mbid=COLEZO, found=None, observed_at=NOW)
+    assert due(NOW) == set()
+    # Only a stored introduction is shown; a series without one has no "wikipedia" at all.
+    assert browse.build_series_payload(query_params={"series": METAL_LIST})["series"]["wikipedia"] == {
+        "extract": "A list.", "url": "https://en.wikipedia.org/wiki/Metal"}
+    assert "wikipedia" not in browse.build_series_payload(query_params={"series": COLOSSUS})["series"]
+    # The failure rests a day, then two after a second failure; the stored article survives one.
+    assert due(NOW + timedelta(hours=23)) == set()
+    assert due(NOW + timedelta(days=1)) == {COLEZO}
+    repository.store(mbid=COLEZO, found=None, observed_at=NOW + timedelta(days=1))
+    assert due(NOW + timedelta(days=2)) == set()
+    assert due(NOW + timedelta(days=3)) == {COLEZO}
+    repository.store(mbid=METAL_LIST, found=None, observed_at=NOW + timedelta(days=3))
+    assert browse.build_series_payload(query_params={"series": METAL_LIST})["series"]["wikipedia"]["extract"] == "A list."
+    # Answers are asked again after 90 days; a link that is gone removes its article.
+    assert METAL_LIST not in due(NOW + timedelta(days=89))
+    assert COLOSSUS in due(NOW + timedelta(days=91))
+    repository.store(mbid=METAL_LIST, found=False, observed_at=NOW + timedelta(days=91))
+    assert "wikipedia" not in browse.build_series_payload(query_params={"series": METAL_LIST})["series"]
+
+
 # Series size: counted once per 30 days, only when type and name leave it undecided ----------
 
 def _sizing_repository(setup_url):

@@ -2058,6 +2058,14 @@ class PostgresLibraryBrowseRepository:
         with self._connect_to_database() as connection:
             rows = [_row_mapping(row) for row in connection.execute(
                 _series_album_rows_sql(), _root_sidebar_params(_root_sidebar_view_state(params))).fetchall()]
+            shown = sorted({str(row["series_mbid"]) for row in rows
+                            if series_mbid is None or str(row["series_mbid"]) == series_mbid})
+            # Only a stored Wikipedia introduction; a page load never asks Wikipedia (owner 2026-11-17).
+            wikipedia = {str(row["series_mbid"]): {"extract": row["extract"], "url": row["url"]}
+                         for row in map(_row_mapping, connection.execute(
+                             "select series_mbid::text as series_mbid, extract, url"
+                             " from integration.musicbrainz_series_wikipedia where series_mbid = any(%(mbids)s::uuid[])",
+                             {"mbids": shown}).fetchall())} if shown else {}
         grouped: dict[str, list[Mapping[str, object]]] = {}
         for row in rows:
             grouped.setdefault(str(row["series_mbid"]), []).append(row)
@@ -2077,6 +2085,8 @@ class PostgresLibraryBrowseRepository:
             albums = sorted(_root_album_browse_album_payloads(series_rows, series["name"],
                                                               include_total_duration_seconds=True),
                             key=lambda album: order.get(album["album_id"], len(order)))
+            if mbid in wikipedia:
+                series["wikipedia"] = wikipedia[mbid]
             artist_groups.append({"artist": series["name"], "artist_display": series["name"], "albums": albums,
                                   "sections": [], "series": {**series, "album_count": len(albums)}})
         return {

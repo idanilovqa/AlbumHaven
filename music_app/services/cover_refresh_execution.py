@@ -744,19 +744,18 @@ def _run_cover_jobs(
     def clear_album_cover_selection(job: dict[str, object]) -> None:
         """Clears the cover selection of this album's tracks, and only theirs,
         when the search found nothing and the old cover is gone. Postgres
-        commits first, guarded by the album's observed selection state, so a
-        cover chosen meanwhile (or any user-owned one) is never cleared; the
-        runtime entries follow only once that commit succeeds."""
+        commits first, guarded by the selection the run read before the
+        search, so a cover chosen since (or any user-owned one) is never
+        cleared; the runtime entries follow only once that commit succeeds."""
         nonlocal changed
         paths = {str(path) for path in job.get("track_paths") or []}
-        live_entries = library_state.get("file_cache") or {}
         baseline = {
-            path: _cover_selection_values(live_entries[path])
-            for path in paths if isinstance(live_entries.get(path), dict)
+            path: _cover_selection_values(file_cache[path])
+            for path in paths if isinstance(file_cache.get(path), dict)
         }
         states = {
-            (str(live_entries[path].get("cover_selection_origin") or "").strip().casefold(),
-             str(live_entries[path].get("cover_revision") or ""))
+            (str(file_cache[path].get("cover_selection_origin") or "").strip().casefold(),
+             str(file_cache[path].get("cover_revision") or ""))
             for path in baseline
         }
         if not paths or len(baseline) != len(paths) or len(states) != 1:

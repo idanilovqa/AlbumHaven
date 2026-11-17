@@ -3139,6 +3139,36 @@ def test_missing_cover_is_cleared_for_its_album_only_and_rechecked_before_publis
         )
 
 
+def test_missing_cover_clear_keeps_an_automatic_cover_chosen_during_the_search(recovered_cover_case, monkeypatch):
+    """The clear is guarded by the selection the run read before its search,
+    so an automatic cover chosen while the search ran is kept."""
+    case = recovered_cover_case
+    for entry in case.entries.values():
+        entry["cover_path"] = str(case.cover.parent / "missing.jpg")
+    case.kwargs.update(file_cache={path: dict(entry) for path, entry in case.entries.items()})
+    chosen = {"cover_path": str(case.cover), "cover_revision": "chosen-revision", "cover_selection_origin": "automatic"}
+
+    def search_meanwhile_chooses(**_kwargs):
+        for entry in case.entries.values():
+            entry.update(chosen)
+        return None, False, {"reason": "no_match"}
+
+    expected_states = []
+
+    def persist(_config, _paths, _selected, **options):
+        expected_states.append(options["expected_cover_state"])
+        return options["commit_guard"](lambda: {"album_rows_updated": 1, "track_file_rows_updated": 2})
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", search_meanwhile_chooses)
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
+    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert expected_states == [("automatic", "old-revision")]
+    assert all(
+        {field: entry[field] for field in chosen} == chosen for entry in case.state["file_cache"].values()
+    )
+
+
 def test_targeted_cover_refresh_never_publishes_a_partial_inventory_snapshot(
     recovered_cover_case,
     monkeypatch,

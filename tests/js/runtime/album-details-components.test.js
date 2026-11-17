@@ -479,3 +479,60 @@ test('album details carry the romanized artist name as hover text on desktop and
   assert.match(callers, /artistRomanized: albumDetailsRomanizedArtist\(album\)/);
   assert.match(callers, /eyebrowRomanized: albumDetailsRomanizedArtist\(album\)/);
 });
+
+// Acceptance 2026-11-16: the page's Gallery Bar comes from the server template, which has no
+// romanized slot, so "(Tenmon)" never showed beside 天門 at the top of the artist's gallery.
+test('the server-rendered Gallery Bar gains the romanized slot right after the name (J3)', () => {
+  const context = loadComponents();
+  const html = [];
+  const made = { hidden: true, textContent: '' };
+  const name = { insertAdjacentHTML(where, markup) { html.push([where, markup]); } };
+  const bar = { querySelector(selector) {
+    if (selector === '[data-gallery-context-name]') return name;
+    if (selector === '[data-gallery-context-romanized]') return html.length ? made : null;
+    return null;
+  } };
+  assert.equal(context.galleryContextRomanizedElement(bar), made);
+  assert.deepEqual(html, [['afterend', '<span class="gallery-artist-romanized" data-gallery-context-romanized hidden></span>']]);
+  assert.equal(context.galleryContextRomanizedElement(bar), made);
+  assert.equal(html.length, 1, 'added once');
+  assert.equal(context.galleryContextRomanizedElement({ querySelector: () => null }), null);
+  const chrome = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js'), 'utf8');
+  assert.match(chrome, /const romanized = galleryContextRomanizedElement\(bar\);/);
+});
+
+// Acceptance 2026-11-16: on a phone the Series block sat under the cover. Album details render
+// before the album page is presented (is-mobile-page), so placement decided at render time saw
+// a desktop modal. Placement now follows the mobile composition, which runs after presentation
+// and on every breakpoint change.
+test('phone album details place Series after the track table once the page is presented (4A)', () => {
+  const context = loadComponents();
+  const placed = [];
+  const element = (name) => ({
+    name, classList: { contains: (token) => token === 'is-mobile-page' && mobilePage, add() {}, remove() {} },
+    dataset: {}, closest: () => body, querySelector: () => null, appendChild() {},
+    insertAdjacentHTML: (where, html) => placed.push([name, where, html.match(/data-album-details-series="(\w+)"/)[1]]),
+  });
+  let mobilePage = false;
+  const body = { querySelector: () => null };
+  const overlay = element('overlay');
+  const cover = element('cover');
+  const list = element('list');
+  context.usesMobilePageLayout = () => true;
+  context.document = {
+    documentElement: { getAttribute: () => 'classic_bar' },
+    getElementById: (id) => ({ 'track-modal': overlay, 'track-modal-cover': cover, 'track-modal-list': list }[id] || null),
+    querySelectorAll: () => [],
+  };
+  context.mobilePageState = { pages: [] };
+  context.syncMobilePageShell = () => {};
+  const album = { name: 'Fetch The Bolt Cutters', musicbrainz_series: [{ mbid: 's', name: 'Pitchfork: 10/10', kind: 'series' }] };
+
+  context.syncMobileAlbumComposition(album);
+  assert.deepEqual(placed.at(-1), ['cover', 'beforeend', 'series'], 'a desktop modal: under the cover');
+  mobilePage = true;
+  context.syncMobileAlbumComposition(album);
+  assert.deepEqual(placed.at(-1), ['list', 'afterend', 'series'], 'the presented phone page: after the track table');
+  const tagEditor = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
+  assert.doesNotMatch(tagEditor, /syncAlbumDetailsSeries\(/, 'render time no longer decides the placement');
+});

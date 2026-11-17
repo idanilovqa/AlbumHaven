@@ -292,6 +292,9 @@ function syncMobileAlbumComposition(album) {
     if (identity) overview.before(identity);
     overview.remove();
   }
+  // Here rather than at render time: album details render before the phone page is presented,
+  // and this also runs after presentation and on every breakpoint change (approved 1B / 4A).
+  syncAlbumDetailsSeries(album, { cover, list: document.getElementById('track-modal-list'), mobile });
   if (mobile) {
     const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
     if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));

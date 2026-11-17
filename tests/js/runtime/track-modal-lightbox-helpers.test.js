@@ -1561,7 +1561,9 @@ async function run() {
     assert.equal(trackModal.hidden, false);
     assert.equal(context.state.modalReleaseIndex, 0);
     assert.equal(context.state.modalReleases.length, 2);
-    assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha']);
+    // The gallery album renders at once, then again with the details the server adds.
+    assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha', 'alpha']);
+    assert.equal(context.renderTrackModalReleaseAlbums[1].album_details_loaded, true);
     assert.equal(context.attachSharedPlayerCalls, 1);
     assert.equal(context.clearPendingSelectedArtistReconcileCalls, 1);
     assert.deepEqual(context.loadProblematicFilesCalls, []);
@@ -1756,7 +1758,8 @@ async function run() {
     const resolved = await context.resolveHydratedTrackModalActionAlbum(actionButton);
 
     assert.strictEqual(resolved, hydratedAlbum);
-    assert.equal(context.fetchCalls.length, 0);
+    // The only request is the open album's details (MusicBrainz fields), not the action's.
+    assert.equal(context.fetchCalls.length, 1);
   }
 
   {
@@ -3309,7 +3312,7 @@ async function run() {
     const { context } = loadHelper({
       initialAlbums: [fullAlbum],
       onFetchAlbumDetails() {
-        throw new Error('indexed selected-artist albums should not refetch album details');
+        throw new Error('details unavailable');
       },
     });
     const button = new FakeHtmlElement('selected-artist-open-button');
@@ -3320,9 +3323,13 @@ async function run() {
     const opened = context.openTrackModalForButton(button);
     await flushMicrotasks();
 
+    // An indexed selected-artist album still opens at once, without a loading shell; its
+    // details then load in the background (acceptance 2026-11-16) and, when that fails, the
+    // gallery album stays as shown with no error.
     assert.equal(opened, true);
     assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha']);
-    assert.deepEqual(context.fetchCalls, []);
+    assert.equal(context.fetchCalls.length, 1);
+    assert.deepEqual(context.showToastCalls, []);
   }
 
   {
@@ -3416,3 +3423,74 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+// Acceptance 2026-11-16: a gallery album carries its tracks but not the details the server
+// adds (MusicBrainz type, Series / Featured In, a.k.a. titles), so details opened from an
+// artist's gallery showed "ALBUM" and no series while search results showed both.
+test('a gallery album with its tracks opens at once, then takes the server details', async () => {
+  const details = {
+    key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'C:\Music\Alpha\01.flac' }],
+    musicbrainz_release: { type_label: 'Live', alternative_titles: ['Альфа'] },
+    musicbrainz_series: [{ mbid: 's1', name: 'Pitchfork: 10/10', kind: 'series' }],
+  };
+  const { context } = loadHelper({ fetchedAlbum: details });
+  const galleryAlbum = { key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'C:\Music\Alpha\01.flac' }] };
+
+  context.openTrackModal(galleryAlbum);
+  assert.equal(context.renderTrackModalReleaseAlbums[0].key, 'alpha', 'no loading shell: the gallery album renders at once');
+  assert.equal(context.renderTrackModalReleaseAlbums[0].musicbrainz_release, undefined);
+  await flushMicrotasks();
+
+  assert.equal(context.fetchCalls.length, 1);
+  assert.match(context.fetchCalls[0].url, /^\/album-details\?album_key=alpha/);
+  const shown = context.renderTrackModalReleaseAlbums.at(-1);
+  assert.equal(shown.musicbrainz_release.type_label, 'Live');
+  assert.equal(shown.musicbrainz_series[0].name, 'Pitchfork: 10/10');
+  assert.equal(context.state.modalReleases[context.state.modalReleaseIndex], shown);
+
+  // Details already loaded: reopening asks nothing more.
+  context.openTrackModal(shown);
+  await flushMicrotasks();
+  assert.equal(context.fetchCalls.length, 1);
+});
+
+test('gallery album details that arrive after the modal closed or moved on are dropped', async () => {
+  let resolveDetails;
+  const { context, trackModal } = loadHelper({
+    onFetchAlbumDetails: () => new Promise((resolve) => { resolveDetails = resolve; }),
+  });
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'a' }] });
+  const renders = context.renderTrackModalReleaseAlbums.length;
+  trackModal.hidden = true;
+  resolveDetails({ ok: true, status: 200, json: async () => ({ ok: true, album: {
+    key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'a' }], musicbrainz_release: { type_label: 'Live' } } }) });
+  await flushMicrotasks();
+  assert.equal(context.renderTrackModalReleaseAlbums.length, renders, 'a closed modal is not reopened');
+  // A missing album has no details to load.
+  context.openTrackModal({ key: 'gone', name: 'Gone', tracks: [], inventory_status: 'missing' });
+  await flushMicrotasks();
+  assert.equal(context.fetchCalls.length, 1);
+});
+
+test('gallery album details land only on the album still open and keep its edition tab label', async () => {
+  const pending = new Map();
+  const { context } = loadHelper({
+    onFetchAlbumDetails: ({ url }) => new Promise((resolve) => { pending.set(url.match(/album_key=(\w+)/)[1], resolve); }),
+  });
+  const answer = (key) => pending.get(key)({ ok: true, status: 200, json: async () => ({ ok: true, album: {
+    key, name: key, tracks: [{ path: key }], musicbrainz_release: { type_label: 'Live' } } }) });
+  context.getAlbumReleaseSet = (album) => ({ releases: [{ ...album, tabLabel: 'Deluxe' }], selectedIndex: 0 });
+
+  context.openTrackModal({ key: 'alpha', name: 'alpha', tracks: [{ path: 'alpha' }] });
+  context.openTrackModal({ key: 'beta', name: 'beta', tracks: [{ path: 'beta' }] });
+  answer('alpha');
+  await flushMicrotasks();
+  assert.equal(context.state.modalReleases[0].key, 'beta', 'the superseded album is not shown');
+  assert.equal(context.renderTrackModalReleaseAlbums.at(-1).musicbrainz_release, undefined);
+
+  answer('beta');
+  await flushMicrotasks();
+  const shown = context.renderTrackModalReleaseAlbums.at(-1);
+  assert.equal(shown.musicbrainz_release.type_label, 'Live');
+  assert.equal(shown.tabLabel, 'Deluxe');
+});

@@ -27787,9 +27787,14 @@ function androidUpdateMenuView() {
     // Pressing it again shows a confirmation left unanswered; an approved install keeps installing.
     case 'installing': return ['Installing…', 'install'];
     case 'authorization': return ['Open install settings', 'install'];
-    // Every failure reads the same; the shell logs its error and reason. A failure that kept its
-    // update downloads it again, as the shell's own retry does; any other checks again.
-    case 'failed': return ['Update failed. Try again', update.versionName ? 'download' : 'check'];
+    // A full phone is named, since only the owner can fix it; every other failure reads the same and
+    // the shell logs its error and reason. A failure that kept its update downloads it again, as the
+    // shell's own retry does; any other checks again.
+    case 'failed': {
+      const retry = update.versionName ? 'download' : 'check';
+      if (update.reason === 'insufficient_storage') return ['Not enough storage', retry, 'Free up space on this phone, then try again'];
+      return ['Update failed. Try again', retry];
+    }
     default: return ['Check for update', 'check'];
   }
 }

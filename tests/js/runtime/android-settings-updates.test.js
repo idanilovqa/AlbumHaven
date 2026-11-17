@@ -133,7 +133,7 @@ const STATES = [
   [update({ state: 'ready', ...ready }), 'Install update', null, 'install'],
   [update({ state: 'installing', ...ready }), 'Installing…', null, 'install'],
   [update({ state: 'authorization', ...ready }), 'Open install settings', null, 'install'],
-  // Every failed check, download or install reads the same, whatever the shell's error and reason.
+  // Every failed check, download or install reads the same, whatever the shell's error and other reasons.
   ...[
     [{ error: 'check_failed' }, 'check'],
     [{ error: 'check_failed', reason: 'signed_out' }, 'check'],
@@ -143,6 +143,14 @@ const STATES = [
     [{ error: 'verification_failed', reason: 'hash_mismatch', ...ready }, 'download'],
     [{ error: 'install_failed', ...ready }, 'download'],
   ].map(([failure, action]) => [update({ state: 'failed', ...failure }), 'Update failed. Try again', null, action]),
+  // Except a full phone, which only the owner can fix.
+  ...[
+    [{ error: 'download_failed', ...ready }, 'download'],
+    [{ error: 'install_failed', ...ready }, 'download'],
+  ].map(([failure, action]) => [
+    update({ state: 'failed', reason: 'insufficient_storage', ...failure }),
+    'Not enough storage', 'Free up space on this phone, then try again', action,
+  ]),
 ];
 
 for (const [state, label, detail, action] of STATES) {
@@ -152,7 +160,7 @@ for (const [state, label, detail, action] of STATES) {
     // The Settings card keeps the version and leaves updates to the menu, in every state.
     const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
     assert.equal(text(alertOf(html)[0]), 'Android app Sandbox · 0.9.50 (1)');
-    assert.doesNotMatch(html, /data-android-update|<progress|Check for update|Update failed|Download update|Installing…/);
+    assert.doesNotMatch(html, /data-android-update|<progress|Check for update|Update failed|Not enough storage|Download update|Installing…/);
   });
 }
 

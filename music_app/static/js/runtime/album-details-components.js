@@ -13,9 +13,10 @@ function albumIdentityArtist(album) {
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
-// An applied MusicBrainz data correction (S4) shows in place of the album artist tag.
+// An applied MusicBrainz data correction (S4) shows in place of the album artist tag; a split
+// same-name artist's album shows its group, "Amarok (Poland)" (D2 S2).
 function albumDisplayArtist(album) {
-  return album?.display_artist || albumIdentityArtist(album);
+  return album?.display_artist || album?.musicbrainz_artist?.group_label || albumIdentityArtist(album);
 }
 
 function albumTaggedArtistNote(album) {
@@ -65,9 +66,14 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>${buildAlbumDetailsRomanizedArtistHtml(config.eyebrowRomanized)}` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artistRomanized = String(config.artistRomanized || '').trim();
-  const artist = artistRomanized && config.artist
-    ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(config.artist)}</span>`
-    : escapeHtml(config.artist || '');
+  // A split group's qualifier is dimmed after the name: "Amarok (Poland)".
+  const artistParts = typeof artistDisplayParts === 'function' ? artistDisplayParts(config.artist || '') : { name: config.artist || '', qualifier: '' };
+  const artistName = artistRomanized && config.artist
+    ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(artistParts.name)}</span>`
+    : escapeHtml(artistParts.name);
+  const artist = artistParts.qualifier
+    ? `${artistName} <span class="album-details-header__aka">${escapeHtml(artistParts.qualifier)}</span>`
+    : artistName;
   // Owner 2026-11-15 (I): "Title (a.k.a. Other title)", dimmed, after the title and before the year.
   const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
   const album = `${escapeHtml(config.album || 'Album')}${alternatives.length

@@ -139,6 +139,25 @@ function romanizedArtistLabel(name) {
   return latin ? `(${latin})` : '';
 }
 
+// Same-name artists MusicBrainz splits per album (approved D2 batch 3, 3): the server names
+// each group "Amarok (Poland)" and lists its qualifier here, dimmed like a romanized name.
+let splitArtistQualifiers = new Map();
+
+function setSplitArtistQualifiers(qualifiers = {}) {
+  splitArtistQualifiers = new Map(Object.entries(qualifiers || {}).map(([label, qualifier]) => [String(label).trim(), String(qualifier || '').trim()]));
+}
+
+// The one way an artist name is drawn: { name: 'Amarok', qualifier: '(Poland)', secondary:
+// the dimmed text after the name } for a split group label, which ends in " (qualifier)";
+// any other name is drawn whole, with its romanized form (if any) as the dimmed text.
+function artistDisplayParts(artist) {
+  const label = String(artist ?? '');
+  const qualifier = splitArtistQualifiers.get(label.trim());
+  if (!qualifier) return { name: label, qualifier: '', secondary: romanizedArtistLabel(label) };
+  const name = label.trim().slice(0, -(qualifier.length + 3));
+  return { name, qualifier: `(${qualifier})`, secondary: [romanizedArtistLabel(name), `(${qualifier})`].filter(Boolean).join(' ') };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -163,7 +182,8 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, secondaryLabel: romanizedArtistLabel(item?.artist_display || item?.artist), key: 'artist:' + item.artist,
+    label: artistDisplayParts(item.artist_display || item.artist).name,
+    secondaryLabel: artistDisplayParts(item.artist_display || item.artist).secondary, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -227,7 +247,7 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
-    romanizedArtistLabel(item?.artist_display || item?.artist),
+    artistDisplayParts(item?.artist_display || item?.artist).secondary,
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized

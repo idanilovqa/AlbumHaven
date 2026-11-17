@@ -589,7 +589,9 @@ function stabilizeRootGalleryArtistAlignment(artist) {
     );
     const aligned = Boolean(scroll && rows)
       && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
-      && String(chromeName?.textContent || '').trim() === targetArtist;
+      // A split group's chrome shows "Amarok" with the "(Poland)" beside it.
+      && String(chromeName?.textContent || '').trim() === (typeof galleryArtistDisplayParts === 'function'
+        ? galleryArtistDisplayParts(targetArtist).name.trim() : targetArtist);
     if (aligned) stableFrames += 1;
     else {
       stableFrames = 0;

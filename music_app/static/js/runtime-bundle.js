@@ -4308,6 +4308,25 @@ function romanizedArtistLabel(name) {
   return latin ? `(${latin})` : '';
 }
 
+// Same-name artists MusicBrainz splits per album (approved D2 batch 3, 3): the server names
+// each group "Amarok (Poland)" and lists its qualifier here, dimmed like a romanized name.
+let splitArtistQualifiers = new Map();
+
+function setSplitArtistQualifiers(qualifiers = {}) {
+  splitArtistQualifiers = new Map(Object.entries(qualifiers || {}).map(([label, qualifier]) => [String(label).trim(), String(qualifier || '').trim()]));
+}
+
+// The one way an artist name is drawn: { name: 'Amarok', qualifier: '(Poland)', secondary:
+// the dimmed text after the name } for a split group label, which ends in " (qualifier)";
+// any other name is drawn whole, with its romanized form (if any) as the dimmed text.
+function artistDisplayParts(artist) {
+  const label = String(artist ?? '');
+  const qualifier = splitArtistQualifiers.get(label.trim());
+  if (!qualifier) return { name: label, qualifier: '', secondary: romanizedArtistLabel(label) };
+  const name = label.trim().slice(0, -(qualifier.length + 3));
+  return { name, qualifier: `(${qualifier})`, secondary: [romanizedArtistLabel(name), `(${qualifier})`].filter(Boolean).join(' ') };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -4332,7 +4351,8 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, secondaryLabel: romanizedArtistLabel(item?.artist_display || item?.artist), key: 'artist:' + item.artist,
+    label: artistDisplayParts(item.artist_display || item.artist).name,
+    secondaryLabel: artistDisplayParts(item.artist_display || item.artist).secondary, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -4396,7 +4416,7 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
-    romanizedArtistLabel(item?.artist_display || item?.artist),
+    artistDisplayParts(item?.artist_display || item?.artist).secondary,
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
@@ -4702,6 +4722,13 @@ function galleryRomanizedArtistLabel(name) {
   return typeof romanizedArtistLabel === 'function' ? romanizedArtistLabel(name) : '';
 }
 
+// The name and its dimmed text ("Amarok" "(Poland)"; "天門" "(Tenmon)"); see render-markup-helpers.
+function galleryArtistDisplayParts(name) {
+  return typeof artistDisplayParts === 'function'
+    ? artistDisplayParts(name)
+    : { name: String(name ?? ''), qualifier: '', secondary: galleryRomanizedArtistLabel(name) };
+}
+
 function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
@@ -4818,7 +4845,7 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
 // Romanized artist names change only when MusicBrainz matches an artist, so the status
 // poll asks for them at most every ten minutes; a change redraws the tree and the gallery.
 const ROMANIZED_ARTIST_NAMES_REFRESH_MS = 600000;
-const romanizedArtistNamesLoad = { loadedAt: 0, signature: '{}', promise: null };
+const romanizedArtistNamesLoad = { loadedAt: 0, signature: '{}{}', promise: null };
 
 function refreshRomanizedArtistNames() {
   if (romanizedArtistNamesLoad.promise) return romanizedArtistNamesLoad.promise;
@@ -4829,10 +4856,13 @@ function refreshRomanizedArtistNames() {
     .then((response) => (response.ok ? response.json() : null))
     .then((payload) => {
       const names = payload?.names && typeof payload.names === 'object' ? payload.names : null;
-      const signature = JSON.stringify(names);
+      // Split same-name groups' qualifiers ride along (D2 S2); absent when nothing is split.
+      const splitArtists = payload?.split_artists && typeof payload.split_artists === 'object' ? payload.split_artists : {};
+      const signature = JSON.stringify(names) + JSON.stringify(splitArtists);
       if (!names || signature === romanizedArtistNamesLoad.signature) return false;
       romanizedArtistNamesLoad.signature = signature;
       setRomanizedArtistNames(names);
+      if (typeof setSplitArtistQualifiers === 'function') setSplitArtistQualifiers(splitArtists);
       if (typeof renderSidebar === 'function') renderSidebar();
       if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
       if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
@@ -4946,10 +4976,11 @@ function buildGalleryBarHtml(config = {}) {
     ? galleryMainPlural(config.albumCount, 'album')
     : `${galleryMainPlural(config.artistCount, 'artist')} · ${galleryMainPlural(config.albumCount, 'album')}`;
   const pills = isArtist ? buildGalleryArtistMetadataHtml(config.artist_musicbrainz) : '';
-  const romanized = isArtist ? galleryRomanizedArtistLabel(title) : '';
+  const display = isArtist ? galleryArtistDisplayParts(title) : { name: title, secondary: '' };
+  const romanized = display.secondary;
   const romanizedHtml = `<span class="gallery-artist-romanized" data-gallery-context-romanized${romanized ? '' : ' hidden'}>${escapeHtml(romanized)}</span>`;
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
-  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${romanizedHtml}${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
+  return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(display.name)}</span>${romanizedHtml}${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total${isArtist ? '' : ' hidden'}>${isArtist ? escapeHtml(summary) : ''}</span></div><span class="gallery-bar__summary" data-gallery-context-summary${isArtist ? ' hidden' : ''}>${isArtist ? '' : escapeHtml(summary)}</span><span class="gallery-bar__artist-metadata" data-gallery-context-metadata${isArtist ? '' : ' hidden'}>${pills}</span></div>
     <div class="gallery-bar__actions">
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
@@ -4995,10 +5026,11 @@ function gallerySeriesHasInfo(series) {
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
-  const romanized = galleryRomanizedArtistLabel(config.artist);
+  const display = galleryArtistDisplayParts(config.artist || '');
+  const romanized = display.secondary;
   const status = buildGalleryArtistStatusHtml(config);
   const info = config.series && !gallerySeriesHasInfo(config.series) ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
-  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}${romanized ? ` <span class="gallery-artist-romanized">${escapeHtml(romanized)}</span>` : ''}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
+  return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(display.name)}${romanized ? ` <span class="gallery-artist-romanized">${escapeHtml(romanized)}</span>` : ''}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
 function buildGalleryRatingHtml(config = {}) {
@@ -5391,9 +5423,10 @@ function albumIdentityArtist(album) {
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
-// An applied MusicBrainz data correction (S4) shows in place of the album artist tag.
+// An applied MusicBrainz data correction (S4) shows in place of the album artist tag; a split
+// same-name artist's album shows its group, "Amarok (Poland)" (D2 S2).
 function albumDisplayArtist(album) {
-  return album?.display_artist || albumIdentityArtist(album);
+  return album?.display_artist || album?.musicbrainz_artist?.group_label || albumIdentityArtist(album);
 }
 
 function albumTaggedArtistNote(album) {
@@ -5443,9 +5476,14 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy">${eyebrow ? `<div class="album-details-header__eyebrow">${eyebrow}</div>${buildAlbumDetailsRomanizedArtistHtml(config.eyebrowRomanized)}` : ''}<div class="album-details-header__primary-row"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3>${qualityAlertHtml}</div><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
   }
   const artistRomanized = String(config.artistRomanized || '').trim();
-  const artist = artistRomanized && config.artist
-    ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(config.artist)}</span>`
-    : escapeHtml(config.artist || '');
+  // A split group's qualifier is dimmed after the name: "Amarok (Poland)".
+  const artistParts = typeof artistDisplayParts === 'function' ? artistDisplayParts(config.artist || '') : { name: config.artist || '', qualifier: '' };
+  const artistName = artistRomanized && config.artist
+    ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(artistParts.name)}</span>`
+    : escapeHtml(artistParts.name);
+  const artist = artistParts.qualifier
+    ? `${artistName} <span class="album-details-header__aka">${escapeHtml(artistParts.qualifier)}</span>`
+    : artistName;
   // Owner 2026-11-15 (I): "Title (a.k.a. Other title)", dimmed, after the title and before the year.
   const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
   const album = `${escapeHtml(config.album || 'Album')}${alternatives.length
@@ -7641,9 +7679,10 @@ function updateGalleryMainChrome() {
     oldInfo?.remove();
   } else {
     // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
-    name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
+    const display = galleryArtistDisplayParts(galleryArtistDisplayName(context.artist, context.artist_musicbrainz));
+    name.textContent = display.name;
     if (romanized) {
-      romanized.textContent = galleryRomanizedArtistLabel(name.textContent);
+      romanized.textContent = display.secondary;
       romanized.hidden = !romanized.textContent;
     }
     summary.hidden = true;
@@ -50584,7 +50623,9 @@ function stabilizeRootGalleryArtistAlignment(artist) {
     );
     const aligned = Boolean(scroll && rows)
       && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
-      && String(chromeName?.textContent || '').trim() === targetArtist;
+      // A split group's chrome shows "Amarok" with the "(Poland)" beside it.
+      && String(chromeName?.textContent || '').trim() === (typeof galleryArtistDisplayParts === 'function'
+        ? galleryArtistDisplayParts(targetArtist).name.trim() : targetArtist);
     if (aligned) stableFrames += 1;
     else {
       stableFrames = 0;

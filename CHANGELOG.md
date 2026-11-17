@@ -3,6 +3,11 @@
 ## 0.11.24 - 2026-11-17
 
 - Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
+## 0.11.21 - 2026-11-17
+
+- Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.
+
 ## 0.11.20 - 2026-11-17
 
 - Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.

@@ -57,6 +57,10 @@ from music_app.routes.musicbrainz_enrichment_asgi import (
     project_album_problems_into_problematic_files,
     project_artist_problems_into_problematic_files,
 )
+from music_app.routes.musicbrainz_corrections_asgi import (
+    project_correction_into_problematic_detail,
+    project_correction_problems_into_problematic_files,
+)
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
@@ -1286,6 +1290,7 @@ def utilities_problematic_files(
             )
             _project_missing_album_actions_for_request(request, payload)
             project_album_problems_into_problematic_files(request, payload, album_items.result())
+            project_correction_problems_into_problematic_files(request, payload)
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)
@@ -1312,6 +1317,7 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
             )
         _project_missing_album_actions_for_request(request, payload)
         project_album_problem_into_problematic_detail(request, payload)
+        project_correction_into_problematic_detail(request, payload)
         return JSONResponse(payload)
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_album_detail_payload(
@@ -1340,6 +1346,7 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
             )
         _project_missing_album_actions_for_request(request, payload)
         project_album_problem_into_problematic_detail(request, payload)
+        project_correction_into_problematic_detail(request, payload)
         return JSONResponse(payload)
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_album_detail_payload(

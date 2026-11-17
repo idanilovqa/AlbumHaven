@@ -260,6 +260,7 @@ def _configure_asgi_app(app, runtime) -> None:
         lookup_router as musicbrainz_lookup_asgi_router,
         router as musicbrainz_enrichment_asgi_router,
     )
+    from music_app.routes.musicbrainz_corrections_asgi import router as musicbrainz_corrections_asgi_router
     from music_app.routes.api_wave_a_asgi_routes import router as api_wave_a_asgi_router
     from music_app.routes.api_wave_b_asgi_routes import router as api_wave_b_asgi_router
     from music_app.routes.api_wave_c_asgi_routes import router as api_wave_c_asgi_router
@@ -392,6 +393,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(selection_accent_asgi_router)
     app.include_router(musicbrainz_enrichment_asgi_router)
     app.include_router(musicbrainz_lookup_asgi_router)
+    app.include_router(musicbrainz_corrections_asgi_router)
     app.include_router(admin_asgi_router)
     app.include_router(web_asgi_router)
     app.include_router(api_read_asgi_router)
@@ -459,6 +461,7 @@ def create_asgi_app():
     from music_app.services.musicbrainz_enrichment_api import (
         build_musicbrainz_enrichment_api_service,
     )
+    from music_app.services.musicbrainz_corrections_postgres import enable_background_correction_refresh
     from music_app.services.musicbrainz_enrichment_postgres import (
         MusicBrainzEnrichmentPostgresRepository,
     )
@@ -655,6 +658,8 @@ def create_asgi_app():
                 _app.state.musicbrainz_enrichment_api_service = (
                     build_musicbrainz_enrichment_api_service(runtime.config)
                 )
+                # Stored data corrections follow tag changes from here on (S4).
+                enable_background_correction_refresh(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL"))
                 try:
                     schedule_startup_backfill(enrichment_scheduler)
                 except Exception:

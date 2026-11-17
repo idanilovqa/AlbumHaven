@@ -537,6 +537,16 @@ async def dismiss_lookup_batch(batch_id: int, request: Request):
     return {"dismissed": True}
 
 
+@lookup_router.delete("/{request_id}")
+async def remove_queued_lookup(request_id: int, request: Request):
+    """Settings → Edits Queue removes a lookup still waiting in the queue (S4)."""
+    await _require_current_library_owner(request)
+    result = await _call_service(request, "remove_queued_lookup", request_id=request_id)
+    if not isinstance(result, Mapping) or result.get("removed") is not True:
+        raise HTTPException(404, "Lookup was not found.")
+    return {"removed": True}
+
+
 def _lookup_target(body: object) -> dict[str, object] | None:
     """Exactly one artist (by id or by one of its albums) or one album (by key)."""
     if not isinstance(body, Mapping):

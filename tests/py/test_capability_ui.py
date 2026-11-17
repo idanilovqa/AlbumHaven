@@ -6,15 +6,16 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from music_app.services.capabilities import capability_keys_for_roles
 from music_app.services.capability_ui import UI_ACTIONS, build_capability_ui
-from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor
+from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
 from music_app.services.policy import PolicyContext, RequestOrigin
 from music_app.services.policy_evaluator import PolicyEvaluator
 
 
-def projection(roles, surface="private_web", bootstrap=False):
+def projection(roles, surface="private_web", bootstrap=False, primary_owner=False):
     actor = CurrentActor(
         state=ActorState.ACTIVE, account_id=7, session_id=8,
-        is_bootstrap_owner=bootstrap,
+        is_bootstrap_owner=bootstrap, current_library_id=23 if primary_owner else None,
+        library_relationships=(LibraryRelationship(23, "owner", True),) if primary_owner else (),
         capability_grants=tuple(CapabilityGrant(key, "library", 23) for key in capability_keys_for_roles(roles)),
     )
     evaluator = PolicyEvaluator()
@@ -64,7 +65,7 @@ def test_tv_limits_bootstrap_owner_and_admin_too():
 
 
 def test_rendref_desktop_projection_only_hides_unimplemented_move():
-    value = projection(["owner", "admin"], bootstrap=True)
+    value = projection(["owner", "admin"], bootstrap=True, primary_owner=True)
     assert set(value["denied_selectors"]) == {
         "[data-move-problematic-album]",
         '[data-required-action="capability.move"]',

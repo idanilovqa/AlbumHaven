@@ -63,7 +63,10 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
   const artist = artistRomanized && config.artist
     ? `<span title="${escapeHtml(artistRomanized)}">${escapeHtml(config.artist)}</span>`
     : escapeHtml(config.artist || '');
-  const album = escapeHtml(config.album || 'Album');
+  // Owner 2026-11-15 (I): "Title (a.k.a. Other title)", dimmed, after the title and before the year.
+  const alternatives = Array.isArray(config.alternativeTitles) ? config.alternativeTitles.filter(Boolean) : [];
+  const album = `${escapeHtml(config.album || 'Album')}${alternatives.length
+    ? ` <span class="album-details-header__aka">(a.k.a. ${escapeHtml(alternatives.join(', '))})</span>` : ''}`;
   const year = escapeHtml(config.year || '');
   const releaseType = escapeHtml(config.releaseType || 'ALBUM');
   const tags = Array.isArray(config.tags) ? config.tags.filter(Boolean) : [];

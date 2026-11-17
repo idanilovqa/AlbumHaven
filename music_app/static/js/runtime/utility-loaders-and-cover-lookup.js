@@ -107,6 +107,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
         });
         state.utility.libraryWatchHealthProblems = operationalItems;
+        state.utility.musicBrainzCorrectionAlbumCount = Number(data.musicbrainz_correction_album_count || 0);
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
         previousSummaryItems = summaryItems.map(item => ({ ...item }));
@@ -239,6 +240,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   // listed only because MusicBrainz has no info on it is its own detail.
   if (typeof isMusicBrainzArtistProblem === 'function'
       && (isMusicBrainzArtistProblem(currentAlbum) || isMusicBrainzAlbumProblem(currentAlbum))) {
+    return currentAlbum;
+  }
+  // An album listed only for its data correction is its own detail.
+  if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(currentAlbum)) {
     return currentAlbum;
   }
   if (currentAlbum?.detail_load_failed === true && !force) {
@@ -1169,6 +1174,7 @@ function loadActiveUtilityTab(force = false) {
     renderUtilityModalContent();
     return null;
   }
+  if (state.utility.activeTab === 'edits-queue') return loadUtilityEditsQueue(force);
   return loadProblematicFiles(force);
 }
 

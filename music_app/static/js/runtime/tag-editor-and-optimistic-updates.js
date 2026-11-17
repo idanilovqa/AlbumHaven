@@ -1959,6 +1959,7 @@ function renderTrackModalRelease(album) {
       artist: albumDisplayArtist(album),
       artistRomanized: albumDetailsRomanizedArtist(album),
       album: album.display_name || album.name || 'Album',
+      alternativeTitles: album.musicbrainz_release?.alternative_titles,
       year: album.display_year || album.year || '',
       releaseType: albumDetailsReleaseType(album),
       tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),

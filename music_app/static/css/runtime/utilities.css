@@ -2192,3 +2192,10 @@
 .musicbrainz-retry-status dd {
   margin: 0;
 }
+
+/* Settings → Edits Queue (MusicBrainz Delivery 2, S4): one full-width page, no sidebar. */
+#utility-modal[data-active-tab="edits-queue"] .utility-modal-body { grid-template-columns: minmax(0, 1fr); }
+#utility-modal[data-active-tab="edits-queue"] .utility-sidebar { display: none; }
+.edits-queue-body { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.edits-queue-controls { justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.edits-queue-auto-submit { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

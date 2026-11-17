@@ -32,6 +32,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
+  if (typeof syncMusicBrainzCorrectionRows === 'function') syncMusicBrainzCorrectionRows();
   const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
@@ -41,12 +42,17 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onRangeRendered: (end, count) => {
+          if (typeof loadMoreMusicBrainzCorrectionRows === 'function') loadMoreMusicBrainzCorrectionRows(end, count);
+        },
       });
     }
     if (problematicFilesVirtualList) {
       problematicFilesVirtualList.render(items, selectedKey);
     } else if (!retainTree) {
       replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
+      // Without virtualization every row is rendered: the next page follows.
+      if (typeof loadMoreMusicBrainzCorrectionRows === 'function') loadMoreMusicBrainzCorrectionRows(items.length, items.length);
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
       const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
@@ -177,6 +183,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
   if (typeof isMusicBrainzAlbumProblem === 'function' && isMusicBrainzAlbumProblem(selectedAlbum)) {
     els.detail.innerHTML = buildMusicBrainzAlbumProblemDetail(selectedAlbum);
+    return;
+  }
+  if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(selectedAlbum)) {
+    els.detail.innerHTML = buildMusicBrainzCorrectionProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_correction?.corrections && !selectedAlbum.musicbrainz_correction_failed) {
+      void loadMusicBrainzCorrectionDetail(selectedAlbum);
+    }
     return;
   }
   if (selectedAlbum?.detail_load_failed) {
@@ -879,6 +892,8 @@ function renderUtilityModalContent(options = {}) {
     renderUtilityAppearance();
   } else if (activeTab === 'android') {
     renderUtilityAndroid();
+  } else if (activeTab === 'edits-queue') {
+    renderUtilityEditsQueue();
   } else {
     renderProblematicFiles(options);
   }

@@ -234,6 +234,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
         "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
         "utility_allowed_actions": allowed_actions_for_request(request, (
             "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
+            "library.metadata_matches.review",
         )),
     }
     context_finished_at = time.perf_counter()

@@ -666,6 +666,14 @@ body.modal-open { overflow: hidden; }
   font-size: 13px;
 }
 
+/* An entry's own actions (Edits Queue: open and remove), after its name. */
+.version-picker-option-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .version-picker-empty {
   padding: 14px 2px;
   color: rgba(245, 247, 250, 0.72);

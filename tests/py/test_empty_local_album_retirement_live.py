@@ -111,6 +111,17 @@ _USER_STATE = {
         values (%(library_id)s, %(album_key)s)""",
     "cover_lookup_task": """insert into ops.cover_lookup_tasks (library_id, task_key, status, album_key)
         values (%(library_id)s, 'retirement-guard', 'completed', %(album_key)s)""",
+    "musicbrainz_lookup_request": """insert into ops.musicbrainz_lookup_requests (
+        library_id, target_kind, local_artist_id, album_key, mode, state, requested_at)
+        select library_id, 'album', artist_id, album_key, 'queue', 'queued', now()
+        from library.local_albums where id = %(album_id)s""",
+    "musicbrainz_correction": """with release as (
+          insert into integration.musicbrainz_releases (mbid, title, refreshed_at)
+          values ('7b0d4c2e-0000-4000-8000-00000000c0de', 'Silent Running', now()) returning mbid)
+        insert into ops.musicbrainz_correction_queue (library_id, album_key, release_mbid, corrections, queued_at)
+        select %(library_id)s, %(album_key)s, mbid,
+               '[{"field": "album", "current": "Silent Running", "proposed": "Silent Runnings"}]', now()
+        from release""",
 }
 
 

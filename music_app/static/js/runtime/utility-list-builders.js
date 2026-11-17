@@ -543,6 +543,7 @@ function buildProblematicAlbumDetail(album) {
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
     ${album.musicbrainz_album_key ? buildMusicBrainzAlbumLookupHtml(album) : ''}
+    ${album.musicbrainz_correction ? buildMusicBrainzCorrectionHtml(album) : ''}
   `;
 }
 
@@ -2985,6 +2986,10 @@ function getProblemReasonTypes() {
       if (reason) reasons.add(reason);
     });
   });
+  // Albums needing a MusicBrainz correction load only through this filter.
+  if (Number(state.utility.musicBrainzCorrectionAlbumCount) > 0 && typeof MUSICBRAINZ_DATA_CORRECTION_LABEL === 'string') {
+    reasons.add(normalizeProblemFilterReason(MUSICBRAINZ_DATA_CORRECTION_LABEL));
+  }
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 
@@ -3064,6 +3069,7 @@ function getFilteredProblematicAlbums() {
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
+    if (typeof isMusicBrainzCorrectionRowShown === 'function' && !isMusicBrainzCorrectionRowShown(album)) return false;
     if (!query) return true;
     const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
     const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];

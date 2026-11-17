@@ -130,6 +130,22 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
     }
   };
   page.on('request', recordDetailRequest);
+  // Diagnostic: record who requests the summary so a duplicate request names its caller.
+  await page.evaluate((pathname) => {
+    window.__pfSummaryFetches = [];
+    if (window.__pfSummaryFetchWrapped) return;
+    window.__pfSummaryFetchWrapped = true;
+    const originalFetch = window.fetch;
+    window.fetch = function diagnosticFetch(input, init) {
+      try {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if (url.pathname === pathname) {
+          window.__pfSummaryFetches.push({ url: url.pathname + url.search, at: Math.round(performance.now()), stack: new Error().stack });
+        }
+      } catch (error) { /* diagnostics only */ }
+      return originalFetch.apply(this, arguments);
+    };
+  }, summaryPathname);
   try {
     const timeout = Number(options.timeout || 120000);
     const preemptionBefore = await readGalleryCoverPreemptionSnapshot(page);
@@ -185,6 +201,8 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
       completeSummaryResponse: completeSummaryResponseResult.value,
       detailRequestCount: detailRequests.length,
       summaryRequestCount: summaryRequests.length,
+      summaryRequestUrls: summaryRequests.map((request) => new URL(request.url()).search || '(none)'),
+      summaryFetchDiagnostics: await page.evaluate(() => window.__pfSummaryFetches || []),
       coverPreemptionWindow: {
         sequenceBefore: preemptionBefore.sequence,
         sequenceAfter: preemptionAfter.sequence,

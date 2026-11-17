@@ -175,7 +175,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         firstVisibleMs = networkEvidence.firstVisibleMs;
         problematicFilesPayload = await networkEvidence.completeSummaryResponse.json();
         assertCompactProblematicSummary(problematicFilesPayload);
-        expect(networkEvidence.summaryRequestCount, 'Warm opening must not duplicate summary requests').toBe(2);
+        expect(networkEvidence.summaryRequestCount, `Warm opening must not duplicate summary requests: ${JSON.stringify({ urls: networkEvidence.summaryRequestUrls, fetches: networkEvidence.summaryFetchDiagnostics }, null, 2)}`).toBe(2);
         initialDetailRequestCount = networkEvidence.detailRequestCount;
         await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
           key: 'problematic-files-ready',

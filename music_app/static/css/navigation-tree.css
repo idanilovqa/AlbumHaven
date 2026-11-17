@@ -26,6 +26,8 @@ button.navigation-tree-item.navigation-tree-group-heading { color: var(--muted);
 .navigation-tree-label { min-width: 0; }
 /* A dimmed second name after the label, e.g. a romanized artist name (approved J3). */
 .navigation-tree-label-secondary { color: var(--muted); }
+/* With it the row stays one line at its normal height, cut with an ellipsis (approved D2 batch 3, 1D-1). */
+.artist-link .navigation-tree-label:has(> .navigation-tree-label-secondary) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .navigation-tree-icon { flex: 0 0 22px; text-align: center; }
 /* Use a real edge, independent of filled selection/focus paint. Account-owned
    accent color/disable overrides still apply to every NavigationTree consumer. */

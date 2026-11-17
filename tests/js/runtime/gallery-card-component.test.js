@@ -164,18 +164,24 @@ test('album cards pass the payload genre and re-render when it changes', () => {
   assert.match(source, /String\(album\?\.musicbrainz_genre \|\| ''\)/);
 });
 
-test('a card of an original-script artist carries the romanized name as hover text on desktop and a line on phones (J3)', () => {
+test('1D-3: a card of an original-script artist reads "天門 (Tenmon) · 2002" on phones, hover text only on desktop', () => {
   const context = loadGalleryCard();
-  const html = context.buildGalleryCardInfoHtml({ title: 'Hoshi no Koe', artist: '天門', year: '2002', trackCount: 12, artistRomanized: 'Tenmon' });
-  assert.match(html, /<div class="album-subtitle" title="Tenmon"><span data-gallery-metadata-text>天門 · 2002<\/span><\/div>/);
-  assert.match(html, /<\/div><div class="album-subtitle gallery-card__romanized">\(Tenmon\)<\/div><\/div>/, 'inside the meta row, under artist and year');
+  const html = context.buildGalleryCardInfoHtml({ title: 'Hoshi no Koe', artist: '天門', year: '2002', trackCount: 12, artistRomanized: 'Tenmon <b>' });
+  assert.match(html, /<div class="album-subtitle" title="Tenmon &lt;b&gt;"><span data-gallery-metadata-text>天門<span class="gallery-artist-romanized gallery-card__romanized"> \(Tenmon &lt;b&gt;\)<\/span> · 2002<\/span><\/div>/);
+  // Rows keep their height: no second line under artist and year any more.
+  assert.equal((html.match(/class="album-subtitle/g) || []).length, 1);
+  const noYear = context.buildGalleryCardInfoHtml({ title: 'X', artist: '天門', trackCount: 1, artistRomanized: 'Tenmon' });
+  assert.match(noYear, /<span data-gallery-metadata-text>天門<span class="gallery-artist-romanized gallery-card__romanized"> \(Tenmon\)<\/span><\/span>/);
   const plain = context.buildGalleryCardInfoHtml({ title: 'Angels Cry', artist: 'Angra', year: '1993', trackCount: 10 });
   assert.doesNotMatch(plain, /title=|gallery-card__romanized/);
+  assert.match(plain, /<span data-gallery-metadata-text>Angra · 1993<\/span>/);
+  assert.match(context.buildGalleryCardInfoHtml({ title: 'X', artist: 'A <b>', year: '1' }), /<span data-gallery-metadata-text>A &lt;b&gt; · 1<\/span>/);
   const css = (file) => fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', file), 'utf8');
-  assert.match(css('gallery-main.css'), /\.gallery-card__romanized \{ display: none; \}/, 'desktop shows only the hover text');
+  assert.match(css('gallery-main.css'), /\.gallery-card-info \.gallery-card__romanized \{ display: none; \}/, 'desktop shows only the hover text');
   const phone = css('mobile-layout.css');
   const phoneBlock = phone.slice(phone.indexOf('@media (max-width: 900px)'));
-  assert.match(phoneBlock, /\.album-card \.gallery-card__romanized \{ display: block;/);
+  assert.match(phoneBlock, /\.album-card \.gallery-card__romanized \{ display: inline; \}/);
+  assert.doesNotMatch(phone, /\.gallery-card__romanized \{ display: block/, 'never its own line');
 });
 
 test('album cards pass the romanized artist name and re-render when it arrives (J3)', () => {

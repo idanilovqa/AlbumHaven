@@ -138,8 +138,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .album-card[data-gallery-display="cards"] .album-title { font-size: 12px; line-height: 1.3; margin: 0; }
   .album-card[data-gallery-display="cards"] .album-meta-row { font-size: 10px; gap: 3px; }
   .album-card[data-gallery-display="cards"] .album-subtitle { font-size: 10px; margin: 0; }
-  /* J3: the romanized artist name on its own line under artist and year, and in album details. */
-  .album-card .gallery-card__romanized { display: block; grid-column: 1 / -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* J3: the romanized artist name in parentheses right after the artist, on the same line, so rows
+     keep their height (approved D2 batch 3, 1D-3); in album details on its own line. */
+  .album-card .gallery-card__romanized { display: inline; }
   .album-details-header .album-details-header__romanized { display: block; }
   /* S7: track titles' Latin forms are desktop-only until the phone layout (1C/1D) is approved. */
   .album-track-table__transliteration { display: none; }

@@ -287,3 +287,12 @@ test('an artist row shows its secondary label dimmed after the escaped label (ap
   assert.match(html, /<span class="navigation-tree-label artist-name-label">天門 <span class="navigation-tree-label-secondary">\(Tenmon &lt;b&gt;\)<\/span><\/span>/);
   assert.doesNotMatch(tree.renderItem({ label: 'Angra', key: 'artist:Angra' }), /navigation-tree-label-secondary/);
 });
+
+test('1D-1: a row with a romanized name stays one line at its normal height, cut with an ellipsis; other rows still wrap', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/navigation-tree.css'), 'utf8');
+  assert.match(css, /\.artist-link \.navigation-tree-label:has\(> \.navigation-tree-label-secondary\) \{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \}/);
+  // Negative: the plain artist label keeps the shared wrapping rule (base.css), untouched here.
+  const base = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/base.css'), 'utf8');
+  assert.match(base, /\.artist-link \.artist-name-label \{[^}]*white-space: normal;/);
+  assert.doesNotMatch(css, /\.artist-name-label \{[^}]*nowrap/);
+});

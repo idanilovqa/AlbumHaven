@@ -138,6 +138,14 @@ def log_app_message(logger: logging.Logger, action: str, *, level: str = "info",
     return payload
 
 
+def log_app_message_event(config: dict, logger: logging.Logger, action: str, *, level: str = "info", **fields) -> None:
+    """`log_app_event` without its log-history branch, for code that logs per
+    item or per provider call: one history write opens one database
+    connection, so those events go to the application log only."""
+    del config
+    log_app_message(logger, action, level=level, **fields)
+
+
 def log_app_event(
     config: dict,
     logger: logging.Logger,

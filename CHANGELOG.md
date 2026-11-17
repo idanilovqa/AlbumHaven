@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.17 - 2026-11-17
+## 0.11.18 - 2026-11-17
 
 - Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.
+
+## 0.11.17 - 2026-11-17
+
+- Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.
 
 ## 0.11.16 - 2026-11-17
 

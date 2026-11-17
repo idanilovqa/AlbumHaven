@@ -55,7 +55,8 @@ function loadContext({ allowed = true, responses = {} } = {}) {
     vm.runInContext(read(file), context, { filename: file });
   }
   // The shared card lives with the cover-lookup drawer; load only its card builder.
-  const drawer = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
+  // Normalised so the "\n}\n" end marker also holds on a CRLF (Windows) checkout.
+  const drawer = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js').replace(/\r\n/g, '\n');
   const start = drawer.indexOf('const NOTIFICATION_CARD_TITLES');
   vm.runInContext(drawer.slice(start, drawer.indexOf('\n}\n', start) + 3), context);
   return { context, requests, toasts, renders };

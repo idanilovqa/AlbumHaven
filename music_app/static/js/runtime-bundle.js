@@ -8076,8 +8076,6 @@ const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 // A lost socket is replaced at once, then after each of these delays, then every last one.
 const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 5000];
-// How long a player whose received audio ran out keeps waiting for the network.
-const STREAMING_DETACHED_SILENCE_MS = 30_000;
 // After a network change, a socket that owes bytes and sent none for this long is presumed lost.
 const STREAMING_SILENT_SOCKET_MS = 3000;
 // A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
@@ -8510,11 +8508,12 @@ async function recoverUnexpectedStreamingSocketClose(socket, event) {
   if (detachStreamingTransport(event?.code)) return;
   const current = engine.roles.current;
   const startRequestId = engine.startRequestId;
+  // A restart lost before its stream opened keeps the place it was restarting from.
   const recovery = current ? {
     track: current.track,
     startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
     attempt: Math.max(0, Number(current.transportRecoveryAttempt) || 0),
-  } : null;
+  } : engine.pendingTransportRecovery;
   const wasPlaying = Boolean(current && !engine.snapshot.paused && !engine.snapshot.ended);
   const detail = [event?.code, event?.reason]
     .filter((value) => value !== undefined && value !== '')
@@ -8538,7 +8537,7 @@ async function recoverUnexpectedStreamingSocketClose(socket, event) {
     return;
   }
 
-  engine.pendingTransportRecovery = null;
+  engine.pendingTransportRecovery = { ...recovery, attempt: recovery.attempt + 1 };
   delete engine.diagnostics.lastError;
   try {
     const recovered = await startStreamingTrack(recovery.track, {
@@ -8612,7 +8611,7 @@ function detachStreamingTransport(code) {
   const encoded = current?.encoded;
   const wire = encoded?.wire;
   if (!wire || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error'
-      || engine.snapshot.paused || engine.snapshot.ended || engine.pendingSeek
+      || engine.snapshot.ended || engine.pendingSeek
       || engine.pendingBufferedSeek || engine.loopContinuity || current.spliceFrame !== undefined) return false;
   const whole = Boolean(wire.serverless || wire.eos);
   const spliceFrame = whole ? null : wire.table && wholeThroughStreamingSeekTable(wire.table, {
@@ -8641,8 +8640,8 @@ function detachStreamingTransport(code) {
     spliceFrame,
     failures: 0,
     timer: 0,
-    silenceTimer: 0,
-    paused: false,
+    // A paused player keeps what it received too, and tries the network again once played.
+    paused: Boolean(engine.snapshot.paused),
   };
   // A successor still streaming died with the socket; it is prepared again on the next one. A
   // splice needs the successor's place, so there it always waits.
@@ -8668,7 +8667,7 @@ function detachStreamingTransport(code) {
     engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: true });
   }
   engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
-  connectStreamingSocket();
+  if (!engine.detached.paused) connectStreamingSocket();
   if (Number.isFinite(heldSeekSeconds)) void seekStreamingPlayback(heldSeekSeconds);
   publishStreamingDiagnostics();
   return true;
@@ -8676,9 +8675,7 @@ function detachStreamingTransport(code) {
 
 function stopStreamingReconnectTimers(detached) {
   window.clearTimeout(detached.timer);
-  window.clearTimeout(detached.silenceTimer);
   detached.timer = 0;
-  detached.silenceTimer = 0;
 }
 
 function endStreamingDetach({ resumed = false } = {}) {
@@ -8790,15 +8787,14 @@ function joinStreamingSplice(current, continuity, message) {
   endStreamingDetach({ resumed: true });
 }
 
-// The received audio ran out while the network is still gone: the player waits, for a while.
+// The received audio ran out while the network is still gone: the player waits silently where it
+// is, however long, and plays on from there once the next socket opens (owner decision
+// 2026-11-17).
 function waitForStreamingTransport() {
   const engine = streamingEngineState();
   const detached = engine.detached;
-  if (!detached || detached.silenceTimer || detached.paused) return;
+  if (!detached || detached.paused) return;
   engine.mode = 'buffering';
-  detached.silenceTimer = window.setTimeout(() => {
-    if (engine.detached === detached) void failDetachedStreamingTransport();
-  }, STREAMING_DETACHED_SILENCE_MS);
   publishStreamingDiagnostics();
 }
 
@@ -8829,7 +8825,8 @@ function resumeStreamingReconnect() {
 }
 
 // While detached, a seek inside the audio here plays at once; past it, the track restarts there
-// and its open waits for the next socket (the owner's choice: jump, and wait at the target).
+// and its open waits for the next socket (the owner's choice: jump, and wait at the target). A
+// paused player stays paused there.
 function seekStreamingAudioHere(detached, startFrame) {
   return detached.kind !== 'reopen'
     && (detached.spliceFrame === null || startFrame < detached.spliceFrame);
@@ -8842,7 +8839,7 @@ function jumpWhileDetached(track, startSeconds) {
   detached.kind = 'reopen';
   detached.spliceFrame = null;
   waitForStreamingTransport();
-  return startStreamingTrack(track, { startSeconds, autoplay: true, keepDetached: true });
+  return startStreamingTrack(track, { startSeconds, autoplay: !engine.snapshot.paused, keepDetached: true });
 }
 
 function streamingSocketConnecting(socket) {
@@ -10362,7 +10359,10 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
-    if (roleState.role === 'current') roleState.transportRecoveryAttempt = 0;
+    if (roleState.role === 'current') {
+      roleState.transportRecoveryAttempt = 0;
+      engine.pendingTransportRecovery = null;
+    }
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
     }
@@ -11267,7 +11267,7 @@ async function resumeBrowserStreaming(
     ?? (Number(engine.startRequestId) || 0);
   const pendingRecovery = engine.pendingTransportRecovery;
   if (pendingRecovery && !engine.context && !engine.roles.current) {
-    engine.pendingTransportRecovery = null;
+    // Held until the restart plays: one lost before it opens keeps the place.
     delete engine.diagnostics.lastError;
     const recovered = await startStreamingTrack(pendingRecovery.track, {
       startSeconds: pendingRecovery.startSeconds,
@@ -11320,6 +11320,14 @@ async function resumeBrowserStreaming(
 async function seekBrowserStreaming(seconds) {
   const engine = streamingEngineState();
   engine.diagnostics.seekRequestedAtMs = performance.now();
+  // Stopped by a lost connection: the seek moves the place the next play starts at.
+  const held = engine.pendingTransportRecovery;
+  if (held && !engine.roles.current) {
+    held.startSeconds = Math.max(0, Number(seconds) || 0);
+    engine.snapshot.currentTime = held.startSeconds;
+    publishStreamingDiagnostics();
+    return null;
+  }
   const currentTrack = engine.roles.current?.track;
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;

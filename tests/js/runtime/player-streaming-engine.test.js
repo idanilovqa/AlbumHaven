@@ -6990,11 +6990,12 @@ test('a refused socket is an error, not a network change', async () => {
   assert.equal(harness.api.snapshot().diagnostics.transportDetaches, undefined);
 });
 
-test('reconnects keep trying while the received audio plays, then for 30 seconds of silence, then stop at the heard frame', async () => {
+test('reconnects keep trying while the received audio plays, and once it runs out the player waits silently at the heard frame', async () => {
   const timers = manualTimers();
+  let online = false;
   const harness = encodedHarness({
     createStreamingDecoder: recordingDecoders().create,
-    refuseConnection: (count) => count > 1,
+    refuseConnection: (count) => count > 1 && !online,
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
   });
@@ -7020,19 +7021,24 @@ test('reconnects keep trying while the received audio plays, then for 30 seconds
     type: 'underrun', generation: open.generation, streamId: open.streamId, role: 'current',
     renderedFrame: 1, missingFrames: 128,
   });
-  assert.equal(harness.api.snapshot().mode, 'buffering');
-  const deadline = timers.pending().find(({ delay }) => delay === 30_000);
-  assert.ok(deadline, 'the silence is bounded');
-  timers.fire(deadline);
-  await settleTwice(harness);
+  // The owner's rule (2026-11-17): losing the network never stops playback, however long.
+  assert.deepEqual(timers.pending().map(({ delay }) => delay), [5_000], 'no deadline ends the wait');
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    timers.fire(timers.pending()[0]);
+    await settleTwice(harness);
+  }
+  const waiting = harness.api.snapshot();
+  assert.equal(waiting.mode, 'buffering');
+  assert.equal(waiting.paused, false);
+  assert.equal(waiting.currentTime, 5, 'the head stays at the heard frame');
+  assert.equal(harness.contexts[0].closeCalls, 0);
 
-  const stopped = harness.api.snapshot();
-  assert.equal(stopped.mode, 'error');
-  assert.equal(stopped.paused, true);
-  assert.equal(stopped.currentTime, 5);
-  assert.equal(harness.engine.pendingTransportRecovery.startSeconds, 5);
-  assert.equal(harness.contexts[0].closeCalls, 1);
-  assert.equal(timers.pending().length, 0, 'no attempt follows');
+  online = true;
+  timers.fire(timers.pending()[0]);
+  await settleTwice(harness);
+  const splice = harness.sockets.at(-1).sent.find(({ type }) => type === 'open');
+  assert.equal(splice.startFrame, harness.engine.diagnostics.lastSpliceFrame, 'the rest of the song joins at the splice');
+  assert.equal(harness.api.snapshot().paused, false);
 });
 
 test('pausing while the network is gone stops the attempts and playing again resumes them', async () => {
@@ -7055,6 +7061,102 @@ test('pausing while the network is gone stops the attempts and playing again res
   await settleTwice(harness);
   assert.equal(harness.sockets.length, 3, 'playing again tries at once');
   assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('a socket lost while paused keeps the received audio: Play plays it, and a seek inside it, with no network', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 300_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
+  await harness.api.pause();
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const paused = harness.api.snapshot();
+  assert.equal(paused.diagnostics.transportState, 'detached-splice');
+  assert.equal(paused.mode, 'paused');
+  assert.equal(harness.sockets.length, 1, 'a paused player tries the network only once played');
+  assert.equal(timers.pending().length, 0);
+
+  await harness.api.seek(3);
+  await settleTwice(harness);
+  assert.equal(harness.engine.roles.continuity.local, true, 'the seek decodes the received audio here');
+  assert.equal(harness.api.snapshot().currentTime, 3);
+  assert.equal(harness.api.snapshot().paused, true);
+
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+  const playing = harness.api.snapshot();
+  assert.equal(playing.paused, false);
+  assert.notEqual(playing.mode, 'error');
+  assert.equal(playing.currentTime, 3);
+  assert.equal(harness.sockets.length, 2, 'playing tries the network again');
+});
+
+test('offline and paused, a seek past the received audio places the head there and stays paused until Play', async () => {
+  const timers = manualTimers();
+  let online = false;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await harness.api.pause();
+
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  const placed = harness.api.snapshot();
+  assert.equal(placed.currentTime, 60);
+  assert.equal(placed.paused, true, 'no sound and no advance');
+  assert.notEqual(placed.mode, 'error');
+  assert.equal(timers.pending().length, 0, 'nothing is retried while paused');
+
+  online = true;
+  assert.equal(await harness.api.resume(), true);
+  await settleTwice(harness);
+  const opened = harness.sockets.filter(({ readyState }) => readyState === 1);
+  assert.equal(opened.length, 1);
+  assert.deepEqual(opened[0].sent.filter(({ type }) => type === 'open').map(({ startFrame }) => startFrame), [2_880_000]);
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+test('stopped by a lost connection, a seek moves the held place and Play while still offline keeps it', async () => {
+  let online = false;
+  const harness = encodedHarness({ refuseConnection: (count) => count > 1 && !online });
+  const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 2_000_000, initialCreditBytes: 4_000 });
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(1_000)));
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.api.snapshot().mode, 'error');
+  assert.equal(harness.api.snapshot().currentTime, 2);
+
+  await harness.api.seek(40);
+  assert.equal(harness.api.snapshot().currentTime, 40);
+  assert.equal(harness.engine.pendingTransportRecovery.startSeconds, 40);
+
+  await harness.api.resume();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.api.snapshot().currentTime, 40, 'a failed play does not reset the head');
+  assert.equal(harness.engine.pendingTransportRecovery.startSeconds, 40);
+
+  online = true;
+  await harness.api.resume();
+  await settleTwice(harness);
+  const reopened = harness.sockets.at(-1).sent.find(({ type }) => type === 'open');
+  assert.equal(reopened.startFrame, 40 * 48_000);
 });
 
 test('the browser coming back online tries at once', async () => {

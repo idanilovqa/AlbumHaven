@@ -83,7 +83,9 @@ class DiscogsFallbackPostgresRepository(EnrichmentJobQueue):
             join library.local_artists artists on artists.library_id = jobs.library_id and artists.id = jobs.local_artist_id
             join library.local_albums albums on albums.library_id = artists.library_id and albums.artist_id = artists.id
             join lateral (
-              select json_agg(json_build_object('title', tracks.title, 'duration_seconds', tracks.duration_seconds)
+              select json_agg(json_build_object('title', tracks.title, 'duration_seconds', tracks.duration_seconds,
+                                                'disc_number', coalesce(nullif(tracks.disc_number, 0), 1),
+                                                'track_number', tracks.track_number)
                               order by coalesce(nullif(tracks.disc_number, 0), 1), tracks.track_number, tracks.title)
                        as tracks
               from library.local_tracks tracks
@@ -111,7 +113,8 @@ class DiscogsFallbackPostgresRepository(EnrichmentJobQueue):
             "albums": json.dumps([{"local_album_id": album.get("local_album_id"),
                                    "discogs_release_id": int(album["discogs_release_id"]),
                                    "discogs_master_id": album.get("discogs_master_id"),
-                                   "signals": list(album.get("signals") or [])} for album in albums]),
+                                   "signals": list(album.get("signals") or []),
+                                   "track_sections": album.get("track_sections") or []} for album in albums]),
         }
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
@@ -192,17 +195,20 @@ _RECORD = _active_library_cte() + """
       select artist_albums.library_id, artist_albums.album_key, rows.*
       from (select count(*) from removed_albums) settled
       cross join jsonb_to_recordset(%(albums)s::jsonb)
-        as rows(local_album_id bigint, discogs_release_id bigint, discogs_master_id bigint, signals text[])
+        as rows(local_album_id bigint, discogs_release_id bigint, discogs_master_id bigint, signals text[],
+                track_sections jsonb)
       join artist_albums on artist_albums.id = rows.local_album_id
     ), stored_albums as (
       insert into library.local_album_discogs_releases (
-        library_id, album_key, discogs_release_id, discogs_master_id, signals, observed_at, created_at, updated_at)
+        library_id, album_key, discogs_release_id, discogs_master_id, signals, track_sections, observed_at,
+        created_at, updated_at)
       select library_id, album_key, discogs_release_id, discogs_master_id, coalesce(signals, '{}'::text[]),
-             %(observed_at)s, %(observed_at)s, %(observed_at)s
+             coalesce(track_sections, '[]'::jsonb), %(observed_at)s, %(observed_at)s, %(observed_at)s
       from incoming
       on conflict (library_id, album_key) do update
       set discogs_release_id = excluded.discogs_release_id, discogs_master_id = excluded.discogs_master_id,
-          signals = excluded.signals, observed_at = excluded.observed_at, updated_at = excluded.updated_at
+          signals = excluded.signals, track_sections = excluded.track_sections, observed_at = excluded.observed_at,
+          updated_at = excluded.updated_at
       returning 1
     ), cleared_flag as (
       delete from library.musicbrainz_contribution_flags flags using job

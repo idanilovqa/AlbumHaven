@@ -111,6 +111,19 @@ class DiscogsMetadataClient:
             {"id": int(item["id"]), "name": artist_name(item.get("title"))}
             for item in found["payload"].get("results") or [] if isinstance(item, dict) and item.get("id")]}
 
+    def search_releases(self, *, barcode: str | None = None, artist: str | None = None,
+                        title: str | None = None, limit: int = 5) -> JsonDict:
+        """Releases by barcode, or by artist and title (S8 sub-sections). Candidates only: a
+        release counts once its title, track titles and track count agree."""
+        found = self._get("/database/search", type="release", barcode=barcode or None, artist=artist or None,
+                          release_title=title or None, per_page=limit)
+        if found["classification"] != "complete":
+            return found
+        return {"classification": "complete", "releases": [
+            {"id": int(item["id"]), "title": str(item.get("title") or ""), "year": str(item.get("year") or "") or None}
+            for item in found["payload"].get("results") or [] if isinstance(item, dict)
+            and str(item.get("id") or "").isdigit()]}
+
     def artist(self, artist_id: int) -> JsonDict:
         found = self._get(f"/artists/{int(artist_id)}")
         if found["classification"] != "complete":
@@ -149,14 +162,17 @@ class DiscogsMetadataClient:
         if found["classification"] != "complete":
             return found
         payload = found["payload"]
-        tracks = [
-            {"position": str(track.get("position") or ""), "disc": _disc(track.get("position")),
-             "title": str(track.get("title") or ""),
-             "length": duration_ms(track.get("duration")), "artists": _credits(track.get("artists"))}
-            for track in payload.get("tracklist") or []
-            # Headings and index entries are not tracks.
-            if isinstance(track, dict) and str(track.get("type_") or "track") == "track"
-        ]
+        tracks, section = [], None
+        for track in payload.get("tracklist") or []:
+            kind = str(track.get("type_") or "track") if isinstance(track, dict) else ""
+            if kind == "heading":
+                # A heading names the tracks after it, up to the next heading (S8 sub-sections).
+                section = str(track.get("title") or "").strip() or None
+            elif kind == "track":
+                # Index entries are not tracks either.
+                tracks.append({"position": str(track.get("position") or ""), "disc": _disc(track.get("position")),
+                               "title": str(track.get("title") or ""), "length": duration_ms(track.get("duration")),
+                               "artists": _credits(track.get("artists")), "section": section})
         return {"classification": "complete", "release": {
             "id": int(release_id), "title": str(payload.get("title") or ""),
             "year": str(payload.get("year") or "") or None,

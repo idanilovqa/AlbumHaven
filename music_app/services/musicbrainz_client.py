@@ -184,23 +184,28 @@ def project_artist(
     }
 
 
-_DISCOGS_ARTIST_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/artist/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
+_DISCOGS_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/(artist|release)/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
 
 
 def discogs_artist_id(relations: object) -> int | None:
-    """The Discogs artist ID from MusicBrainz url-rels.
+    """The Discogs artist ID from MusicBrainz url-rels."""
+    return discogs_link_id(relations, "artist")
 
-    Only current "discogs" URL relations to a discogs.com artist page count. When
-    they name several different Discogs artists, none is chosen.
+
+def discogs_link_id(relations: object, kind: str) -> int | None:
+    """The Discogs ``kind`` ("artist" or "release") ID from MusicBrainz url-rels.
+
+    Only current "discogs" URL relations to a discogs.com page of that kind count. When
+    they name several different Discogs entities, none is chosen.
     """
     found = set()
     for relation in relations if isinstance(relations, list) else []:
         if not isinstance(relation, dict) or relation.get("type") != "discogs" or relation.get("ended"):
             continue
         url = relation.get("url")
-        match = _DISCOGS_ARTIST_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
-        if match:
-            found.add(int(match.group(1)))
+        match = _DISCOGS_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
+        if match and match.group(1) == kind:
+            found.add(int(match.group(2)))
     return found.pop() if len(found) == 1 else None
 
 
@@ -242,6 +247,14 @@ def _transport_classification(metadata: JsonDict, *, discovered_by_search: bool 
 
 # MusicBrainz's special-purpose "[data]" artist credits a mixed-mode CD's data track.
 _DATA_ARTIST_MBID = "33cf029c-63b0-41a0-9855-be2a3665fb3b"
+
+
+# Video media are not discs of the album (a bonus DVD).
+_VIDEO_FORMATS = frozenset({"dvd", "dvd-video", "blu-ray", "hd-dvd", "vhs", "vcd", "svcd", "umd", "laserdisc"})
+
+
+def _is_audio_medium(medium: JsonDict) -> bool:
+    return _text(medium.get("format")).casefold() not in _VIDEO_FORMATS and _integer(medium.get("track-count")) > 0
 
 
 def _audio_tracks(medium: JsonDict) -> list[JsonDict]:
@@ -604,11 +617,13 @@ class MusicBrainzClient:
 
     def original_release_id(self, release_group_mbid: object) -> JsonDict:
         """The release group's original release: the earliest dated official release
-        (undated and unofficial ones only when nothing else exists)."""
+        (undated and unofficial ones only when nothing else exists), and the fewest audio
+        discs any of its releases has (owner 2026-11-16: that many discs are the main album;
+        None when MusicBrainz lists no media)."""
         group = _valid_mbid(release_group_mbid)
         if not group:
             return {"classification": "invalid_request"}
-        query = urllib.parse.urlencode({"release-group": group, "fmt": "json", "limit": 100})
+        query = urllib.parse.urlencode({"release-group": group, "inc": "media", "fmt": "json", "limit": 100})
         payload, transport = self.get_json(f"{self.base_url}/release?{query}", self.user_agent)
         if not isinstance(payload, dict):
             return {"classification": _transport_classification(transport), "transport": transport}
@@ -619,7 +634,10 @@ class MusicBrainzClient:
         original = min(releases, key=lambda release: (
             _text(release.get("status")) != "Official", not _text(release.get("date")),
             _text(release.get("date")), _valid_mbid(release.get("id"))))
-        return {"classification": "complete", "release_id": _valid_mbid(original.get("id"))}
+        discs = [sum(1 for medium in release["media"] if isinstance(medium, dict) and _is_audio_medium(medium))
+                 for release in releases if isinstance(release.get("media"), list)]
+        return {"classification": "complete", "release_id": _valid_mbid(original.get("id")),
+                "fewest_discs": min((count for count in discs if count), default=None)}
 
     def lookup_release_tracklist(self, release_mbid: object) -> JsonDict:
         """One release's media with every track and its artist credit, for the main-album
@@ -653,6 +671,18 @@ class MusicBrainzClient:
             "artist_credit": _artist_credit(payload.get("artist-credit")), "media": media,
             "series": _series_parts(payload.get("relations")),
         }}
+
+    def lookup_release_discogs_id(self, release_mbid: object) -> JsonDict:
+        """The Discogs release a MusicBrainz release links to, for its tracklist headings (S8)."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "url-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete",
+                "discogs_release_id": discogs_link_id(payload.get("relations"), "release")}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
         """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.

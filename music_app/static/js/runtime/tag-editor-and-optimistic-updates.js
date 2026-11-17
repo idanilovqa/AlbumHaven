@@ -2355,6 +2355,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         originalDuration: duration,
         trackNumber: trackValue,
         secondaryArtist,
+        // The matched release's sub-section heading (S8); never a tag.
+        section: String(trackRow?.section || '').trim(),
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),

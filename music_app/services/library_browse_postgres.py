@@ -1890,6 +1890,7 @@ class PostgresLibraryBrowseRepository:
                                                          detail_album.get("tracks") or [])
         if musicbrainz_release:
             detail_album["musicbrainz_release"] = musicbrainz_release
+        track_sections = _album_track_sections(connection, first_row_payload.get("album_id"))
         musicbrainz_series = _album_musicbrainz_series(connection, first_row_payload.get("album_id"))
         if musicbrainz_series:
             detail_album["musicbrainz_series"] = musicbrainz_series
@@ -1901,12 +1902,12 @@ class PostgresLibraryBrowseRepository:
 
         from music_app.services.album_details import _attach_album_detail_track_rows
 
-        return _apply_musicbrainz_track_artists(_attach_album_detail_track_rows(
+        return _apply_track_sections(_apply_musicbrainz_track_artists(_attach_album_detail_track_rows(
             detail_album,
             client_surface_class=client_surface_class,
             config=None,
             viewer_opinion_preferences={},
-        ))
+        )), track_sections)
 
     def build_non_album_detail_payload(
         self,
@@ -8298,6 +8299,30 @@ def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[o
     }
 
 
+def _album_track_sections(connection: Any, album_id: object) -> list[dict[str, object]]:
+    """The album's tracklist sub-sections (S8): the MusicBrainz release's, else the Discogs
+    fallback release's. Display only."""
+    if not album_id:
+        return []
+    rows = connection.execute(
+        """
+        select coalesce(nullif(decision.track_sections, '[]'::jsonb), discogs.track_sections) as track_sections
+        from library.local_albums album
+        left join library.local_album_musicbrainz_releases decision
+          on decision.library_id = album.library_id and decision.album_key = album.album_key
+         and decision.state = 'release'
+        left join library.local_album_discogs_releases discogs
+          on discogs.library_id = album.library_id and discogs.album_key = album.album_key
+        where album.id = %(album_id)s
+        """,
+        {"album_id": album_id},
+    ).fetchall()
+    sections = _row_mapping(rows[0]).get("track_sections") if rows else None
+    if isinstance(sections, str):
+        sections = json.loads(sections)
+    return [item for item in sections or [] if isinstance(item, Mapping) and item.get("section")]
+
+
 _SERIES_TYPE_LABELS = {"Release group series": "Album series", "Release series": "Album series"}
 
 
@@ -8448,6 +8473,22 @@ def _apply_musicbrainz_track_artists(album: dict[str, object] | None) -> dict[st
         credit = credits.get((_positive_number(row.get("disc_number")) or 1, _positive_number(row.get("track_number")) or 0))
         if credit is not None:
             row["secondary_artist"] = None if credit.strip().casefold() == album_artist else credit
+    return album
+
+
+def _apply_track_sections(album: dict[str, object] | None,
+                          sections: list[dict[str, object]]) -> dict[str, object] | None:
+    """Name each track row's sub-section heading ("Where Dead Angels Lie"); the track table
+    shows it between rows inside the disc. Track rows only: tags never change."""
+    by_position = {(int(item.get("disc_number") or 1), int(item.get("track_number") or 0)): str(item["section"])
+                   for item in sections}
+    if not album or not by_position:
+        return album
+    for row in album.get("track_rows") or []:
+        section = by_position.get((_positive_number(row.get("disc_number")) or 1,
+                                   _positive_number(row.get("track_number")) or 0))
+        if section:
+            row["section"] = section
     return album
 
 

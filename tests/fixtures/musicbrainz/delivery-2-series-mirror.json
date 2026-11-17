@@ -3082,7 +3082,7 @@
 },
 "title": "〈COLEZO! TWIN〉酒井法子"
 },
-"/release?release-group=bbdbb3d2-bd99-4331-ba59-5c8f818c9222&fmt=json&limit=100": {
+"/release?release-group=bbdbb3d2-bd99-4331-ba59-5c8f818c9222&inc=media&fmt=json&limit=100": {
 "release-count": 1,
 "release-offset": 0,
 "releases": [

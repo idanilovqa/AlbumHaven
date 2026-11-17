@@ -164,3 +164,21 @@ def test_problematic_files_attention_says_musicbrainz_has_no_info_for_a_flagged_
     ).list_artist_attention()
     assert {row["local_artist_name"]: row["musicbrainz_has_no_info"] for row in attention} == {
         "3 Crows": True, "Angra": False}
+
+
+def test_a_fallback_albums_sub_sections_are_stored_and_shown_after_the_musicbrainz_ones(monkeypatch):
+    """S8: Discogs headings of the fallback release; MusicBrainz's own sections win."""
+    from music_app.services.library_browse_postgres import _album_track_sections
+
+    setup_url, repository, ids, albums = _seed(monkeypatch)
+    sections = [{"disc_number": 1, "track_number": 1, "section": "Where Dead Angels Lie"}]
+
+    def outcome(context):
+        found = _found(context, hints=[])
+        found["albums"][0]["track_sections"] = sections
+        return found
+
+    _run(monkeypatch, repository, outcome).process_next(worker_id="w")
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _album_track_sections(connection, albums["crows"]) == sections
+        assert _album_track_sections(connection, albums["found"]) == []

@@ -868,16 +868,17 @@ class NativePcmEngine(
     }
 
     /**
-     * The socket is gone, as when the phone moves from Wi-Fi to mobile data. A playing stream the
-     * server has nothing more to send for (all of it received, or played from the device's cache)
-     * plays on to its end, and [resume] on the next socket prepares what follows it. A playing
-     * encoded stream still arriving keeps playing the bytes it already received, cut at a frame they
-     * decode whole, instead of stopping; [resume] opens the rest from that frame and it takes over
-     * there with no gap, as a queued successor does. Returns the frame the stream plays on to, or
-     * null when nothing can play on, in which case the caller stops as [onTransportClosed] does.
+     * The socket is gone, as when the phone moves from Wi-Fi to mobile data; the stream may be
+     * playing or paused. A stream the server has nothing more to send for (all of it received, or
+     * played from the device's cache) plays on to its end, and [resume] on the next socket prepares
+     * what follows it. An encoded stream still arriving keeps playing the bytes it already
+     * received, cut at a frame they decode whole, instead of stopping; [resume] opens the rest from
+     * that frame and it takes over there with no gap, as a queued successor does. Returns the frame
+     * the stream plays on to, or null when nothing can play on, in which case the caller stops as
+     * [onTransportClosed] does.
      */
     fun detach(): Long? {
-        if (failed || !playing || pendingSeek != null || resumeFrame != null || playingOffline) return null
+        if (failed || pendingSeek != null || resumeFrame != null || playingOffline) return null
         val stream = current ?: return null
         receivedEnd(stream)?.let { end ->
             playOffline(stream)
@@ -907,6 +908,9 @@ class NativePcmEngine(
         pumpEncoded(stream)
         return splice
     }
+
+    /** Whether the stream plays on from received audio, with no socket under it. */
+    val detached: Boolean get() = !failed && (playingOffline || resumeFrame != null)
 
     /**
      * A socket lost while the playing stream is already detached, as when a reconnect fails because

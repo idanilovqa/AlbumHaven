@@ -690,9 +690,12 @@ class NativePlaybackController(
      */
     private fun mayBeHeard(): Boolean = claims.owned || (wantPlay && claims.acquiring)
 
-    /** Starts or resumes once the socket is ready and the claim is held or being asked for. */
+    /**
+     * Starts or resumes once the socket is ready, or the stream plays on without one, and the claim
+     * is held or being asked for.
+     */
     private fun startWhenReady() {
-        if (!wantPlay || !mayBeHeard() || !transportOpen) return
+        if (!wantPlay || !mayBeHeard() || !(transportOpen || engine?.detached == true)) return
         val current = engine
         if (loaded && current != null) {
             heldFrame = null
@@ -1126,10 +1129,11 @@ class NativePlaybackController(
             // A network change ends the socket mid-track: the received audio plays on while it
             // reconnects. A reconnect that fails while it is down keeps it playing on; the next
             // attempt waits a little longer each time (owner decision 2026-11-15: losing the
-            // network never stops playback).
+            // network never stops playback). A paused stream keeps its received audio too, and
+            // reconnects once played (owner retest B-P3, 2026-11-17).
             val engine = engine
-            if (wantPlay && code !in REFUSED_CLOSE_CODES && engine != null && (engine.redetach() ?: engine.detach()) != null) {
-                scheduleReconnect()
+            if (code !in REFUSED_CLOSE_CODES && engine != null && (engine.redetach() ?: engine.detach()) != null) {
+                if (wantPlay) scheduleReconnect()
                 return
             }
             engine?.onTransportClosed(code)

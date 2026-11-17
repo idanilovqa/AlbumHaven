@@ -63,6 +63,9 @@ class PlaybackClaimOwner(
     private var renewing = false
     private var nextRenewMs = 0L
 
+    /** When an acquire nobody answered is sent again; null while none waits. */
+    private var acquireRetryAtMs: Long? = null
+
     /** A token whose give-back the server never answered: its lease may still run there, so the next acquire renews it. */
     private var unansweredRelease: String? = null
     private val waiters = mutableListOf<(ClaimOutcome) -> Unit>()
@@ -104,6 +107,10 @@ class PlaybackClaimOwner(
         waiters += onResult
         if (acquiring) return
         acquiring = true
+        sendAcquire(claimTrack)
+    }
+
+    private fun sendAcquire(claimTrack: ClaimTrack) {
         val requestEpoch = epoch
         val sentMs = clock()
         val offered = unansweredRelease.also { unansweredRelease = null }
@@ -134,8 +141,14 @@ class PlaybackClaimOwner(
      * refusal gives it up.
      */
     fun tick() {
-        val held = token ?: return
         val now = clock()
+        acquireRetryAtMs?.let { at ->
+            if (now < at) return
+            acquireRetryAtMs = null
+            sendAcquire(track ?: return)
+            return
+        }
+        val held = token ?: return
         if (renewing || now < nextRenewMs) return
         val claimTrack = track ?: return
         renewing = true
@@ -147,9 +160,9 @@ class PlaybackClaimOwner(
         }
     }
 
-    /** When [tick] next has work for a held claim: its next heartbeat or retry; none while one is in flight. */
+    /** When [tick] next has work: a held claim's next heartbeat or retry, or an unanswered acquire's retry; none while one is in flight. */
     fun nextDeadlineMs(): Long? = when {
-        token == null -> null
+        token == null -> acquireRetryAtMs
         // The renewal's answer wakes the playback thread.
         renewing -> null
         else -> nextRenewMs
@@ -197,6 +210,7 @@ class PlaybackClaimOwner(
         token = null
         scrobblingAvailable = null
         acquiring = false
+        acquireRetryAtMs = null
         renewing = false
         settle(ClaimOutcome.UNAVAILABLE)
     }
@@ -224,9 +238,11 @@ class PlaybackClaimOwner(
             }
             is ClaimResponse.Rejected -> settle(ClaimOutcome.UNAVAILABLE)
             ClaimResponse.Unreachable -> {
-                // The offered token is still the best credential for the next try.
+                // No answer is not a refusal (owner decision, 2026-11-15): playback goes on from what
+                // is here while the acquire is sent again, the offered token still its best credential.
                 if (offered != null) unansweredRelease = offered
-                settle(ClaimOutcome.UNAVAILABLE)
+                acquiring = true
+                acquireRetryAtMs = sentMs + RETRY_MS
             }
         }
     }

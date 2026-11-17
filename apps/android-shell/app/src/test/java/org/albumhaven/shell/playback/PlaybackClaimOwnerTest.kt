@@ -180,21 +180,67 @@ class PlaybackClaimOwnerTest {
     }
 
     @Test
-    fun aHandedOverTokenSurvivesAnUnansweredAcquire() {
+    fun anUnansweredAcquireIsSentAgainEveryTwoSecondsWithTheHandedOverTokenUntilTheServerAnswers() {
         owner.acquire(track) {}
         drain()
         api.releaseAnswered = false
         owner.release()
         drain()
         api.renewResponse = { ClaimResponse.Unreachable }
-        owner.acquire(track) {}
+        val outcomes = mutableListOf<ClaimOutcome>()
+        owner.acquire(track, outcomes::add)
         drain()
+        // No answer is not a refusal: the request stays pending, so the player may be heard meanwhile.
+        assertTrue(owner.acquiring)
         assertFalse(owner.owned)
-        api.renewResponse = { ClaimResponse.Granted(it) }
-        owner.acquire(track) {}
+        assertEquals(emptyList<ClaimOutcome>(), outcomes)
+        assertEquals(PlaybackClaimOwner.RETRY_MS, owner.nextDeadlineMs())
+        owner.tick()
         drain()
-        assertEquals(listOf("acquire:null", "release:token-1", "acquire:token-1", "acquire:token-1"), api.calls)
+        assertEquals(3, api.calls.size)
+
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        api.renewResponse = { ClaimResponse.Granted(it) }
+        now = 2 * PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals(
+            listOf("acquire:null", "release:token-1", "acquire:token-1", "acquire:token-1", "acquire:token-1"),
+            api.calls,
+        )
+        assertEquals(listOf(ClaimOutcome.GRANTED), outcomes)
         assertEquals("token-1", owner.heldToken)
+    }
+
+    @Test
+    fun anUnansweredAcquireEndsOnlyWithAnAnswerOrARelease() {
+        api.acquireResponse = { ClaimResponse.Unreachable }
+        val outcomes = mutableListOf<ClaimOutcome>()
+        owner.acquire(track, outcomes::add)
+        drain()
+        assertTrue(owner.acquiring)
+
+        // Another device took over meanwhile: its answer is the first that counts.
+        api.acquireResponse = { ClaimResponse.Conflict }
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals(listOf(ClaimOutcome.BLOCKED), outcomes)
+        assertFalse(owner.acquiring)
+        assertNull(owner.nextDeadlineMs())
+
+        api.acquireResponse = { ClaimResponse.Unreachable }
+        owner.acquire(track, outcomes::add)
+        drain()
+        owner.release()
+        assertEquals(listOf(ClaimOutcome.BLOCKED, ClaimOutcome.UNAVAILABLE), outcomes)
+        assertNull(owner.nextDeadlineMs())
+        now = 10 * PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals(listOf("acquire:null", "acquire:null", "acquire:null"), api.calls)
     }
 
     @Test

@@ -1215,6 +1215,53 @@ class NativePlaybackControllerTest {
         assertEquals(listOf(Run(3, 0, long.frames)), sink.runs())
     }
 
+    /**
+     * Owner retest B-P3 (2026-11-17): paused with the network gone, Play did not go on. Paused, a
+     * failed reconnect gave the received audio up, and an unanswered claim request ended in an error.
+     * Now Play goes on from the received audio with nothing answering, and once the network is back
+     * the kept token renews and the rest of the song joins in place.
+     */
+    @Test
+    fun pausedWithTheNetworkGonePlayGoesOnFromTheReceivedAudio() {
+        val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
+        val harness = ControllerHarness(long, realTime = true, encoded = true)
+        harness.load(1, long)
+        harness.runUntil { (harness.sinks.lastOrNull()?.writtenFrames ?: 0) >= 3 * RATE }
+        val sink = harness.sinks.last()
+
+        harness.refuseConnect = true
+        harness.claims.acquireResponse = { ClaimResponse.Unreachable }
+        harness.claims.renewResponse = { ClaimResponse.Unreachable }
+        harness.claims.releaseAnswered = false
+        harness.server.disconnect()
+        harness.listener!!.onClosed(PcmTransportListener.ABNORMAL_CLOSURE)
+        val cutAt = harness.now
+        harness.runUntil { harness.now >= cutAt + 1_000 }
+        harness.controller.pause()
+        val pausedAt = harness.now
+        // A reconnect attempt still on its way fails while paused.
+        harness.runUntil { harness.now >= pausedAt + 30_000 }
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        val written = sink.writtenFrames
+
+        assertEquals(CommandResult.ACCEPTED, harness.controller.play(1))
+        val playedAt = harness.now
+        harness.runUntil { harness.now >= playedAt + 3_000 || harness.events.any { it is NativePlaybackEvent.Error } }
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertTrue("plays on from the received audio", sink.writtenFrames > written)
+        assertEquals(NativePlaybackState.PLAYING, harness.state())
+
+        harness.refuseConnect = false
+        harness.claims.renewResponse = { ClaimResponse.Granted(it) }
+        harness.server.reconnect()
+        harness.runUntil { harness.state() == NativePlaybackState.ENDED || harness.events.any { it is NativePlaybackEvent.Error } }
+        assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
+        assertTrue(harness.sinks.last() === sink)
+        assertEquals(listOf(Run(3, 0, long.frames)), sink.runs())
+        assertTrue("the kept token renews", harness.claims.calls.contains("acquire:token-1"))
+        assertFalse("no anonymous acquire after the first", harness.claims.calls.drop(1).contains("acquire:null"))
+    }
+
     @Test
     fun aSocketLostAgainRightAfterTheSpliceOpensReopensItFromTheSameFrame() {
         val long = SyntheticTrack(tag = 3, frames = 60L * RATE)

@@ -676,6 +676,189 @@ async def builtin(request):
     assert all(hazard["operation"].startswith("event-loop-blocking:database:") for hazard in hazards.values())
 
 
+def _blocking_by_route(root: Path) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for hazard in _hazards(root, "BI-08"):
+        route = hazard["entrypoint"].split("#")[1].split(":")[0]
+        found.setdefault(route, []).append(hazard["operation"].split(":")[2].split("@")[0])
+    return {route: sorted(operations) for route, operations in found.items()}
+
+
+def test_event_loop_blocking_reports_filesystem_changes(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/files.py", """
+import os as _os
+import shutil
+from pathlib import Path
+from shutil import move
+
+@router.post('/os')
+async def os_changes(request):
+    _os.remove("a")
+    _os.makedirs("b", exist_ok=True)
+    _os.replace("c", "d")
+
+@router.post('/shutil')
+async def shutil_changes(request):
+    shutil.rmtree("a")
+    shutil.copy2("b", "c")
+    move("d", "e")
+
+@router.post('/paths')
+async def path_changes(request, name):
+    Path(name).unlink()
+    Path(name).parent.mkdir(parents=True)
+    (Path(name) / "x").touch()
+    Path(name).rename("y")
+    target = Path(name)
+    target.replace("z")
+
+@router.post('/strings')
+async def string_changes(request, name):
+    label = name.replace("a", "b")
+    return "".join(label).replace("c", "d")
+""")
+    assert _blocking_by_route(tmp_path) == {
+        "os_changes": ["os.makedirs", "os.remove", "os.replace"],
+        "path_changes": ["Path.mkdir", "Path.rename", "Path.replace", "Path.touch", "Path.unlink"],
+        "shutil_changes": ["shutil.copy2", "shutil.move", "shutil.rmtree"],
+    }
+
+
+def test_event_loop_blocking_follows_constructors_aliases_dispatch_tables_and_factories(tmp_path: Path):
+    _write(tmp_path, "music_app/services/store.py", """
+import psycopg
+
+class Loader:
+    def __init__(self, path):
+        self.text = open(path).read()
+
+class Repo:
+    def update(self, value):
+        with psycopg.connect(value) as connection:
+            connection.execute("select 1")
+
+def make_repo(config):
+    return Repo()
+
+def make_rows(config):
+    return {}
+""")
+    _write(tmp_path, "music_app/routes/dispatch.py", """
+from music_app.services import store
+from music_app.services.store import Loader, make_repo, make_rows
+
+def blocking(config):
+    return open(config).read()
+
+_ALIAS = blocking
+_HANDLERS = {"a": blocking}
+
+@router.post('/constructed')
+async def constructed(request):
+    Loader("a")
+
+@router.post('/module-constructed')
+async def module_constructed(request):
+    store.Loader("a")
+
+@router.post('/alias')
+async def alias(request):
+    _ALIAS("a")
+
+@router.post('/table')
+async def table(request):
+    _HANDLERS["a"]("a")
+
+@router.post('/factory')
+async def factory(request):
+    repo = make_repo(request)
+    repo.update("a")
+    make_repo(request).update("b")
+
+@router.post('/builtin')
+async def builtin(request):
+    rows = {}
+    rows.update({"a": 1})
+    make_rows(request).update({"b": 2})
+""")
+    assert _blocking_by_route(tmp_path) == {
+        "alias": ["open"],
+        "constructed": ["open"],
+        "factory": ["psycopg.connect", "psycopg.connect"],
+        "module_constructed": ["open"],
+        "table": ["open"],
+    }
+
+
+def test_event_loop_blocking_reports_thread_waits_but_not_asyncio_waits(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/waits.py", """
+import asyncio
+import queue
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from time import sleep
+
+_READY = threading.Event()
+_POOL = ThreadPoolExecutor(max_workers=1)
+
+class Drain:
+    def __init__(self):
+        self.jobs = queue.Queue()
+
+    def next_job(self):
+        return self.jobs.get()
+
+    def next_job_now(self):
+        return self.jobs.get(block=False)
+
+def work():
+    return 1
+
+@router.post('/event')
+async def event(request):
+    _READY.wait(1)
+
+@router.post('/thread')
+async def thread(request):
+    worker = threading.Thread(target=work)
+    worker.start()
+    worker.join()
+
+@router.post('/future')
+async def future(request):
+    pending = _POOL.submit(work)
+    return pending.result()
+
+@router.post('/queue')
+async def queued(request):
+    return Drain().next_job()
+
+@router.post('/sleep')
+async def sleeping(request):
+    sleep(1)
+
+@router.post('/asyncio')
+async def asyncio_waits(request):
+    await asyncio.sleep(1)
+    ready = asyncio.Event()
+    await ready.wait()
+    jobs = asyncio.Queue()
+    await jobs.get()
+    task = asyncio.ensure_future(asyncio.sleep(0))
+    await task
+    task.result()
+    Drain().next_job_now()
+    return {}.get("a")
+""")
+    assert _blocking_by_route(tmp_path) == {
+        "event": ["Event.wait"],
+        "future": ["Future.result"],
+        "queued": ["Queue.get"],
+        "sleeping": ["time.sleep"],
+        "thread": ["Thread.join"],
+    }
+
+
 def test_connection_per_loop_item_is_rejected_in_a_route_and_reported_at_the_loop(tmp_path: Path):
     _write(tmp_path, "music_app/services/roots.py", """
 import psycopg

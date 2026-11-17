@@ -85,7 +85,31 @@ BLOCKING_CALLS = {
 # a database driver: the import is the evidence the receiver is one.
 DATABASE_METHODS = frozenset({"execute", "executemany", "fetchone", "fetchall", "fetchmany", "getconn", "connection"})
 DATABASE_DRIVERS = ("psycopg", "psycopg2", "psycopg_pool")
-FILESYSTEM_WRITE_METHODS = {"write_text": "Path.write_text", "write_bytes": "Path.write_bytes"}
+# Filesystem changes, by import-qualified name and as `pathlib` methods.
+FILESYSTEM_MUTATORS = frozenset({
+    *(f"os.{name}" for name in ("remove", "unlink", "rename", "renames", "replace", "makedirs", "mkdir", "rmdir", "removedirs")),
+    *(f"shutil.{name}" for name in ("copy", "copy2", "copyfile", "copytree", "copymode", "copystat", "move", "rmtree")),
+})
+FILESYSTEM_WRITE_METHODS = {
+    name: f"Path.{name}" for name in ("write_text", "write_bytes", "unlink", "mkdir", "touch", "rmdir")
+}
+# `rename` and `replace` are string methods too: they count only on a receiver evidently a path.
+PATH_ONLY_WRITE_METHODS = {"rename": "Path.rename", "replace": "Path.replace"}
+# Waits that block the calling thread, by the import-qualified constructor of
+# their receiver: `asyncio` primitives of the same names are awaited instead.
+# A receiver built by `executor.submit(...)` or
+# `asyncio.run_coroutine_threadsafe(...)` is a `concurrent.futures.Future`.
+FUTURE = "concurrent.futures.Future"
+BLOCKING_WAITS = {
+    "threading.Event": {"wait"},
+    "threading.Condition": {"wait", "wait_for"},
+    "threading.Barrier": {"wait"},
+    "threading.Thread": {"join"},
+    "threading.Timer": {"join"},
+    **{f"queue.{kind}": {"get", "join"} for kind in ("Queue", "LifoQueue", "PriorityQueue", "SimpleQueue")},
+    FUTURE: {"result", "exception"},
+}
+WAIT_METHODS = frozenset(name for names in BLOCKING_WAITS.values() for name in names)
 # Calls whose callable runs on another thread: the event loop is free while it
 # runs. `executor.submit(fn).result()` waits for it and is not a hand-off.
 OFFLOADING_CALLS = frozenset({"run_in_threadpool", "to_thread", "run_sync", "run_in_executor", "submit"})
@@ -133,7 +157,12 @@ class Module:
     # `self.<attribute> = <function> or <function>` bindings, per class: the
     # names a method call through that attribute may run.
     bound_callables: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    # Every value assigned to `self.<attribute>`, per class.
+    attribute_values: dict[str, dict[str, list[ast.AST]]] = field(default_factory=dict)
     class_bases: dict[str, list[str]] = field(default_factory=dict)
+    # Every value assigned to a module-level name: aliases (`_ALIAS = run`),
+    # dispatch tables (`_HANDLERS = {"a": run}`), and shared instances.
+    assignments: dict[str, list[ast.AST]] = field(default_factory=dict)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -186,6 +215,11 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
                                 if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
                                     names = [value.id for value in ast.walk(statement.value) if isinstance(value, ast.Name)]
                                     module.bound_callables.setdefault(node.name, {}).setdefault(target.attr, []).extend(names)
+                                    module.attribute_values.setdefault(node.name, {}).setdefault(target.attr, []).append(statement.value)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            for target in _binding_targets(node):
+                if isinstance(target, ast.Name):
+                    module.assignments.setdefault(target.id, []).append(node.value)
     # Function-local imports are merged into module scope: resolution only needs
     # to know which module a name came from, and local imports never shadow it.
     for node in _iter_statements(tree.body):
@@ -228,16 +262,25 @@ class Index:
                     if not name.startswith("__"):
                         self.methods_by_name.setdefault(name, []).append(definition)
 
-    def module_function(self, module_name: str, name: str) -> Definition | None:
+    def module_function(self, module_name: str, name: str, depth: int = 0) -> Definition | None:
+        """A function a module defines, imports, or aliases (`_ALIAS = run`)."""
         module = self.modules.get(module_name)
-        if module is None:
+        if module is None or depth > 8:
             return None
         if name in module.functions:
             return module.functions[name]
         imported = module.imports.get(name)
         if imported and imported[1] and imported[0] != module_name:
-            return self.module_function(imported[0], imported[1])
+            return self.module_function(imported[0], imported[1], depth + 1)
+        alias = module.assignments.get(name, [])
+        if len(alias) == 1 and isinstance(alias[0], ast.Name):
+            return self.module_function(module_name, alias[0].id, depth + 1)
         return None
+
+    def constructor(self, class_ref: tuple[str, str] | None) -> list[Definition]:
+        """The `__init__` a call of an app class runs."""
+        found = self.class_method(class_ref, "__init__") if class_ref is not None else None
+        return [found] if found is not None else []
 
     def class_ref(self, module_name: str, name: str, depth: int = 0) -> tuple[str, str] | None:
         """The (module, class) an app class name refers to in a module."""
@@ -276,12 +319,33 @@ class Index:
                 return self.class_ref(imported[0], node.attr)
         return None
 
+    def _call_class(self, call: ast.Call, owner: Definition) -> tuple[str, str] | None:
+        """The app class a call returns an instance of: a constructor call, or a
+        call of a factory whose return annotation names one class or whose every
+        `return` is a constructor call of one class."""
+        found = self._type_ref(call.func, owner.module)
+        if found is not None or not isinstance(call.func, ast.Name):
+            return found
+        targets = self.resolve(call.func, owner)
+        if len(targets) != 1:
+            return None
+        factory = targets[0]
+        if (annotated := self._type_ref(getattr(factory.node, "returns", None), factory.module)) is not None:
+            return annotated
+        returned = {
+            self._type_ref(node.value.func, factory.module) if isinstance(node.value, ast.Call) else None
+            for node in _own_nodes(factory)
+            if isinstance(node, ast.Return)
+        }
+        return next(iter(returned)) if len(returned) == 1 else None
+
     def receiver_class(self, value: ast.AST, owner: Definition) -> tuple[str, str] | None:
         """The app class a method call's receiver is an instance of (or is):
-        a constructor call, a class, or a local or parameter whose every binding
-        in the owner is a constructor call of, or an annotation naming, one class."""
+        a constructor or factory call, a class, or a local or parameter whose
+        every binding in the owner is such a call of, or an annotation naming,
+        one class."""
         if isinstance(value, ast.Call):
-            return self._type_ref(value.func, owner.module)
+            return self._call_class(value, owner)
         if not isinstance(value, ast.Name) or value.id in {"self", "cls"}:
             return None
         key = (id(owner.node), value.id)
@@ -302,7 +366,7 @@ class Index:
                 continue
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
                     and isinstance(node.value, ast.Call):
-                local_types.add(self._type_ref(node.value.func, owner.module))
+                local_types.add(self._call_class(node.value, owner))
             elif isinstance(node, ast.AnnAssign):
                 local_types.add(self._type_ref(node.annotation, owner.module))
             else:
@@ -312,20 +376,22 @@ class Index:
         return self._type_ref(value, owner.module)
 
     def resolve(self, call_target: ast.AST, owner: Definition) -> list[Definition]:
-        """Definitions a call may run. A method call on a receiver that resolves
-        to an app class runs that class's method. On an unknown receiver it may
-        run any app method of that name; all candidates are followed, except
-        that a builtin container name (CONTAINER_METHODS) or an ambiguous
-        builtin protocol name (PROTOCOL_METHODS) is not."""
+        """Definitions a call may run. A call of an app class runs its
+        `__init__`; a module-level alias runs the function it names, and an
+        entry of a module-level dispatch table (`_HANDLERS[key](...)`) any of
+        its functions. A method call on a receiver that resolves to an app
+        class runs that class's method. On an unknown receiver it may run any
+        app method of that name; all candidates are followed, except that a
+        builtin container name (CONTAINER_METHODS) or an ambiguous builtin
+        protocol name (PROTOCOL_METHODS) is not."""
         module = self.modules[owner.module]
         if isinstance(call_target, ast.Name):
-            name = call_target.id
-            if name in module.functions:
-                return [module.functions[name]]
-            imported = module.imports.get(name)
-            if imported and imported[1]:
-                found = self.module_function(imported[0], imported[1])
-                return [found] if found else []
+            found = self.module_function(module.name, call_target.id)
+            return [found] if found else self.constructor(self.class_ref(module.name, call_target.id))
+        if isinstance(call_target, ast.Subscript) and isinstance(call_target.value, ast.Name):
+            tables = module.assignments.get(call_target.value.id, [])
+            if len(tables) == 1 and isinstance(tables[0], ast.Dict):
+                return [found for value in tables[0].values for found in self.resolve(_callable_target(value), owner)]
             return []
         if isinstance(call_target, ast.Attribute):
             value = call_target.value
@@ -345,6 +411,8 @@ class Index:
                     found = self.module_function(target_module, attr)
                     if found:
                         return [found]
+                    if constructed := self.constructor(self.class_ref(target_module, attr)):
+                        return constructed
             receiver = self.receiver_class(value, owner)
             if receiver is not None and (method := self.class_method(receiver, attr)):
                 return [method]
@@ -543,20 +611,62 @@ def _database_connect(node: ast.Call, module: Module) -> str | None:
     return name if name in DATABASE_CONNECTS else None
 
 
-def _blocking_operation(node: ast.Call, module: Module) -> tuple[str, str] | None:
-    """(family, operation) for a call that blocks its thread until I/O completes."""
+def _blocking_operation(node: ast.Call, module: Module, owner: Definition) -> tuple[str, str] | None:
+    """(family, operation) for a call that blocks its thread until I/O or
+    another thread completes."""
     name = _qualified_name(node.func, module)
     if name in BLOCKING_CALLS:
         return BLOCKING_CALLS[name], name
+    if name in FILESYSTEM_MUTATORS:
+        return "filesystem", name
     operation = _filesystem_operation(node)
     if operation is not None:
         return ("media" if operation == "mutagen.File" else "filesystem"), operation
     if isinstance(node.func, ast.Attribute):
-        if node.func.attr in FILESYSTEM_WRITE_METHODS:
-            return "filesystem", FILESYSTEM_WRITE_METHODS[node.func.attr]
-        if node.func.attr in DATABASE_METHODS and _imports_database_driver(module):
-            return "database", f"db.{node.func.attr}"
+        attr, receiver = node.func.attr, node.func.value
+        if attr in FILESYSTEM_WRITE_METHODS:
+            return "filesystem", FILESYSTEM_WRITE_METHODS[attr]
+        if attr in PATH_ONLY_WRITE_METHODS and (
+            _path_valued(receiver) or _receiver_constructor(receiver, module, owner).startswith("pathlib.")
+        ):
+            return "filesystem", PATH_ONLY_WRITE_METHODS[attr]
+        if attr in DATABASE_METHODS and _imports_database_driver(module):
+            return "database", f"db.{attr}"
+        if attr in WAIT_METHODS and not _non_blocking_get(node):
+            kind = _receiver_constructor(receiver, module, owner)
+            if attr in BLOCKING_WAITS.get(kind, ()):
+                return "wait", f"{kind.rsplit('.', 1)[1]}.{attr}"
     return None
+
+
+def _non_blocking_get(node: ast.Call) -> bool:
+    """`queue.get(False)` or `queue.get(block=False)` returns at once."""
+    block = next((keyword.value for keyword in node.keywords if keyword.arg == "block"), node.args[0] if node.args else None)
+    return node.func.attr == "get" and isinstance(block, ast.Constant) and block.value is False
+
+
+def _receiver_constructor(value: ast.AST, module: Module, owner: Definition) -> str:
+    """The import-qualified constructor that built a receiver, or "": a call,
+    or a local, module-level name, or `self` attribute every assignment of
+    which is a call of that one constructor. `submit(...)` and
+    `asyncio.run_coroutine_threadsafe(...)` build a `concurrent.futures.Future`."""
+    if isinstance(value, ast.Call):
+        name = _qualified_name(value.func, module)
+        if name == "asyncio.run_coroutine_threadsafe" or _call_name(value)[1] == "submit":
+            return FUTURE
+        return name
+    if isinstance(value, ast.Name):
+        bound = [
+            node.value for node in _own_nodes(owner)
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+            and any(isinstance(target, ast.Name) and target.id == value.id for target in _binding_targets(node))
+        ] or module.assignments.get(value.id, [])
+    elif isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name) and value.value.id == "self":
+        bound = module.attribute_values.get(owner.class_name, {}).get(value.attr, [])
+    else:
+        return ""
+    kinds = {_receiver_constructor(item, module, owner) if isinstance(item, ast.Call) else "" for item in bound}
+    return next(iter(kinds)) if len(kinds) == 1 else ""
 
 
 def _is_os_path(node: ast.AST) -> bool:
@@ -917,9 +1027,10 @@ class EventLoopAnalysis:
     event-loop thread, so a synchronous call made there (not awaited and not
     handed to a thread) stalls every other request until it returns. The chain
     of such calls is followed through sync helpers to a blocking operation: a
-    database connection or DB-API call, filesystem or media I/O, a subprocess,
-    `time.sleep`, synchronous HTTP, a PIL image open, or registered
-    library-scale work. A coroutine called from the chain runs on the loop too
+    database connection or DB-API call, filesystem or media I/O (changes
+    included), a subprocess, `time.sleep` or a wait on a thread, event, queue
+    or future, synchronous HTTP, a PIL image open, or registered library-scale
+    work. A coroutine called from the chain runs on the loop too
     and is followed as part of it.
     """
 
@@ -933,7 +1044,7 @@ class EventLoopAnalysis:
             return "library-scale", definition.key, definition.node.lineno
         module = self.index.modules[definition.module]
         for node, _ in _facts(definition).calls:
-            found = _blocking_operation(node, module)
+            found = _blocking_operation(node, module, definition)
             if found is not None:
                 return (*found, node.lineno)
         return None
@@ -973,7 +1084,7 @@ class EventLoopAnalysis:
             module = self.index.modules[current.module]
             for node, targets in _loop_calls(current, self.index):
                 blocking = []
-                if id(node) not in awaited and (direct := _blocking_operation(node, module)) is not None:
+                if id(node) not in awaited and (direct := _blocking_operation(node, module, current)) is not None:
                     blocking.append((*direct, current.path, node.lineno, []))
                 for target in targets:
                     if isinstance(target.node, ast.AsyncFunctionDef):

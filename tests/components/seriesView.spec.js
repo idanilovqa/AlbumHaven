@@ -178,7 +178,8 @@ test('4B: the Series tree shows Series then Featured In under dimmed collapsible
 
 test('5B: a series menu offers Mark as Series and Mark as Featured In, the current kind disabled, never Hidden', async ({ page }) => {
   await loadSeriesTree(page);
-  await page.evaluate((tree) => { state.view = { series_sidebar: tree }; showSeriesTreeContextMenu(120, 300, tree[0].mbid); }, TREE);
+  // The Series tree's rows come from /series-tree (state.ui.seriesTree) while no series is open.
+  await page.evaluate((tree) => { state.ui.seriesTree = tree; showSeriesTreeContextMenu(120, 300, tree[0].mbid); }, TREE);
   const menu = page.locator('#artist-tree-context-menu');
   await expect(menu).toBeVisible();
   await expect(menu.getByRole('button')).toHaveText(['Mark as Series', 'Mark as Featured In']);

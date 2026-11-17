@@ -261,9 +261,10 @@ def test_a_series_view_lists_its_albums_chronologically_with_the_number_breaking
         ("Dante's Inferno", "Various Artists"), ("Iliad, A Grand Piano Extravaganza", "Colossus Project")]
     assert payload["album_count"] == 4
     assert payload["series_sidebar"] == [
-        {"mbid": COLEZO, "name": "COLEZO! TWIN", "count": 1},
-        {"mbid": COLOSSUS, "name": "Colossus Projects", "count": 4},
-        {"mbid": METAL_LIST, "name": "Rolling Stone: The 100 Greatest Metal Albums of All Time", "count": 2}]
+        {"mbid": COLEZO, "name": "COLEZO! TWIN", "count": 1, "kind": "series", "owner_kind": None},
+        {"mbid": COLOSSUS, "name": "Colossus Projects", "count": 4, "kind": "series", "owner_kind": None},
+        {"mbid": METAL_LIST, "name": "Rolling Stone: The 100 Greatest Metal Albums of All Time", "count": 2,
+         "kind": "featured_in", "owner_kind": None}]
 
 
 def test_all_series_shows_every_series_and_an_unknown_series_shows_nothing(monkeypatch):

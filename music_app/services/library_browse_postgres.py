@@ -10579,7 +10579,9 @@ def _search_preview_sql(
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        album_title_matches as materialized (
+        -- The tag and corrected titles are planned alone: inside a union with the series arm
+        -- Postgres stops combining their trigram indexes and walks every album.
+        album_tag_title_matches as materialized (
           select
             library.local_albums.library_id,
             library.local_albums.id as album_id
@@ -10589,6 +10591,9 @@ def _search_preview_sql(
              or (library.local_albums.corrected_title is not null
                  and lower(btrim(coalesce(library.local_albums.corrected_title, '')))
                  like lower(%(query_like)s) escape '')
+        ),
+        album_title_matches as materialized (
+          select library_id, album_id from album_tag_title_matches
           union
           -- Every album of a MusicBrainz series whose name matches ("Colossus").
           select series_albums.library_id, series_albums.album_id

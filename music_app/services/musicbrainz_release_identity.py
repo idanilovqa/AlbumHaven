@@ -24,13 +24,9 @@ from datetime import datetime, timedelta, timezone
 
 from music_app.services.musicbrainz_evidence import (
     TITLE_RANK,
-    _compact,
-    _starts_remote_title,
-    _track_title_forms,
     album_level,
     album_rank,
     album_signals,
-    fold,
     title_agreement,
 )
 from music_app.services.musicbrainz_enrichment import (
@@ -46,6 +42,7 @@ from music_app.services.musicbrainz_enrichment import (
     retry_delay,
 )
 from music_app.services.musicbrainz_discogs_fallback import search_certain_release
+from music_app.services.musicbrainz_track_order import pair_tracks, same_track_title
 from music_app.services.tracklist_sections import (
     discogs_sections,
     local_discs,
@@ -55,8 +52,9 @@ from music_app.services.tracklist_sections import (
 )
 
 # 2: release groups and releases are looked up with the series they are part of (S6), so
-# decisions stored before that are made again. 3: tracklist sub-sections (S8).
-RELEASE_MATCHER_VERSION = 3
+# decisions stored before that are made again. 3: tracklist sub-sections (S8). 4: the edition
+# whose track order matches the local files, and the track pairing (owner 2026-11-16).
+RELEASE_MATCHER_VERSION = 4
 # Per artist group: the shared browses plus, per album, its tracklists and the lookups of
 # the chosen release group and release.
 _BASE_REQUESTS = 40
@@ -143,6 +141,7 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
         release = releases.get(result.get("release_mbid") or "")
         if not release:
             continue
+        release = _choose_edition(album, result, release, mirror, releases)
         result["track_artists"] = display_track_artists(album.get("tracks") or [], release)
         discs = local_discs(album.get("tracks") or [])
         result["track_sections"] = musicbrainz_sections(discs, release)
@@ -160,6 +159,50 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
                 result["original_release_mbid"] = original_id
         result["main_disc"] = main_disc_count(discs, original=original, matched=release, fewest_discs=fewest_discs)
     return {"classification": "complete", "albums": results, "release_groups": release_groups, "releases": releases}
+
+
+# Same-length editions whose tracklists the order choice fetches, nearest length first.
+_MAX_EDITIONS = 3
+
+
+def _edition_rank(paired: dict[str, object]) -> tuple[bool, bool, int]:
+    return paired["quality"] == "order_exact", paired["quality"] != "ambiguous", paired["aligned"]
+
+
+def _choose_edition(album: dict[str, object], result: dict[str, object], release: dict[str, object],
+                    mirror: _Mirror, releases: dict[str, dict[str, object]]) -> dict[str, object]:
+    """The edition whose track order best matches the local files (owner 2026-11-16): the
+    certainly matched release unless another release of its group is certain too and keeps
+    the local order better; then the existing choice. Only same-length editions' tracklists
+    are fetched, and only when the first choice is not in the local order. One disc of a
+    larger release is compared with its own medium and keeps its release."""
+    tracks = [track for disc in local_discs(album.get("tracks") or []) for track in disc]
+    disc = result.get("disc_position")
+    medium = next((part for part in release.get("media") or [] if int(part.get("position") or 0) == disc), None)
+    best_release, best = release, pair_tracks(tracks, {"media": [medium]} if medium else release)
+    if best["quality"] != "order_exact" and not disc:
+        listing = mirror.call("release_group_editions", result["release_group_mbid"]) or {}
+        editions = sorted((edition for edition in listing.get("releases") or []
+                           if edition["id"] != release["id"] and abs(edition["track_count"] - len(tracks)) <= 1),
+                          key=lambda edition: (abs(edition["track_count"] - len(tracks)), edition["date"] or "9999"))
+        for edition in editions[:_MAX_EDITIONS]:
+            found = mirror.call("lookup_release_tracklist", edition["id"])
+            if found is None:
+                break
+            candidate = found.get("release")
+            remote = [track for part in (candidate or {}).get("media") or [] for track in part.get("tracks") or []]
+            if not candidate or not _CERTAIN_SIGNALS <= album_signals({"tracks": tracks}, {"tracks": remote}):
+                continue
+            paired = pair_tracks(tracks, candidate)
+            if _edition_rank(paired) > _edition_rank(best):
+                best_release, best = candidate, paired
+            if best["quality"] == "order_exact":
+                break
+    releases[best_release["id"]] = best_release
+    result["release_mbid"] = best_release["id"]
+    result["edition"] = {"match_quality": best["quality"], "track_pairing": best["pairing"],
+                         "track_order_differs": best["quality"] != "order_exact"}
+    return best_release
 
 
 def _resolve_by_credit(albums: list[dict[str, object]], local_name: str, mirror: _Mirror) -> dict[str, object]:
@@ -318,12 +361,6 @@ def release_type_label(primary_type: object, secondary_types: object) -> str | N
     return " • ".join(part for part in parts if part) or None
 
 
-def _same_track_title(local: object, remote: object) -> bool:
-    """The matcher's own track-title agreement: brackets, spacing and ID3v1 truncation aside."""
-    return bool(_track_title_forms(local) & _track_title_forms(remote)) or _starts_remote_title(
-        local, {_compact(fold(remote))} - {""})
-
-
 def display_track_artists(local_tracks: list[dict[str, object]], release: dict[str, object]) -> list[dict[str, object]]:
     """Track artists to show instead of unreadable tags, from the certainly matched release.
 
@@ -337,7 +374,7 @@ def display_track_artists(local_tracks: list[dict[str, object]], release: dict[s
         if not _LOST_TEXT.match(str(track.get("artist") or "")):
             continue
         remote = by_position.get((int(track.get("disc_number") or 1), int(track.get("track_number") or 0)))
-        if not remote or not _same_track_title(track.get("title"), remote.get("title")):
+        if not remote or not same_track_title(track.get("title"), remote.get("title")):
             continue
         text = credit_text(remote.get("artist_credit") or [])
         if text:

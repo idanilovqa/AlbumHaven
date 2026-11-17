@@ -17,6 +17,8 @@
 button.navigation-tree-item[data-navigation-tree-item="panel"] {
   width: 100%; text-align: left; font: inherit; cursor: pointer;
 }
+/* A collapsible group heading made from the same item (approved D2 4B): dimmed, never selected. */
+button.navigation-tree-item.navigation-tree-group-heading { color: var(--muted); }
 .navigation-tree-label { min-width: 0; }
 /* A dimmed second name after the label, e.g. a romanized artist name (approved J3). */
 .navigation-tree-label-secondary { color: var(--muted); }

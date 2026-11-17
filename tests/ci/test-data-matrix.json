@@ -9461,6 +9461,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "4B: the Series tree shows Series then Featured In under dimmed collapsible headings, never \"All\" rows",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-tree-groups"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "5B: a series menu offers Mark as Series and Mark as Featured In, the current kind disabled, never Hidden",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-tree-kind-menu"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/musicbrainzLookups.spec.js",
     "case": "F1: the album menu ends after its longest item, every item on its own row, in full MusicBrainz wording",
     "profile": null,

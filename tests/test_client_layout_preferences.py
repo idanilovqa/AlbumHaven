@@ -21,6 +21,9 @@ def test_mobile_defaults_are_independent_from_desktop():
     {'galleryDisplayPreferences': {'defaultGalleryDisplayMode': 'list'}},
     {'gallerySources': {'main_library': True, 'new_arrivals': True, 'hoard': 1}},
     {'combineSimilarArtists': {'Northlight': 'true'}},
+    {'seriesTreeCollapsedGroups': {'series': True}},
+    {'seriesTreeCollapsedGroups': {'series': True, 'featured_in': 1}},
+    {'seriesTreeCollapsedGroups': {'series': True, 'featured_in': False, 'hidden': True}},
     {'playerAppearance': {'seekbarMode': 'waveform', 'waveformFillColor': 'url(bad)', 'waveformEdgeColor': '#ffffff'}},
 ])
 def test_invalid_or_authorization_shaped_changes_are_rejected(changes):
@@ -30,6 +33,10 @@ def test_invalid_or_authorization_shaped_changes_are_rejected(changes):
 
 def test_valid_changes_are_partial_preference_families():
     assert normalize_changes({'mobileGridColumns': 3}) == {'mobileGridColumns': 3}
+    # The Series tree's collapsed groups (owner 2026-11-17, 4B), remembered per account and client.
+    collapsed = {'seriesTreeCollapsedGroups': {'series': False, 'featured_in': True}}
+    assert normalize_changes(collapsed) == collapsed
+    assert default_preferences('web_desktop')['seriesTreeCollapsedGroups'] == {'series': False, 'featured_in': False}
     with pytest.raises(ValueError):
         normalize_profile('other-account')
 

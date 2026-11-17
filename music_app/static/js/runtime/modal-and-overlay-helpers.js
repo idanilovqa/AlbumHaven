@@ -58,7 +58,6 @@ function ensureArtistTreeContextMenu() {
   menu.id = 'artist-tree-context-menu';
   menu.className = 'album-card-context-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
   document.body.appendChild(menu);
   return menu;
 }
@@ -68,18 +67,37 @@ function hideArtistTreeContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.artist = '';
+  menu.dataset.series = '';
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
-function showArtistTreeContextMenu(x, y, artist) {
+// The tree's one context menu, for an artist or (Series tree) a series.
+function openTreeContextMenu(x, y, itemsHtml, { artist = '', series = '' } = {}) {
   const menu = ensureArtistTreeContextMenu();
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
+  menu.innerHTML = itemsHtml;
   menu.dataset.artist = String(artist || '');
+  menu.dataset.series = String(series || '');
   menu.hidden = false;
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
+}
+
+function showArtistTreeContextMenu(x, y, artist) {
+  openTreeContextMenu(x, y, '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>', { artist });
+}
+
+// Right-clicking a series in the Series tree (owner 2026-11-17, 5B): Series or Featured In,
+// its current kind disabled; the MusicBrainz default comes back only after an owner's choice.
+function showSeriesTreeContextMenu(x, y, mbid) {
+  const series = (state.view?.series_sidebar || []).find((item) => item.mbid === mbid);
+  if (!series) return false;
+  const choice = (kind, label) => `<button type="button" class="album-card-context-menu-item" data-series-tree-kind="${kind}"${series.kind === kind ? ' disabled aria-disabled="true"' : ''}>${label}</button>`;
+  openTreeContextMenu(x, y, choice('series', 'Mark as Series') + choice('featured_in', 'Mark as Featured In')
+    + (series.owner_kind ? choice('', 'Use MusicBrainz default') : ''), { series: mbid });
+  return true;
 }
 
 function ensureVersionPickerModal() {

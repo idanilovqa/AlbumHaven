@@ -907,6 +907,22 @@ function openSeriesGallery(mbid) {
   navigate();
 }
 
+// The Series tree menu's choice (owner 2026-11-17, 5B): Series, Featured In, or null for the
+// MusicBrainz default. Once saved, the open view reloads in place and the tree regroups.
+async function saveSeriesKind(mbid, kind) {
+  try {
+    const response = await fetch(`/api/musicbrainz/series/${encodeURIComponent(mbid)}/kind`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.detail || '');
+  } catch (error) {
+    showToast(error?.message || 'The series could not be saved.', 'error', 3200);
+    return false;
+  }
+  return refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
+}
+
 function handleGalleryMainClick(event) {
   const seriesLink = event.target.closest?.('[data-open-series]');
   if (seriesLink) { event.preventDefault(); openSeriesGallery(seriesLink.dataset.openSeries); return true; }

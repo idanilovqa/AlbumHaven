@@ -109,3 +109,88 @@ test('3A: the folded sidebar stacks the Series button directly below the Artist 
   expect(svg.width).toBeGreaterThan(0);
   await expect(page.locator('#series-tree-navigation-button svg rect')).toHaveCount(3);
 });
+
+// Owner 2026-11-17: 4B (two groups under collapsible headings, no "All…" rows) and 5B (the
+// tree's right-click menu marks a series).
+const TREE = [
+  { mbid: '520f6fcd-251d-46cd-83a9-0bc725d42333', name: 'Colossus project', count: 10, kind: 'series', owner_kind: null },
+  { mbid: '00000000-0000-4000-8000-0000000001b1', name: 'Dream Theater Official Bootlegs', count: 3, kind: 'series', owner_kind: null },
+  { mbid: 'd5471f85-4b54-45da-9de7-c9ad9843c4bd', name: '1001 Albums You Must Hear Before You Die', count: 6, kind: 'featured_in', owner_kind: null },
+  { mbid: '00000000-0000-4000-8000-0000000001b2', name: 'Pitchfork: 10/10', count: 6, kind: 'featured_in', owner_kind: 'featured_in' },
+];
+
+async function loadSeriesTree(page) {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const template = fs.readFileSync(path.join(repoRoot, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
+  await page.setContent(`<aside class="sidebar shell-navigation-rail" style="width:240px"><div id="sidebar-list" class="artist-list"></div></aside>
+    <script id="navigation-tree-item-template" type="text/plain">${template}</script>`);
+  await page.addScriptTag({ content: 'window.escapeHtml = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c])); window.state = { view: {}, ui: {} };' });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/navigation-tree.js') });
+  for (const file of ['view-state-helpers.js', 'browser-navigation-helpers.js', 'view-value-helpers.js', 'markup-format-helpers.js',
+    'render-markup-helpers.js', 'modal-and-overlay-helpers.js']) {
+    await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  }
+  for (const css of ['css/runtime/base-layout.css', 'css/navigation-tree.css', 'css/app-chrome.css', 'css/modals.css']) {
+    await page.addStyleTag({ path: path.join(staticRoot, css) });
+  }
+  const render = (collapsed) => page.evaluate(({ tree, groups }) => {
+    document.getElementById('sidebar-list').innerHTML = buildSeriesSidebarHtml(
+      { selected_series: tree[2].mbid, series_sidebar: tree }, groups);
+  }, { tree: TREE, groups: collapsed });
+  return render;
+}
+
+test('4B: the Series tree shows Series then Featured In under dimmed collapsible headings, never "All" rows', async ({ page }) => {
+  const render = await loadSeriesTree(page);
+  await render({});
+  const list = page.locator('#sidebar-list');
+  await expect(list.locator('.artist-name-label')).toHaveText(['Series', 'Colossus project', 'Dream Theater Official Bootlegs',
+    'Featured In', '1001 Albums You Must Hear Before You Die', 'Pitchfork: 10/10']);
+  await expect(list).not.toContainText('All series');
+  await expect(list).not.toContainText('All Featured In');
+  const headings = list.locator('button[data-series-tree-group]');
+  await expect(headings).toHaveCount(2);
+  for (const index of [0, 1]) await expect(headings.nth(index)).toHaveAttribute('aria-expanded', 'true');
+  await expect(headings.locator('.navigation-tree-count')).toHaveCount(0);
+  await expect(list.locator('[aria-current="true"]')).toHaveText(/1001 Albums/);
+  // Headings are dimmed beside the series rows, and start at the rows' left edge.
+  const heading = await headings.first().evaluate((element) => ({ color: getComputedStyle(element).color, left: element.getBoundingClientRect().left }));
+  const row = await list.locator('a[data-sidebar-series]').first().evaluate((element) => ({ color: getComputedStyle(element).color, left: element.getBoundingClientRect().left }));
+  expect(heading.color).not.toBe(row.color);
+  expect(Math.abs(heading.left - row.left)).toBeLessThanOrEqual(1);
+  // Without the NavigationTree separator nothing stands between the groups.
+  await expect(list.locator('[role="separator"]')).toHaveCount(0);
+
+  // A collapsed group keeps its heading and hides its series.
+  await render({ series: true, featured_in: false });
+  await expect(list.locator('.artist-name-label')).toHaveText(['Series', 'Featured In', '1001 Albums You Must Hear Before You Die', 'Pitchfork: 10/10']);
+  await expect(list.locator('[data-series-tree-group="series"]')).toHaveAttribute('aria-expanded', 'false');
+
+  // Where NavigationTree draws a separator, it sits between the last series and Featured In.
+  await page.evaluate(() => { window.NavigationTree.renderSeparator = () => '<div role="separator" style="height:1px"></div>'; });
+  await render({});
+  const lastSeries = await list.locator('a[data-sidebar-series]').nth(1).boundingBox();
+  const separator = await list.locator('[role="separator"]').boundingBox();
+  const featured = await list.locator('[data-series-tree-group="featured_in"]').boundingBox();
+  expect(separator.y).toBeGreaterThanOrEqual(lastSeries.y + lastSeries.height);
+  expect(featured.y).toBeGreaterThanOrEqual(separator.y + separator.height);
+});
+
+test('5B: a series menu offers Mark as Series and Mark as Featured In, the current kind disabled, never Hidden', async ({ page }) => {
+  await loadSeriesTree(page);
+  await page.evaluate((tree) => { state.view = { series_sidebar: tree }; showSeriesTreeContextMenu(120, 300, tree[0].mbid); }, TREE);
+  const menu = page.locator('#artist-tree-context-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('button')).toHaveText(['Mark as Series', 'Mark as Featured In']);
+  await expect(menu.getByRole('button', { name: 'Mark as Series', exact: true })).toBeDisabled();
+  await expect(menu.getByRole('button', { name: 'Mark as Featured In', exact: true })).toBeEnabled();
+  await expect(menu).not.toContainText(/Hidden|Hide/);
+  // The tree's menu is the app's dark anchored menu, at the pointer.
+  const box = await menu.boundingBox();
+  expect(Math.abs(box.x - 120)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.y - 300)).toBeLessThanOrEqual(1);
+  // An owner's choice brings the MusicBrainz default back.
+  await page.evaluate((tree) => showSeriesTreeContextMenu(120, 300, tree[3].mbid), TREE);
+  await expect(menu.getByRole('button')).toHaveText(['Mark as Series', 'Mark as Featured In', 'Use MusicBrainz default']);
+  await expect(menu.getByRole('button', { name: 'Mark as Featured In', exact: true })).toBeDisabled();
+});

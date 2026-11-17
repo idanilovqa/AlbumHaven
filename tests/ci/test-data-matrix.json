@@ -3559,6 +3559,30 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files stays ready with stored MusicBrainz data corrections",
+    "profile": "utility-problematic-files",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "utility-problematic-files:musicbrainz-data-corrections-10800"
+    ],
+    "filesystemScenarios": [
+      "media:utility-problematic-files"
+    ],
+    "expectedContracts": [
+      "problematic-files-ready-with-corrections",
+      "correction-rows-outside-list-response",
+      "correction-filter-page-one"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "utility-problematic-files:musicbrainz-corrections"
+    },
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.utility-problematic-files.config.cjs",
+    "project": "utility-problematic-files",
+    "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
     "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
@@ -9581,7 +9605,7 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-phone-data-correction"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9596,7 +9620,7 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-phone-lookups"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

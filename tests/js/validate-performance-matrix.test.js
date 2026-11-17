@@ -119,9 +119,9 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 29 independently schedulable targets and 60 cases', () => {
+test('approved registry keeps 29 independently schedulable targets and 61 cases', () => {
   assert.equal(contract.targets.length, 29);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 60);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 61);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
@@ -196,7 +196,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /60 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /61 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;

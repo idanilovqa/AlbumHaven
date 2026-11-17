@@ -604,6 +604,12 @@
           "config": "playwright.utility-problematic-files.config.cjs",
           "project": "utility-problematic-files",
           "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+          "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files stays ready with stored MusicBrainz data corrections"
+        },
+        {
+          "config": "playwright.utility-problematic-files.config.cjs",
+          "project": "utility-problematic-files",
+          "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
           "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail"
         }
       ]

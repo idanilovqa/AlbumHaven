@@ -392,7 +392,7 @@ test('problematic-files cases exclusively use the dedicated fixture surface whil
   const problematicCases = matrix.filter((entry) =>
     /FTC-UTIL-PROBLEMS-(009|010)/.test(entry.case));
 
-  assert.equal(problematicCases.length, 2);
+  assert.equal(problematicCases.length, 3);
   assert.deepEqual(
     new Set(problematicCases.map((entry) => entry.case.match(/FTC-UTIL-PROBLEMS-(?:009|010)/)[0])),
     new Set(['FTC-UTIL-PROBLEMS-009', 'FTC-UTIL-PROBLEMS-010']),
@@ -432,10 +432,13 @@ test('problematic-files performance targets use only the dedicated profile and s
     assert.ok(target, name);
     assert.equal(target.fixtureProfile, 'utility-problematic-files', name);
     assert.equal(target.workers, 1, name);
-    assert.equal(target.cases.length, 1, name);
-    assert.equal(target.cases[0].config, 'playwright.utility-problematic-files.config.cjs', name);
-    assert.equal(target.cases[0].project, 'utility-problematic-files', name);
-    assert.match(target.cases[0].test, /^tests\/e2e\/utilityProblematicFiles\//, name);
+    // problematic-files-focused also measures stored MusicBrainz data corrections (S4).
+    assert.equal(target.cases.length, name === 'problematic-files-focused' ? 2 : 1, name);
+    for (const testCase of target.cases) {
+      assert.equal(testCase.config, 'playwright.utility-problematic-files.config.cjs', name);
+      assert.equal(testCase.project, 'utility-problematic-files', name);
+      assert.match(testCase.test, /^tests\/e2e\/utilityProblematicFiles\//, name);
+    }
   }
 });
 
@@ -541,7 +544,7 @@ test('functional shard contract owns all 165 browser-functional cases exactly on
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 60 performance cases across 29 targets', () => {
+test('performance target contract owns all 61 performance cases across 29 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -586,7 +589,7 @@ test('performance target contract owns all 60 performance cases across 29 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 60);
+  assert.equal(expectedCases.size, 61);
   assert.deepEqual(errors, []);
   assert.equal(contract.targets.length, 29);
   assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
@@ -755,12 +758,12 @@ test('read-only inventory command reports complete discovery and ownership total
     browserFunctional: 165,
     component: 244,
     mobile: 77,
-    performance: 60,
-    total: 546,
+    performance: 61,
+    total: 547,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 546,
+    testDataMatrix: 547,
     functionalShards: 165,
-    performanceTargets: 60,
+    performanceTargets: 61,
   });
 });

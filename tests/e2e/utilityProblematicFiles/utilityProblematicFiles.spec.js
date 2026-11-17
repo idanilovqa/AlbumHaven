@@ -1,4 +1,5 @@
 import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
+import { seedMusicBrainzCorrections } from '../helpers/musicbrainzCorrectionsFixture.js';
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
@@ -19,6 +20,10 @@ const READY_TARGET_MS = READY_BUDGET.targetMaximum;
 const READY_GRACE_MS = READY_BUDGET.graceMs;
 const SUMMARY_PATHNAME = '/utilities/problematic-files';
 const DETAIL_PATHNAME = '/utilities/problematic-files/detail';
+const CORRECTION_PAGES_PATHNAME = '/api/musicbrainz/corrections/albums';
+const DATA_CORRECTION_LABEL = 'Data Correction Needed';
+// sandbox6's measured scale (2026-11-16): about 10,800 albums need a MusicBrainz data correction.
+const CORRECTION_ALBUMS = 10800;
 
 test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
 
@@ -189,5 +194,107 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       },
     });
     expectTimingBudgetOutcome(expect, readinessOutcome, 'Problematic Files populated detail readiness');
+  });
+
+
+  // MusicBrainz Delivery 2, S4: the same readiness budget with about 10,800 stored data
+  // corrections. The first open after seeding is "cold" for the corrections (stored counts are
+  // read on every request, never cached); the reload that follows is warm.
+  // Only listed albums carry the label in the list response; correction-only albums arrive in
+  // pages when the filter is chosen.
+  test('Problematic Files stays ready with stored MusicBrainz data corrections', async ({
+    galleryActions,
+    page,
+    problematicFilesFocusedLocalReport,
+    settingsModalAppBarActions,
+    stepLogger,
+    utilityProblematicFilesActions,
+  }) => {
+    expect(process.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP).toBe('1');
+    const seeded = await stepLogger.step('Store about 10,800 synthetic data corrections in the isolated database', async () => (
+      seedMusicBrainzCorrections({ listedAlbums: 300, syntheticAlbums: CORRECTION_ALBUMS - 300 })
+    ));
+    expect(seeded.albums).toBe(CORRECTION_ALBUMS);
+
+    const open = async (label) => {
+      await galleryActions.goto('/');
+      return stepLogger.step(label, async () => measureProblematicFilesSettingsOpenWithNetworkEvidence(
+        page, settingsModalAppBarActions, utilityProblematicFilesActions,
+        { timeout: 120000, summaryPathname: SUMMARY_PATHNAME, detailPathname: DETAIL_PATHNAME },
+      ));
+    };
+    const cold = await open('Open Problematic Files cold, with stored corrections');
+    const complete = await cold.completeSummaryResponse.json();
+    const completeBytes = (await cold.completeSummaryResponse.body()).length;
+    assertCompactProblematicSummary(complete);
+    expect(complete.musicbrainz_correction_album_count).toBe(CORRECTION_ALBUMS);
+    expect(complete.items.some((item) => item.entity_kind === 'musicbrainz_correction'),
+      'correction-only albums never travel in the list response').toBe(false);
+    expect(complete.items.some((item) => (item.problem_reasons || []).includes(DATA_CORRECTION_LABEL)),
+      'listed albums carry the label').toBe(true);
+    await utilityProblematicFilesActions.expectCoreLayoutVisible({ requirePopulated: true });
+    const coldOutcome = evaluateTimingBudget(cold.readyMs, READY_BUDGET);
+
+    const warm = await open('Reload and open Problematic Files warm');
+    const warmOutcome = evaluateTimingBudget(warm.readyMs, READY_BUDGET);
+
+    const pageRequests = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === CORRECTION_PAGES_PATHNAME) pageRequests.push(request.url());
+    });
+    const filterMs = await stepLogger.step('Choose Data Correction Needed until page 1 is visible', async () => {
+      const startedAt = Date.now();
+      await utilityProblematicFilesActions.applySingleProblemFilter(DATA_CORRECTION_LABEL);
+      await page.locator('[data-problematic-album-key^="musicbrainz-correction:"]').first()
+        .waitFor({ state: 'visible', timeout: 60000 });
+      return Date.now() - startedAt;
+    });
+    const filterOutcome = evaluateTimingBudget(filterMs, READY_BUDGET);
+    expect(pageRequests.map((url) => new URL(url).searchParams.get('offset')), 'page 1 only').toEqual(['0']);
+    expect(await utilityProblematicFilesActions.readErrorToastCount()).toBe(0);
+
+    const metrics = {
+      correctionAlbums: seeded.albums,
+      labelledFixtureAlbums: seeded.fixtureAlbums,
+      coldReadyMs: cold.readyMs,
+      warmReadyMs: warm.readyMs,
+      filterPageOneVisibleMs: filterMs,
+      completeResponseBytes: completeBytes,
+      completeResponseItems: complete.items.length,
+      correctionPageRequests: pageRequests.length,
+      readyTargetMs: READY_TARGET_MS,
+      readyGraceMs: READY_GRACE_MS,
+      readyHardCeilingMs: READY_TARGET_MS + READY_GRACE_MS,
+    };
+    for (const [key, label, timingMs] of [
+      ['problematic-files-corrections-cold', 'Problematic Files ready, cold, with 10,800 corrections', cold.readyMs],
+      ['problematic-files-corrections-warm', 'Problematic Files ready, warm, with 10,800 corrections', warm.readyMs],
+      ['problematic-files-corrections-filter', 'Data Correction Needed page 1 visible', filterMs],
+    ]) {
+      await problematicFilesFocusedLocalReport.recordTimingCheckpoint({ key, label, timingMs, details: metrics });
+    }
+    problematicFilesFocusedLocalReport.recordTextCheckpoint({
+      key: 'problematic-files-corrections-response-size',
+      label: 'Complete Problematic Files response with corrections stored',
+      valueText: `${completeBytes} bytes, ${complete.items.length} rows`,
+    });
+    problematicFilesFocusedLocalReport.setMetricsPayload({
+      ...metrics,
+      benchmarkValidation: {
+        selectedContract: READY_BUDGET.contractName,
+        functionalChecksComplete: true,
+        nonTimingChecksComplete: true,
+        expectedMetricIds: [READY_BUDGET.metricId],
+        results: [{
+          key: 'readyMs', metricId: READY_BUDGET.metricId, contractName: READY_BUDGET.contractName, units: 'ms',
+          actual: cold.readyMs, targetMaximum: READY_BUDGET.targetMaximum, graceMs: READY_BUDGET.graceMs,
+          hardCeiling: READY_BUDGET.hardCeiling, allowedMaximum: READY_BUDGET.hardCeiling,
+          performanceStatus: coldOutcome.status, passed: coldOutcome.passed,
+        }],
+      },
+    });
+    expectTimingBudgetOutcome(expect, coldOutcome, 'Problematic Files readiness, cold, with corrections');
+    expectTimingBudgetOutcome(expect, warmOutcome, 'Problematic Files readiness, warm, with corrections');
+    expectTimingBudgetOutcome(expect, filterOutcome, 'Data Correction Needed page 1 visible');
   });
 });

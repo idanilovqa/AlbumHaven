@@ -179,6 +179,8 @@ def _cue_track_rows(program: CueProgram) -> list[dict[str, object]]:
             "track_key": f"cue:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}",
             "title": str(track.title or f"Track {track.number:02d}"),
             "artist": str(track.performer or program.performer or "Unknown Artist"),
+            # The CUE's own performer for this track; None leaves the audio file's artist.
+            "performer": track.performer or program.performer,
             "track_number": track.number,
             "duration_frames": track.end_frame - track.start_frame,
             "program_ordinal": program_ordinal,
@@ -574,6 +576,20 @@ class PostgresScanCacheAdapter:
                 """, {**context, "private_path": private_path})))
                 media_ids[str(media["private_path"])] = int(media["id"])
 
+            # Each CUE track is credited to its own PERFORMER (compilations name one per track).
+            performer_ids: dict[str, int] = {}
+            for performer in dict.fromkeys(str(row["performer"]) for row in track_rows if row.get("performer")):
+                artist_key = _key(performer)
+                connection.execute(_upsert_local_artist_sql(), {
+                    "artist_key": artist_key, "name": performer, "sort_name": performer.casefold(),
+                    "metadata": _jsonb({"source": _SOURCE}),
+                })
+                performer_ids[performer] = int(_row_mapping(_first_row(connection.execute("""
+                    /* cue_performer_artist */
+                    select id from library.local_artists
+                    where library_id = %(library_id)s and artist_key = %(artist_key)s;
+                """, {"library_id": context["library_id"], "artist_key": artist_key})))["id"])
+
             persisted_ids: list[int] = []
             for row in track_rows:
                 persisted = _row_mapping(_first_row(connection.execute("""
@@ -595,6 +611,7 @@ class PostgresScanCacheAdapter:
                 """, {
                     **context, **row, "duration_seconds": row["duration_frames"] / 75,
                     "source_kind": source_kind,
+                    "artist_id": performer_ids.get(str(row.get("performer") or ""), context.get("artist_id")),
                 })))
                 track_id = int(persisted["id"])
                 persisted_ids.append(track_id)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
+import re
 import shlex
 from typing import Mapping
 
@@ -39,6 +40,24 @@ class CueProgram:
     problems: tuple[str, ...]
     provenance: tuple[tuple[str, ...], ...] = ()
     source_name: str = ""
+
+
+def decode_cue_text(source_bytes: bytes) -> str:
+    """CUE sheets are UTF-8 or a legacy Windows code page; Russian rips are usually Windows-1251.
+
+    Runs of three or more non-ASCII bytes are words in a non-Latin script (Windows-1251); scattered
+    accented letters between ASCII ones are Western text (Windows-1252).
+    """
+    try:
+        return source_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    if re.search(b"[\x80-\xff]{3,}", source_bytes):
+        return source_bytes.decode("cp1251", errors="replace")
+    try:
+        return source_bytes.decode("cp1252")
+    except UnicodeDecodeError:
+        return source_bytes.decode("latin-1")
 
 
 def _tokens(line: str) -> list[str]:

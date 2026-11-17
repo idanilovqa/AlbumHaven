@@ -887,3 +887,54 @@ def test_a_read_records_the_lost_track_artist_but_never_adds_an_album_artist_tag
 
     assert entry["album_artist"] == "\u00e9milie Simon"
     assert set(entry["text_corrections"]) == {"artist"}
+
+
+def _silent_wav(path):
+    import wave
+
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        output.writeframes(b"\x00\x00" * 800)
+
+
+def test_untagged_cue_image_takes_artist_album_date_and_genre_from_its_cue_sheet(tmp_path):
+    # Owner 2026-11-17: image rips keep their tags in the .cue, so the app must read them there.
+    from music_app.services.metadata import read_metadata_for_file
+
+    image = tmp_path / "image.wav"
+    _silent_wav(image)
+    (tmp_path / "album.cue").write_bytes((
+        'REM GENRE "Rock"\nREM DATE 1996\nPERFORMER "ДДТ"\nTITLE "Рождённый в СССР"\n'
+        'FILE "image.wav" WAVE\n  TRACK 01 AUDIO\n    TITLE "Один"\n    INDEX 01 00:00:00\n'
+    ).encode("cp1251"))
+
+    metadata = read_metadata_for_file(image)
+
+    assert metadata["album"] == "Рождённый в СССР"
+    assert metadata["album_artist"] == "ДДТ"
+    assert metadata["artist"] == "ДДТ"
+    assert metadata["year"] == 1996
+    assert metadata["genre"] == "Rock"
+
+
+def test_cue_sheet_never_overrides_tags_written_in_the_audio_file_or_another_files_sheet(tmp_path, monkeypatch):
+    from music_app.services import metadata as metadata_module
+
+    image = tmp_path / "image.wav"
+    _silent_wav(image)
+    (tmp_path / "album.cue").write_text(
+        'PERFORMER "Cue Artist"\nTITLE "Cue Album"\nFILE "image.wav" WAVE\n'
+        '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n', encoding="utf-8")
+    real_read_tags = metadata_module.read_tags
+    monkeypatch.setattr(metadata_module, "read_tags", lambda path: {
+        **real_read_tags(path), "album": ["Tagged Album"], "albumartist": ["Tagged Artist"],
+    })
+    tagged = metadata_module.read_metadata_for_file(image)
+    assert (tagged["album"], tagged["album_artist"]) == ("Tagged Album", "Tagged Artist")
+
+    other = tmp_path / "other.wav"
+    _silent_wav(other)
+    monkeypatch.setattr(metadata_module, "read_tags", real_read_tags)
+    assert metadata_module.cue_album_tags(other) == {}, "a CUE sheet only describes the files it plays"

@@ -24,7 +24,7 @@ from music_app.services.metadata import (
     schema_upgrade_requires_file_read,
     upgrade_stored_file_entry,
 )
-from music_app.services.cue_program import CueProgram, parse_cue_program, resolve_cue_timeline
+from music_app.services.cue_program import CueProgram, decode_cue_text, parse_cue_program, resolve_cue_timeline
 
 
 _REMOTE_COVER_KEYS = (
@@ -59,13 +59,6 @@ class CueSourceCandidate:
     media_paths: tuple[Path, ...]
     program: CueProgram
     root_id: str = ""
-
-
-def _cue_text(source_bytes: bytes) -> str:
-    try:
-        return source_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return source_bytes.decode("latin-1")
 
 
 def _cue_media_paths(
@@ -152,7 +145,7 @@ def discover_cue_sources(
                 program = replace(program, problems=("CUE source exceeds the size limit.",))
                 media_paths: tuple[Path, ...] = ()
             else:
-                program = parse_cue_program(_cue_text(source_bytes), source_name=source_identity)
+                program = parse_cue_program(decode_cue_text(source_bytes), source_name=source_identity)
                 media_paths, program = _cue_media_paths(
                     program,
                     source_directory=resolved_path.parent,

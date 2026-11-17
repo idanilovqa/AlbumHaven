@@ -818,8 +818,74 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     return without_nul_characters(_read_metadata_for_file(path))
 
 
+_ARTIST_TAG_KEYS = ["albumartist", "album artist", "wm/albumartist", "tpe2", "tpe1", "artist"]
+_CUE_SHEET_BYTE_LIMIT = 512 * 1024
+_CUE_SHEETS_PER_FOLDER = 8
+
+
+def cue_album_tags(path: Path) -> dict[str, list[str]]:
+    """Album tags a CUE sheet in the same folder gives the audio file it plays.
+
+    Image rips (one FLAC/APE/WAV per disc) usually carry the artist, album, date and genre only
+    in the .cue, not in the audio file. Returns {} when no CUE sheet here names this file.
+    """
+    from music_app.services.cue_program import decode_cue_text, parse_cue_program
+
+    try:
+        sheets = sorted(
+            (item for item in path.parent.iterdir() if item.suffix.casefold() == ".cue" and item.is_file()),
+            key=lambda item: item.name.casefold(),
+        )[:_CUE_SHEETS_PER_FOLDER]
+    except OSError:
+        return {}
+    for sheet in sheets:
+        try:
+            if sheet.stat().st_size > _CUE_SHEET_BYTE_LIMIT:
+                continue
+            program = parse_cue_program(decode_cue_text(sheet.read_bytes()), source_name=sheet.name)
+        except OSError:
+            continue
+        plays_file = any(
+            Path(str(reference).replace("\\", "/")).name.casefold() == path.name.casefold()
+            for reference in program.files
+        )
+        if not plays_file:
+            continue
+        remarks = {
+            str(item[1]).casefold(): " ".join(str(part) for part in item[2:]).strip()
+            for item in program.provenance
+            if len(item) >= 3 and item[0] == "REM"
+        }
+        tags: dict[str, list[str]] = {}
+        if program.album_title:
+            tags["album"] = [program.album_title]
+        if program.performer:
+            tags["albumartist"] = [program.performer]
+            tags["artist"] = [program.performer]
+        if remarks.get("date"):
+            tags["date"] = [remarks["date"]]
+        if remarks.get("genre"):
+            tags["genre"] = [remarks["genre"]]
+        return tags
+    return {}
+
+
+def _with_cue_album_tags(path: Path, tags: dict[str, object]) -> dict[str, object]:
+    """Fill the album, artist, date and genre an image file lacks from its CUE sheet.
+
+    Tags written in the audio file itself still win; only missing values come from the CUE.
+    """
+    if first_tag(tags, ["album", "talb"]) and first_tag(tags, _ARTIST_TAG_KEYS):
+        return tags
+    filled = dict(tags)
+    for key, value in cue_album_tags(path).items():
+        if not first_tag(filled, [key]):
+            filled[key] = value
+    return filled
+
+
 def _read_metadata_for_file(path: Path) -> dict[str, object]:
-    tags = read_tags(path)
+    tags = _with_cue_album_tags(path, read_tags(path))
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
     credits = derive_readable_artist_credits({

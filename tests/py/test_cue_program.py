@@ -194,3 +194,11 @@ def test_cue_models_are_immutable():
 
     with pytest.raises((AttributeError, TypeError)):
         program.tracks[0].start_frame = 1
+
+
+def test_cue_text_decodes_utf8_russian_windows_1251_and_western_windows_1252():
+    from music_app.services.cue_program import decode_cue_text
+
+    assert decode_cue_text('PERFORMER "ДДТ"'.encode("utf-8")) == 'PERFORMER "ДДТ"'
+    assert decode_cue_text('TITLE "Студийные записи"'.encode("cp1251")) == 'TITLE "Студийные записи"'
+    assert decode_cue_text('PERFORMER "Björk"'.encode("cp1252")) == 'PERFORMER "Björk"'

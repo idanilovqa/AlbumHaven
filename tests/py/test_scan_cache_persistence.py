@@ -223,6 +223,8 @@ def test_persist_cue_program_revision_replaces_segments_in_one_commit(monkeypatc
                 return FakeCursor([{"library_id": 1, "library_root_id": 2, "album_id": 3, "artist_id": 4}])
             if "cue_existing_tracks" in normalized:
                 return FakeCursor([{"id": 10, "track_key": track_rows[0]["track_key"]}])
+            if "cue_performer_artist" in normalized:
+                return FakeCursor([{"id": 44}])
             if "cue_previous_program" in normalized:
                 return FakeCursor([{"id": 5, "revision_sha256": "c" * 64}])
             if "insert into library.cue_programs" in normalized:
@@ -258,6 +260,13 @@ def test_persist_cue_program_revision_replaces_segments_in_one_commit(monkeypatc
     # jsonb_build_object accepts any type, so Postgres cannot infer an uncast parameter there.
     track_insert = next(sql for sql in normalized_calls if "insert into library.local_tracks" in sql)
     assert "'cue_source_kind', %(source_kind)s::text" in track_insert
+    # The CUE PERFORMER is the tracks' artist, not the image file's (untagged) artist.
+    artist_upserts = [params for sql, params in connection.executed
+                      if "insert into library.local_artists" in _normalized_sql(sql)]
+    assert [params["name"] for params in artist_upserts] == ["Artist"]
+    track_params = [params for sql, params in connection.executed
+                    if "insert into library.local_tracks" in _normalized_sql(sql)]
+    assert {params["artist_id"] for params in track_params} == {44}
     segment_params = [params for sql, params in connection.executed
                       if "insert into library.cue_track_segments" in _normalized_sql(sql)]
     assert all(isinstance(json.loads(params["provenance"]), dict) for params in segment_params),         "cue_track_segments.provenance must be a JSON object (migration 0181)"

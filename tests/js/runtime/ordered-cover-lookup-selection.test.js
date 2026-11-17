@@ -31,9 +31,10 @@ function loadRuntime() {
   return context;
 }
 
+// The client only ever holds the opaque reference the server published for a local file.
 const local = (name) => ({
-  key: `local:C:/Music/Album/${name}.jpg`,
-  reference: { kind: 'local', path: `C:/Music/Album/${name}.jpg` },
+  key: `local:ref-${name}`,
+  reference: { kind: 'local', candidate_cover_ref: `ref-${name}` },
 });
 
 require('node:test')('normal selection keeps one checked cover', () => {
@@ -121,7 +122,7 @@ require('node:test')('loading saved covers keeps server order and opaque save re
         selected_covers_revision: 7,
         current_cover_token: 'a'.repeat(64),
         selected_covers: [
-          { selection_id: 'front', kind: 'local', path: 'C:/Music/Album/front.jpg' },
+          { selection_id: 'front', kind: 'local', candidate_cover_ref: 'ref-front' },
           {
             selection_id: 'remote',
             kind: 'remote',
@@ -140,7 +141,7 @@ require('node:test')('loading saved covers keeps server order and opaque save re
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.state.coverLookup.modal.orderedCoverSelections)),
     [
-      { key: 'local:C:/Music/Album/front.jpg', reference: { selection_id: 'front' } },
+      { key: 'local:ref-front', reference: { selection_id: 'front' } },
       { key: 'remote:candidate-2', reference: { selection_id: 'remote' } },
     ],
   );
@@ -214,7 +215,7 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
     expected_revision: 4,
     mutation_id: '1d7ddf55-2af0-4fea-83a2-18b73398a89a',
     references: [
-      { kind: 'local', path: 'C:/Music/Album/front.jpg' },
+      { kind: 'local', candidate_cover_ref: 'ref-front' },
       {
         kind: 'remote',
         candidate_id: 'candidate-2',
@@ -234,6 +235,40 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
   );
 });
 
+require('node:test')('ordered Save from a lookup notification marks that notification Art chosen', async () => {
+  const context = loadRuntime();
+  const marked = [];
+  const rendered = [];
+  context.crypto = { randomUUID: () => '0b4c7a7e-4f7d-4b8e-9f43-3c6b5d0e9a11' };
+  context.closeCoverLookupModal = () => {};
+  context.markCoverLookupTaskActionTaken = (taskId, album) => marked.push({ taskId, album });
+  context.renderCoverLookupDrawer = (options) => rendered.push(options);
+  const album = { album_id: 72, selected_covers_album_id: 72 };
+  context.state.coverLookup.tasks = [{ id: 'lookup-1', status: 'completed' }];
+  context.state.coverLookup.modal = {
+    album,
+    taskId: 'lookup-1',
+    orderedCoversRevision: 0,
+    orderedSelectionLoaded: true,
+    orderedCoverBaseline: '[]',
+    orderedCoverSelections: [{
+      key: 'remote:candidate-2',
+      reference: { kind: 'remote', candidate_id: 'candidate-2', candidate_generation: 'lookup-1' },
+    }],
+    saving: false,
+  };
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({ ok: true, selected_covers_revision: 1, selected_covers: [{ selection_id: 'remote-id' }] }),
+  });
+
+  assert.equal(await context.saveOrderedCoverSelection(), true);
+  assert.equal(marked.length, 1);
+  assert.equal(marked[0].taskId, 'lookup-1');
+  assert.equal(marked[0].album, album);
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), [{ taskIds: ['lookup-1'] }]);
+});
+
 require('node:test')('Cover Lookup cards show saved order and dim only unselected cards at the limit', () => {
   const context = loadRuntime();
   context.state.coverLookup.modal = {
@@ -247,10 +282,10 @@ require('node:test')('Cover Lookup cards show saved order and dim only unselecte
     otherArt: [],
   };
 
-  const selected = context.buildCoverLookupCard({ path: 'C:/Music/Album/front.jpg' });
-  const limited = context.buildCoverLookupCard({ path: 'C:/Music/Album/insert.jpg' });
+  const selected = context.buildCoverLookupCard({ candidate_cover_ref: 'ref-front' });
+  const limited = context.buildCoverLookupCard({ candidate_cover_ref: 'ref-insert' });
 
-  assert.match(selected, /data-cover-selection-key="local:C:\/Music\/Album\/front\.jpg"/);
+  assert.match(selected, /data-cover-selection-key="local:ref-front"/);
   assert.match(selected, /cover-lookup-art-check[^>]*>1</);
   assert.doesNotMatch(selected, /is-selection-limited/);
   assert.match(limited, /is-selection-limited/);
@@ -274,7 +309,7 @@ require('node:test')('existing local and remote card actions produce backend ref
     otherArt: [],
   };
 
-  context.selectLocalCoverFromLookup('C:/Music/Album/front.jpg');
+  context.selectLocalCoverFromLookup('ref-front');
   assert.deepEqual(
     JSON.parse(JSON.stringify(context.state.coverLookup.modal.orderedCoverSelections)),
     [local('front')],
@@ -596,26 +631,26 @@ require('node:test')('a saved selection stays on the exact file even when anothe
   const context = loadRuntime();
   const modal = context.state.coverLookup.modal;
   context.seedOrderedCoverSelectionFromAlbum({ selected_covers_loaded: true, selected_covers: [
-    { selection_id: 'one', kind: 'local', path: 'C:/Music/Album/cover.jpg' },
-    { selection_id: 'two', kind: 'local', path: 'C:/Music/Album/cover-existing-1.jpg' },
+    { selection_id: 'one', kind: 'local', candidate_cover_ref: 'ref-cover' },
+    { selection_id: 'two', kind: 'local', candidate_cover_ref: 'ref-cover-existing-1' },
   ] });
   context.applyCoverLookupGalleryPayload({
-    active_cover_path: 'C:/Music/Album/cover.jpg',
-    selected_source_path: 'C:/Music/Album/Covers/Front.jpg',
+    active_cover_ref: 'ref-cover',
+    selected_source_cover_ref: 'ref-covers-front',
     local_covers: [
-      { path: 'C:/Music/Album/cover.jpg', is_active: true, cover_revision: 'r' },
-      { path: 'C:/Music/Album/Covers/Front.jpg', cover_revision: 'r' },
-      { path: 'C:/Music/Album/cover-existing-1.jpg' },
+      { candidate_cover_ref: 'ref-cover', is_active: true, cover_revision: 'r' },
+      { candidate_cover_ref: 'ref-covers-front', cover_revision: 'r' },
+      { candidate_cover_ref: 'ref-cover-existing-1' },
     ],
     other_art: [],
   });
 
-  assert.deepEqual(modal.localCovers.map((cover) => cover.path), [
-    'C:/Music/Album/cover.jpg', 'C:/Music/Album/Covers/Front.jpg', 'C:/Music/Album/cover-existing-1.jpg',
+  assert.deepEqual(modal.localCovers.map((cover) => cover.candidate_cover_ref), [
+    'ref-cover', 'ref-covers-front', 'ref-cover-existing-1',
   ]);
   assert.deepEqual(modal.orderedCoverSelections.map((item) => item.key),
-    ['local:C:/Music/Album/cover.jpg', 'local:C:/Music/Album/cover-existing-1.jpg']);
-  context.applyCoverLookupSelectionIntent({ key: 'local:C:/Music/Album/cover.jpg', reference: {} });
+    ['local:ref-cover', 'local:ref-cover-existing-1']);
+  context.applyCoverLookupSelectionIntent({ key: 'local:ref-cover', reference: {} });
   assert.deepEqual(modal.orderedCoverSelections.map((item) => item.key),
-    ['local:C:/Music/Album/cover-existing-1.jpg']);
+    ['local:ref-cover-existing-1']);
 });

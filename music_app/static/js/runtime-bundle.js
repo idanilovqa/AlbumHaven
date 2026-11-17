@@ -36339,6 +36339,13 @@ async function saveOrderedCoverSelection() {
     }));
     modal.orderedCoverBaseline = orderedCoverSelectionSignature(modal.orderedCoverSelections);
     modal.orderedCoverMutationId = '';
+    // A choice saved from a lookup notification answers it, as the single-cover saves do.
+    const taskId = String(modal.taskId || '').trim();
+    const task = (state.coverLookup.tasks || []).find(item => String(item?.id || '') === taskId);
+    if (taskId && isCompletedCoverLookupTask(task)) {
+      markCoverLookupTaskActionTaken(taskId, album);
+      renderCoverLookupDrawer({ taskIds: [taskId] });
+    }
     closeCoverLookupModal();
     return true;
   } catch (error) {

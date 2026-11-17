@@ -563,10 +563,14 @@ export class CoverLookupActions {
 
   async saveSelectedRemoteCandidate(options = {}) {
     const timeout = options.timeout || 30000;
-    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && new URL(response.url()).pathname === '/utilities/cover-lookup/save-remote'
-    ), { timeout });
+    // An album whose saved cover selection loaded saves through its ordered selection;
+    // other albums use the single remote-cover save.
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => {
+      const method = response.request().method();
+      const pathname = new URL(response.url()).pathname;
+      return (method === 'POST' && pathname === '/utilities/cover-lookup/save-remote')
+        || (method === 'PUT' && /^\/albums\/\d+\/selected-covers$/u.test(pathname));
+    }, { timeout });
     await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
     await this.coverLookup.saveRemoteButton.click();
     const response = await responsePromise;
@@ -577,10 +581,16 @@ export class CoverLookupActions {
       );
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
+    const requestPayload = response.request().postDataJSON();
+    const remoteReference = Array.isArray(requestPayload?.references)
+      ? requestPayload.references.find((reference) => reference?.kind === 'remote')
+      : null;
     return {
       ...payload,
       payload,
-      requestPayload: response.request().postDataJSON(),
+      requestPayload: remoteReference
+        ? { ...requestPayload, candidate_id: remoteReference.candidate_id }
+        : requestPayload,
     };
   }
 

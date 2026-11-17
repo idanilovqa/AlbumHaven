@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.17 - 2026-11-17
+
+- Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.
+
 ## 0.11.16 - 2026-11-17
 
 - The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".

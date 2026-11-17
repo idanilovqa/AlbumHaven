@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.25 - 2026-11-17
+## 0.11.26 - 2026-11-17
 
 - The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.
+
+## 0.11.25 - 2026-11-17
+
+- Opening an album from a gallery card no longer shows the "This album was split" chooser; it appears only from a notification about a split album. If an album opened from the gallery changed elsewhere, the gallery refreshes in place, Album Details closes, and a toast says "This album changed—choose it again in the gallery." An album you just split yourself opens the matching release.
 
 ## 0.11.24 - 2026-11-17
 

@@ -168,6 +168,10 @@ export class TagEditorActions {
     await expect(firstTrack).toHaveCount(1);
     await firstTrack.scrollIntoViewIfNeeded();
     await expect(firstTrack).toBeVisible();
+    // A drag that starts on a track of a multi-selection deselects (owner 2026-11-16), so a new
+    // range starts from a plain click that leaves only its first track selected.
+    await firstTrack.click();
+    await expect(this.tagEditor.activeTrackButtons).toHaveCount(1);
     const firstBox = await firstTrack.boundingBox();
     if (!firstBox) {
       throw new Error('The first drag-selected track must be visible.');

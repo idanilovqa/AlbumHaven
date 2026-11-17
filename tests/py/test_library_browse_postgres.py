@@ -3422,6 +3422,8 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
         {
             "key": "broadcast-noise-01",
                 "track_ref": "broadcast-noise-01",
+                "cue_segment_ref": None,
+                "source_kind": None,
                 "title": "Long Was the Year",
                 "artist": "Broadcast",
                 "album_artist": "Broadcast",
@@ -3473,7 +3475,9 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
         f"and {stale_predicate}"
     ) in compact_sql
     assert "left join library.local_tracks" not in compact_sql
-    assert "left join library.local_track_files" not in compact_sql
+    # CUE logical tracks have no file row, so files are left-joined; the WHERE guard still drops
+    # tracks whose only file is stale.
+    assert "or ( library.local_track_files.id is not null" in compact_sql
 
 
 def test_postgres_selected_artist_payload_uses_featured_artist_identity_but_keeps_album_artist_credit():

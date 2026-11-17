@@ -3084,88 +3084,134 @@ def test_downloaded_cover_refreshes_stale_dimensions_when_path_and_revision_are_
         assert (entry["local_cover_width"], entry["local_cover_height"]) == (4000, 4000)
 
 
-@pytest.mark.parametrize("invalidate", [None, "identity", "cover_generation", "scan_generation", "selection"])
-def test_missing_cover_is_cleared_for_its_album_only_and_rechecked_before_publishing(recovered_cover_case, monkeypatch, invalidate):
-    """When the search finds nothing and the old cover file is gone, the album's
-    cover selection is cleared through one guarded Postgres call for that
-    album's tracks (no whole-inventory snapshot). The call runs without the
-    runtime cache lock; the commit rechecks the album under it, and a cover
-    chosen meanwhile, or a replaced or superseded runtime, keeps everything."""
+def _never_persist(*_args, **_kwargs):
+    raise AssertionError("A search that finds nothing must not write a cover selection.")
+
+
+@pytest.mark.parametrize("origin", ["automatic", "user"])
+@pytest.mark.parametrize("reason", ["remote_search_returned_no_candidate", "negative_cache_ttl_active"])
+def test_missing_cover_file_keeps_the_saved_selection_and_reports_it(recovered_cover_case, monkeypatch, origin, reason):
+    """Option 3: when the saved cover file is gone and the search finds
+    nothing, the saved choice stays, whatever its origin, and the album's
+    outcome says the cover file is missing. Nothing is written."""
+    case = recovered_cover_case
+    for entry in case.entries.values():
+        entry.update(cover_path=str(case.cover.parent / "missing.jpg"), cover_selection_origin=origin)
+    case.job["cover_selection_origin"] = origin
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **_kwargs: (None, False, {"reason": reason}))
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", _never_persist)
+
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert result["changed"] is False
+    assert case.state["file_cache"] == baseline
+    (job_result,) = result["job_results"]
+    assert job_result["reason"] == "selected_cover_file_missing"
+    assert job_result["search_reason"] == reason
+    assert job_result["message"] == "Cover file missing; saved choice kept."
+    assert result["summary"] == "1 album(s) have a missing cover file; saved choice kept."
+
+
+def test_real_find_replaces_a_missing_cover_selection(recovered_cover_case, monkeypatch):
+    """A later fetch that downloads a cover replaces the missing one through
+    the existing write path."""
     case = recovered_cover_case
     for entry in case.entries.values():
         entry["cover_path"] = str(case.cover.parent / "missing.jpg")
-    worker_entries = {path: dict(entry) for path, entry in case.entries.items()}
-    case.kwargs.update(file_cache=worker_entries, cover_generation=2, scan_generation=4)
-    case.state.update(cover_generation=2, scan_generation=4)
-    current = [case.state]
-    case.kwargs["get_state"] = lambda: current[0]
-    commits = []
-    clears = []
-    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **kw: (None, False, {"reason": "no_match"}))
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **_kwargs: (
+        case.cover, True, {"reason": "cover_written", "decoded_width": 1600, "decoded_height": 1600},
+    ))
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", _never_persist)
 
-    def persist(_config, paths, selected, **options):
-        assert not case.kwargs["cache_lock"].locked(), "Database publication cannot wait while holding runtime cache lock"
-        assert selected is None and options["clear_selection"] is True
-        assert options["expected_cover_state"] == ("automatic", "old-revision")
-        clears.append(set(paths))
-        if invalidate == "identity":
-            current[0] = dict(case.state)
-        elif invalidate in {"cover_generation", "scan_generation"}:
-            case.state[invalidate] += 1
-        elif invalidate == "selection":
-            case.entries[case.tracks[0]].update(cover_path="user-selected.jpg", cover_selection_origin="user")
-
-        def commit():
-            assert case.kwargs["cache_lock"].locked()
-            commits.append(True)
-            return {"album_rows_updated": 1, "track_file_rows_updated": 2}
-        return options["commit_guard"](commit)
-
-    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    baseline = {path: dict(entry) for path, entry in case.entries.items()}
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    assert clears == [set(case.tracks)]
-    if invalidate:
-        assert commits == []
-        if invalidate != "selection":
-            assert case.entries == baseline
-    else:
-        assert result["changed"] is True
-        assert commits == [True]
-        assert all(
-            entry["cover_path"] is None and entry["cover_revision"] is None and entry["cover_selection_origin"] is None
-            for entry in case.state["file_cache"].values()
+    assert result["changed"] is True
+    assert result["job_results"][0]["reason"] == "cover_written"
+    assert "summary" not in result
+    revision = cover_refresh_execution.cover_revision_for_path(case.cover)
+    for entry in case.state["file_cache"].values():
+        assert (entry["cover_path"], entry["cover_revision"], entry["cover_selection_origin"]) == (
+            str(case.cover), revision, "automatic",
         )
 
 
-def test_missing_cover_clear_keeps_an_automatic_cover_chosen_during_the_search(recovered_cover_case, monkeypatch):
-    """The clear is guarded by the selection the run read before its search,
-    so an automatic cover chosen while the search ran is kept."""
+def test_a_found_local_file_never_replaces_a_missing_user_selection(recovered_cover_case, monkeypatch):
+    """Finding a file beside an album is not a new user choice: a missing
+    user-owned cover stays as saved; only the guarded writer may replace it."""
     case = recovered_cover_case
     for entry in case.entries.values():
-        entry["cover_path"] = str(case.cover.parent / "missing.jpg")
-    case.kwargs.update(file_cache={path: dict(entry) for path, entry in case.entries.items()})
-    chosen = {"cover_path": str(case.cover), "cover_revision": "chosen-revision", "cover_selection_origin": "automatic"}
+        entry.update(cover_path=str(case.cover.parent / "missing.jpg"), cover_selection_origin="user")
+    case.job["cover_selection_origin"] = "user"
+    baseline = {path: dict(entry) for path, entry in case.entries.items()}
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", _never_persist)
 
-    def search_meanwhile_chooses(**_kwargs):
-        for entry in case.entries.values():
-            entry.update(chosen)
-        return None, False, {"reason": "no_match"}
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    expected_states = []
+    assert result["changed"] is False
+    assert case.state["file_cache"] == baseline
 
-    def persist(_config, _paths, _selected, **options):
-        expected_states.append(options["expected_cover_state"])
-        return options["commit_guard"](lambda: {"album_rows_updated": 1, "track_file_rows_updated": 2})
 
-    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", search_meanwhile_chooses)
-    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    cover_refresh_execution.run_cover_jobs(**case.kwargs)
+def test_offline_library_root_skips_the_album_without_searching_or_writing(recovered_cover_case, monkeypatch):
+    """An album whose library root is unreachable is never searched, and
+    nothing about it is written or published; its outcome names the root by
+    its label, never its path."""
+    case = recovered_cover_case
+    offline_root = case.cover.parent.parent.parent / "offline-share"
+    folder = offline_root / "Artist" / "Recovered"
+    tracks = [str(folder / "01.mp3")]
+    entries = {tracks[0]: {**case.entries[case.tracks[0]], "path": tracks[0],
+                           "cover_path": str(folder / "cover.jpg"), "library_root_category": "new_arrivals"}}
+    baseline = {path: dict(entry) for path, entry in entries.items()}
+    case.state.update(file_cache=entries)
+    case.kwargs.update(file_cache=entries, jobs=[{**case.job, "folder": folder, "track_paths": tracks}])
+    monkeypatch.setattr(cover_refresh_execution, "configured_library_root_paths_snapshot", lambda _config: (offline_root,))
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **_kwargs: pytest.fail("searched an offline album"))
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", _never_persist)
+    monkeypatch.setattr(
+        cover_refresh_execution, "AlbumCoverCandidateSnapshotRepository",
+        lambda _config: pytest.fail("touched the database for an offline album"),
+    )
 
-    assert expected_states == [("automatic", "old-revision")]
-    assert all(
-        {field: entry[field] for field in chosen} == chosen for entry in case.state["file_cache"].values()
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert result["changed"] is False
+    assert case.state["file_cache"] == baseline
+    (job_result,) = result["job_results"]
+    assert job_result["reason"] == "library_root_unavailable"
+    assert job_result["library_root_label"] == "New Arrivals"
+    assert job_result["message"] == "New Arrivals is offline, so this album was skipped. Its saved cover was not changed."
+    assert str(offline_root) not in job_result["message"]
+    assert (result["skipped"], result["failed"]) == (1, 0)
+    assert result["summary"] == "Cover search skipped: New Arrivals is offline. Saved covers were not changed."
+
+
+def test_offline_root_skip_leaves_albums_on_reachable_roots_searched(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    offline_root = case.cover.parent.parent.parent / "offline-share"
+    offline_track = str(offline_root / "Other" / "Album" / "01.mp3")
+    case.entries[offline_track] = {**case.entries[case.tracks[0]], "path": offline_track, "album": "Album"}
+    case.kwargs["jobs"].append({**case.job, "folder": offline_root / "Other" / "Album", "track_paths": [offline_track]})
+    monkeypatch.setattr(
+        cover_refresh_execution, "configured_library_root_paths_snapshot",
+        lambda _config: (case.cover.parent.parent.parent, offline_root),
+    )
+    searched = []
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda *, job, **_kwargs: (
+        searched.append(job["folder"]) or (case.cover, False, {"reason": "satisfactory_local_cover_present"})
+    ))
+    monkeypatch.setattr(
+        cover_refresh_execution, "persist_cover_selection_in_shared_transaction",
+        lambda *_args, **options: options["commit_guard"](lambda: {"album_rows_updated": 1}),
+    )
+
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+
+    assert searched == [case.job["folder"]]
+    reasons = {item["folder"]: item["reason"] for item in result["job_results"] if item.get("folder")}
+    assert reasons[str(offline_root / "Other" / "Album")] == "library_root_unavailable"
+    assert result["summary"] == (
+        "1 album(s) skipped because a library drive or share is offline; their saved covers were not changed."
     )
 
 
@@ -3359,6 +3405,8 @@ def test_automatic_cover_commit_blocks_generation_invalidation_until_committed(
 
     # The cover run opens its one shared connection up front; this test's commits are stand-ins.
     monkeypatch.setattr(scan_cache_persistence, "_connect", lambda _url: SimpleNamespace(close=lambda: None))
+    # Its library roots are configured nowhere; the reachability probe falls back to the drive.
+    monkeypatch.setattr(cover_refresh_execution, "configured_library_root_paths_snapshot", lambda _config: ())
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
@@ -4065,7 +4113,7 @@ def test_recovered_cover_planned_folder_requires_album_identity_agreement(
         assert outcomes[0]["reason"] == "satisfactory_local_cover_present"
 
 
-def test_mixed_cover_folder_does_not_suppress_independent_clear(recovered_cover_case, monkeypatch):
+def test_mixed_cover_folder_does_not_suppress_independent_missing_cover_report(recovered_cover_case, monkeypatch):
     from music_app.services import cover_refresh_planning
 
     case = recovered_cover_case
@@ -4087,19 +4135,14 @@ def test_mixed_cover_folder_does_not_suppress_independent_clear(recovered_cover_
         cover_refresh_execution, "execute_cover_job",
         lambda **_kwargs: (None, False, {"reason": "remote_search_returned_no_candidate"}),
     )
-    clears = []
-
-    def persist(_config, paths, selected, **options):
-        assert selected is None and options["clear_selection"] is True
-        clears.append(set(paths))
-        return options["commit_guard"](lambda: {"album_rows_updated": 1})
-
-    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", _never_persist)
 
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    assert clears == [{independent_path}], "the unrelated album's clear is durable, and only that album's"
-    assert case.entries[independent_path]["cover_path"] is None
+    assert sorted(item["reason"] for item in result["job_results"]) == [
+        "mixed_album_folder", "selected_cover_file_missing",
+    ], "the unrelated album still reports its missing file"
+    assert case.entries[independent_path]["cover_path"] == "missing-cover.jpg"
     assert {path: case.entries[path] for path in case.tracks} == mixed_baseline
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
     assert result["processed"] == 2
@@ -4679,6 +4722,8 @@ def test_run_cover_jobs_serializes_authority_writes_with_progress_ownership(
 
     # The cover run opens its one shared connection up front; this test's commits are stand-ins.
     monkeypatch.setattr(scan_cache_persistence, "_connect", lambda _url: SimpleNamespace(close=lambda: None))
+    # Its library roots are configured nowhere; the reachability probe falls back to the drive.
+    monkeypatch.setattr(cover_refresh_execution, "configured_library_root_paths_snapshot", lambda _config: ())
     track_path = (config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")

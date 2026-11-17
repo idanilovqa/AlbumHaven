@@ -12440,7 +12440,7 @@
         "metric": "candidate_rows",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count tests/py/test_cover_batch_bounded_contracts.py::test_fetch_cover_clears_a_missing_cover_for_its_album_through_one_connection_at_production_album_count",
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count tests/py/test_cover_batch_bounded_contracts.py::test_fetch_cover_keeps_a_missing_cover_selection_and_writes_nothing_at_production_album_count",
       "testIdentity": "test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_album_at_production_album_count",
       "rollback": "Revert fix(covers) selected-album Fetch cover with its contract; that restores the whole-cache snapshot, whole-library job planning and full album rebuild per request."
     },
@@ -12508,7 +12508,7 @@
         "metric": "builder_calls",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_clears_each_missing_cover_through_one_connection_at_production_album_count",
+      "command": "python -m pytest tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_keeps_each_missing_cover_selection_and_writes_nothing_at_production_album_count tests/py/test_cover_batch_bounded_contracts.py::test_unsuccessful_cover_batch_skips_an_offline_library_root_without_searching_or_writing_at_production_album_count",
       "testIdentity": "test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count",
       "rollback": "Revert the contract parametrization; no product code changed for this interaction."
     },

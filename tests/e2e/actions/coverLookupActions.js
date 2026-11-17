@@ -582,15 +582,27 @@ export class CoverLookupActions {
     }
     await this.coverLookup.waitForHidden(this.coverLookup.modal, { timeout });
     const requestPayload = response.request().postDataJSON();
-    const remoteReference = Array.isArray(requestPayload?.references)
-      ? requestPayload.references.find((reference) => reference?.kind === 'remote')
+    // Both saves name the chosen candidate, the lookup it came from and its provider.
+    const ordered = Array.isArray(requestPayload?.references);
+    const savedCover = ordered
+      ? (payload.selected_covers || []).find((cover) => cover?.kind === 'remote') || null
       : null;
+    const reference = ordered
+      ? requestPayload.references.find((item) => item?.kind === 'remote') || {}
+      : {};
     return {
       ...payload,
       payload,
-      requestPayload: remoteReference
-        ? { ...requestPayload, candidate_id: remoteReference.candidate_id }
-        : requestPayload,
+      requestPayload,
+      ordered,
+      savedCover,
+      candidateId: ordered ? String(reference.candidate_id || '') : String(requestPayload.candidate_id || ''),
+      lookupTaskId: ordered ? String(requestPayload.lookup_task_id || '') : String(requestPayload.task_id || ''),
+      snapshotGeneration: ordered
+        ? String(reference.candidate_generation || '')
+        : String(requestPayload.snapshot_generation || ''),
+      remoteSource: ordered ? String(savedCover?.source || '') : String(payload.optimistic_remote_source || ''),
+      lookupTask: ordered ? payload.lookup_task || null : payload.task || null,
     };
   }
 

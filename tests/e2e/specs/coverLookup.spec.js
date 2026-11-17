@@ -1166,7 +1166,7 @@ test('FTC-COVERS-035 persisted notification candidates remain visible and save a
       expect(cancelBox.x).toBeGreaterThan(findBetterBox.x + findBetterBox.width);
       expect(saveBox.x).toBeGreaterThan(cancelBox.x + cancelBox.width);
       const saved = await restarted.coverLookupActions.saveSelectedRemoteCandidate();
-    expect(saved.requestPayload.candidate_id).toBe(candidateId);
+    expect(saved.candidateId).toBe(candidateId);
     await restarted.coverLookupActions.waitForTaskStatusById(taskId, 'Art chosen', {
       timeout: 120_000,
     });
@@ -1208,8 +1208,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
 
   await stepLogger.step('Save Spotify and retain it as the selected linked remote cover', async () => {
     const payload = await coverLookupActions.selectRemoteCandidateByIdAndSave(spotifyCandidate.id);
-    expect(payload.optimistic_cover_ref).toBe('');
-    expect(payload.optimistic_remote_source).toBe('spotify');
+    expect(payload.remoteSource).toBe('spotify');
     const reopened = await coverLookupActions.reopenUntilSavedRemoteCoverIsActive(
       () => trackModalActions.openCoverLookup(),
       'SPOTIFY',
@@ -1340,11 +1339,7 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     await expect(page.getByText('Lookup task does not belong to this album')).toHaveCount(0);
     await coverLookupActions.waitForRemoteCandidateId(candidateId);
     const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(candidateId);
-    expect(saved.requestPayload).toMatchObject({
-      album: expect.objectContaining({ name: SPLIT_FIXTURE.splitAlbum }),
-      candidate_id: candidateId,
-      task_id: taskId,
-    });
+    expect(saved).toMatchObject({ candidateId, lookupTaskId: taskId });
   } finally {
     if (await coverLookupActions.coverLookup.modal.isVisible()) {
       await coverLookupActions.closeModal();
@@ -1981,7 +1976,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     const savedSecondary = await coverLookupActions.selectRemoteCandidateByIdAndSave(
       archiveSecondaryCandidateId,
     );
-    expect(savedSecondary.payload.optimistic_remote_source).toBe('cover_art_archive');
+    expect(savedSecondary.remoteSource).toBe('cover_art_archive');
   });
 });
 
@@ -2059,12 +2054,12 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     await expect(coverLookupActions.coverLookup.saveRemoteButton).toBeEnabled();
 
     saved = await coverLookupActions.saveSelectedRemoteCandidate();
-    expect(saved.requestPayload).toMatchObject({
-      task_id: generationATaskId,
-      candidate_id: generationAChoice.id,
-      snapshot_generation: generationATaskId,
+    expect(saved).toMatchObject({
+      lookupTaskId: generationATaskId,
+      candidateId: generationAChoice.id,
+      snapshotGeneration: generationATaskId,
     });
-    expect(saved.requestPayload.task_id).not.toBe(generationBTaskId);
+    expect(saved.lookupTaskId).not.toBe(generationBTaskId);
     expect(await coverPathForReference(saved.payload.optimistic_cover_ref)).toMatch(/[\\/]cover\.jpg$/i);
     await trackModalActions.close();
     await coverLookupActions.openDrawer();

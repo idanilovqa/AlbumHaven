@@ -36297,6 +36297,7 @@ async function saveOrderedCoverSelection() {
     ? modal.orderedCoverSelections : [];
   if (!albumId || modal.saving || !hasChangedOrderedCoverSelection(selections)) return false;
   const mutationId = String(modal.orderedCoverMutationId || crypto.randomUUID());
+  const lookupTaskId = String(modal.taskId || '').trim();
   const previousSlots = Array.isArray(album.selected_covers)
     ? album.selected_covers.map((slot) => ({ ...slot })) : [];
   const previousLoaded = album.selected_covers_loaded === true;
@@ -36313,6 +36314,8 @@ async function saveOrderedCoverSelection() {
         expected_revision: Math.max(0, Number(modal.orderedCoversRevision || 0) || 0),
         mutation_id: mutationId,
         references: selections.map((item) => ({ ...item.reference })),
+        // The lookup notification this choice answers; the server marks it Art chosen.
+        ...(lookupTaskId ? { lookup_task_id: lookupTaskId } : {}),
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -36339,12 +36342,11 @@ async function saveOrderedCoverSelection() {
     }));
     modal.orderedCoverBaseline = orderedCoverSelectionSignature(modal.orderedCoverSelections);
     modal.orderedCoverMutationId = '';
-    // A choice saved from a lookup notification answers it, as the single-cover saves do.
-    const taskId = String(modal.taskId || '').trim();
-    const task = (state.coverLookup.tasks || []).find(item => String(item?.id || '') === taskId);
-    if (taskId && isCompletedCoverLookupTask(task)) {
-      markCoverLookupTaskActionTaken(taskId, album);
-      renderCoverLookupDrawer({ taskIds: [taskId] });
+    // The server answered the lookup notification this choice came from.
+    const answeredTaskId = String(data.lookup_task?.id || '').trim();
+    if (answeredTaskId) {
+      markCoverLookupTaskActionTaken(answeredTaskId, album, { persist: false });
+      renderCoverLookupDrawer({ taskIds: [answeredTaskId] });
     }
     closeCoverLookupModal();
     return true;

@@ -1450,8 +1450,15 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
         return JSONResponse({"ok": False, "error": "Album was not found."}, status_code=404)
     album_id = int(album_ref)
     payload = await _json_payload(request)
-    if not isinstance(payload, dict) or set(payload) != {"expected_revision", "mutation_id", "references"}:
+    if (not isinstance(payload, dict)
+            or not {"expected_revision", "mutation_id", "references"} <= set(payload)
+            or not set(payload) <= {"expected_revision", "mutation_id", "references", "lookup_task_id"}):
         return JSONResponse({"ok": False, "error": "A revision, mutation ID and ordered references are required."}, status_code=422)
+    # The Cover Look Up notification this choice answers, when it was opened from one.
+    lookup_task_id = payload.pop("lookup_task_id", "")
+    if not isinstance(lookup_task_id, str):
+        return JSONResponse({"ok": False, "error": "A revision, mutation ID and ordered references are required."}, status_code=422)
+    lookup_task_id = lookup_task_id.strip()
     # A local source arrives as the `candidate_cover_ref` the lookup published; the cover reference
     # boundary has already resolved it to `candidate_cover_path` (null when it names no visible file).
     if isinstance(payload["references"], list):
@@ -1544,15 +1551,72 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
         return JSONResponse({"ok": False, "persisted": True, "error": "The selection was saved, but its display could not refresh. Retry the same request."}, status_code=503)
     except Exception:
         return JSONResponse({"ok": False, "error": "Cover selection is temporarily unavailable. Retry the same request."}, status_code=503)
-    # Source descriptors remain private. Retaining an opaque saved remote ID
-    # must not disclose its URL to an editor without remote-read authority.
+    lookup_task = await _answer_cover_lookup_with_ordered_save(
+        config, lookup_task_id, track_paths=track_paths, album_id=album_id,
+        album_key=str(context.get("album_key") or ""), selected_covers=result["selected_covers"],
+    )
+    # Source URLs remain private. An editor with remote-read authority also sees which lookup and
+    # provider each online cover came from; retaining an opaque saved ID discloses neither.
+    from music_app.services.policy_asgi import allowed_actions_for_request
+
+    remote_details = allowed_actions_for_request(
+        request, ("library.covers.remote.read",),
+    ).as_payload().get("library.covers.remote.read") is True
     return JSONResponse({
         "ok": True, "album_ref": str(album_id),
-        "selected_covers": [{"selection_id": item["selection_id"], "kind": item["kind"]}
-                            for item in result["selected_covers"]],
+        "selected_covers": [
+            {"selection_id": item["selection_id"], "kind": item["kind"],
+             **(_ordered_remote_cover_provenance(item) if remote_details and item["kind"] == "remote" else {})}
+            for item in result["selected_covers"]
+        ],
         "selected_covers_revision": result["selected_covers_revision"],
         "changed": result["changed"], "replayed": result["replayed"],
+        "lookup_task": lookup_task,
     })
+
+
+def _ordered_remote_cover_provenance(item: Mapping[str, object]) -> dict[str, str]:
+    """The lookup and provider an online cover was chosen from; never its URL."""
+    return {
+        "candidate_id": str(item.get("candidate_id") or ""),
+        "lookup_task_id": _uuid_hex(str(item.get("candidate_generation") or "")),
+        "source": str(item.get("source") or ""),
+        "source_label": str(item.get("source_label") or ""),
+    }
+
+
+async def _answer_cover_lookup_with_ordered_save(
+    config, lookup_task_id: str, *, track_paths: set[str], album_id: int, album_key: str,
+    selected_covers: list[Mapping[str, object]],
+) -> dict[str, object] | None:
+    """Mark the lookup notification a saved choice answers, naming the candidate taken from it."""
+    if not lookup_task_id:
+        return None
+    task = cover_lookup_result(lookup_task_id) or await run_in_threadpool(
+        load_cover_lookup_notification, dict(config), lookup_task_id,
+    ) or {}
+    if not task or not _task_matches_album_context(
+        task, track_paths=track_paths, album_id=album_id, album_key=album_key,
+    ):
+        return None
+    chosen = next((
+        str(item.get("candidate_id") or "") for item in selected_covers
+        if item.get("kind") == "remote"
+        and _ordered_remote_cover_provenance(item)["lookup_task_id"] == _uuid_hex(lookup_task_id)
+    ), "")
+    return await run_in_threadpool(
+        lambda: mark_cover_lookup_task_notification_action_taken(
+            lookup_task_id, config=config, selected_candidate_id=chosen,
+        ),
+    )
+
+
+def _uuid_hex(value: str) -> str:
+    # Lookup task IDs are the hex form of the candidate search generation.
+    try:
+        return UUID(value).hex
+    except ValueError:
+        return value
 
 
 @router.post("/utilities/cover-lookup/local-select")

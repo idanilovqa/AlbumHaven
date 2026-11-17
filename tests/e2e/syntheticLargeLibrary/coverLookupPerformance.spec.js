@@ -79,18 +79,17 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       )
     ));
 
-    let savePayload = null;
+    let saved = null;
     const saveAccepted = await stepLogger.step('Measure Save acceptance and modal close', async () => (
       measureInteractionToPaint(
         page,
         async () => {
-          ({ payload: savePayload } = await coverLookupActions.saveSelectedRemoteCandidate());
+          saved = await coverLookupActions.saveSelectedRemoteCandidate();
         },
         () => coverLookupActions.coverLookup.waitForHidden(coverLookupActions.coverLookup.modal),
       )
     ));
-    expect(savePayload?.optimistic_cover_ref).toBe('');
-    expect(savePayload?.optimistic_remote_source).toBe('spotify');
+    expect(saved?.remoteSource).toBe('spotify');
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
 
     const reopened = await stepLogger.step(

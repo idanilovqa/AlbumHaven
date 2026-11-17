@@ -108,7 +108,7 @@ def test_authorized_save_uses_server_album_paths_and_never_exposes_private_sourc
     status, body = api.request()
     assert status == 200
     assert body == {"ok": True, "album_ref": "72", "selected_covers": [{"selection_id": "front", "kind": "local"}],
-                    "selected_covers_revision": 4, "changed": True, "replayed": False}
+                    "selected_covers_revision": 4, "changed": True, "replayed": False, "lookup_task": None}
     save = next(payload for name, payload in api.calls if name == "save")
     assert save["expected_album_id"] == 72
     assert set(save["track_paths"]) == set(api.context["track_paths"])
@@ -149,6 +149,81 @@ def test_remote_editor_can_save_server_candidate_selector(api):
     status, _ = api.request(payload)
     assert status == 200
     assert next(args for name, args in api.calls if name == "save")["references"] == payload["references"]
+
+
+REMOTE_GENERATION = "e2f769fb-83d5-4f29-8a1a-fb319023e3cd"
+REMOTE_SAVED = {"selection_id": "online", "kind": "remote", "url": "https://images.example/private.jpg",
+                "thumbnail_url": "https://images.example/private-thumb.jpg", "source": "spotify",
+                "source_label": "Spotify", "candidate_id": "candidate", "candidate_generation": REMOTE_GENERATION}
+
+
+def save_returning(api, monkeypatch, selected_covers):
+    def persist(config, **kwargs):
+        api.calls.append(("save", kwargs))
+        result = {"selected_covers": selected_covers, "selected_covers_revision": 4, "changed": True,
+                  "replayed": False, "inventory_mutation_revision": 9}
+        kwargs["commit_guard"](lambda: result)
+        return result
+    monkeypatch.setattr(routes, "persist_ordered_cover_selection_for_config", persist, raising=False)
+
+
+def test_online_cover_names_its_lookup_and_provider_but_never_its_url(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    save_returning(api, monkeypatch, [REMOTE_SAVED])
+    payload = {**BODY, "references": [{"kind": "remote", "candidate_id": "candidate", "candidate_generation": REMOTE_GENERATION}]}
+    status, body = api.request(payload)
+    assert status == 200
+    assert body["selected_covers"] == [{
+        "selection_id": "online", "kind": "remote", "candidate_id": "candidate",
+        "lookup_task_id": "e2f769fb83d54f298a1afb319023e3cd", "source": "spotify", "source_label": "Spotify",
+    }]
+    assert "images.example" not in json.dumps(body)
+
+
+def test_retained_online_cover_hides_its_provenance_without_remote_read(api, monkeypatch):
+    save_returning(api, monkeypatch, [REMOTE_SAVED])
+    status, body = api.request({**BODY, "references": [{"selection_id": "online"}]})
+    assert status == 200
+    assert body["selected_covers"] == [{"selection_id": "online", "kind": "remote"}]
+
+
+def test_save_from_a_lookup_answers_that_lookup_with_the_chosen_candidate(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    save_returning(api, monkeypatch, [REMOTE_SAVED])
+    task_id = "e2f769fb83d54f298a1afb319023e3cd"
+    marked = []
+    monkeypatch.setattr(routes, "cover_lookup_result", lambda value: {
+        "id": task_id, "status": "completed", "album_payload": {"album_id": 72},
+    } if value == task_id else {})
+    monkeypatch.setattr(routes, "mark_cover_lookup_task_notification_action_taken", lambda value, **kwargs: (
+        marked.append((value, kwargs["selected_candidate_id"])) or {"id": value, "notification_action_taken": True}))
+    payload = {**BODY, "lookup_task_id": task_id,
+               "references": [{"kind": "remote", "candidate_id": "candidate", "candidate_generation": REMOTE_GENERATION}]}
+    status, body = api.request(payload)
+    assert status == 200
+    assert marked == [(task_id, "candidate")]
+    assert body["lookup_task"] == {"id": task_id, "notification_action_taken": True}
+    assert "lookup_task_id" not in next(args for name, args in api.calls if name == "save")
+
+
+def test_lookup_of_another_album_is_never_answered(api, monkeypatch):
+    marked = []
+    monkeypatch.setattr(routes, "cover_lookup_result", lambda value: {
+        "id": value, "status": "completed", "album_payload": {"album_id": 5}, "track_paths": ["/other/a.flac"],
+    })
+    monkeypatch.setattr(routes, "mark_cover_lookup_task_notification_action_taken",
+                        lambda value, **kwargs: marked.append(value))
+    status, body = api.request({**BODY, "lookup_task_id": "lookup-of-album-5"})
+    assert status == 200
+    assert body["lookup_task"] is None
+    assert marked == []
+
+
+@pytest.mark.parametrize("lookup_task_id", [7, None, ["lookup"]])
+def test_malformed_lookup_task_id_never_reaches_repository(api, lookup_task_id):
+    status, _ = api.request({**BODY, "lookup_task_id": lookup_task_id})
+    assert status == 422
+    assert not any(name == "save" for name, _ in api.calls)
 
 
 def test_retaining_saved_selection_does_not_invent_remote_read_requirement(api):

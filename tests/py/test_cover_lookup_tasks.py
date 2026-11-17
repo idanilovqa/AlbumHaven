@@ -1576,12 +1576,17 @@ def test_cover_lookup_tasks_mark_action_taken_uses_postgres_selection_without_to
     config["PERSISTENCE_BACKENDS"] = {"cover_lookup_tasks": "postgres"}
 
     reset_cover_lookup_runtime_state()
-    marked = mark_cover_lookup_task_notification_action_taken("postgres-task", config=config)
+    # A lookup restored after a restart is only persisted; an ordered save names its chosen candidate.
+    marked = mark_cover_lookup_task_notification_action_taken(
+        "postgres-task", config=config, selected_candidate_id="candidate-2",
+    )
 
     assert marked is not None
     assert marked["notification_action_taken"] is True
+    assert marked["selected_candidate_id"] == "candidate-2"
     assert persisted_tasks[0]["id"] == "postgres-task"
     assert persisted_tasks[0]["notification_action_taken"] is True
+    assert persisted_tasks[0]["selected_candidate_id"] == "candidate-2"
     assert json.loads(notifications_path.read_text(encoding="utf-8")) == {
         "tasks": [{"id": "stale-file-task", "status": "completed"}]
     }

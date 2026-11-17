@@ -235,13 +235,13 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
   );
 });
 
-require('node:test')('ordered Save from a lookup notification marks that notification Art chosen', async () => {
+require('node:test')('ordered Save from a lookup notification names it and shows Art chosen from the server', async () => {
   const context = loadRuntime();
   const marked = [];
   const rendered = [];
   context.crypto = { randomUUID: () => '0b4c7a7e-4f7d-4b8e-9f43-3c6b5d0e9a11' };
   context.closeCoverLookupModal = () => {};
-  context.markCoverLookupTaskActionTaken = (taskId, album) => marked.push({ taskId, album });
+  context.markCoverLookupTaskActionTaken = (taskId, album, options) => marked.push({ taskId, album, options });
   context.renderCoverLookupDrawer = (options) => rendered.push(options);
   const album = { album_id: 72, selected_covers_album_id: 72 };
   context.state.coverLookup.tasks = [{ id: 'lookup-1', status: 'completed' }];
@@ -257,15 +257,26 @@ require('node:test')('ordered Save from a lookup notification marks that notific
     }],
     saving: false,
   };
-  context.fetch = async () => ({
-    ok: true,
-    json: async () => ({ ok: true, selected_covers_revision: 1, selected_covers: [{ selection_id: 'remote-id' }] }),
-  });
+  const bodies = [];
+  context.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        selected_covers_revision: 1,
+        selected_covers: [{ selection_id: 'remote-id', kind: 'remote', source: 'spotify', lookup_task_id: 'lookup-1' }],
+        lookup_task: { id: 'lookup-1', notification_action_taken: true },
+      }),
+    };
+  };
 
   assert.equal(await context.saveOrderedCoverSelection(), true);
+  assert.equal(bodies[0].lookup_task_id, 'lookup-1', 'the save names the lookup it answers');
   assert.equal(marked.length, 1);
   assert.equal(marked[0].taskId, 'lookup-1');
   assert.equal(marked[0].album, album);
+  assert.equal(marked[0].options.persist, false, 'the server already persisted Art chosen');
   assert.deepEqual(JSON.parse(JSON.stringify(rendered)), [{ taskIds: ['lookup-1'] }]);
 });
 

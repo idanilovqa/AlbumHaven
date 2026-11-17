@@ -1081,7 +1081,10 @@ def mark_cover_lookup_task_notification_action_taken(
     task_id: str,
     *,
     config: Mapping[str, object] | None = None,
+    selected_candidate_id: str = "",
 ) -> dict[str, object] | None:
+    """Answer a finished lookup's notification, optionally naming the candidate it chose."""
+    chosen = {"selected_candidate_id": selected_candidate_id} if selected_candidate_id else {}
     normalized_task_id = str(task_id or "").strip()
     if not normalized_task_id:
         return None
@@ -1091,6 +1094,7 @@ def mark_cover_lookup_task_notification_action_taken(
         task = _COVER_LOOKUP_TASKS.get(normalized_task_id)
         if isinstance(task, dict) and is_terminal_cover_lookup_task(task):
             task["notification_action_taken"] = True
+            task.update(chosen)
             if not str(task.get("notification_completed_at") or "").strip():
                 task["notification_completed_at"] = (
                     str(task.get("finished_at") or "").strip()
@@ -1112,6 +1116,7 @@ def mark_cover_lookup_task_notification_action_taken(
     merged = normalize_cover_lookup_notification_task(
         {
             **source_task,
+            **chosen,
             "notification_action_taken": True,
             "notification_expires_at": "",
         }

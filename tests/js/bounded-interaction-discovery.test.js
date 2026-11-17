@@ -157,8 +157,8 @@ test('a call chain deeper than the depth limit is a hazard, never a silent pass'
   assert.deepEqual(hazards.map(hazard => [hazard.operation, hazard.via.at(-1), hazard.reject, hazard.hot]), [['call-depth-exceeded', 'step7', false, true]]);
 });
 
-// Owner decision "Hot paths only": full reachable-hazard proof applies to hot
-// paths; one-shot entrypoints keep route, request, and registration checks.
+// Full reachable-hazard proof applies to hot paths; one-shot entrypoints keep
+// route, request, and registration checks.
 test('classifies hot paths by entrypoint kind: repeating events, observers, intervals, animation loops, and pollers', () => {
   const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
   const { entrypoints } = analyzeJavaScriptSources({ [FILE]: `
@@ -248,10 +248,10 @@ test('a function that schedules its own callback parameter is a timer helper who
   ]);
 });
 
-// Owner decision: "animation loops" are hot paths, so a requestAnimationFrame
-// is hot only when its callback can schedule it again, directly or through a
-// timer helper. A one-shot frame scheduled from a hot handler stays covered as
-// part of that handler's reachable work.
+// A requestAnimationFrame is hot only when its callback can schedule it again,
+// directly or through a timer helper (an animation loop). A one-shot frame
+// scheduled from a hot handler stays covered as part of that handler's
+// reachable work.
 test('a one-shot animation frame is not hot, an animation loop is, and a hot handler covers the frames it schedules', () => {
   const { analyzeJavaScriptSources } = require('../../scripts/ci/bounded-interaction-discovery.cjs');
   const { entrypoints, hazards } = analyzeJavaScriptSources({ [FILE]: `

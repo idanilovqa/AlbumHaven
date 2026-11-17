@@ -3110,7 +3110,7 @@ async function loadCoverLookupTasks(options = {}) {
         const terminalCandidatesPending = terminalTask
           && Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0);
         if (terminalCandidatesPending && options.refreshModalGallery !== false) {
-          await refreshCoverLookupGallery(false, { includeLocal: !state.coverLookup.modal.localInventoryLoaded });
+          await refreshCoverLookupGallery(false, { includeLocal: !state.coverLookup.modal.localInventoryLoaded, coalesce: true });
         } else {
           applyCoverLookupTaskModalStatus(task);
           applyCoverLookupCandidateSource(candidateSource);
@@ -3121,16 +3121,16 @@ async function loadCoverLookupTasks(options = {}) {
                 > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
             );
           if (partialCandidatesAdvanced) {
-            await refreshCoverLookupGallery(false);
+            await refreshCoverLookupGallery(false, { coalesce: true });
           } else if (terminalTask) {
             if (options.refreshModalGallery !== false) {
-              await refreshCoverLookupGallery(false);
+              await refreshCoverLookupGallery(false, { coalesce: true });
             } else {
               renderCoverLookupModal();
             }
           } else if (Array.isArray(task.updated_albums) && task.updated_albums.length) {
             if (Number(task.progress || 0) >= 100) {
-              await refreshCoverLookupGallery(false);
+              await refreshCoverLookupGallery(false, { coalesce: true });
             } else {
               renderCoverLookupModal();
             }
@@ -3831,10 +3831,21 @@ async function finishCoverLookupMutation(mutationKey, session) {
   }
 }
 
-async function refreshCoverLookupGallery(showLoading = true, { includeLocal = true } = {}) {
-  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
+// BUGFIX-05 (owner): a running search's progress polls join the gallery read in flight and ask for
+// one more after it, instead of discarding it; otherwise an open from a Queued or Searching card
+// waits until a read outlives the poll interval.
+let coverLookupGalleryFlight = null;
+
+async function refreshCoverLookupGallery(showLoading = true, { includeLocal = true, coalesce = false } = {}) {
   const album = state.coverLookup.modal.album;
   if (!album) return;
+  if (coalesce && coverLookupGalleryFlight?.album === album) {
+    coverLookupGalleryFlight.queued = true;
+    return;
+  }
+  if (typeof clearTimeout === 'function') clearTimeout(coverLookupLocalInventoryTimer);
+  const flight = { album, queued: false };
+  coverLookupGalleryFlight = flight;
   const request = ++coverLookupGalleryRequest;
   const isCurrent = () => request === coverLookupGalleryRequest;
   // Background refreshes keep the current gallery and any shown error until the response settles,
@@ -3893,6 +3904,13 @@ async function refreshCoverLookupGallery(showLoading = true, { includeLocal = tr
     renderCoverLookupModal();
     if (previousError !== state.coverLookup.modal.galleryError) {
       showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+    }
+  } finally {
+    if (coverLookupGalleryFlight === flight) {
+      coverLookupGalleryFlight = null;
+      if (flight.queued && isCurrent() && state.coverLookup.modal.album === album) {
+        void refreshCoverLookupGallery(false, { coalesce: true });
+      }
     }
   }
 }

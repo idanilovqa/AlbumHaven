@@ -2216,6 +2216,44 @@ test('UI-5: merging a split release back with only its moved tracks known opens 
 });
 
 
+test('BUGFIX-05: a search progress poll does not discard the gallery read an open is waiting on', async () => {
+  const resolvers = [];
+  const overlay = { hidden: false, classList: { toggle() {}, contains: () => false }, toggleAttribute() {}, removeAttribute() {}, setAttribute() {}, hasAttribute: () => false };
+  const album = { album_id: 7, key: 'a::b', name: 'B', album_artist: 'A', tracks: [{ path: 'N:/A/B/01.flac' }] };
+  const context = {
+    window: {}, URLSearchParams, console: { ...console, log() {} }, ButtonComponent, HTMLButtonElement: class {},
+    setTimeout: () => 0, clearTimeout() {},
+    state: { coverLookup: { tasks: [], modal: { album, taskId: 't1', pastedImages: [], localCovers: [] } } },
+    getAlbumTrackPaths: value => new Set((value?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    showToast() {},
+    fetch: () => new Promise((resolve) => resolvers.push(resolve)),
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const applied = [];
+  context.applyCoverLookupGalleryPayload = payload => applied.push(payload.marker);
+  context.renderCoverLookupModal = () => {};
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+  const answer = marker => ({ ok: true, json: async () => ({ ok: true, marker }) });
+
+  const opening = context.refreshCoverLookupGallery(false);
+  // Two progress polls arrive while the opening read is still running.
+  await context.refreshCoverLookupGallery(false, { coalesce: true });
+  await context.refreshCoverLookupGallery(false, { coalesce: true });
+  assert.equal(resolvers.length, 1, 'the polls join the read in flight');
+  resolvers[0](answer('opening'));
+  await opening;
+  assert.deepEqual(applied, ['opening'], 'the opening read is shown, not discarded');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolvers.length, 2, 'one more read follows for the polls');
+  resolvers[1](answer('after-polls'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(applied, ['opening', 'after-polls']);
+});
+
+
 test('UI-5: a split opens the chooser from a notification the server listed without track paths', async () => {
   const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
   const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));

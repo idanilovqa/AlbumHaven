@@ -863,12 +863,15 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
-        def _temp_sample() -> None:  # TEMP-DIAG (not for merge): logs where slow early requests wait
+        def _temp_sample() -> None:  # TEMP-DIAG (not for merge): logs where slow requests wait
             import collections, json as _json, os as _os, sys as _sys, time as _time
             started = _time.time()
             me = threading.get_ident()
-            samples = []
-            while _time.time() - started < 15.0:
+            samples = collections.deque()
+            reported = set()
+            next_check = started + 1.0
+            while True:
+                now = _time.time()
                 names = {t.ident: t.name for t in threading.enumerate()}
                 row = []
                 for ident, frame in _sys._current_frames().items():
@@ -882,18 +885,28 @@ def create_asgi_app():
                     name = names.get(ident, str(ident))
                     if "queue.py:get" in " ".join(chain[:3]) or chain[0].startswith(("windows_events.py", "selectors.py:_select")) and name == "MainThread":
                         continue
-                    app_chain = " < ".join([c for c in chain if not c.startswith(("threading.py", "_asyncio.py", "thread.py", "contextlib.py", "<frozen"))][:5])
+                    app_chain = " < ".join([c for c in chain if not c.startswith(("threading.py", "_asyncio.py", "thread.py", "contextlib.py", "<frozen"))][:6])
                     row.append((name.split("_")[0], app_chain))
-                samples.append((int(_time.time() * 1000), row))
-                _time.sleep(0.01)
-            for path, begin, end, _ident in list(_TEMP_REQUESTS):
-                if end is None or end - begin < 300 or begin > started * 1000 + 15000:
-                    continue
-                counter = collections.Counter()
-                for at, row in samples:
-                    if begin <= at <= end:
-                        counter.update(f"{n} | {c}" for n, c in row if n not in ("Thread-2",))
-                runtime.logger.info("TEMP-DIAG slow-request %s", _json.dumps({"path": path, "ms": end - begin, "start_since_boot": begin - int(started * 1000), "top": counter.most_common(14)}))
+                samples.append((int(now * 1000), row))
+                while samples and samples[0][0] < (now - 20.0) * 1000:
+                    samples.popleft()
+                if now >= next_check:
+                    next_check = now + 1.0
+                    for entry in list(_TEMP_REQUESTS):
+                        path, begin, end, _ident = entry
+                        if end is None or id(entry) in reported:
+                            continue
+                        reported.add(id(entry))
+                        limit = 300 if begin <= started * 1000 + 15000 else 1500
+                        if end - begin < limit:
+                            continue
+                        counter = collections.Counter()
+                        for at, sample_row in samples:
+                            if begin <= at <= end:
+                                counter.update(f"{n} | {c}" for n, c in sample_row if n not in ("Thread-2",))
+                        runtime.logger.info("TEMP-DIAG slow-request %s", _json.dumps({"path": path, "ms": end - begin, "start_since_boot": begin - int(started * 1000), "top": counter.most_common(16)}))
+                    del _TEMP_REQUESTS[:max(0, len(_TEMP_REQUESTS) - 400)]
+                _time.sleep(0.02)
         threading.Thread(target=_temp_sample, name="temp-sampler", daemon=True).start()
         try:
             yield

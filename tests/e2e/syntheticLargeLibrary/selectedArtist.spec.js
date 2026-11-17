@@ -99,6 +99,9 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       coverImageSelector: galleryActions.galleryPage.albumCard.coverImageSelector,
     });
     const selectedGalleryReadyMs = selectedStartupDiagnostics.phases?.galleryReadyMs;
+    // TEMP-DIAG (not for merge)
+    console.log('TEMP-DIAG-RESOURCES', JSON.stringify(await page.evaluate(() => ({ timeOrigin: Math.round(performance.timeOrigin), nav: performance.getEntriesByType('navigation').map((e) => ({ q: Math.round(e.requestStart), r: Math.round(e.responseStart), e: Math.round(e.responseEnd), dcl: Math.round(e.domContentLoadedEventEnd), load: Math.round(e.loadEventEnd) })), entries: performance.getEntriesByType('resource').map((e) => ({ n: e.name.replace(location.origin, '').slice(0, 70), s: Math.round(e.startTime), q: Math.round(e.requestStart), r: Math.round(e.responseStart), e: Math.round(e.responseEnd), z: e.transferSize })) }))));
+    console.log('TEMP-DIAG-PHASES', JSON.stringify({ phases: selectedStartupDiagnostics.phases, navigation: selectedStartupDiagnostics.navigation }));
     await testInfo.attach('selected-startup-diagnostics.json', {
       body: Buffer.from(JSON.stringify({
         ...selectedStartupDiagnostics,

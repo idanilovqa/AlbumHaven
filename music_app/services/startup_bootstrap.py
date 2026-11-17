@@ -326,10 +326,11 @@ def build_startup_album_card_html(album: dict[str, object], eager_cover: bool = 
     total_length = str(album.get("total_duration_display") or "")
     rating_value = get_startup_album_card_rating(album)
     if cover_url:
+        # The cover reference boundary sends `data-cover-path` to the page as `data-cover-ref`.
         onerror_js = (
-            "const failedPath=this.getAttribute('data-cover-path')||'';"
-            "if(failedPath){"
-            "(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__||(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__={}))[failedPath]=true;"
+            "const failedRef=this.getAttribute('data-cover-ref')||'';"
+            "if(failedRef){"
+            "(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__||(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__={}))[failedRef]=true;"
             "}"
             "const remoteFallback=this.getAttribute('data-remote-cover-url')||'';"
             "if(remoteFallback&&this.dataset.remoteCoverTried!=='1'){"

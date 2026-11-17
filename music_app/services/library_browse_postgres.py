@@ -771,7 +771,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -1121,7 +1120,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "non_album_tracks": build_non_album_track_list(
@@ -1675,7 +1673,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2004,7 +2001,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2617,7 +2613,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -7299,7 +7294,7 @@ def _queue_display_cover_variants_for_groups(
                 ):
                     inventory_options = {}
                     recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                    if recorder is not None:
+                    if recorder is not None and preview_policy is not None:
                         inventory_options["on_published"] = recorder
                     queue_cover_display_variant_generation(
                         source_path,

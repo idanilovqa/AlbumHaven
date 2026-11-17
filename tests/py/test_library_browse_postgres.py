@@ -9070,7 +9070,41 @@ def test_postgres_cover_variant_queue_uses_preview_and_full_card_sizes(monkeypat
         ("covers/preview.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
         ("covers/full.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
-    assert queued_recorders == [recorder, recorder]
+    # Unrevisioned previews stay in app data, outside the relocation inventory.
+    assert queued_recorders == [None, None]
+
+
+def test_postgres_cover_variant_queue_records_revisioned_policy_previews(monkeypatch, tmp_path):
+    from music_app.services import covers as covers_module
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+    from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
+
+    queued = []
+    recorder = object()
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, *, cache_root, max_size, revision=None, on_published=None: queued.append(
+            (Path(cache_root), revision, on_published)
+        ),
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {
+            "DATA_DIR": str(tmp_path / "app-data"),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": PreviewStoragePolicy(
+                PreviewStorageSnapshot(mode="album_folders")
+            ),
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": recorder,
+        },
+        [{"albums": [{"cover_path": str(source), "cover_revision": "a" * 64}]}],
+    )
+
+    assert queued == [(source.parent / ".album-haven", "a" * 64, recorder)]
 
 
 def test_postgres_cover_variant_queue_deduplicates_without_consuming_limit(monkeypatch):

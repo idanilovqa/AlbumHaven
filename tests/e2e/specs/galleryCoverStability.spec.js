@@ -5,6 +5,7 @@ import {
   expectJosephCoverRouteResponse,
   expectJosephFixtureCheckpoint,
   expectZoomedJosephDetailScreenshot,
+  josephCoverReference,
   observeExactCoverTraffic,
   readDecodedImageCheckpoint,
   readPagePerformanceNow,
@@ -29,7 +30,8 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
   stepLogger,
   trackModalActions,
 }) => {
-  const coverTraffic = observeExactCoverTraffic(page);
+  const josephReference = await josephCoverReference();
+  const coverTraffic = observeExactCoverTraffic(page, { josephReference });
   let baseline;
   let baselineAlbumKey = '';
   let baselineCardHandle;
@@ -56,9 +58,9 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     baselineCardHandle = await galleryActions.captureAlbumCardHandleByName(ALBUM);
     expectDecodedCheckpoint(expect, baseline);
     expectAlbumCardCoverPresentationReady(expect, baseline);
-    expectJosephFixtureCheckpoint(expect, baseline);
+    expectJosephFixtureCheckpoint(expect, baseline, { josephReference });
     const baselineResponse = await coverTraffic.waitForResponse(baseline.productionSrc);
-    expectJosephCoverRouteResponse(expect, baselineResponse);
+    expectJosephCoverRouteResponse(expect, baselineResponse, { josephReference });
     expect(baselineAlbumKey).not.toEqual('');
     const timingOutcome = expectTimingBudget(
       expect,
@@ -156,7 +158,8 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
   stepLogger,
   trackModalActions,
 }) => {
-  const coverTraffic = observeExactCoverTraffic(page);
+  const josephReference = await josephCoverReference();
+  const coverTraffic = observeExactCoverTraffic(page, { josephReference });
   let lightboxSources;
   let unavailableCover;
   let fullCoverUrl;
@@ -167,14 +170,14 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
     await searchToolbarActions.waitForQuery('Joseph');
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
-    expectJosephFixtureCheckpoint(expect, checkpoint);
+    expectJosephFixtureCheckpoint(expect, checkpoint, { josephReference });
     expectAlbumCardCoverPresentationReady(expect, checkpoint);
     fullCoverUrl = new URL(checkpoint.productionSrc || checkpoint.src, page.url());
     fullCoverUrl.searchParams.delete('size');
   });
 
   // Make the original unavailable before opening the modal starts its full-art preload.
-  unavailableCover = temporarilyMakeJosephCoverUnavailable(fullCoverUrl.href, page.url());
+  unavailableCover = await temporarilyMakeJosephCoverUnavailable(fullCoverUrl.href, page.url());
   try {
     await stepLogger.step('Open its normal album modal and verify the decoded non-placeholder cover', async () => {
       await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
@@ -195,7 +198,7 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
       expect(modalCover.currentSrc).not.toBe(previewUrl);
       expect(new URL(modalCover.productionSrc, page.url()).href).toBe(previewUrl);
       const previewResponse = await coverTraffic.waitForResponse(previewUrl);
-      expectJosephCoverRouteResponse(expect, previewResponse);
+      expectJosephCoverRouteResponse(expect, previewResponse, { josephReference });
     });
 
     await stepLogger.step('Fall back to the real 480 preview when the test-owned full source is unavailable', async () => {
@@ -206,7 +209,7 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
       );
       expect(failedFullResponse.status).toBe(404);
       const fallbackCheckpoint = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
-      expectJosephFixtureCheckpoint(expect, fallbackCheckpoint);
+      expectJosephFixtureCheckpoint(expect, fallbackCheckpoint, { josephReference });
       expect(new URL(fallbackCheckpoint.src, page.url()).href).toBe(
         new URL(lightboxSources.preview, page.url()).href,
       );
@@ -220,9 +223,9 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
     await trackModalActions.openCoverLightbox();
     const fullUrl = new URL(lightboxSources.full, page.url()).href;
     const fullResponse = await coverTraffic.waitForResponse(fullUrl);
-    expectJosephCoverRouteResponse(expect, fullResponse, { fullscreen: true });
+    expectJosephCoverRouteResponse(expect, fullResponse, { fullscreen: true, josephReference });
     const checkpoint = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
-    expectJosephFixtureCheckpoint(expect, checkpoint, { fullscreen: true });
+    expectJosephFixtureCheckpoint(expect, checkpoint, { fullscreen: true, josephReference });
     expect(new URL(checkpoint.src, page.url()).href).toBe(fullUrl);
     expect(new URL(checkpoint.src, page.url()).searchParams.get('size')).toBeNull();
     expect(checkpoint.src.startsWith('blob:')).toBe(false);
@@ -241,7 +244,8 @@ test('FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-si
   stepLogger,
   trackModalActions,
 }) => {
-  const coverTraffic = observeExactCoverTraffic(page);
+  const josephReference = await josephCoverReference();
+  const coverTraffic = observeExactCoverTraffic(page, { josephReference });
   let fullCoverUrl;
   let unavailableCover;
 
@@ -252,14 +256,14 @@ test('FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-si
     await searchToolbarActions.waitForQuery('Joseph');
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
-    expectJosephFixtureCheckpoint(expect, checkpoint);
+    expectJosephFixtureCheckpoint(expect, checkpoint, { josephReference });
     expectAlbumCardCoverPresentationReady(expect, checkpoint);
     fullCoverUrl = new URL(checkpoint.productionSrc || checkpoint.src, page.url());
     fullCoverUrl.searchParams.delete('size');
-    expect(fullCoverUrl.pathname).toBe('/cover');
+    expect(fullCoverUrl.pathname).toBe(`/cover/${josephReference}`);
   });
 
-  unavailableCover = temporarilyMakeJosephCoverUnavailable(fullCoverUrl.href, page.url());
+  unavailableCover = await temporarilyMakeJosephCoverUnavailable(fullCoverUrl.href, page.url());
   try {
     await stepLogger.step('Keep the real preview visible and expose Retry after full-size attempts fail', async () => {
       await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
@@ -269,7 +273,7 @@ test('FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-si
       const lightboxSources = await trackModalActions.readCoverLightboxSources();
       const previewUrl = new URL(lightboxSources.preview, page.url());
       const expectedFullUrl = new URL(lightboxSources.full, page.url());
-      expect(previewUrl.pathname).toBe('/cover');
+      expect(previewUrl.pathname).toBe(`/cover/${josephReference}`);
       expect(previewUrl.searchParams.get('size')).toBe('480');
       expect(expectedFullUrl.origin).toBe(fullCoverUrl.origin);
       expect(expectedFullUrl.pathname).toBe(fullCoverUrl.pathname);
@@ -285,7 +289,6 @@ test('FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-si
       const fullSizeRetryUrls = () => coverTraffic.requestUrls().filter((requestUrl) => {
         const url = new URL(requestUrl);
         return url.pathname === expectedFullUrl.pathname
-          && url.searchParams.get('path') === expectedFullUrl.searchParams.get('path')
           && url.searchParams.get('size') === null
           && url.searchParams.has('_album_haven_retry');
       });
@@ -309,7 +312,6 @@ test('FTC-COVERS-030 keeps a usable preview and exposes Retry when local full-si
       const recoveredCheckpoint = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
       const recoveredUrl = new URL(recoveredCheckpoint.src, page.url());
       expect(recoveredUrl.pathname).toBe(expectedFullUrl.pathname);
-      expect(recoveredUrl.searchParams.get('path')).toBe(expectedFullUrl.searchParams.get('path'));
       expect(recoveredUrl.searchParams.get('size')).toBeNull();
       expect(recoveredUrl.searchParams.has('_album_haven_retry')).toBe(true);
       await trackModalActions.expectCoverLightboxRetryHidden();
@@ -332,7 +334,8 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
   stepLogger,
   trackModalActions,
 }) => {
-  let expectedCoverPath = '';
+  const josephReference = await josephCoverReference();
+  let expectedCoverPathname = '';
   let track;
 
   await stepLogger.step('Open the known Joseph release and start playback through its real track control', async () => {
@@ -345,8 +348,8 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     const summary = await trackModalActions.waitForLoadedSummary();
     expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
     const modalCover = await trackModalActions.waitForDetailedCoverImageCheckpoint();
-    expectedCoverPath = new URL(modalCover.productionSrc, page.url()).searchParams.get('path') || '';
-    expect(expectedCoverPath).not.toEqual('');
+    expectedCoverPathname = new URL(modalCover.productionSrc, page.url()).pathname;
+    expect(expectedCoverPathname).toBe(`/cover/${josephReference}`);
     const playbackMark = await playbackEvidence.playbackMark();
     track = await trackModalActions.playTrackAt(0);
     await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: track.title });
@@ -367,8 +370,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     expect(playerCover.naturalWidth).toBeGreaterThan(0);
     expect(playerCover.naturalHeight).toBeGreaterThan(0);
     const playerCoverUrl = new URL(playerCover.sourceUrl);
-    expect(playerCoverUrl.pathname).toBe('/cover');
-    expect(playerCoverUrl.searchParams.get('path')).toBe(expectedCoverPath);
+    expect(playerCoverUrl.pathname).toBe(expectedCoverPathname);
   });
 
   await stepLogger.step('Restore the multi-album artist gallery before opening the player artwork', async () => {
@@ -402,8 +404,8 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     expect(reopened.title).toContain(YEAR);
     await trackModalActions.openCoverLightbox();
     const fullscreenCover = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);
-    expectJosephFixtureCheckpoint(expect, fullscreenCover, { fullscreen: true });
-    expect(new URL(fullscreenCover.src, page.url()).searchParams.get('path')).toBe(expectedCoverPath);
+    expectJosephFixtureCheckpoint(expect, fullscreenCover, { fullscreen: true, josephReference });
+    expect(new URL(fullscreenCover.src, page.url()).pathname).toBe(expectedCoverPathname);
     await trackModalActions.expectCoverLightboxNavigationUnavailable();
     await trackModalActions.closeCoverLightbox();
     await trackModalActions.close();

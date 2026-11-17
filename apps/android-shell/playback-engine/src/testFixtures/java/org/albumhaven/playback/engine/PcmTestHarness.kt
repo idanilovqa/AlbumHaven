@@ -14,9 +14,14 @@ import java.nio.ByteOrder
 
 const val RATE = 48_000
 
-/** Every sample identifies itself: left is its source frame index, right is its track tag. */
-class SyntheticTrack(val tag: Int, val frames: Long, val sampleRate: Int = RATE) {
+/**
+ * Every sample identifies itself: left is its source frame index, right is its track tag. A
+ * [shape] instead gives both channels audio-like levels, for tests that judge loudness.
+ */
+class SyntheticTrack(val tag: Int, val frames: Long, val sampleRate: Int = RATE, private val shape: ((Long) -> Float)? = null) {
     val pcm = PcmTrack("ref-$tag", frames.toDouble() / sampleRate, cacheKey = "key-$tag")
+
+    fun sample(frame: Long, channel: Int): Float = shape?.invoke(frame) ?: if (channel == 0) frame.toFloat() else tag.toFloat()
 }
 
 /** A [TrackCache] in memory, recording what it was asked. */
@@ -247,7 +252,7 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
             val buffer = ByteBuffer.allocate(((ENCODED_SKIP_FRAMES + kept + ENCODED_TRAILING_FRAMES) * 8).toInt())
                 .order(ByteOrder.LITTLE_ENDIAN)
             repeat(ENCODED_SKIP_FRAMES) { buffer.putFloat(-1f).putFloat(JUNK_TAG) }
-            for (frame in start until track.frames) buffer.putFloat(frame.toFloat()).putFloat(track.tag.toFloat())
+            for (frame in start until track.frames) buffer.putFloat(track.sample(frame, 0)).putFloat(track.sample(frame, 1))
             repeat(ENCODED_TRAILING_FRAMES) { buffer.putFloat(-1f).putFloat(JUNK_TAG) }
             stream.encodedBytes = buffer.array()
             stream.outstanding = INITIAL_CREDIT_BYTES
@@ -322,9 +327,7 @@ class FakeAhpcServer(tracks: List<SyntheticTrack>, var chunkFrames: Int = 4_096)
                 return
             }
             val frames = minOf(stream.outstanding.toLong(), chunkFrames.toLong(), remaining).toInt()
-            val samples = FloatArray(frames * 2) { index ->
-                if (index % 2 == 0) (stream.position + index / 2).toFloat() else stream.track.tag.toFloat()
-            }
+            val samples = FloatArray(frames * 2) { index -> stream.track.sample(stream.position + index / 2, index % 2) }
             outbox += pcmFrame(stream.role, stream.generation, stream.id, stream.sequence, samples)
             stream.sequence += 1
             stream.position += frames
@@ -365,6 +368,8 @@ class PcmTrace {
         for (sample in 0 until count * 2) samples[frames * 2 + sample] = source[offsetSamples + sample] * gain
         frames += count
     }
+
+    fun left(frame: Int): Float = samples[frame * 2]
 
     /** Appends frame [frame] of [source] scaled by [gain]. */
     fun appendFrame(source: PcmTrace, frame: Int, gain: Float) = append(source.samples, frame * 2, 1, gain)
@@ -434,6 +439,9 @@ class RecordingSink(
 ) : PcmSink {
     private val written = PcmTrace()
     val writtenFrames: Int get() = written.frames
+
+    /** The left channel as written, for tracks with a [SyntheticTrack] shape. */
+    fun writtenLeft(): List<Float> = List(written.frames, written::left)
     val operations = mutableListOf<String>()
 
     /** What the modelled output played, with the gain its fades gave each frame. */

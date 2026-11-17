@@ -7,6 +7,7 @@ import unicodedata
 
 from music_app.services.lastfm import LastfmError
 from music_app.services.listen_history import is_unverified_scrobble_entry
+from music_app.services.listen_history_postgres import SETTLED_SUBMISSION_STATES
 from music_app.services.measured_listen_history import (
     MeasuredListenError,
     load_measured,
@@ -275,7 +276,6 @@ class PendingScrobblePlan:
     updates: JsonDict | None = None
 
 
-_BLOCKED_SUBMISSION_STATES = frozenset({"attempting", "sent", "uncertain", "accepted"})
 
 
 def attempting_updates(claimed_at: datetime) -> JsonDict:
@@ -303,7 +303,7 @@ def plan_pending_scrobble(
         or not bool(entry.get("scrobble_eligible", True))
         or not bool(entry.get("scrobble_retryable", True))
         or bool(entry.get("scrobble_retry_exhausted"))
-        or str(entry.get("scrobble_submission_state") or "") in _BLOCKED_SUBMISSION_STATES
+        or str(entry.get("scrobble_submission_state") or "") in SETTLED_SUBMISSION_STATES
     ):
         return None
     if bool(entry.get("scrobble_reauthentication_required")) and not reauthenticated:

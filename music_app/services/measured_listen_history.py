@@ -150,7 +150,7 @@ def append_measured(adapter, entry, *, account_id, library_id, connection=None):
         return {key: item for key, item in value.items()
                 if key not in _SERVER_FIELDS and not key.startswith("scrobble_")}
     connection_scope = (nullcontext(connection) if connection is not None
-                        else adapter._connect_to_database())
+                        else adapter.connect())
     with connection_scope as connection:
         # The transaction-scoped identity lock also serializes first-row creation.
         lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
@@ -225,6 +225,6 @@ def measured_provider_guard(config, *, account_id, library_id, device_id, sessio
     from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
     lock_key = provider_lock_key(account_id=account_id, library_id=library_id,
                                  device_id=device_id, session_id=session_id)
-    with PostgresListenHistoryAdapter(config)._connect_to_database() as connection:
+    with PostgresListenHistoryAdapter(config).connect() as connection:
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
         yield connection

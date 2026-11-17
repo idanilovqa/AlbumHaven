@@ -43,7 +43,7 @@ def test_scoped_counts_preserve_typed_status_when_payload_omits_legacy_flag(ledg
     owner = ledger['own']
     item = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
     adapter = PostgresListenHistoryAdapter(ledger['config'])
-    with adapter._connect_to_database() as connection:
+    with adapter.connect() as connection:
         connection.execute("""update integration.listen_history
             set scrobble_status='scrobbled',
                 metadata=jsonb_set(metadata, '{source_payload}', (metadata->'source_payload') - 'scrobbled')
@@ -89,7 +89,7 @@ def test_scoped_counts_exclude_imported_source_family_rows(ledger):
     }, account_id=owner['account_id'], library_id=owner['library_id'])
     imported_pending = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
     adapter = PostgresListenHistoryAdapter(ledger['config'])
-    with adapter._connect_to_database() as connection:
+    with adapter.connect() as connection:
         connection.execute("""update integration.listen_history
             set source_family='lastfm_import'
             where account_id=%s and library_id=%s

@@ -23,6 +23,10 @@ _SOURCE = "runtime_listen_history_adapter"
 _BACKFILL_SOURCE = "phase_6_json_file_backfill"
 _MEASURED_SOURCE = "rendered_local_listen_session"
 LASTFM_SCROBBLE_SOURCE_FAMILIES = (_SOURCE, _BACKFILL_SOURCE, _MEASURED_SOURCE)
+# Submission states in which a listen no longer waits to be sent, and those whose outcome is
+# unknown. The listen predicates in `listen_history` and their SQL forms below share them.
+SETTLED_SUBMISSION_STATES = frozenset({"attempting", "sent", "uncertain", "accepted"})
+UNVERIFIED_SUBMISSION_STATES = frozenset({"attempting", "uncertain"})
 
 
 def is_listen_history_postgres_available(config: dict[str, object] | None) -> bool:
@@ -51,7 +55,7 @@ class PostgresListenHistoryAdapter:
         self._connect = connect or _connect
 
     def load_items(self) -> list[dict[str, object]]:
-        with self._connect_to_database() as connection:
+        with self.connect() as connection:
             _ensure_bootstrap_context(connection)
             rows = list(connection.execute(_load_listen_history_sql()).fetchall())
         return [_listen_history_item_from_row(row) for row in rows]
@@ -67,7 +71,7 @@ class PostgresListenHistoryAdapter:
         ]
         if not normalized_track_refs:
             return {}
-        with self._connect_to_database() as connection:
+        with self.connect() as connection:
             _ensure_bootstrap_context(connection)
             rows = list(
                 connection.execute(
@@ -86,7 +90,7 @@ class PostgresListenHistoryAdapter:
 
     def save_items(self, items: list[dict[str, object]]) -> None:
         normalized_items = [dict(item) for item in items if isinstance(item, dict)]
-        with self._connect_to_database() as connection:
+        with self.connect() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
                 connection.execute(_delete_listen_history_sql())
@@ -125,7 +129,7 @@ class PostgresListenHistoryAdapter:
         # This preserves the existing configured legacy retry family while
         # carrying its actual row provenance into delayed callbacks.
         from music_app.services.listen_history import is_pending_scrobble_entry, is_unverified_scrobble_entry
-        with (nullcontext(connection) if connection is not None else self._connect_to_database()) as connection:
+        with (nullcontext(connection) if connection is not None else self.connect()) as connection:
             rows = connection.execute(_load_listen_history_sql(include_provenance=True)).fetchall()
             measured_rows = connection.execute("""
                 select * from integration.listen_history
@@ -150,7 +154,7 @@ class PostgresListenHistoryAdapter:
         return result
 
     def update_scoped_entry(self, *, account_id, library_id, row_id, entry_id, updates):
-        with self._connect_to_database() as connection:
+        with self.connect() as connection:
             if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
                 raise ValueError("Exact listen update scope is required")
             if row_id is None:
@@ -172,10 +176,70 @@ class PostgresListenHistoryAdapter:
             connection.execute('update integration.listen_history set metadata=%s,scrobble_status=%s where id=%s and account_id=%s and library_id=%s', (_jsonb(metadata), _scrobble_status(item), row['id'], account_id, library_id))
             return item
 
-    def _connect_to_database(self) -> Any:
+    def scrobble_status_counts(self, *, account_id: int, library_id: int) -> dict[str, int]:
+        """The library's scrobbled and pending listens, counted in one query."""
+        with self.connect() as connection:
+            row = connection.execute(f"""
+                with scoped as (
+                    select metadata,
+                        coalesce(case when metadata->'source_payload' ? 'scrobbled'
+                            then metadata->'source_payload'->>'scrobbled' = 'true'
+                            else scrobble_status = 'scrobbled' end, false) as accepted
+                    from integration.listen_history
+                    where account_id = %s and library_id = %s
+                      and source_family = any(%s)
+                )
+                select count(*) filter (where accepted) as scrobbled,
+                    count(*) filter (
+                        where metadata->'source_payload'->>'scrobble_eligible' = 'true'
+                        and not accepted
+                        and {_waiting_to_send_sql("metadata->'source_payload'")}
+                    ) as pending
+                from scoped
+            """, (account_id, library_id, list(LASTFM_SCROBBLE_SOURCE_FAMILIES))).fetchone()
+        return {"listen_history_count": int(row["scrobbled"]), "pending_scrobble_count": int(row["pending"])}
+
+    def has_sendable_scrobbles(self) -> bool:
+        """Whether any account with a connected Last.fm session has a listen waiting to be sent or
+        looked up on Last.fm, answered by one query that stops at the first such listen."""
+        payload = "h.metadata->'source_payload'"
+        with self.connect() as connection:
+            row = connection.execute(f"""
+                select exists (
+                    select 1 from integration.listen_history h
+                    join integration.lastfm_sessions k on k.account_id = h.account_id and k.is_active
+                    where h.source_family = any(%s)
+                      and h.scrobble_status is distinct from 'scrobbled'
+                      and {payload}->>'scrobble_eligible' = 'true'
+                      and coalesce({payload}->>'scrobbled', 'false') != 'true'
+                      and coalesce({payload}->>'scrobble_reauthentication_required', 'false') != 'true'
+                      and ({_unverified_sql(payload)} or ({_waiting_to_send_sql(payload)}))
+                ) as has_sendable_scrobbles
+            """, (list(LASTFM_SCROBBLE_SOURCE_FAMILIES),)).fetchone()
+        return bool(row["has_sendable_scrobbles"])
+
+    def connect(self) -> Any:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres listen history.")
         return self._connect(self._database_url)
+
+
+def _sql_states(states: frozenset[str]) -> str:
+    return ", ".join(f"'{state}'" for state in sorted(states))
+
+
+def _waiting_to_send_sql(payload: str) -> str:
+    """The retry checks of `is_pending_scrobble_entry`, over a `source_payload` expression."""
+    return f"""coalesce({payload}->>'scrobble_retryable', 'true') = 'true'
+        and coalesce({payload}->>'scrobble_retry_exhausted', 'false') != 'true'
+        and coalesce({payload}->>'scrobble_submission_state', '')
+            not in ({_sql_states(SETTLED_SUBMISSION_STATES)})"""
+
+
+def _unverified_sql(payload: str) -> str:
+    """The state check of `is_unverified_scrobble_entry`, over a `source_payload` expression."""
+    return f"""coalesce({payload}->>'scrobble_submission_state', '')
+        in ({_sql_states(UNVERIFIED_SUBMISSION_STATES)})"""
 
 
 def lock_pending_entries(connection: Any, pending: list[PendingListenEntry]) -> dict[int, PendingListenEntry]:

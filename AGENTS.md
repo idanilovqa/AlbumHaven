@@ -71,133 +71,49 @@ operate, or contribute to the application.
   `tests/ci/bounded-interactions.json`. After adding, moving, or removing one,
   run `node scripts/ci/validate-bounded-interactions.cjs --sync`, review the
   entries it registers (action, work class), then validate. `--sync` never
-  grants endpoints: a request it registers gets an empty
-  `requestOwnership.allowed` list, and validation fails until the author fills
-  it with the reviewed endpoints (and `forbidden` with the ones it must never
-  reach).
-- Hot paths need full reachable-hazard proof: an entry proves boundedness
-  statically only while discovery finds no hazard reachable from its hot
-  entrypoints (a JavaScript helper chain deeper than the call-depth limit is
-  itself a hazard). Hot paths are, by entrypoint kind only:
-  JavaScript high-frequency or repeating events (`pointermove`, `mousemove`,
-  `scroll`, `wheel`, `touchmove`, `input`, `mouseover`, `pointerover`,
-  `dragover`, `resize`, `drag`, `pointerrawupdate`, `selectionchange`,
-  `timeupdate`, and channel or worker `message`); `setInterval`; a
-  `requestAnimationFrame` or `setTimeout` whose callback can reach the function
-  that schedules it (an animation loop or a poller), including through a helper
-  that schedules its own callback parameter (a one-shot frame or timeout is
-  analyzed as part of any hot entrypoint that schedules it); Mutation, Resize,
-  Intersection, and Performance observers; workers; and every Python route and
-  background entrypoint (watchers, pollers, schedulers, reconcilers,
-  refresh/publish, thread and executor targets, including a lambda, `partial`,
-  or function passed to a helper that hands that parameter to `submit`,
-  `Thread(target=)`, or `run_in_executor`). On a hot JavaScript path a call that
-  resolves to no code is itself an `unresolved-call` hazard unless a real
-  browser defines the name (`scripts/ci/bounded-interaction-platform-names.json`,
-  regenerated with `node scripts/ci/bounded-interaction-platform-names.cjs
-  --write`) or the application never defines it; discovery resolves `const`
-  aliases, singleton aliases, object-literal and published API members,
-  inherited methods, and parameters through their call sites first. Limit: an
-  application method that shares a platform method's name is followed only
-  when its receiver resolves. A listener's event name must resolve (a literal,
-  a `const`, a constant list, an object literal's keys, or a helper's call
-  sites); otherwise validation fails with `unresolved-trigger`. A Python
-  background entrypoint may reach registered library-scale work, and any
-  entrypoint may loop over or copy a registered `libraryStateCollections` key
-  of the in-memory library state, only under a contract proving batching,
-  coalescing, and convergence (routes still reject library-scale work).
-  Library-state scans are found on receivers evidenced as library state
-  through the call graph, whatever they are named: a `.library_state`
-  attribute, a call of a getter whose return is library state
-  (`_library_state(request)`), a local bound from one (`st = get_state()`), a
-  getter parameter whose call sites pass such a getter or a lambda returning
-  library state, a parameter whose call sites pass library state or one of
-  its registered collections (`updated_file_cache=st["file_cache"]`), and one
-  local alias of a collection; a `library_state` parameter or local also
-  counts. Otherwise the entry needs a
-  deterministic contract that runs the real code at a small and a
-  production-calibration cardinality and asserts absolute operation budgets and
-  growth
-  (`tests/js/helpers/bounded-interaction-counter.js`,
-  `tests/py/bounded_interactions.py`). A contract measures under its entry's
-  own registered id (an unknown id is an error), or under each id of an
-  explicit `measures` list of registered contracts; the gate fails unless the
-  entry's `testIdentity` (the exact name of a real test declaration) measured
-  it. A helper-level test never proves a route or worker it does not drive.
-  Interactive work never declares `library-size`; there are no allowlists,
-  waivers, or baselines.
-- Every other JavaScript entrypoint (click, change, submit, keydown, load and
-  other one-shot events, one-shot `setTimeout`, request owners) is not forced
-  to prove its call chain, but still fails for a dedicated surface routed
-  through a generic endpoint, a literal or resolved request target outside
+  grants endpoints: fill `requestOwnership.allowed` (and `forbidden`) with the
+  reviewed endpoints yourself.
+- Discovery is static and lives in `scripts/ci/bounded-interaction-discovery.cjs`
+  (JavaScript) and `scripts/ci/bounded_interaction_discovery.py` (Python).
+  Their comments are the reference for which entrypoints are hot paths, how
+  calls and receivers are resolved, and which operations count as hazards.
+- A hot-path entry (high-frequency or repeating events, intervals, animation
+  loops and pollers, observers, workers, and every Python route and background
+  entrypoint) passes statically only while no hazard is reachable from it.
+  Otherwise it needs a deterministic contract that runs the real code at a
+  small and a production-calibration cardinality and asserts absolute
+  operation budgets and growth (`tests/js/helpers/bounded-interaction-counter.js`,
+  `tests/py/bounded_interactions.py`). The contract measures under the entry's
+  registered id, or each id in its `measures` list, and the entry's
+  `testIdentity` must name the real test that measured it; a helper-level test
+  never proves a route or worker it does not drive. Interactive work never
+  declares `library-size`. There are no allowlists, waivers, or baselines.
+- Any entry also fails for an unregistered or stale entrypoint, a listener
+  whose event name does not resolve, a request target outside
   `requestOwnership.allowed` or inside `forbidden`, a dynamic request target
-  without a request-capture contract, or an unregistered or stale entrypoint.
-  Direct broad work is rejected outright only inside a high-frequency handler;
-  interactive Python routes keep their library-scale and direct-enumeration
-  rejections. Existing contracts on one-shot entries stay in force.
-- Event-loop blocking (BI-08) is rejected outright. uvicorn runs every
-  `async def` route, websocket handler, and middleware (`@app.middleware`,
-  `BaseHTTPMiddleware.dispatch`, ASGI `__call__`) on its one event-loop
-  thread, so a synchronous call made there stalls every request. From each
-  such entrypoint discovery follows the calls that run on the loop: calls made
-  directly, including sync helpers at any depth, coroutines the chain calls or
-  awaits, and a function passed as an argument that the callee calls. A
-  method call is followed into the app class its receiver resolves to: a
-  constructor call (`Adapter(config).append(...)`), a class, or a local or
-  parameter bound only to, or annotated with, one app class; a name a builtin
-  container or string also defines (`append`, `get`, `update`) is followed
-  only on such a receiver, and is otherwise the builtin. Work
-  handed to a thread is not followed (`run_in_threadpool`,
-  `asyncio.to_thread`, `anyio.to_thread.run_sync`, `loop.run_in_executor`,
-  `executor.submit` not waited on with `.result()`); an awaited call is never
-  itself blocking. A chain is rejected when it reaches a blocking operation:
-  a psycopg/psycopg2 connection or `psycopg_pool.ConnectionPool` (repository
-  `_connect` helpers are recognised by resolving to that call), DB-API
-  `execute`/`fetch*`/`getconn`/`connection` calls in a module that imports a
-  database driver, directory enumeration, path probes (including
-  `os.path.exists`/`isfile`/`isdir`/`getsize`/`getmtime`-style probes,
-  `os.path.realpath`, and `Path.resolve` on a receiver evidently a path: a
-  path constructor, a path-valued expression, or a `strict=` call), `open`,
-  path reads/writes, media parses, `subprocess`, `time.sleep`, synchronous HTTP
-  (`urllib.request.urlopen`, `requests`, sync `httpx`), PIL `Image.open`, or
-  registered library-scale work. Each loop call site is reported with the
-  nearest blocking operation and the chain to it. A plain `def` route runs in
-  Starlette's threadpool and is not an event-loop entrypoint; a sync helper
-  that does none of the above is fine. Fix by making a route that awaits
-  nothing a plain `def`, or by awaiting its body or scope and handing the
-  blocking part to `run_in_threadpool`, keeping authorization first.
-- A database connection opened once per loop item (BI-05, N+1) is a hazard:
-  discovery reports a psycopg connect or pool reachable from a `for`, `while`,
-  or comprehension body, including through per-item helpers at any depth, at
-  the loop that repeats it. A loop over a fixed display (`for x in [a, b]`), a
-  block that ends with `break`, `return`, or `raise`, and the iterable of a
-  `for` run once. In a route or middleware it is rejected outright; a
-  background entrypoint needs a contract. Fix it at the owning boundary: load
-  once per request or build and pass the snapshot down (for example
-  `resolve_media_path_within_roots(raw_path, root_paths)` and
-  `resolve_album_root_within_roots(track_paths, roots)`), or write a batch in
-  one transaction. Do not add a process-wide cache unless it already has an
-  invalidation owner.
-- The ASGI test client (`tests/py/asgi_testing.py`) fails any request during
-  which the event loop is blocked for more than 250 ms and prints the loop
-  thread's stack sampled while it was blocked. A stall every sample of which is
-  inside import machinery (a module's first import) is not counted. It has no
-  opt-out: a test that needs to wait uses `await asyncio.sleep(...)`, and a
-  test double for `run_in_threadpool` still runs the work off the loop.
+  without a request-capture contract, or a dedicated surface routed through a
+  generic endpoint.
+- Rejected outright: direct broad work in a high-frequency JavaScript handler;
+  a route reaching registered library-scale work or enumerating a directory
+  directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
+  middleware; and a database connection opened per loop item (BI-05) in a
+  route or middleware. Fix BI-08 by making a route that awaits nothing a plain
+  `def`, or by handing the blocking part to `run_in_threadpool` after
+  authorization. Fix BI-05 at the owning boundary: load once and pass the
+  snapshot down, or write a batch in one transaction; do not add a
+  process-wide cache without an invalidation owner.
+- The ASGI test client (`tests/py/asgi_testing.py`) fails any request that
+  blocks the event loop for more than 250 ms outside a module's first import,
+  and has no opt-out.
 - Before calling an interaction implemented, run
-  `npm run test:bounded-interactions` (or with `--changed-paths <file>` for the
-  owners you changed) at production-calibration cardinality. Record the exact
-  test identities and operation budgets. A functional pass, mocked helper
-  success, cached DOM query, small fixture, or elapsed-time-only result does
-  not prove bounded work. Treat an unbounded path as a correctness defect. Do
-  not defer this gate to full CI or manual acceptance.
-- Implementation summaries report the selected interaction IDs, small and
-  large cardinalities, measured operation counts and work class, the focused
-  command and result, any browser performance target still deferred to CI, and
-  remaining risk.
-- When a new kind of unbounded work escapes the guard, add it to
-  `tests/js/bounded-interaction-seeded-defects.test.js` first, then change
-  discovery until that seeded defect is reported.
+  `npm run test:bounded-interactions` (or with `--changed-paths <file>`). A
+  functional pass, mocked helper, small fixture, or elapsed time alone does
+  not prove bounded work. Report the interaction IDs, cardinalities, measured
+  operation counts and work class, the command and result, and any browser
+  performance target deferred to CI.
+- When unbounded work escapes the guard, first add it to
+  `tests/js/bounded-interaction-seeded-defects.test.js`, then change discovery
+  until that defect is reported.
 
 ## Mandatory search regression gate
 

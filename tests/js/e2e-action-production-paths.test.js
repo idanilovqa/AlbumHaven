@@ -1331,7 +1331,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
     coverLookup,
     /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
-  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = String\(selection\.payload\?\.optimistic_cover_path[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
+  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = await coverPathForReference\(selection\.payload\?\.optimistic_cover_ref\)[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
   assert.match(
     coverLookup,
     /selectedRemoteCandidateId = selection\.candidateId[\s\S]*readRemoteCandidateEvidence\([\s\S]*selectedRemoteCandidateId[\s\S]*persistedSelectedRemoteCover\.sha256[\s\S]*selectedRemoteCover\.sha256/,
@@ -1762,7 +1762,7 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
   );
   assert.match(
     beforeScan,
-    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverPath:\s*neutralBaselineAlbum\.cover_path,[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
+    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverPath:\s*await coverPathForReference\(neutralBaselineAlbum\.cover_ref\),[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
   );
   assert.match(beforeScan, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
 
@@ -1782,7 +1782,7 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
   );
   assert.match(
     afterScan,
-    /expect\(neutralPreservedAlbum\.cover_path\)\.toBe\(neutralBaselineAlbum\.cover_path\)/u,
+    /expect\(neutralPreservedAlbum\.cover_ref\)\.toBe\(neutralBaselineAlbum\.cover_ref\)/u,
   );
   assert.match(
     afterScan,
@@ -2275,7 +2275,7 @@ test('gallery cover readiness requires decoded images or explicit final placehol
 
   assert.match(gallery, /coverImage\.complete\s*&&\s*coverImage\.naturalWidth\s*>\s*0/);
   assert.match(gallery, /url\.origin\s*===\s*window\.location\.origin/);
-  assert.match(gallery, /url\.pathname\s*===\s*'\/cover'/);
+  assert.match(gallery, /url\.pathname\.startsWith\('\/cover\/'\)/);
   assert.match(gallery, /options\.allowPlaceholder\s*===\s*true/);
   assert.match(gallery, /allowPlaceholder requires a named placeholderScenario/);
   assert.match(gallery, /cover-placeholder-deferred/);
@@ -3622,14 +3622,14 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
   });
   const firstDecodedCover = new FakeImageElement({
     naturalWidth: 480,
-    productionSrc: '/cover?path=first',
+    productionSrc: '/cover/firstCoverReference000',
   });
   const secondDecodedCover = new FakeImageElement({
     naturalWidth: 480,
-    productionSrc: '/cover?path=second',
+    productionSrc: '/cover/secondCoverReference00',
   });
   const cards = [
-    card('first', firstDecodedCover, { cover_path: 'C:/covers/first.jpg' }),
+    card('first', firstDecodedCover, { cover_ref: 'firstCoverReference000' }),
     card('second', secondDecodedCover),
     card('legitimate-no-art'),
   ];
@@ -3663,7 +3663,7 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
       true,
       'a legitimate no-art card must not block two decoded production covers',
     );
-    cards.push(card('covered-without-image', null, { cover_path: 'C:/covers/expected.jpg' }));
+    cards.push(card('covered-without-image', null, { cover_ref: 'expectedCoverReference' }));
     assert.equal(
       readDecodedProductionCardWindow(args),
       false,
@@ -3750,7 +3750,7 @@ test('FTC-COVERS-014 ends visible-cover timing at decode before collecting visua
   );
   assert.match(
     spec,
-    /const baselineResponse = await coverTraffic\.waitForResponse\(baseline\.productionSrc\);\s*expectJosephCoverRouteResponse\(expect, baselineResponse\);/,
+    /const baselineResponse = await coverTraffic\.waitForResponse\(baseline\.productionSrc\);\s*expectJosephCoverRouteResponse\(expect, baselineResponse, \{ josephReference \}\);/,
   );
   assert.doesNotMatch(spec, /page\.(?:route|evaluate|addInitScript|setContent)\s*\(/);
 });
@@ -5375,7 +5375,13 @@ test('cover lookup measures exact no-size production cover bytes through the act
       };
     },
   };
-  const actions = new CoverLookupActions({ page });
+  const reference = 'CrackTheSkyeReference0';
+  const actions = new CoverLookupActions({ page }, {
+    coverReferences: {
+      coverReferenceForPath: async (coverPath) => (coverPath === 'Mastodon/Crack The Skye/cover.jpg' ? reference : ''),
+      coverPathForReference: async (named) => (named === reference ? 'Mastodon/Crack The Skye/cover.jpg' : ''),
+    },
+  });
 
   const evidence = await actions.readFullSizeCoverEvidence({
     coverPath: 'Mastodon/Crack The Skye/cover.jpg',
@@ -5385,8 +5391,7 @@ test('cover lookup measures exact no-size production cover bytes through the act
 
   assert.equal(requested.length, 1);
   const requestedUrl = new URL(requested[0].url);
-  assert.equal(requestedUrl.pathname, '/cover');
-  assert.equal(requestedUrl.searchParams.get('path'), 'Mastodon/Crack The Skye/cover.jpg');
+  assert.equal(requestedUrl.pathname, `/cover/${reference}`);
   assert.equal(requestedUrl.searchParams.get('v'), 'A'.repeat(64));
   assert.equal(requestedUrl.searchParams.has('size'), false);
   assert.deepEqual(requested[0].options, {
@@ -5403,7 +5408,7 @@ test('cover lookup measures exact no-size production cover bytes through the act
   });
   await assert.rejects(
     actions.readFullSizeCoverEvidence({
-      source: '/cover?path=Mastodon%2FCrack%20The%20Skye%2Fcover.jpg&size=480',
+      source: `/cover/${reference}?size=480`,
       label: 'resized candidate',
     }),
     /cannot use a resized cover variant/,
@@ -5416,7 +5421,7 @@ test('cover lookup records same-origin cover response evidence loaded through fe
   const page = new EventEmitter();
   page.url = () => 'http://127.0.0.1:4173/';
   const actions = new CoverLookupActions({ page });
-  const responseUrl = 'http://127.0.0.1:4173/cover?path=fixture%2Fcover.jpg&size=480';
+  const responseUrl = 'http://127.0.0.1:4173/cover/fixtureCoverReference0?size=480';
   const body = Buffer.from('selected local cover bytes');
 
   page.emit('response', {
@@ -6462,7 +6467,7 @@ test('search actions record the submission boundary before clicking Apply', asyn
 
 test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {
   const { AlbumCard } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/albumCard.js')).href);
-  const productionSrc = 'http://localhost/cover?path=album-cover&size=480&v=revision';
+  const productionSrc = 'http://localhost/cover/albumCoverReference000?size=480&v=revision';
   const blobSrc = 'blob:http://localhost/displayed-cover';
   for (const [label, overrides, expected] of [
     ['production blob', {}, true],
@@ -6470,7 +6475,7 @@ test('album cover checkpoint accepts coherent production blobs and rejects stale
     ['foreign blob', { src: 'blob:http://elsewhere/displayed-cover', currentSrc: 'blob:http://elsewhere/displayed-cover' }, false],
     ['uncommitted image', { visualState: 'pending' }, false],
     ['missing production identity', { productionSrc: '' }, false],
-    ['wrong production origin', { productionSrc: 'http://elsewhere/cover?path=album-cover' }, false],
+    ['wrong production origin', { productionSrc: 'http://elsewhere/cover/albumCoverReference000' }, false],
     ['non-cover production identity', { productionSrc: 'http://localhost/unrelated' }, false],
     ['undecoded image', { complete: false }, false],
   ]) {

@@ -181,8 +181,8 @@ test('TrackModalActions reads the displayed modal cover checkpoint through its P
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
   const coverCheckpoint = {
     complete: true,
-    currentSrc: 'http://127.0.0.1:4173/cover?path=joseph&size=480',
-    productionSrc: '/cover?path=joseph&size=480',
+    currentSrc: 'http://127.0.0.1:4173/cover/joseph?size=480',
+    productionSrc: '/cover/joseph?size=480',
     naturalWidth: 480,
     naturalHeight: 480,
   };

@@ -411,7 +411,7 @@ function reconcileCoverLookupRemoteSelection(possibleMatches) {
   if (selectedMatchExists) return;
   state.coverLookup.modal.selectedRemoteId = '';
   if (
-    String(state.coverLookup.modal.pendingLocalPath || '')
+    String(state.coverLookup.modal.pendingLocalRef || '')
     || String(state.coverLookup.modal.pendingPastedImageId || '')
   ) {
     return;
@@ -615,11 +615,11 @@ function applyCoverLookupCandidateSource(candidateSource) {
     return;
   }
   const hasPendingNonRemoteSelection = Boolean(
-    String(modal.pendingLocalPath || '')
+    String(modal.pendingLocalRef || '')
     || String(modal.pendingPastedImageId || '')
     || (modal.localCovers || []).some((cover) => Boolean(cover?.is_active))
-    || String(modal.activeLocalSelectionPath || '')
-    || String(getCoverLookupActiveLocalPath() || '')
+    || String(modal.activeLocalSelectionRef || '')
+    || String(getCoverLookupActiveLocalRef() || '')
   );
   const bestCandidateId = String(candidateSource.bestCandidateId || '').trim();
   const bestCandidateIsSelectable = bestCandidateId && possibleMatches.some((candidate) => (
@@ -645,26 +645,26 @@ function applyCoverLookupGalleryPayload(gallery) {
   if (!gallery || typeof gallery !== 'object') return;
   cacheCoverLookupGalleryPayload(state.coverLookup.modal.album, gallery);
   const incomingLocalCovers = Array.isArray(gallery.local_covers) ? gallery.local_covers : [];
-  const savedSource = String(gallery.selected_source_path || '');
+  const savedSource = String(gallery.selected_source_cover_ref || '');
   const candidates = [...incomingLocalCovers, ...(Array.isArray(gallery.other_art) ? gallery.other_art : [])];
   const incomingActiveLocalCover = !gallery.remote_cover
-    ? candidates.find(cover => savedSource && String(cover?.path || '') === savedSource)
-      || candidates.find(cover => Boolean(cover?.is_active) && cover?.path)
+    ? candidates.find(cover => savedSource && String(cover?.candidate_cover_ref || '') === savedSource)
+      || candidates.find(cover => Boolean(cover?.is_active) && cover?.candidate_cover_ref)
     : null;
   if (incomingActiveLocalCover) {
-    state.coverLookup.modal.activeLocalSelectionPath = String(incomingActiveLocalCover.path);
+    state.coverLookup.modal.activeLocalSelectionRef = String(incomingActiveLocalCover.candidate_cover_ref);
     const revision = String(incomingActiveLocalCover.cover_revision || '').trim();
     if (revision && !state.coverLookup.modal.saving
         && revision === String(state.coverLookup.modal.album?.cover_revision || '').trim()) {
-      markAlbumCoverPathsFresh([{ cover_path: incomingActiveLocalCover.path, cover_revision: revision }]);
+      markAlbumCoverRefsFresh([{ cover_ref: incomingActiveLocalCover.candidate_cover_ref, cover_revision: revision }]);
     }
   }
   state.coverLookup.modal.remoteCover = gallery.remote_cover && typeof gallery.remote_cover === 'object' ? gallery.remote_cover : null;
   // The canonical copy is not a second artwork choice when the server verified
   // an identical source. Keep the real sources visible and the saved source selected.
   state.coverLookup.modal.localCovers = incomingLocalCovers.filter(cover => !(
-    incomingActiveLocalCover && String(cover?.path || '') === String(gallery.active_cover_path || '')
-    && String(cover?.path || '') !== String(incomingActiveLocalCover.path)
+    incomingActiveLocalCover && String(cover?.candidate_cover_ref || '') === String(gallery.active_cover_ref || '')
+    && String(cover?.candidate_cover_ref || '') !== String(incomingActiveLocalCover.candidate_cover_ref)
   ));
   state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
@@ -787,9 +787,9 @@ async function markCoverLookupAutomaticImprovementSeen(candidateSnapshot) {
   }
 }
 
-function getCoverLookupActiveLocalPath() {
-  const retainedPath = String(state.coverLookup.modal.activeLocalSelectionPath || '');
-  if (retainedPath) return retainedPath;
+function getCoverLookupActiveLocalRef() {
+  const retainedRef = String(state.coverLookup.modal.activeLocalSelectionRef || '');
+  if (retainedRef) return retainedRef;
   if (state.coverLookup.modal.remoteCover && typeof state.coverLookup.modal.remoteCover === 'object') {
     return '';
   }
@@ -797,12 +797,12 @@ function getCoverLookupActiveLocalPath() {
     ...(Array.isArray(state.coverLookup.modal.localCovers) ? state.coverLookup.modal.localCovers : []),
     ...(Array.isArray(state.coverLookup.modal.otherArt) ? state.coverLookup.modal.otherArt : []),
   ];
-  const activeItem = localCandidates.find((item) => Boolean(item?.is_active) && item?.path);
-  if (activeItem?.path) {
-    return String(activeItem.path);
+  const activeItem = localCandidates.find((item) => Boolean(item?.is_active) && item?.candidate_cover_ref);
+  if (activeItem?.candidate_cover_ref) {
+    return String(activeItem.candidate_cover_ref);
   }
   return String(
-    state.coverLookup.modal.album?.cover_path
+    state.coverLookup.modal.album?.cover_ref
       || state.coverLookup.modal.album?.art_path
       || ''
   );
@@ -914,8 +914,8 @@ function buildTrackModalCoverSourceBadge(source) {
 }
 
 function hasPendingLocalCoverSelection() {
-  const pendingPath = String(state.coverLookup.modal.pendingLocalPath || '');
-  return Boolean(pendingPath && pendingPath !== getCoverLookupActiveLocalPath());
+  const pendingRef = String(state.coverLookup.modal.pendingLocalRef || '');
+  return Boolean(pendingRef && pendingRef !== getCoverLookupActiveLocalRef());
 }
 
 function hasPendingPastedCoverSelection() {
@@ -1001,13 +1001,13 @@ function syncCoverLookupSelectionUi() {
   const modal = document.getElementById('cover-lookup-modal');
   if (!modal || modal.hidden) return;
   const selectedRemoteId = String(state.coverLookup.modal.selectedRemoteId || '');
-  const pendingLocalPath = String(state.coverLookup.modal.pendingLocalPath || '');
+  const pendingLocalRef = String(state.coverLookup.modal.pendingLocalRef || '');
   const pendingPastedImageId = String(state.coverLookup.modal.pendingPastedImageId || '');
   modal.querySelectorAll('[data-select-local-cover]').forEach((card) => {
     const localPath = String(card.getAttribute('data-select-local-cover') || '');
     const shouldBeActive = !selectedRemoteId && !pendingPastedImageId && (
-      pendingLocalPath
-        ? localPath === pendingLocalPath
+      pendingLocalRef
+        ? localPath === pendingLocalRef
         : card.hasAttribute('data-cover-lookup-local-active')
     );
     card.classList.toggle('is-active', shouldBeActive);
@@ -1053,9 +1053,9 @@ function syncCoverLookupSelectionUi() {
   });
   modal.querySelectorAll('[data-cover-lookup-saved-remote]').forEach((card) => {
     const isActive = !selectedRemoteId
-      && !pendingLocalPath
+      && !pendingLocalRef
       && !pendingPastedImageId
-      && !String(state.coverLookup.modal.activeLocalSelectionPath || '');
+      && !String(state.coverLookup.modal.activeLocalSelectionRef || '');
     card.classList.toggle('is-active', isActive);
     let check = card.querySelector('.cover-lookup-art-check');
     if (isActive && !check) {
@@ -1172,30 +1172,30 @@ function clearOptimisticAlbumCovers(updatedAlbums) {
   });
 }
 
-function applyOptimisticLocalCoverSelection(album, sourcePath) {
+function applyOptimisticLocalCoverSelection(album, sourceRef) {
   if (!album) return;
-  const normalizedSourcePath = String(sourcePath || '').trim();
-  if (!normalizedSourcePath) return;
+  const normalizedSourceRef = String(sourceRef || '').trim();
+  if (!normalizedSourceRef) return;
   invalidateCoverLookupGalleryCache(album);
   const selectedCandidate = (state.coverLookup.modal.localCovers || []).find((candidate) => (
-    String(candidate?.path || '').trim() === normalizedSourcePath
+    String(candidate?.candidate_cover_ref || '').trim() === normalizedSourceRef
   ));
   const signature = getAlbumPathSignature(album)
     || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
   if (!signature) return;
   state.coverLookup.optimisticAlbumCovers[signature] = {
-    src: buildCoverUrl(normalizedSourcePath, {
+    src: buildCoverUrl(normalizedSourceRef, {
       size: 480,
       revision: selectedCandidate?.cover_revision,
     }),
-    coverPath: normalizedSourcePath,
+    coverRef: normalizedSourceRef,
   };
 }
 
 function preloadCoverLookupAlbumImage(album) {
-  const coverPath = String(album?.cover_path || '').trim();
-  if (!coverPath || typeof Image !== 'function') return Promise.resolve(false);
-  const source = buildCoverUrl(coverPath, {
+  const coverRef = String(album?.cover_ref || '').trim();
+  if (!coverRef || typeof Image !== 'function') return Promise.resolve(false);
+  const source = buildCoverUrl(coverRef, {
     size: 480,
     revision: String(album?.cover_revision || '').trim(),
   });
@@ -1241,13 +1241,13 @@ function preloadCoverLookupAlbumImageWithTimeout(album) {
   });
 }
 
-function buildOptimisticCoverUpdatedAlbum(album, coverPath) {
+function buildOptimisticCoverUpdatedAlbum(album, coverRef) {
   if (!album) return null;
-  const nextCoverPath = String(coverPath || '').trim();
-  if (!nextCoverPath) return null;
+  const nextCoverRef = String(coverRef || '').trim();
+  if (!nextCoverRef) return null;
   return {
     ...album,
-    cover_path: nextCoverPath,
+    cover_ref: nextCoverRef,
     cover_preview_url: null,
     cover_revision: null,
     remote_cover_url: null,
@@ -1259,7 +1259,7 @@ function buildOptimisticCoverUpdatedAlbum(album, coverPath) {
     remote_cover_height: null,
     tracks: (Array.isArray(album.tracks) ? album.tracks : []).map((track) => ({
       ...track,
-      cover_path: nextCoverPath,
+      cover_ref: nextCoverRef,
       cover_preview_url: null,
       cover_revision: null,
       remote_cover_url: null,
@@ -1273,19 +1273,19 @@ function buildOptimisticCoverUpdatedAlbum(album, coverPath) {
   };
 }
 
-function buildOptimisticCoverDeleteUpdatedAlbum(album, removedCoverPath, fallbackCoverPath = '') {
+function buildOptimisticCoverDeleteUpdatedAlbum(album, removedCoverRef, fallbackCoverRef = '') {
   if (!album) return null;
-  const normalizedRemovedPath = String(removedCoverPath || '').trim();
+  const normalizedRemovedPath = String(removedCoverRef || '').trim();
   if (!normalizedRemovedPath) return null;
-  const normalizedFallbackPath = String(fallbackCoverPath || '').trim();
-  const currentCoverPath = String(album?.cover_path || '').trim();
-  if (currentCoverPath && currentCoverPath !== normalizedRemovedPath) {
+  const normalizedFallbackPath = String(fallbackCoverRef || '').trim();
+  const currentCoverRef = String(album?.cover_ref || '').trim();
+  if (currentCoverRef && currentCoverRef !== normalizedRemovedPath) {
     return null;
   }
-  const nextCoverPath = normalizedFallbackPath || null;
+  const nextCoverRef = normalizedFallbackPath || null;
   return {
     ...album,
-    cover_path: nextCoverPath,
+    cover_ref: nextCoverRef,
     cover_preview_url: null,
     cover_revision: null,
     remote_cover_url: null,
@@ -1297,7 +1297,7 @@ function buildOptimisticCoverDeleteUpdatedAlbum(album, removedCoverPath, fallbac
     remote_cover_height: null,
     tracks: (Array.isArray(album.tracks) ? album.tracks : []).map((track) => ({
       ...track,
-      cover_path: nextCoverPath,
+      cover_ref: nextCoverRef,
       cover_preview_url: null,
       cover_revision: null,
       remote_cover_url: null,
@@ -1311,15 +1311,15 @@ function buildOptimisticCoverDeleteUpdatedAlbum(album, removedCoverPath, fallbac
   };
 }
 
-function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
+function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverRef) {
   const imageUrl = String(selectedMatch?.url || selectedMatch?.thumbnail_url || '').trim();
   const previewImageUrl = String(selectedMatch?.thumbnail_url || imageUrl || '').trim();
   const previewKey = String(selectedMatch?.id || selectedMatch?.url || '').trim();
-  const nextCoverPath = String(coverPath || '').trim();
+  const nextCoverRef = String(coverRef || '').trim();
   invalidateCoverLookupGalleryCache(album);
   const updatedAlbum = {
     ...album,
-    cover_path: null,
+    cover_ref: null,
     cover_preview_url: null,
     cover_revision: null,
     remote_cover_url: imageUrl || null,
@@ -1331,7 +1331,7 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
     remote_cover_height: Number(selectedMatch?.height || 0) || null,
     tracks: (Array.isArray(album?.tracks) ? album.tracks : []).map((track) => ({
       ...track,
-      cover_path: null,
+      cover_ref: null,
       cover_preview_url: null,
       cover_revision: null,
       remote_cover_url: imageUrl || null,
@@ -1347,7 +1347,7 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverPath) {
   const signature = getAlbumPathSignature(updatedAlbum) || `${updatedAlbum?.key || ''}::${updatedAlbum?.name || ''}::${updatedAlbum?.album_artist || ''}`;
   state.coverLookup.optimisticAlbumCovers[signature] = {
     src: buildRemoteCoverLookupDisplayUrl(selectedMatch, previewImageUrl, previewKey),
-    coverPath: nextCoverPath,
+    coverRef: nextCoverRef,
   };
   syncCoverLookupAlbumReferences([updatedAlbum]);
   refreshCoverLookupAlbumArtwork(album, [updatedAlbum]);
@@ -1361,7 +1361,7 @@ function applyOptimisticPastedCoverSelection(album, pastedItem) {
   invalidateCoverLookupGalleryCache(album);
   const updatedAlbum = {
     ...album,
-    cover_path: String(album?.cover_path || '').trim() || null,
+    cover_ref: String(album?.cover_ref || '').trim() || null,
     cover_preview_url: null,
     cover_revision: null,
     remote_cover_url: String(album?.remote_cover_url || '').trim() || null,
@@ -1373,7 +1373,7 @@ function applyOptimisticPastedCoverSelection(album, pastedItem) {
     remote_cover_height: Number(album?.remote_cover_height || 0) || null,
     tracks: (Array.isArray(album?.tracks) ? album.tracks : []).map((track) => ({
       ...track,
-      cover_path: String(track?.cover_path || album?.cover_path || '').trim() || null,
+      cover_ref: String(track?.cover_ref || album?.cover_ref || '').trim() || null,
       cover_preview_url: null,
       cover_revision: null,
       remote_cover_url: String(track?.remote_cover_url || album?.remote_cover_url || '').trim() || null,
@@ -1388,9 +1388,9 @@ function applyOptimisticPastedCoverSelection(album, pastedItem) {
   const signature = getAlbumPathSignature(updatedAlbum) || `${updatedAlbum?.key || ''}::${updatedAlbum?.name || ''}::${updatedAlbum?.album_artist || ''}`;
   state.coverLookup.optimisticAlbumCovers[signature] = {
     src: imageUrl,
-    coverPath: '',
+    coverRef: '',
   };
-  markAlbumCoverPathsFresh([updatedAlbum]);
+  markAlbumCoverRefsFresh([updatedAlbum]);
   syncCoverLookupAlbumReferences([updatedAlbum]);
   refreshCoverLookupAlbumArtwork(album, [updatedAlbum]);
   return updatedAlbum;
@@ -2201,7 +2201,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : buildCoverUrl(item?.path || '', {
+      : buildCoverUrl(item?.candidate_cover_ref || '', {
         size: 480,
         revision: item?.cover_revision,
       });
@@ -2211,22 +2211,22 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       ? buildRemoteCoverLookupDisplayUrl(item, item?.url || item?.thumbnail_url || '', `full:saved:${item?.id || item?.url || ''}`)
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
-      : buildCoverUrl(item?.path || '', { revision: item?.cover_revision });
+      : buildCoverUrl(item?.candidate_cover_ref || '', { revision: item?.cover_revision });
   const isActive = kind === 'local'
     ? (!state.coverLookup.modal.selectedRemoteId && (
-      String(state.coverLookup.modal.pendingLocalPath || '')
-        ? String(state.coverLookup.modal.pendingLocalPath || '') === String(item?.path || '')
+      String(state.coverLookup.modal.pendingLocalRef || '')
+        ? String(state.coverLookup.modal.pendingLocalRef || '') === String(item?.candidate_cover_ref || '')
         : !String(state.coverLookup.modal.pendingPastedImageId || '')
-          && String(item?.path || '') === getCoverLookupActiveLocalPath()
+          && String(item?.candidate_cover_ref || '') === getCoverLookupActiveLocalRef()
     ))
     : kind === 'pasted'
-      ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalPath || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))
+      ? (!String(state.coverLookup.modal.selectedRemoteId || '') && !String(state.coverLookup.modal.pendingLocalRef || '') && state.coverLookup.modal.pendingPastedImageId === String(item?.id || ''))
     : kind === 'saved-remote'
       ? (
         !String(state.coverLookup.modal.selectedRemoteId || '')
-        && !String(state.coverLookup.modal.pendingLocalPath || '')
+        && !String(state.coverLookup.modal.pendingLocalRef || '')
         && !String(state.coverLookup.modal.pendingPastedImageId || '')
-        && !String(state.coverLookup.modal.activeLocalSelectionPath || '')
+        && !String(state.coverLookup.modal.activeLocalSelectionRef || '')
       )
       : ((!isOtherRemoteArt || isSelectableOtherRemoteArt)
         && state.coverLookup.modal.selectedRemoteId === String(item?.id || ''));
@@ -2235,7 +2235,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     && !String(state.coverLookup.modal.remoteSelectionOverrideGeneration || '')
     && String(item?.id || '') === String(state.coverLookup.modal.suggestedRemoteId || '');
   const itemIdentity = kind === 'local'
-    ? String(item?.path || '')
+    ? String(item?.candidate_cover_ref || '')
     : kind === 'pasted'
       ? String(item?.id || '')
       : String(item?.id || item?.url || '');
@@ -2248,7 +2248,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     : kind === 'pasted'
     ? `data-select-pasted-cover="${escapeHtml(item.id || '')}"`
     : kind === 'local'
-    ? `data-select-local-cover="${escapeHtml(item.path || '')}"`
+    ? `data-select-local-cover="${escapeHtml(item.candidate_cover_ref || '')}"`
     : kind === 'saved-remote'
       ? 'data-cover-lookup-saved-remote="1"'
       : `data-select-remote-cover="${escapeHtml(item.id || '')}"`;
@@ -2291,7 +2291,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
             </svg>
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
-          ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
+          ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.candidate_cover_ref || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
           ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
         </span>
         <span class="cover-lookup-art-meta">
@@ -2480,7 +2480,7 @@ function buildCoverLookupGalleryLoadingCards(section, count) {
 
 function buildCoverLookupGalleryLoadingMarkup(modalState) {
   const album = modalState?.album || {};
-  const localCount = String(album.cover_path || '').trim()
+  const localCount = String(album.cover_ref || '').trim()
     && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
   const savedRemoteCount = String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
   const cachedRemoteCandidates = Array.isArray(modalState?.possibleMatches)
@@ -2544,8 +2544,8 @@ function renderCoverLookupModal() {
   // file. Keep a draft chosen on desktop visible after the viewport narrows.
   const compact = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const localCovers = compact ? allLocalCovers.filter(cover => !(
-    cover.duplicate_of && cover.path !== modalState.pendingLocalPath
-    && allLocalCovers.some(other => other.path === cover.duplicate_of)
+    cover.duplicate_of_cover_ref && cover.candidate_cover_ref !== modalState.pendingLocalRef
+    && allLocalCovers.some(other => other.candidate_cover_ref === cover.duplicate_of_cover_ref)
   )) : allLocalCovers;
   const pastedImages = Array.isArray(modalState.pastedImages) ? modalState.pastedImages : [];
   const manualImageAttachments = Array.isArray(modalState.manualImageAttachments)
@@ -3253,7 +3253,7 @@ function applyCoverLookupTaskUpdates(task, options = {}) {
   if (!options.force && signature === previousSignature) return;
   state.coverLookup.appliedTaskUpdateSignatures[taskId] = signature;
   clearOptimisticAlbumCovers(task.updated_albums);
-  markAlbumCoverPathsFresh(task.updated_albums);
+  markAlbumCoverRefsFresh(task.updated_albums);
   syncCoverLookupAlbumReferences(task.updated_albums);
   refreshCoverLookupAlbumArtwork(task.album_payload || state.coverLookup.modal.album || null, task.updated_albums);
 }
@@ -3421,7 +3421,7 @@ async function openCoverLookupModal(album, options = {}) {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.otherArt = [];
-  state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.pendingLocalRef = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.possibleMatches = cachedCandidates;
@@ -3434,7 +3434,7 @@ async function openCoverLookupModal(album, options = {}) {
     ? Math.max(0, Number(matchingTask?.candidate_revision || 0) || 0)
     : 0;
   state.coverLookup.modal.expectedRemoteCount = expectedRemoteCount;
-  state.coverLookup.modal.activeLocalSelectionPath = '';
+  state.coverLookup.modal.activeLocalSelectionRef = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
   state.coverLookup.modal.remoteSelectionOverrideUrl = '';
@@ -3476,11 +3476,11 @@ function closeCoverLookupModal() {
   els.overlay.hidden = true;
   els.overlay.classList?.remove?.('is-mobile-sheet');
   els.overlay.style?.removeProperty?.('--cover-lookup-sheet-drag-y');
-  state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.pendingLocalRef = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.remoteCover = null;
-  state.coverLookup.modal.activeLocalSelectionPath = '';
+  state.coverLookup.modal.activeLocalSelectionRef = '';
   revokeCoverLookupPastedImageUrls();
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
@@ -3554,15 +3554,15 @@ async function startCoverLookupForAlbum(album, options = {}) {
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
       ?.querySelector?.('[data-select-local-cover][data-cover-lookup-local-active]');
-    const selectedLocalPath = String(
+    const selectedLocalRef = String(
       selectedLocalCard?.getAttribute?.('data-select-local-cover') || '',
     );
     if (
-      selectedLocalPath
+      selectedLocalRef
       && !String(state.coverLookup.modal.selectedRemoteId || '')
       && !String(state.coverLookup.modal.pendingPastedImageId || '')
     ) {
-      state.coverLookup.modal.activeLocalSelectionPath = selectedLocalPath;
+      state.coverLookup.modal.activeLocalSelectionRef = selectedLocalRef;
     }
   }
   try {
@@ -3658,9 +3658,9 @@ async function startCoverLookupForAlbum(album, options = {}) {
   }
 }
 
-function selectLocalCoverFromLookup(sourcePath) {
+function selectLocalCoverFromLookup(sourceRef) {
   if (window.AlbumHavenCapabilities?.clientSurface === 'tv') return;
-  state.coverLookup.modal.pendingLocalPath = String(sourcePath || '');
+  state.coverLookup.modal.pendingLocalRef = String(sourceRef || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
@@ -3669,31 +3669,31 @@ function selectLocalCoverFromLookup(sourcePath) {
   syncCoverLookupSelectionUi();
 }
 
-async function saveLocalCoverFromLookup(sourcePath) {
+async function saveLocalCoverFromLookup(sourceRef) {
   const session = coverLookupModalSession;
   const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
   const taskId = String(state.coverLookup.modal.taskId || '');
-  if (!album || !sourcePath || state.coverLookup.modal.saving || isCoverLookupLocalMutationPending(album)) return;
+  if (!album || !sourceRef || state.coverLookup.modal.saving || isCoverLookupLocalMutationPending(album)) return;
   const mutationKey = buildTrackPathSignature(album);
   const previousAlbum = deepCloneJson(album);
-  const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourcePath);
+  const optimisticAlbum = buildOptimisticCoverUpdatedAlbum(album, sourceRef);
   coverLookupPendingLocalMutations.add(mutationKey);
   coverLookupGalleryRequest += 1;
   try {
     state.coverLookup.modal.saving = true;
     syncCoverLookupSaveButton();
-    applyOptimisticLocalCoverSelection(album, sourcePath);
+    applyOptimisticLocalCoverSelection(album, sourceRef);
     markTrackModalCoverTransitionPending(album);
     if (optimisticAlbum) {
-      markAlbumCoverPathsFresh([optimisticAlbum]);
+      markAlbumCoverRefsFresh([optimisticAlbum]);
       syncCoverLookupAlbumReferences([optimisticAlbum]);
       refreshCoverLookupAlbumArtwork(album, [optimisticAlbum], { updateTrackModal: false });
     }
     const response = await fetch('/utilities/cover-lookup/local-select', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, source_path: sourcePath, task_id: taskId }),
+      body: JSON.stringify({ album, source_cover_ref: sourceRef, task_id: taskId }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
@@ -3703,7 +3703,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
-    markAlbumCoverPathsFresh(updatedAlbums);
+    markAlbumCoverRefsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (taskId) {
@@ -3722,7 +3722,7 @@ async function saveLocalCoverFromLookup(sourcePath) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {
       clearOptimisticAlbumCovers([previousAlbum]);
-      markAlbumCoverPathsFresh([previousAlbum]);
+      markAlbumCoverRefsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
@@ -3733,35 +3733,35 @@ async function saveLocalCoverFromLookup(sourcePath) {
   }
 }
 
-async function deleteLocalCoverFromLookup(sourcePath) {
+async function deleteLocalCoverFromLookup(sourceRef) {
   const session = coverLookupModalSession;
   const ownsModal = () => coverLookupModalSession === session;
   const album = state.coverLookup.modal.album;
-  if (!album || !sourcePath || isCoverLookupLocalMutationPending(album)) return;
+  if (!album || !sourceRef || isCoverLookupLocalMutationPending(album)) return;
   const mutationKey = buildTrackPathSignature(album);
   const previousLocalCovers = Array.isArray(state.coverLookup.modal.localCovers)
     ? state.coverLookup.modal.localCovers.slice()
     : [];
   const previousAlbum = deepCloneJson(album);
-  const remainingLocalCovers = previousLocalCovers.filter((item) => String(item?.path || '') !== String(sourcePath || ''));
-  const fallbackLocalCoverPath = String(remainingLocalCovers[0]?.path || '').trim();
-  const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(album, sourcePath, fallbackLocalCoverPath);
+  const remainingLocalCovers = previousLocalCovers.filter((item) => String(item?.candidate_cover_ref || '') !== String(sourceRef || ''));
+  const fallbackLocalCoverRef = String(remainingLocalCovers[0]?.candidate_cover_ref || '').trim();
+  const optimisticAlbum = buildOptimisticCoverDeleteUpdatedAlbum(album, sourceRef, fallbackLocalCoverRef);
   coverLookupPendingLocalMutations.add(mutationKey);
   invalidateCoverLookupGalleryCache(album);
   coverLookupGalleryRequest += 1;
   try {
     closeCoverLookupDeleteConfirm();
     state.coverLookup.modal.localCovers = remainingLocalCovers;
-    if (String(state.coverLookup.modal.pendingLocalPath || '') === String(sourcePath || '')) {
-      state.coverLookup.modal.pendingLocalPath = '';
+    if (String(state.coverLookup.modal.pendingLocalRef || '') === String(sourceRef || '')) {
+      state.coverLookup.modal.pendingLocalRef = '';
     }
-    if (String(state.coverLookup.modal.activeLocalSelectionPath || '') === String(sourcePath || '')) {
-      state.coverLookup.modal.activeLocalSelectionPath = '';
+    if (String(state.coverLookup.modal.activeLocalSelectionRef || '') === String(sourceRef || '')) {
+      state.coverLookup.modal.activeLocalSelectionRef = '';
     }
     state.coverLookup.modal.pendingPastedImageId = '';
     state.coverLookup.modal.selectedRemoteId = '';
     if (optimisticAlbum) {
-      markAlbumCoverPathsFresh([optimisticAlbum]);
+      markAlbumCoverRefsFresh([optimisticAlbum]);
       syncCoverLookupAlbumReferences([optimisticAlbum]);
       refreshCoverLookupAlbumArtwork(album, [optimisticAlbum]);
     }
@@ -3769,7 +3769,7 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     const response = await fetch('/utilities/cover-lookup/local-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, source_path: sourcePath }),
+      body: JSON.stringify({ album, source_cover_ref: sourceRef }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
@@ -3777,7 +3777,7 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
-    markAlbumCoverPathsFresh(updatedAlbums);
+    markAlbumCoverRefsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     if (ownsModal()) {
@@ -3792,7 +3792,7 @@ async function deleteLocalCoverFromLookup(sourcePath) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
     if (previousAlbum) {
-      markAlbumCoverPathsFresh([previousAlbum]);
+      markAlbumCoverRefsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
@@ -3810,10 +3810,10 @@ function selectRemoteCoverFromLookup(candidateId) {
   ));
   if (!isSelectableRemoteCoverCandidate(selectedCandidate)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsCoverCandidate(selectedCandidate)) return;
-  state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.pendingLocalRef = '';
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = String(candidateId || '');
-  state.coverLookup.modal.activeLocalSelectionPath = '';
+  state.coverLookup.modal.activeLocalSelectionRef = '';
   const selectionAlbumSignature = buildTrackPathSignature(state.coverLookup.modal.album);
   const selectedCandidateUrl = normalizeCoverLookupCandidateUrl(
     selectedCandidate?.url,
@@ -3843,10 +3843,10 @@ function selectRemoteCoverFromLookup(candidateId) {
 }
 
 function selectPastedCoverFromLookup(imageId) {
-  state.coverLookup.modal.pendingLocalPath = '';
+  state.coverLookup.modal.pendingLocalRef = '';
   state.coverLookup.modal.selectedRemoteId = '';
   state.coverLookup.modal.pendingPastedImageId = String(imageId || '');
-  state.coverLookup.modal.activeLocalSelectionPath = '';
+  state.coverLookup.modal.activeLocalSelectionRef = '';
   state.coverLookup.modal.remoteSelectionOverrideGeneration = '';
   state.coverLookup.modal.remoteSelectionOverrideCandidateId = '';
   state.coverLookup.modal.remoteSelectionOverrideUrl = '';
@@ -3890,8 +3890,8 @@ async function saveRemoteCoverFromLookup() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to save selected cover art');
     }
-    const optimisticCoverPath = String(data.optimistic_cover_path || '').trim();
-    if (optimisticEntry?.[1]) optimisticEntry[1].coverPath = optimisticCoverPath;
+    const optimisticCoverRef = String(data.optimistic_cover_ref || '').trim();
+    if (optimisticEntry?.[1]) optimisticEntry[1].coverRef = optimisticCoverRef;
     const acceptedTaskId = String(data.task?.id || taskId || '').trim();
     if (acceptedTaskId && selectedMatch) {
       const acceptedTask = data.task && typeof data.task === 'object' ? data.task : null;
@@ -3928,7 +3928,7 @@ async function saveRemoteCoverFromLookup() {
     if (ownsModal()) {
       state.coverLookup.modal.saving = false;
       state.coverLookup.modal.manualBusy = false;
-      state.coverLookup.modal.pendingLocalPath = '';
+      state.coverLookup.modal.pendingLocalRef = '';
       state.coverLookup.modal.selectedRemoteId = '';
       closeCoverLookupModal();
     }
@@ -4035,7 +4035,7 @@ async function savePastedCoverFromLookup(imageId) {
       renderCoverLookupDrawer({ taskIds: [taskId] });
     }
     state.coverLookup.modal.manualBusy = false;
-    state.coverLookup.modal.pendingLocalPath = '';
+    state.coverLookup.modal.pendingLocalRef = '';
     state.coverLookup.modal.selectedRemoteId = '';
     state.coverLookup.modal.pendingPastedImageId = '';
     closeCoverLookupModal();
@@ -4057,7 +4057,7 @@ async function savePastedCoverFromLookup(imageId) {
     }
     const updatedAlbums = Array.isArray(data.updated_albums) ? data.updated_albums : [data.updated_album].filter(Boolean);
     clearOptimisticAlbumCovers(updatedAlbums);
-    markAlbumCoverPathsFresh(updatedAlbums);
+    markAlbumCoverRefsFresh(updatedAlbums);
     syncCoverLookupAlbumReferences(updatedAlbums);
     refreshCoverLookupAlbumArtwork(album, updatedAlbums);
     const actionedTaskIds = data.notification_action_taken_task_ids || [];
@@ -4067,7 +4067,7 @@ async function savePastedCoverFromLookup(imageId) {
     renderCoverLookupDrawer({ taskIds: actionedTaskIds });
   } catch (error) {
     if (previousAlbum) {
-      markAlbumCoverPathsFresh([previousAlbum]);
+      markAlbumCoverRefsFresh([previousAlbum]);
       syncCoverLookupAlbumReferences([previousAlbum]);
       refreshCoverLookupAlbumArtwork(previousAlbum, [previousAlbum]);
     }
@@ -4093,6 +4093,6 @@ async function saveCoverFromLookup() {
     return;
   }
   if (hasPendingLocalCoverSelection()) {
-    await saveLocalCoverFromLookup(state.coverLookup.modal.pendingLocalPath);
+    await saveLocalCoverFromLookup(state.coverLookup.modal.pendingLocalRef);
   }
 }

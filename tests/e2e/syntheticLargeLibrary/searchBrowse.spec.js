@@ -28,7 +28,8 @@ const test = performanceTest.extend({
       if (searchSubmittedAt === null) return;
       const url = new URL(request.url());
       if (url.origin !== origin) return;
-      const pathname = paths.has(url.pathname) ? url.pathname
+      const route = url.pathname.startsWith('/cover/') ? '/cover' : url.pathname;
+      const pathname = paths.has(route) ? route
         : request.resourceType() === 'image' ? '[same-origin-image]' : null;
       if (!pathname) return;
       if (requests.length >= 250) { droppedRequests += 1; return; }

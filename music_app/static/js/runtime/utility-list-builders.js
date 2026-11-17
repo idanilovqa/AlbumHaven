@@ -751,7 +751,7 @@ function getAlbumPathSignature(album) {
 }
 
 const VISIBLE_ALBUM_COVER_FIELDS = [
-  'cover_path',
+  'cover_ref',
   'cover_preview_url',
   'remote_cover_url',
   'remote_cover_thumbnail_url',

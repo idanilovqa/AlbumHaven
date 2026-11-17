@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.26 - 2026-11-17
+## 0.11.27 - 2026-11-17
 
 - The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.
+
+## 0.11.26 - 2026-11-17
+
+- The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
 
 ## 0.11.25 - 2026-11-17
 

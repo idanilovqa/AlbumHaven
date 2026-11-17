@@ -527,6 +527,53 @@ def scrobble_tracks(
     return outcomes
 
 
+@dataclass(frozen=True)
+class LastfmScrobble:
+    timestamp: int
+    artist: str
+    track: str
+
+
+LASTFM_RECENT_TRACKS_PAGE_LIMIT = 200
+
+
+def get_lastfm_scrobbles_between(
+    config: dict[str, Any], *, session: LastfmSession, after: int, before: int, page: int = 1,
+) -> tuple[list[LastfmScrobble], int]:
+    """One page, newest first, of the account's scrobbles timed strictly between ``after``
+    and ``before`` (Unix seconds), and how many pages the range holds.
+
+    Signed with the session, so an account that hides its recent listening is still read."""
+    root = _post_lastfm(config, "user.getRecentTracks", {
+        "sk": session.session_key,
+        "user": session.username,
+        "from": int(after),
+        "to": int(before),
+        "limit": LASTFM_RECENT_TRACKS_PAGE_LIMIT,
+        "page": int(page),
+    })
+    recent = root.find("recenttracks")
+    pages = str(recent.get("totalPages") or "").strip() if recent is not None else ""
+    if not pages.isdigit():
+        raise LastfmError(
+            "Last.fm recent tracks response did not include its page count.",
+            retryable=True,
+            error_kind="malformed_response",
+        )
+    scrobbles = []
+    for track in recent.findall("track"):
+        date = track.find("date")
+        uts = str(date.get("uts") or "").strip() if date is not None else ""
+        # The track playing now has no scrobble time and is not a scrobble yet.
+        if uts.isdigit():
+            scrobbles.append(LastfmScrobble(
+                timestamp=int(uts),
+                artist=(track.findtext("artist") or "").strip(),
+                track=(track.findtext("name") or "").strip(),
+            ))
+    return scrobbles, int(pages)
+
+
 def get_lastfm_total_scrobbles(
     config: dict[str, Any], *, session: LastfmSession,
 ) -> int:

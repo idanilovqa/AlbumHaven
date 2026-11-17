@@ -383,3 +383,51 @@ def test_scrobble_batch_without_an_outcome_per_listen_is_a_malformed_response(
 def test_scrobble_batch_holds_one_to_fifty_listens(count):
     with pytest.raises(ValueError):
         lastfm.scrobble_tracks({}, _batch_payloads(count), session=LastfmSession("listener", "fixture-session", "now"))
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_recent_scrobbles_read_one_signed_page_of_a_window_and_skip_the_track_playing_now(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport,
+):
+    fixture_owned_lastfm_provider["responses"].append((200, """<lfm status="ok">
+        <recenttracks user="listener" page="2" perPage="200" totalPages="3" total="401">
+            <track nowplaying="true"><artist mbid="">ДДТ</artist><name>Playing now</name></track>
+            <track><artist mbid="">ДДТ</artist><name>Осень</name><date uts="1700000002">14 Nov 2023, 22:13</date></track>
+            <track><artist mbid="">Artist</artist><name>Song 0</name><date uts="1700000000">14 Nov 2023, 22:13</date></track>
+        </recenttracks></lfm>""".encode("utf-8")))
+
+    scrobbles, pages = lastfm.get_lastfm_scrobbles_between(
+        _config(allow_lastfm_loopback_transport), session=LastfmSession("listener", "fixture-session", "now"),
+        after=1_699_999_999, before=1_700_000_003, page=2,
+    )
+
+    assert pages == 3
+    assert scrobbles == [lastfm.LastfmScrobble(1_700_000_002, "ДДТ", "Осень"),
+                         lastfm.LastfmScrobble(1_700_000_000, "Artist", "Song 0")]
+    [request] = fixture_owned_lastfm_provider["requests"]
+    params = {key: values[-1] for key, values in request.items()}
+    assert {key: params[key] for key in ("method", "user", "sk", "from", "to", "limit", "page")} == {
+        "method": "user.getRecentTracks", "user": "listener", "sk": "fixture-session",
+        "from": "1699999999", "to": "1700000003", "limit": "200", "page": "2",
+    }
+    assert "api_sig" in params
+
+
+@pytest.mark.parametrize("body", [
+    b'<lfm status="ok"></lfm>',
+    b'<lfm status="ok"><recenttracks user="listener" page="1"></recenttracks></lfm>',
+    b'<lfm status="ok"><recenttracks user="listener" totalPages="many"></recenttracks></lfm>',
+])
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_recent_scrobbles_without_a_page_count_are_a_malformed_response(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport, body,
+):
+    fixture_owned_lastfm_provider["responses"].append((200, body))
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.get_lastfm_scrobbles_between(
+            _config(allow_lastfm_loopback_transport), session=LastfmSession("listener", "fixture-session", "now"),
+            after=1, before=3,
+        )
+
+    assert (caught.value.error_kind, caught.value.retryable) == ("malformed_response", True)

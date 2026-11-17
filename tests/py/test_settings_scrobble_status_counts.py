@@ -1,4 +1,8 @@
 """The scoped Integrations response retains actual scrobbled and queued counts."""
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
 from tests.py.test_settings_measured_listen_ledger import ledger, measured, append
 from music_app.services import listen_history as history
 from music_app.routes import api_wave_b_asgi_routes as routes
@@ -109,3 +113,47 @@ def test_scoped_counts_exclude_imported_source_family_rows(ledger):
 
     assert counts == {'listen_history_count': 1, 'pending_scrobble_count': 1}
     assert imported_pending['id'] not in pending_ids
+
+
+def _minutes_ago(minutes):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+
+
+@pytest.mark.parametrize(('state', 'updates', 'sendable'), [
+    ('pending due', {'scrobble_retryable': True}, True),
+    ('pending not yet due', {
+        'scrobble_retryable': True, 'scrobble_submission_state': 'not_sent', 'scrobble_retry_count': 6,
+        'last_scrobble_attempt_at': _minutes_ago(0)}, True),
+    ('uncertain due for verification', {
+        'scrobble_retryable': False, 'scrobble_submission_state': 'uncertain', 'scrobble_retry_count': 1,
+        'last_scrobble_attempt_at': _minutes_ago(10)}, True),
+    ('uncertain not yet due', {
+        'scrobble_retryable': False, 'scrobble_submission_state': 'uncertain', 'scrobble_retry_count': 1,
+        'last_scrobble_attempt_at': _minutes_ago(0)}, True),
+    ('accepted', {
+        'scrobbled': True, 'scrobble_retryable': False, 'scrobble_submission_state': 'accepted',
+        'scrobble_retry_count': 1, 'last_scrobble_attempt_at': _minutes_ago(10)}, False),
+    ('final ignored', {
+        'scrobble_retryable': False, 'scrobble_submission_state': 'sent', 'scrobble_retry_count': 1,
+        'scrobble_error': 'Timestamp too old', 'last_scrobble_attempt_at': _minutes_ago(10)}, False),
+])
+def test_has_sendable_scrobbles_wakes_the_worker_for_every_listen_still_waiting(ledger, state, updates, sendable):
+    """The idle check answers whether a connected account has any listen to send or look up.
+    Due times are the retry pass's to judge: a listen not yet due still wakes the worker, which
+    then waits until it is due; only a settled listen leaves it idle."""
+    from music_app.services.lastfm_postgres import LastfmPostgresAdapter
+    from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
+    owner = ledger['own']
+    adapter = PostgresListenHistoryAdapter(ledger['config'])
+    assert adapter.has_sendable_scrobbles() is False, 'the isolated database starts with nothing waiting'
+    item = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
+    history.update_listen_history_entry(ledger['config'], item['id'], updates,
+        account_id=owner['account_id'], library_id=owner['library_id'])
+    # A listen of an account without a connected Last.fm session never wakes the worker.
+    assert adapter.has_sendable_scrobbles() is False
+
+    LastfmPostgresAdapter(ledger['config']).save_settings(
+        {'username': f"sendable-{owner['account_id']}", 'session_key': 'sendable-fixture'},
+        account_id=owner['account_id'])
+
+    assert adapter.has_sendable_scrobbles() is sendable, state

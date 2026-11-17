@@ -394,4 +394,14 @@ export class UtilityProblematicFilesTab extends BasePage {
       has: this.page.locator(this.listItemTitleSelector).filter({ hasText: albumTitleWithOptionalYear(albumTitle) }),
     }).first();
   }
+
+  listItemByKey(key) {
+    return this.page.locator(`[data-problematic-album-key="${key}"]`).first();
+  }
+
+  // The selected album's "MusicBrainz has no info" label (S5); list rows carry no issue line.
+  get detailMusicBrainzHasNoInfoLabel() {
+    return this.page.locator('#utility-problematic-detail .utility-album-problem-labels .alert-label')
+      .filter({ hasText: 'MusicBrainz has no info' });
+  }
 }

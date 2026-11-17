@@ -776,6 +776,12 @@ export class UtilityProblematicFilesActions {
     return this.utilityProblematicFilesTab.excludeProblemButton.isEnabled();
   }
 
+  async expectMusicBrainzHasNoInfo({ key, title }) {
+    await this.utilityProblematicFilesTab.listItemByKey(key).click();
+    await this.waitForSelectedDetailSelection({ expectedKey: key, expectedTitle: title });
+    await expect(this.utilityProblematicFilesTab.detailMusicBrainzHasNoInfoLabel).toBeVisible({ timeout: 60000 });
+  }
+
   async readAlbumProblemReasons() {
     return (await this.utilityProblematicFilesTab.albumProblemPills.allTextContents())
       .map((value) => String(value || '').trim()).filter(Boolean);

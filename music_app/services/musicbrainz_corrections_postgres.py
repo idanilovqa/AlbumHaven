@@ -181,14 +181,25 @@ _ALBUM_ROWS_SQL = _active_library_cte() + f"""
 """
 
 # The Edits Queue: "applied" (the automatic history) or "review" (waiting), by kind, then a
-# page of albums with their rows. Albums sent to review whole form their own group.
+# page of albums with their rows. Albums sent to review whole form their own group. A page
+# reads only its kind's rows (%(kind)s is null for the counts). A row has at most one decision
+# (its primary key is _DECISION_MATCH), so one join gives _STATE_SQL's state without three
+# probes per row.
 _GROUP_SQL = _active_library_cte() + f"""
     , rows as (
-      select correction.*, {_STATE_SQL} as state, stored.review_whole
+      select correction.*, stored.review_whole,
+             case decision.decision when 'approved' then 'applied' when 'undone' then 'undone'
+                                    when 'skipped' then 'skipped'
+                                    else case when correction.mode = 'auto' then 'applied' else 'pending' end
+             end as state
       from library.local_album_musicbrainz_correction_rows correction
       join active_library on active_library.library_id = correction.library_id
       join library.local_album_musicbrainz_corrections stored
         on stored.library_id = correction.library_id and stored.album_key = correction.album_key
+      left join library.local_album_musicbrainz_correction_decisions decision on {_DECISION_MATCH}
+      where %(kind)s::text is null
+         or (case when %(section)s = 'review' and stored.review_whole then '{WHOLE_ALBUM_GROUP}'
+                  else correction.kind end) = %(kind)s::text
     ), listed as (
       select case when %(section)s = 'review' and review_whole then '{WHOLE_ALBUM_GROUP}' else kind end as grouping,
              rows.*
@@ -401,7 +412,7 @@ class MusicBrainzCorrectionsPostgresRepository:
     def kinds(self, *, section: str) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:
             return [_row_mapping(row) for row in connection.execute(
-                _KIND_COUNTS_SQL, {"section": section}).fetchall()]
+                _KIND_COUNTS_SQL, {"section": section, "kind": None}).fetchall()]
 
     def kind_page(self, *, section: str, kind: str, offset: int, limit: int) -> list[dict[str, object]]:
         params = {"section": section, "kind": kind, "offset": max(0, int(offset)), "limit": max(1, int(limit))}

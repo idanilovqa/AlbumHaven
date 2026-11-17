@@ -447,10 +447,11 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await utilityProblematicFilesActions.waitForSearchResults(OUTAGE);
       const remaining = await utilityProblematicFilesActions.readVisibleListItems();
       expect(remaining.filter((item) => item.key.startsWith('musicbrainz-artist:'))).toEqual([]);
-      expect(remaining.filter((item) => item.issues.includes('Provider unavailable'))).toEqual([]);
+      // List rows carry no issue line, so each remaining album's label is read from its detail.
+      expect(remaining.length).toBeGreaterThan(0);
       for (const item of remaining) {
         expect(item.meta.startsWith(OUTAGE)).toBe(true);
-        expect(item.issues).toContain('MusicBrainz has no info');
+        await utilityProblematicFilesActions.expectMusicBrainzHasNoInfo(item);
       }
       await settingsModalAppBarActions.closeSettings();
       await openArtist({ galleryActions, searchToolbarActions }, OUTAGE);

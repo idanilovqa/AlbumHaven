@@ -345,10 +345,9 @@ def scrobble_retry_delay_seconds(attempts: int) -> float:
 
 
 # Last.fm can list a scrobble some time after it accepted it, most of all while it is failing,
-# which is when submission outcomes are lost. Five minutes is far past the 12 s request timeout,
-# so the lost submission can no longer be on its way, and keeps the answer within one 15-minute
-# retry cap.
-SCROBBLE_VERIFICATION_DELAY_SECONDS = 5 * 60
+# which is when submission outcomes are lost. Thirty minutes is far past the 12 s request timeout
+# and gives a slow Last.fm time to list what it accepted.
+SCROBBLE_VERIFICATION_DELAY_SECONDS = 30 * 60
 NOT_ON_LASTFM = "Last.fm has no record of this listen, so it will be sent again."
 
 
@@ -364,7 +363,7 @@ def scrobble_verification_due(
 
 
 def scrobble_verification_due_at(entry: JsonDict, *, now: datetime, bypass_backoff: bool = False) -> datetime:
-    """Five minutes after the listen's last submission started (without one, after it was
+    """Thirty minutes after the listen's last submission started (without one, after it was
     recorded); after a failed lookup, also its backoff, as for a failed submission."""
     started = _stored_time(entry.get("last_scrobble_attempt_at")) or _stored_time(entry.get("recorded_at"))
     due = now if started is None else started + timedelta(seconds=SCROBBLE_VERIFICATION_DELAY_SECONDS)
@@ -376,9 +375,15 @@ def scrobble_verification_due_at(entry: JsonDict, *, now: datetime, bypass_backo
 
 
 def scrobble_identity(timestamp: object, artist: object, track: object) -> tuple[int, str, str]:
-    """What makes a Last.fm scrobble the same listen: its Unix second, and its artist and track
-    names compared without case, Unicode compatibility forms, or extra spaces ("ДДТ" is "ддт")."""
+    """A scrobble's Unix second, and its artist and track names compared without case, Unicode
+    compatibility forms, or extra spaces ("ДДТ" is "ддт")."""
     return int(timestamp or 0), _comparable_name(artist), _comparable_name(track)
+
+
+def is_same_scrobble(listen: tuple[int, str, str], scrobble: tuple[int, str, str]) -> bool:
+    """Whether Last.fm lists this listen: the same second and the same artist or the same track.
+    One name may differ because Last.fm corrects names it knows ("Beatles" to "The Beatles")."""
+    return listen[0] == scrobble[0] and (listen[1] == scrobble[1] or listen[2] == scrobble[2])
 
 
 def _comparable_name(value: object) -> str:

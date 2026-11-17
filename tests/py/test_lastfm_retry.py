@@ -14,6 +14,7 @@ from music_app.services.lastfm import LastfmError, LastfmScrobble, LastfmSubmiss
 from music_app.services.lastfm_sync_bridge import (
     attempting_updates,
     failed_batch_disposition,
+    is_same_scrobble,
     plan_pending_scrobble,
     scrobble_attempt_updates,
     scrobble_identity,
@@ -404,7 +405,7 @@ def _ago(minutes: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
 
 
-def _add_unverified(ledger: ScrobbleLedger, count: int, *, minutes_ago: float = 10, start: int = 0,
+def _add_unverified(ledger: ScrobbleLedger, count: int, *, minutes_ago: float = 40, start: int = 0,
                     account_id: int = ACCOUNT_ID, **changes) -> None:
     """Listens whose last submission ended with an unknown outcome ``minutes_ago``."""
     ledger.add_pending(count, start=start, account_id=account_id, **{
@@ -423,20 +424,30 @@ def test_scrobble_identity_ignores_case_width_and_spacing_in_any_script():
     assert scrobble_identity(1, "Е", "Song") != scrobble_identity(1, "Ё", "Song")
 
 
-def test_an_unknown_outcome_is_looked_up_five_minutes_after_its_submission_and_backs_off_after_a_failed_lookup():
+def test_last_fm_lists_a_listen_at_its_second_under_the_same_artist_or_the_same_track():
+    listen = scrobble_identity(1, "Beatles", "Let It Be")
+    # Last.fm corrected one name: still the same listen.
+    assert is_same_scrobble(listen, scrobble_identity(1, "The Beatles", "Let It Be"))
+    assert is_same_scrobble(listen, scrobble_identity(1, "beatles", "Let It Be (Remastered)"))
+    # Both names differ, or the second differs: another scrobble.
+    assert not is_same_scrobble(listen, scrobble_identity(1, "The Beatles", "Let It Be (Remastered)"))
+    assert not is_same_scrobble(listen, scrobble_identity(2, "Beatles", "Let It Be"))
+
+
+def test_an_unknown_outcome_is_looked_up_thirty_minutes_after_its_submission_and_backs_off_after_a_failed_lookup():
     entry = listen_entry(1, scrobble_submission_state="uncertain", scrobble_retryable=False,
                          last_scrobble_attempt_at=_NOW.isoformat())
-    assert scrobble_verification_due_at(entry, now=_NOW) == _NOW + timedelta(minutes=5)
-    assert not scrobble_verification_due(entry, now=_NOW + timedelta(minutes=4), bypass_backoff=True)
-    assert scrobble_verification_due(entry, now=_NOW + timedelta(minutes=5))
+    assert scrobble_verification_due_at(entry, now=_NOW) == _NOW + timedelta(minutes=30)
+    assert not scrobble_verification_due(entry, now=_NOW + timedelta(minutes=29), bypass_backoff=True)
+    assert scrobble_verification_due(entry, now=_NOW + timedelta(minutes=30))
     # A crash after the claim leaves the listen claimed; the claim time is when its submission started.
     claimed = {**listen_entry(1), **attempting_updates(_NOW)}
-    assert scrobble_verification_due_at(claimed, now=_NOW) == _NOW + timedelta(minutes=5)
+    assert scrobble_verification_due_at(claimed, now=_NOW) == _NOW + timedelta(minutes=30)
     # Failed lookups back off like failed submissions, to the 15-minute cap; Submit skips the backoff.
     failed = {**entry, "scrobble_verification_failures": 7,
-              "last_scrobble_verification_at": (_NOW + timedelta(minutes=10)).isoformat()}
-    assert scrobble_verification_due_at(failed, now=_NOW) == _NOW + timedelta(minutes=25)
-    assert scrobble_verification_due(failed, now=_NOW + timedelta(minutes=11), bypass_backoff=True)
+              "last_scrobble_verification_at": (_NOW + timedelta(minutes=31)).isoformat()}
+    assert scrobble_verification_due_at(failed, now=_NOW) == _NOW + timedelta(minutes=46)
+    assert scrobble_verification_due(failed, now=_NOW + timedelta(minutes=32), bypass_backoff=True)
     # Reauthentication holds the lookup until the account reconnects.
     revoked = {**entry, "scrobble_reauthentication_required": True}
     assert not scrobble_verification_due(revoked, now=_NOW + timedelta(hours=1), bypass_backoff=True)
@@ -466,6 +477,18 @@ def test_a_listen_found_on_last_fm_is_accepted_and_never_sent_again(scrobble_led
     assert first.retry_in_seconds is None and second.summary["pending_before"] == 0
     assert [{key: fields[key] for key in ("attempted", "verified_present", "verified_absent")} for fields in events] == [
         {"attempted": 0, "verified_present": 2, "verified_absent": 0}]
+
+
+def test_a_listen_last_fm_lists_under_a_corrected_artist_is_accepted(scrobble_ledger):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 1)
+    [entry] = ledger.entries()
+    ledger.recent_tracks.lists({**entry, "artist": f"The {entry['artist']}"})
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    assert provider.calls == []
+    assert [entry["scrobble_submission_state"] for entry in ledger.entries()] == ["accepted"]
 
 
 def test_a_listen_missing_from_last_fm_is_resent_once_through_the_batch(scrobble_ledger, monkeypatch):
@@ -521,7 +544,7 @@ def test_a_resend_with_an_unknown_outcome_is_looked_up_again_before_any_further_
     assert (len(ledger.recent_tracks.calls), len(provider.calls)) == (1, 1)
     assert (entry["scrobble_submission_state"], entry["scrobble_retry_count"]) == ("uncertain", 2)
     assert scrobble_verification_due_at(entry, now=_NOW) == datetime.fromisoformat(
-        entry["last_scrobble_attempt_at"]) + timedelta(minutes=5)
+        entry["last_scrobble_attempt_at"]) + timedelta(minutes=30)
 
 
 @pytest.mark.parametrize("failure", [
@@ -689,7 +712,7 @@ def test_a_listen_without_a_timestamp_is_never_looked_up_and_fails_as_invalid(sc
 def test_a_listen_claimed_moments_ago_is_not_looked_up_while_its_submission_may_be_running(scrobble_ledger):
     ledger, provider = scrobble_ledger()
     ledger.add(listen_entry(1, **attempting_updates(datetime.now(timezone.utc) - timedelta(seconds=30))))
-    ledger.add(listen_entry(2, **attempting_updates(datetime.now(timezone.utc) - timedelta(minutes=6))))
+    ledger.add(listen_entry(2, **attempting_updates(datetime.now(timezone.utc) - timedelta(minutes=31))))
     ledger.recent_tracks.lists(ledger.entry(2))
 
     result = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
@@ -698,7 +721,7 @@ def test_a_listen_claimed_moments_ago_is_not_looked_up_while_its_submission_may_
     assert ledger.entry(1)["scrobble_submission_state"] == "attempting"
     assert ledger.entry(2)["scrobble_submission_state"] == "accepted"
     assert provider.calls == []
-    assert 4 * 60 < result.retry_in_seconds <= 4.5 * 60
+    assert 29 * 60 < result.retry_in_seconds <= 29.5 * 60
 
 
 @pytest.mark.parametrize("concurrent", ["accepted by a live submission", "returned to the queue by another lookup"])

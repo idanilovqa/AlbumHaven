@@ -11,10 +11,11 @@ which marks its listens as being submitted before any is sent, and its results
 are stored in a second one, so a listen is never sent twice, even after a crash.
 
 A listen whose submission outcome is unknown (a lost or unclear answer, or a
-crash after its claim) is never sent again blindly. Five minutes after its
+crash after its claim) is never sent again blindly. Thirty minutes after its
 submission started, a pass looks it up among the account's scrobbles on Last.fm,
 in batches of up to 50 listens, reading only the hours around their timestamps.
-Listed, it is accepted; not listed, it returns to the send queue. Its result is
+Listed (the same second and the same artist or track), it is accepted; not
+listed, it returns to the send queue, as often as it takes. Its result is
 stored under the same locks as a submission, and only while the listen is still
 unchanged since it was loaded.
 """
@@ -44,6 +45,7 @@ from music_app.services.lastfm_sync_bridge import (
     attempting_updates,
     failed_batch_disposition,
     failed_verification_updates,
+    is_same_scrobble,
     listen_scrobble_identity,
     plan_pending_scrobble,
     scrobble_attempt_updates,
@@ -347,8 +349,9 @@ def _verify_batch(
     try:
         for window in _verification_windows(batch):
             found, complete = _listed_scrobbles(config, session, window)
-            for _timestamp, item in window:
-                if listen_scrobble_identity(item.entry) in found:
+            for timestamp, item in window:
+                listen = listen_scrobble_identity(item.entry)
+                if any(is_same_scrobble(listen, scrobble) for scrobble in found.get(timestamp, ())):
                     listed.add(item.row_id)
                 elif not complete:
                     unread.add(item.row_id)
@@ -394,16 +397,18 @@ def _verification_windows(batch: list[PendingListenEntry]) -> list[list[tuple[in
 
 def _listed_scrobbles(
     config: dict[str, Any], session: LastfmSession, window: list[tuple[int, PendingListenEntry]],
-) -> tuple[set[tuple[int, str, str]], bool]:
-    """The scrobbles Last.fm lists from the first to the last listen of a window, and
-    whether it listed all of them within the page limit."""
-    found: set[tuple[int, str, str]] = set()
+) -> tuple[dict[int, list[tuple[int, str, str]]], bool]:
+    """The scrobbles Last.fm lists from the first to the last listen of a window, by their
+    second, and whether it listed all of them within the page limit."""
+    found: dict[int, list[tuple[int, str, str]]] = {}
     page = 1
     while True:
         scrobbles, pages = get_lastfm_scrobbles_between(
             config, session=session, after=window[0][0] - 1, before=window[-1][0] + 1, page=page,
         )
-        found.update(scrobble_identity(scrobble.timestamp, scrobble.artist, scrobble.track) for scrobble in scrobbles)
+        for scrobble in scrobbles:
+            identity = scrobble_identity(scrobble.timestamp, scrobble.artist, scrobble.track)
+            found.setdefault(identity[0], []).append(identity)
         if page >= min(pages, _VERIFICATION_MAX_PAGES):
             return found, pages <= _VERIFICATION_MAX_PAGES
         page += 1

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.25 - 2026-11-17
+
+- Opening an album from a gallery card no longer shows the "This album was split" chooser; it appears only from a notification about a split album. If an album opened from the gallery changed elsewhere, the gallery refreshes in place, Album Details closes, and a toast says "This album changed—choose it again in the gallery." An album you just split yourself opens the matching release.
+
 ## 0.11.24 - 2026-11-17
 
 - Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.

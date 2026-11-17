@@ -183,3 +183,13 @@ test('album cards pass the romanized artist name and re-render when it arrives (
   assert.match(source, /artistRomanized: galleryRomanizedArtistName\(album\.album_artist\)/);
   assert.match(source, /galleryRomanizedArtistName\(album\?\.album_artist\),/);
 });
+
+test('a card without a genre shows no genre pill and no placeholder text (owner 2026-11-16)', () => {
+  const context = loadGalleryCard();
+  for (const genre of [undefined, null, '', '  ']) {
+    const html = context.buildGalleryCardInfoHtml({ title: 'X', artist: 'Y', year: '2000', trackCount: 1, genre });
+    assert.doesNotMatch(html, /ui-metadata-pill|unavailable/i);
+  }
+  assert.match(context.buildGalleryCardInfoHtml({ title: 'X', artist: 'Y', genre: 'power metal' }),
+    /<span class="ui-metadata-pill ui-metadata-pill--genre">power metal<\/span>/);
+});

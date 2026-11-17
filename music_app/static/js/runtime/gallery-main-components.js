@@ -59,18 +59,17 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
     ? artistMusicBrainz
     : {};
   const country = galleryCountryName(projection.country);
+  // No genre shows no pill (owner 2026-11-16): the server's "Genre unavailable" placeholder
+  // for a matched artist without genres is not a genre.
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
-    .filter(Boolean)
+    .filter((genre) => genre && genre !== 'Genre unavailable')
     .slice(0, 3);
   const countryHtml = country
     ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(country)}</span>`
     : '';
-  const genreHtml = genres.map((genre) => (
-    genre === 'Genre unavailable'
-      ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
-      : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
-  )).join('');
+  const genreHtml = genres
+    .map((genre) => `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`).join('');
   return `${countryHtml}${genreHtml}`;
 }
 

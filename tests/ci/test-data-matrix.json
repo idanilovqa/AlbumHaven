@@ -10440,5 +10440,35 @@
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryGenrePill.spec.js",
+    "case": "no genre shows no genre pill and no placeholder text in the gallery header or on a card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "no genre shows no genre pill and no placeholder text in the gallery header or on a card"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryGenrePill.spec.js",
+    "case": "a real genre still shows its pill in the gallery header and on a card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a real genre still shows its pill in the gallery header and on a card"
+    ],
+    "ownerApproval": "pending"
   }
 ]

@@ -88,8 +88,8 @@ function Complete-Gate {
     exit 0
 }
 
-function Get-ProfileRoot([string]$Profile) {
-    return Join-Path ([IO.Path]::GetFullPath($FixtureDistribution)) "profiles\$Profile"
+function Get-ProfileRoot([string]$FixtureProfile) {
+    return Join-Path ([IO.Path]::GetFullPath($FixtureDistribution)) "profiles\$FixtureProfile"
 }
 
 foreach ($required in @(
@@ -106,9 +106,9 @@ foreach ($name in @($definition.RequiredEnvironment)) {
 if ($definition.FixtureProfiles.Count -gt 0) {
     if ([string]::IsNullOrWhiteSpace($FixtureDistribution)) { throw "FixtureDistribution is required for the $Gate gate." }
     if ([string]::IsNullOrWhiteSpace($ChromeExecutable)) { throw "PLAYWRIGHT_CHROME_EXECUTABLE is required for the $Gate gate." }
-    foreach ($profile in $definition.FixtureProfiles) {
-        if (-not (Test-Path -LiteralPath (Get-ProfileRoot $profile) -PathType Container)) {
-            throw "Fixture profile is missing: $(Get-ProfileRoot $profile)"
+    foreach ($fixtureProfile in $definition.FixtureProfiles) {
+        if (-not (Test-Path -LiteralPath (Get-ProfileRoot $fixtureProfile) -PathType Container)) {
+            throw "Fixture profile is missing: $(Get-ProfileRoot $fixtureProfile)"
         }
     }
 }

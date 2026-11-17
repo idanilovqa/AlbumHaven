@@ -684,7 +684,7 @@ def test_split_same_name_qualifiers_ride_along_only_when_a_name_is_split(monkeyp
     assert request(app, "GET", "/api/musicbrainz/artists/romanized-names") == (200, {"names": {"天門": "Tenmon"}})
 
 
-def test_the_split_qualifiers_are_read_from_the_view_for_per_album_artists_only():
+def test_the_split_qualifiers_are_read_from_the_narrow_split_groups_for_per_album_artists_only():
     from music_app.services.musicbrainz_enrichment_postgres import MusicBrainzEnrichmentPostgresRepository
 
     seen = []
@@ -710,7 +710,8 @@ def test_the_split_qualifiers_are_read_from_the_view_for_per_album_artists_only(
     assert repository.list_split_artist_qualifiers() == {
         "Amarok (Poland)": "Poland", "Alice Cooper (US band, 1964-1975)": "US band, 1964-1975"}
     assert "split_match.state = 'per_album'" in seen[0]
-    assert "starts_with(artist_groups.group_key, 'musicbrainz:')" in seen[0]
+    assert "split_match.library_id in (select library_id from active_library)" in seen[0]
+    assert "library.local_album_artist_groups" not in seen[0], "never the whole 0192 view"
 
 
 def test_romanized_artist_names_fail_safely_to_none(monkeypatch):

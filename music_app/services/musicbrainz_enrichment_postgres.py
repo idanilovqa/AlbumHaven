@@ -764,19 +764,16 @@ class MusicBrainzEnrichmentPostgresRepository:
 
     def list_split_artist_qualifiers(self) -> dict[str, str]:
         """Each group label of a name MusicBrainz splits per album (D2 S2) and its qualifier,
-        {"Amarok (Poland)": "Poland"}, so the tree and gallery dim the qualifier. Display only."""
+        {"Amarok (Poland)": "Poland"}, so the tree and gallery dim the qualifier. Display only.
+        It reads the browse queries' narrow split groups, never the whole 0192 view."""
+        from music_app.services.library_browse_postgres import _split_album_groups_cte_sql
+
         with self._connect(self._database_url) as connection:
-            rows = connection.execute(_active_library_cte() + """
-                select distinct artists.name as local_artist_name, artist_groups.group_label
-                from active_library
-                join library.local_artist_musicbrainz_matches split_match
-                  on split_match.library_id = active_library.library_id and split_match.state = 'per_album'
-                join library.local_artists artists
-                  on artists.library_id = split_match.library_id and artists.id = split_match.local_artist_id
-                join library.local_album_artist_groups artist_groups
-                  on artist_groups.library_id = split_match.library_id
-                 and artist_groups.local_artist_id = split_match.local_artist_id
-                where starts_with(artist_groups.group_key, 'musicbrainz:')
+            rows = connection.execute(_active_library_cte() + ", "
+                                      + _split_album_groups_cte_sql("select library_id from active_library") + """
+                select distinct artists.name as local_artist_name, split_album_groups.group_label
+                from split_album_groups
+                join library.local_artists artists on artists.id = split_album_groups.artist_id
                 """).fetchall()
         qualifiers = {}
         for row in map(_row_mapping, rows):

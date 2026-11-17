@@ -6639,6 +6639,27 @@ def test_live_the_tree_and_gallery_show_one_row_per_proven_same_name_artist(watc
         _SPLIT_POLAND, "Poland")
 
 
+def test_live_the_narrow_split_groups_label_every_proven_album_exactly_as_the_0192_view(watcher_repair_inventory):
+    """The browse queries read their own narrow copy of the view (the view costs ~60 ms per
+    query on a full library); its rows must stay the view's proven groups, label for label."""
+    from music_app.services.library_browse_postgres import _split_album_groups_cte_sql
+
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    library_id = albums["Hunt"]["library_id"]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        narrow = connection.execute(
+            "with bootstrap_context as (select %s::bigint as library_id), " + _split_album_groups_cte_sql()
+            + " select album_id, artist_id, group_label, artist_mbid::text from split_album_groups"
+            " order by album_id", (library_id,)).fetchall()
+        view = connection.execute(
+            "select local_album_id as album_id, local_artist_id as artist_id, group_label, artist_mbid::text"
+            " from library.local_album_artist_groups where library_id = %s and starts_with(group_key, 'musicbrainz:')"
+            " order by local_album_id", (library_id,)).fetchall()
+    assert [tuple(row.values()) for row in narrow] == [tuple(row.values()) for row in view]
+    assert sorted(row["group_label"] for row in narrow) == ["Owner (Poland)", "Owner (Spain)"]
+
+
 def test_live_selecting_a_split_row_shows_only_that_artist_and_the_plain_name_keeps_the_undecided(
     watcher_repair_inventory,
 ):

@@ -39,12 +39,10 @@ _SPLIT_QUERIES = {
 def test_each_browse_query_reads_the_split_groups_once_through_the_per_album_cte(name):
     sql = _normalized(_SPLIT_QUERIES[name]())
     assert sql.count("split_album_groups as materialized") == 1
-    # The view (with its window functions) is joined once, inside the CTE, never per row.
-    assert sql.count("library.local_album_artist_groups") == 1
-    cte = sql[sql.index("split_album_groups as materialized"):]
-    cte = cte[:cte.index(") ,") if ") ," in cte else cte.index("),")]
-    assert "split_match.state = 'per_album'" in cte
-    assert "starts_with(artist_groups.group_key, 'musicbrainz:')" in cte
+    # The 0192 view is never read here: the planner builds it over every album (~60 ms a
+    # query on a full library). The CTE reads only per_album artists' albums instead.
+    assert "library.local_album_artist_groups" not in sql
+    assert "split_match.state = 'per_album'" in _normalized(browse._split_album_groups_cte_sql())
     assert "left join split_album_groups artist_group" in sql
     # Album details keep the tag as the album's artist; their header label comes from
     # _album_musicbrainz_artist, and only the artist projection here follows the group.
@@ -68,8 +66,10 @@ def test_a_matched_artist_is_never_split_and_undecided_albums_keep_the_plain_nam
     cte = _normalized(browse._split_album_groups_cte_sql())
     # Only per_album artists; 'matched' (one identity) never enters the CTE.
     assert "state = 'per_album'" in cte and "'matched'" not in cte
-    # Undecided albums ('artist:<id>' groups) are left out, so they keep the local name.
-    assert "starts_with(artist_groups.group_key, 'musicbrainz:')" in cte
+    # Undecided albums (no certain identity) and identities MusicBrainz has no artist for are
+    # left out (inner joins), so they keep the local name; the live test compares the view.
+    assert "join library.local_album_artist_identities identities" in cte
+    assert "join integration.musicbrainz_artists remote on remote.mbid = proven.artist_mbid" in cte
     for factory in (browse._root_sidebar_sql, browse._root_gallery_membership_sql, browse._selected_artist_sql):
         assert re.search(r"coalesce\(artist_group\.group_label, [a-z_.]+\) as artist_name", _normalized(factory()))
 

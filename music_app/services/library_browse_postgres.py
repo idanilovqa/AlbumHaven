@@ -9116,23 +9116,61 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
     """
 
 
-def _split_album_groups_cte_sql() -> str:
+def _split_album_groups_cte_sql(library_ids_sql: str = "select library_id from bootstrap_context") -> str:
     """Same-name artists MusicBrainz splits per album (D2 S2, "Amarok (Poland)"): each proven
-    album's group from the 0192 view. Only ``per_album`` artists are read, so every other
-    artist pays one probe of this small set and keeps its name."""
-    return """
+    album's group label, as the 0192 view ``library.local_album_artist_groups`` labels it.
+
+    The view itself is not read: the planner builds it over every album and identity before
+    filtering (about 60 ms and 5.5k buffers per query on a 14,851-album library). This starts
+    from the few ``per_album`` artists and reads only their albums, so every other artist pays
+    one probe of this small set and keeps its name. A Postgres test keeps the labels equal to
+    the view's. ``library_ids_sql`` selects the libraries read (the browse queries' own)."""
+    return f"""
         split_album_groups as materialized (
-          select artist_groups.local_album_id as album_id,
-                 artist_groups.local_artist_id as artist_id,
-                 artist_groups.group_label,
-                 artist_groups.artist_mbid
-          from library.local_artist_musicbrainz_matches split_match
-          join library.local_album_artist_groups artist_groups
-            on artist_groups.library_id = split_match.library_id
-           and artist_groups.local_artist_id = split_match.local_artist_id
-          where split_match.state = 'per_album'
-            and split_match.library_id = (select library_id from bootstrap_context)
-            and starts_with(artist_groups.group_key, 'musicbrainz:')
+          with split_artists as (
+            select split_match.library_id, split_match.local_artist_id as artist_id
+            from library.local_artist_musicbrainz_matches split_match
+            where split_match.state = 'per_album'
+              and split_match.library_id in ({library_ids_sql})
+          ), proven as (
+            select albums.id as album_id, albums.artist_id, identities.artist_mbid
+            from split_artists
+            join library.local_albums albums
+              on albums.library_id = split_artists.library_id and albums.artist_id = split_artists.artist_id
+            join library.local_album_artist_identities identities
+              on identities.library_id = albums.library_id and identities.album_key = albums.album_key
+          ), described as (
+            select distinct proven.artist_id, proven.artist_mbid,
+                   nullif(btrim(remote.disambiguation), '') as disambiguation, country.name as country
+            from proven
+            join integration.musicbrainz_artists remote on remote.mbid = proven.artist_mbid
+            left join lateral (
+              select coalesce(countries.country_name, countries.country_code) as name
+              from integration.musicbrainz_artist_countries countries
+              where countries.artist_mbid = proven.artist_mbid
+              order by countries.country_code
+              limit 1
+            ) country on true
+          ), qualified as (
+            select described.artist_id, described.artist_mbid,
+                   case
+                     when country is not null
+                          and count(*) over (partition by artist_id, country) = 1 then country
+                     when disambiguation is not null
+                          and count(*) over (partition by artist_id, disambiguation) = 1 then disambiguation
+                     when country is not null and disambiguation is not null
+                          and count(*) over (partition by artist_id, country, disambiguation) = 1
+                       then country || ', ' || disambiguation
+                     else left(artist_mbid::text, 8)
+                   end as qualifier
+            from described
+          )
+          select proven.album_id, proven.artist_id,
+                 split_artist.name || ' (' || qualified.qualifier || ')' as group_label,
+                 proven.artist_mbid
+          from proven
+          join qualified on qualified.artist_id = proven.artist_id and qualified.artist_mbid = proven.artist_mbid
+          join library.local_artists split_artist on split_artist.id = proven.artist_id
         )
     """.strip()
 

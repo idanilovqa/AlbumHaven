@@ -661,10 +661,22 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         page.on('requestfinished', onTempFinished);
         const jumpStartedAt = performance.now();
         await galleryRegressions.scrollToArtistAction.click();
-        await expect.poll(async () => (
-          Object.values(await galleryRegressions.readArtistJumpPlacement(TREE_ARTIST)).every(Boolean)
-        ), { timeout: 60000 }).toBe(true);
+        const tempPolls = []; // TEMP-DIAG
+        await expect.poll(async () => {
+          const placement = await galleryRegressions.readArtistJumpPlacement(TREE_ARTIST);
+          // parity-check: allow-read-only-measurement-evaluate -- TEMP-DIAG
+          const geometry = await page.evaluate((artist) => {
+            const scroll = document.getElementById('albums-scroll');
+            const header = [...document.querySelectorAll('#artist-groups .family-artist-header[data-scroll-artist]')].find((item) => item.getAttribute('data-scroll-artist') === artist);
+            const rows = header?.closest('.artist-section')?.querySelector('.artist-rows');
+            const top = scroll ? scroll.getBoundingClientRect().top + scroll.clientTop : null;
+            return { delta: rows && top !== null ? rows.getBoundingClientRect().top - top : null, scrollTop: scroll?.scrollTop, chrome: document.querySelector('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]')?.textContent?.trim() };
+          }, TREE_ARTIST);
+          tempPolls.push({ at: Math.round(performance.now() - jumpStartedAt), ...placement, ...geometry });
+          return Object.values(placement).every(Boolean);
+        }, { timeout: 60000 }).toBe(true);
         metrics.artistJumpAlignedMs = performance.now() - jumpStartedAt;
+        console.log('TEMP-JUMP-POLLS', JSON.stringify(tempPolls));
         page.off('request', onTempRequest);
         page.off('requestfinished', onTempFinished);
         console.log('TEMP-JUMP', JSON.stringify({ epochStart: tempEpochStart, jumpMs: Math.round(metrics.artistJumpAlignedMs), requests: tempRequests }));

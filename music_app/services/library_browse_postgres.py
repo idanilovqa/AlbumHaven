@@ -10454,6 +10454,20 @@ def _search_preview_sql(
         if use_utf8_prefilter
         else ""
     )
+    # Applied MusicBrainz data corrections (S4, owner 2026-11-16: "Search corrected too") are
+    # matched beside the tags in the same single scan, each through the same prefilter on its
+    # own partial trigram index (the planner can combine them with a BitmapOr).
+    corrected_title_prefilter_sql, corrected_artist_prefilter_sql = (
+        (
+            "library.search_utf8_hex("
+            f"lower(btrim(coalesce(library.local_tracks.{column}, '')))"
+            ") like '%%' || "
+            "library.search_utf8_hex(lower(%(query_utf8_prefilter)s)) || '%%' and "
+            if use_utf8_prefilter
+            else ""
+        )
+        for column in ("corrected_title", "corrected_artist")
+    )
     file_path_prefilter_sql = (
         "library.search_utf8_hex("
         "lower(coalesce(library.local_track_files.private_path, ''))"
@@ -10540,6 +10554,8 @@ def _search_preview_sql(
           from library.local_albums
           where lower(btrim(coalesce(library.local_albums.title, '')))
             like lower(%(query_like)s) escape ''
+             or lower(btrim(coalesce(library.local_albums.corrected_title, '')))
+            like lower(%(query_like)s) escape ''
           union
           -- Every album of a MusicBrainz series whose name matches ("Colossus").
           select series_albums.library_id, series_albums.album_id
@@ -10564,6 +10580,8 @@ def _search_preview_sql(
             library.local_albums.id as album_id
           from library.local_albums
           where lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', '')))
+                like lower(%(query_like)s) escape ''
+             or lower(btrim(coalesce(library.local_albums.corrected_album_artist, '')))
                 like lower(%(query_like)s) escape ''
         ),
         credited_raw_artist_matches as materialized (
@@ -10592,8 +10610,14 @@ def _search_preview_sql(
             library.local_tracks.album_id,
             library.local_tracks.id as track_id
           from library.local_tracks
-          where {track_title_prefilter_sql}lower(btrim(coalesce(library.local_tracks.title, '')))
-            like lower(%(query_like)s) escape ''
+          where ({track_title_prefilter_sql}lower(btrim(coalesce(library.local_tracks.title, '')))
+                 like lower(%(query_like)s) escape '')
+             or (library.local_tracks.corrected_title is not null
+                 and {corrected_title_prefilter_sql}lower(btrim(coalesce(library.local_tracks.corrected_title, '')))
+                 like lower(%(query_like)s) escape '')
+             or (library.local_tracks.corrected_artist is not null
+                 and {corrected_artist_prefilter_sql}lower(btrim(coalesce(library.local_tracks.corrected_artist, '')))
+                 like lower(%(query_like)s) escape '')
         ),
         file_name_matches as materialized (
             select

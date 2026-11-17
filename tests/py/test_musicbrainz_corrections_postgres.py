@@ -234,3 +234,41 @@ def test_only_a_waiting_lookup_can_be_removed(monkeypatch):
     assert lookups.remove_queued(request_id=running["request_id"]) is False
     assert lookups.remove_queued(request_id=waiting["request_id"]) is True
     assert lookups.list_lookups()["queued"] == []
+
+
+def _search(setup_url, query):
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    params = {"query_like": f"%{query}%", "category_count": 0, "visible_categories": [], "include_missing": True,
+              "search_artist_keys": []}
+    with isolatedPostgres._connect(setup_url) as connection:
+        return {row["album_key"] for row in connection.execute(_search_preview_sql(), params).fetchall()}
+
+
+def test_search_finds_an_applied_correction_and_after_undo_only_the_tag(monkeypatch):
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    changed = []
+    repository._on_change = changed.append
+    with isolatedPostgres._connect(setup_url) as connection:
+        # A small edit (a typo) applies automatically.
+        connection.execute("update library.local_tracks set title = 'Hostlities' where track_key = 'rel-cry-1'")
+        connection.execute("update integration.musicbrainz_releases set media = %s where mbid = %s", (json.dumps(
+            [_medium(1, ("Hostilities", "Angra"), ("Song 2", "Angra"))]), RELEASE))
+    service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
+    repository.refresh(observed_at=NOW)
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        stored = connection.execute("select title, corrected_title from library.local_tracks"
+                                    " where track_key = 'rel-cry-1'").fetchone()
+    assert (stored["title"], stored["corrected_title"]) == ("Hostlities", "Hostilities"), "the tag value stays"
+    assert "rel-cry" in _search(setup_url, "Hostilities") and "rel-cry" in _search(setup_url, "Hostlities")
+    assert changed and "rel-cry" in changed[-1], "search, gallery and Problematic Files caches are invalidated"
+
+    service.undo_album(album_key="rel-cry", actor_account_id=None)
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute("select corrected_title from library.local_tracks"
+                                  " where track_key = 'rel-cry-1'").fetchone()["corrected_title"] is None
+    assert "rel-cry" not in _search(setup_url, "Hostilities")
+    assert "rel-cry" in _search(setup_url, "Hostlities")
+    assert "rel-cry" in changed[-1]

@@ -3578,7 +3578,7 @@
     "mutationOwnership": {
       "databaseIdentity": "utility-problematic-files:musicbrainz-corrections"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.utility-problematic-files.config.cjs",
@@ -9546,7 +9546,7 @@
     "expectedContracts": [
       "musicbrainz-data-correction-entry"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9561,7 +9561,7 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-data-correction"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9576,7 +9576,7 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-review-approval"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9621,7 +9621,7 @@
     "expectedContracts": [
       "musicbrainz-edits-queue-phone-data-correction"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

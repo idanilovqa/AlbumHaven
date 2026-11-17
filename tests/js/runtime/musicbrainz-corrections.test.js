@@ -406,3 +406,11 @@ test('the virtual list reports each rendered range so the next page can follow',
   assert.match(read('music_app/static/js/runtime/utility-renderers-and-actions.js'),
     /onRangeRendered: \(end, count\) => \{\s+if \(typeof loadMoreMusicBrainzCorrectionRows === 'function'\) loadMoreMusicBrainzCorrectionRows\(end, count\);/);
 });
+
+test('gallery cards show the corrected title and artist; keys and the tag fields stay on the tags', () => {
+  const grid = read('music_app/static/js/runtime/virtual-artist-grid.js');
+
+  assert.match(grid, /const displayName = album\?\.display_title \|\| album\?\.display_name \|\| album\?\.name \|\| '';/);
+  assert.match(grid, /artist: album\.display_artist \|\| album\.album_artist,/);
+  assert.doesNotMatch(grid, /albumKey[^\n]*display_title/);
+});

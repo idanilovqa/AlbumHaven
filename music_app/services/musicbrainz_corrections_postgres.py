@@ -108,7 +108,8 @@ _PRUNE_SQL = _active_library_cte() + """
       and (%(album_ids)s::bigint[] is null or albums.id = any(%(album_ids)s::bigint[]))
       and not exists (select 1 from library.local_album_musicbrainz_releases decision
                       where decision.library_id = stored.library_id and decision.album_key = stored.album_key
-                        and decision.state = 'release');
+                        and decision.state = 'release')
+    returning stored.album_key;
 """
 _PRUNE_ROWS_SQL = """
     delete from library.local_album_musicbrainz_correction_rows correction
@@ -252,6 +253,58 @@ _DECIDE_SQL = _active_library_cte() + f"""
     select count(*)::integer as decided from decided;
 """
 
+# Write the applied values beside the tag-derived ones (local_albums.corrected_title and
+# corrected_album_artist, local_tracks.corrected_title and corrected_artist) for the given
+# albums, or all; null where nothing is applied. Returns the albums whose values changed.
+_SYNC_SQL = _active_library_cte() + f"""
+    , scope as (
+      select albums.id, albums.library_id, albums.album_key
+      from library.local_albums albums
+      join active_library on active_library.library_id = albums.library_id
+      where %(album_keys)s::text[] is null or albums.album_key = any(%(album_keys)s::text[])
+    ), applied as (
+      select correction.album_key, correction.field, correction.disc_number, correction.track_number,
+             correction.proposed_value
+      from library.local_album_musicbrainz_correction_rows correction
+      join scope on scope.library_id = correction.library_id and scope.album_key = correction.album_key
+      where ({_STATE_SQL}) = 'applied'
+    ), album_values as (
+      select scope.id,
+             (select proposed_value from applied where applied.album_key = scope.album_key
+                and applied.field = 'album') as title,
+             (select proposed_value from applied where applied.album_key = scope.album_key
+                and applied.field = 'album_artist') as album_artist
+      from scope
+    ), albums_changed as (
+      update library.local_albums albums
+      set corrected_title = album_values.title, corrected_album_artist = album_values.album_artist
+      from album_values
+      where albums.id = album_values.id
+        and (albums.corrected_title is distinct from album_values.title
+             or albums.corrected_album_artist is distinct from album_values.album_artist)
+      returning albums.album_key
+    ), track_values as (
+      select tracks.id, scope.album_key,
+             (select proposed_value from applied where applied.album_key = scope.album_key and applied.field = 'title'
+                and applied.disc_number = coalesce(nullif(tracks.disc_number, 0), 1)
+                and applied.track_number = tracks.track_number) as title,
+             (select proposed_value from applied where applied.album_key = scope.album_key and applied.field = 'artist'
+                and applied.disc_number = coalesce(nullif(tracks.disc_number, 0), 1)
+                and applied.track_number = tracks.track_number) as artist
+      from scope
+      join library.local_tracks tracks on tracks.album_id = scope.id
+    ), tracks_changed as (
+      update library.local_tracks tracks
+      set corrected_title = track_values.title, corrected_artist = track_values.artist
+      from track_values
+      where tracks.id = track_values.id
+        and (tracks.corrected_title is distinct from track_values.title
+             or tracks.corrected_artist is distinct from track_values.artist)
+      returning track_values.album_key
+    )
+    select album_key from albums_changed union select album_key from tracks_changed;
+"""
+
 _SETTINGS_SQL = _active_library_cte() + """
     select coalesce(settings.auto_submit_bulks, false) as auto_submit_bulks, settings.changed_at
     from active_library
@@ -304,11 +357,29 @@ def album_display_rows(connection: Any, *, album_id: object) -> list[dict[str, o
 
 
 class MusicBrainzCorrectionsPostgresRepository:
-    def __init__(self, config: Mapping[str, object], *, connect: Callable[[str], Any] | None = None) -> None:
+    def __init__(self, config: Mapping[str, object], *, connect: Callable[[str], Any] | None = None,
+                 on_change: Callable[[tuple[str, ...]], None] | None = None) -> None:
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         if not self._database_url:
             raise RuntimeError("Database configuration is required for MusicBrainz corrections.")
         self._connect = connect or _connect
+        self._on_change = on_change
+
+    def _sync(self, connection: Any, album_keys: Iterable[str] | None) -> tuple[str, ...]:
+        params = {"album_keys": None if album_keys is None else sorted({str(key) for key in album_keys})}
+        if params["album_keys"] == []:
+            return ()
+        return tuple(sorted(str(_row_mapping(row)["album_key"]) for row in connection.execute(
+            _SYNC_SQL, params).fetchall()))
+
+    def _changed(self, album_keys: tuple[str, ...]) -> None:
+        """Search, gallery and Problematic Files caches follow the changed corrected values."""
+        on_change = self._on_change or _ON_CHANGE.get(self._database_url)
+        if album_keys and on_change is not None:
+            try:
+                on_change(album_keys)
+            except Exception:
+                _logger.warning("Caches could not be invalidated after a data correction changed.")
 
     def list_summaries(self, *, album_keys: Iterable[str] | None = None, offset: int = 0,
                        limit: int | None = None) -> dict[str, object]:
@@ -350,7 +421,10 @@ class MusicBrainzCorrectionsPostgresRepository:
                   "account_id": actor_account_id, "now": _aware_utc(observed_at)}
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
-                return int(_row_mapping(connection.execute(_DECIDE_SQL, params).fetchone()).get("decided") or 0)
+                decided = int(_row_mapping(connection.execute(_DECIDE_SQL, params).fetchone()).get("decided") or 0)
+                changed = self._sync(connection, [album_key] if album_key is not None else None) if decided else ()
+        self._changed(changed)
+        return decided
 
     def refresh(self, *, album_ids: Iterable[int] | None = None, observed_at: datetime | None = None) -> int:
         """Recompare the albums (all, or ``album_ids``) whose signature moved and store their
@@ -361,12 +435,10 @@ class MusicBrainzCorrectionsPostgresRepository:
         now = _aware_utc(observed_at or datetime.now(timezone.utc))
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
-                connection.execute(_PRUNE_SQL, params)
+                pruned = [str(_row_mapping(row)["album_key"]) for row in connection.execute(_PRUNE_SQL, params).fetchall()]
                 connection.execute(_PRUNE_ROWS_SQL)
                 changed = {row["album_id"]: row for row in map(_row_mapping, connection.execute(
                     _SIGNATURES_SQL, params).fetchall()) if row["signature"] != row.get("stored_signature")}
-                if not changed:
-                    return 0
                 albums, rows = [], []
                 for compared in map(_row_mapping, connection.execute(
                         _COMPARE_SQL, {"album_ids": sorted(changed)}).fetchall()):
@@ -379,9 +451,12 @@ class MusicBrainzCorrectionsPostgresRepository:
                                    "review_count": len(result["rows"]) - auto, "review_whole": result["review_whole"]})
                     rows.extend({**row, "library_id": signed["library_id"], "album_key": signed["album_key"]}
                                 for row in result["rows"])
-                connection.execute(_STORE_SQL, {"albums": json.dumps(albums), "now": now})
+                if albums:
+                    connection.execute(_STORE_SQL, {"albums": json.dumps(albums), "now": now})
                 if rows:
                     connection.execute(_STORE_ROWS_SQL, {"rows": json.dumps(rows)})
+                synced = self._sync(connection, [*pruned, *(album["album_key"] for album in albums)])
+        self._changed(synced)
         return len(changed)
 
     def settings(self) -> dict[str, object]:
@@ -404,15 +479,21 @@ _REFRESH_LOCK = threading.Lock()
 # Databases whose corrections refresh in the background, and whether a refresh is due again.
 _REFRESH_ENABLED: set[str] = set()
 _REFRESH_RUNNING: dict[str, bool] = {}
+# What invalidates search, gallery and Problematic Files caches when corrected values change.
+_ON_CHANGE: dict[str, Callable[[tuple[str, ...]], None]] = {}
 
 
-def enable_background_correction_refresh(database_url: object) -> None:
+def enable_background_correction_refresh(database_url: object,
+                                         on_change: Callable[[tuple[str, ...]], None] | None = None) -> None:
     """Let Problematic Files invalidations refresh this database's stored corrections (the
-    application does this at startup while MusicBrainz enrichment runs), and refresh now."""
+    application does this at startup while MusicBrainz enrichment runs), and refresh now.
+    ``on_change`` receives the album keys whose corrected values changed."""
     url = str(database_url or "").strip()
     if url:
         with _REFRESH_LOCK:
             _REFRESH_ENABLED.add(url)
+            if on_change is not None:
+                _ON_CHANGE[url] = on_change
         schedule_correction_refresh(url)
 
 

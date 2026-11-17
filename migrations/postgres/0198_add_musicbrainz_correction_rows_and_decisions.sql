@@ -55,6 +55,46 @@ alter table library.local_album_musicbrainz_corrections
   add column if not exists review_count integer not null default 0 check (review_count >= 0),
   add column if not exists review_whole boolean not null default false;
 
+-- Applied corrections beside the tag-derived values (owner 2026-11-16: "Corrected values should
+-- be still written into the db as some additional fields, and indexed"). Null while nothing is
+-- applied; search matches both these and the tags. Album keys, sorting and tags are untouched.
+alter table library.local_albums
+  add column if not exists corrected_title text,
+  add column if not exists corrected_album_artist text;
+alter table library.local_tracks
+  add column if not exists corrected_title text,
+  add column if not exists corrected_artist text;
+
+-- The same locale-independent trigram prefilter 0092 gives track titles, on the corrected
+-- values (partial: only rows that carry one).
+do $corrected_indexes$
+declare
+  trigram_schema text;
+begin
+  select namespace.nspname into trigram_schema
+  from pg_catalog.pg_extension extension
+  join pg_catalog.pg_namespace namespace on namespace.oid = extension.extnamespace
+  where extension.extname = 'pg_trgm';
+  if trigram_schema is null then
+    raise exception using errcode = '42704', message = 'Extension pg_trgm is not installed.';
+  end if;
+  execute pg_catalog.format(
+    $index$
+      create index if not exists local_tracks_corrected_title_search_utf8_hex_trgm_idx
+      on library.local_tracks using gin (
+        library.search_utf8_hex(lower(btrim(coalesce(corrected_title, '')))) %I.gin_trgm_ops
+      ) where corrected_title is not null
+    $index$, trigram_schema);
+  execute pg_catalog.format(
+    $index$
+      create index if not exists local_tracks_corrected_artist_search_utf8_hex_trgm_idx
+      on library.local_tracks using gin (
+        library.search_utf8_hex(lower(btrim(coalesce(corrected_artist, '')))) %I.gin_trgm_ops
+      ) where corrected_artist is not null
+    $index$, trigram_schema);
+end
+$corrected_indexes$;
+
 -- Stored before rows existed: recompute every album once.
 update library.local_album_musicbrainz_corrections set signature = 'recompute';
 

@@ -14,7 +14,8 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
-  const displayName = album?.display_name || album?.name || '';
+  // An applied MusicBrainz data correction (display_title, S4) shows in place of the tag.
+  const displayName = album?.display_title || album?.display_name || album?.name || '';
   const displayYear = album?.display_year || album?.year || '';
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
@@ -86,7 +87,7 @@ function albumCardHtml(album, options = {}) {
     albumFallback,
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
-    artist: album.album_artist,
+    artist: album.display_artist || album.album_artist,
     year: displayYear,
     genre: album?.musicbrainz_genre,
     artistRomanized: galleryRomanizedArtistName(album.album_artist),

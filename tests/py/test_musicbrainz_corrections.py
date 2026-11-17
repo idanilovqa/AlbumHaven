@@ -128,3 +128,63 @@ def test_background_refreshes_run_only_where_enabled_and_fold_requests_into_one_
         threading.Event().wait(0.05)
 
     assert runs == ["postgresql://s4", "postgresql://s4"]
+
+
+class _Cursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _Connection:
+    def __init__(self, rows):
+        self.rows, self.queries = rows, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params):
+        self.queries.append(params)
+        return _Cursor(self.rows)
+
+
+def test_cards_get_display_fields_only_where_the_corrected_value_differs():
+    from music_app.services.musicbrainz_correction_display import project_correction_display
+
+    connection = _Connection([{"album_key": "a", "corrected_title": "Hostilities", "corrected_album_artist": None},
+                              {"album_key": "b", "corrected_title": "Same", "corrected_album_artist": "Band"}])
+    payload = {"groups": [{"albums": [{"key": "a", "name": "Hostlities", "album_artist": "Band"},
+                                      {"key": "b", "name": "Same", "album_artist": "band"},
+                                      {"key": "c", "name": "Other", "album_artist": "Band"}]}]}
+
+    project_correction_display({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://x"}, payload,
+                               connect=lambda _url: connection)
+
+    a, b, c = payload["groups"][0]["albums"]
+    assert (a["name"], a["display_title"]) == ("Hostlities", "Hostilities") and "display_artist" not in a
+    assert "display_title" not in b and b["display_artist"] == "Band"
+    assert set(c) == {"key", "name", "album_artist"}, "an untouched album carries no extra bytes"
+    assert connection.queries == [{"album_keys": ["a", "b", "c"]}], "one read per response"
+
+
+def test_search_matches_the_corrected_values_through_their_own_prefiltered_indexes():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    sql = " ".join(_search_preview_sql(use_utf8_prefilter=True).split()).lower()
+    migration = (__import__("pathlib").Path(__file__).resolve().parents[2]
+                 / "migrations" / "postgres" / "0198_add_musicbrainz_correction_rows_and_decisions.sql").read_text(
+        encoding="utf-8").lower()
+
+    for column in ("library.local_albums.corrected_title", "library.local_albums.corrected_album_artist",
+                   "library.local_tracks.corrected_title", "library.local_tracks.corrected_artist"):
+        assert f"lower(btrim(coalesce({column}, ''))) like lower(%(query_like)s)" in sql
+    for column in ("corrected_title", "corrected_artist"):
+        assert (f"library.search_utf8_hex( lower(btrim(coalesce(library.local_tracks.{column}, ''))))"
+                not in sql)
+        assert f"library.search_utf8_hex(lower(btrim(coalesce(library.local_tracks.{column}, ''))))" in sql
+        assert f"library.search_utf8_hex(lower(btrim(coalesce({column}, '')))) %i.gin_trgm_ops" in migration

@@ -659,7 +659,15 @@ def create_asgi_app():
                     build_musicbrainz_enrichment_api_service(runtime.config)
                 )
                 # Stored data corrections follow tag changes from here on (S4).
-                enable_background_correction_refresh(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL"))
+                enable_background_correction_refresh(
+                    runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+                    # Corrected values feed search and the gallery: the existing targeted
+                    # invalidation drops their caches and Problematic Files'.
+                    on_change=lambda album_keys: invalidate_targeted_library_projections(
+                        runtime.library_state, runtime.config,
+                        revision=int(runtime.library_state.get("inventory_mutation_revision") or 0),
+                        affected_album_keys=tuple(album_keys)),
+                )
                 try:
                     schedule_startup_backfill(enrichment_scheduler)
                 except Exception:

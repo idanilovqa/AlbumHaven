@@ -242,6 +242,9 @@ def retry_pending_lastfm_scrobbles(
 
                 # Accounts Last.fm asked to reconnect: their other listens wait for the reconnection.
                 revoked: set[int] = set()
+                # Accounts whose lookup Last.fm refused (a renamed user, say): their other lookups
+                # wait for the backoff, while their sends and every other account carry on.
+                refused: set[int] = set()
                 # Set when Last.fm is failing: the pass stops, and later batches wait for its backoff.
                 stopped = False
                 for batch in _account_batches(
@@ -249,7 +252,7 @@ def retry_pending_lastfm_scrobbles(
                     due=lambda entry: scrobble_verification_due(
                         entry, now=now, reauthenticated=reauthenticated, bypass_backoff=bypass_backoff),
                 ):
-                    if batch[0].account_id in revoked:
+                    if batch[0].account_id in revoked | refused:
                         continue
                     stored, retry_in, error = _verify_batch(
                         config, connection, batch, session=sessions[batch[0].account_id], now=now,
@@ -261,6 +264,8 @@ def retry_pending_lastfm_scrobbles(
                             pending.append(after)
                     if error is not None and error.reauthentication_required:
                         revoked.add(batch[0].account_id)
+                    elif error is not None and not error.retryable:
+                        refused.add(batch[0].account_id)
                     elif error is not None:
                         result.retry_in_seconds, stopped = retry_in, True
                         break

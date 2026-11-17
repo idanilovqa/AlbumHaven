@@ -586,6 +586,29 @@ def test_a_lookup_that_needs_reauthentication_holds_only_that_account(scrobble_l
     assert [call.tracks for call in provider.calls] == [["Song 0", "Song 1", "Song 200"]]
 
 
+def test_a_lookup_last_fm_refuses_holds_only_that_accounts_lookups(scrobble_ledger):
+    other_account = ACCOUNT_ID + 1
+    ledger, provider = scrobble_ledger()
+    ledger.sessions[other_account] = "other-session"
+    # Account A was renamed on Last.fm, so its lookups are refused for good.
+    _add_unverified(ledger, 2)
+    ledger.add_pending(1, start=100, account_id=other_account)
+    ledger.recent_tracks.answer = lambda call: (
+        LastfmError("User not found (Last.fm error 6)", code=6) if call.session_key == "fixture-session" else None)
+
+    results = [lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True) for _pass in range(3)]
+
+    # Account B's listen goes out in the first pass, once; A's lookups are retried every pass.
+    assert [(call.session_key, call.tracks) for call in provider.calls] == [("other-session", ["Song 100"])]
+    assert ledger.entry(3)["scrobbled"] is True
+    assert [call.session_key for call in ledger.recent_tracks.calls] == ["fixture-session"] * 3
+    for entry in ledger.entries()[:2]:
+        assert listen_history.is_unverified_scrobble_entry(entry)
+        assert (entry["scrobble_verification_failures"], entry.get("scrobble_reauthentication_required")) == (3, False)
+    # Without Submit, A's next lookup waits for its backoff.
+    assert 0 < results[-1].retry_in_seconds <= scrobble_retry_delay_seconds(3)
+
+
 def test_a_lookup_reads_only_the_window_around_its_batch_never_the_whole_history(scrobble_ledger):
     ledger, _provider = scrobble_ledger()
     # 60 listens: 50 within one minute, then 10 two hours later, so two batches of one window

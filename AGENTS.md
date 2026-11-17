@@ -86,8 +86,10 @@ operate, or contribute to the application.
   measurements. Do not take the heavy-job lock for a gate the hosted workflow
   covers.
 - Hosted runs keep every budget, grace band, and hard ceiling. Do not switch
-  timing contracts, relax budgets, or rerun until green; diagnose a hosted
-  performance failure exactly like a local one.
+  timing contracts or relax budgets. Rerunning to diagnose a failure (with
+  added diagnostics if needed) or to verify a fix is expected; never rerun
+  unchanged code hoping for a lucky pass, and never accept an unexplained
+  pass. Diagnose a hosted performance failure exactly like a local one.
 
 ## Mandatory search regression gate
 
@@ -159,7 +161,8 @@ operate, or contribute to the application.
   satisfy the gate. Run Python, Node, and browser stages serially.
 - Keep the approved 1000 ms readiness target plus 200 ms grace. Retain cold
   and warm measurements, full response sizes, and populated visible detail
-  assertions. Do not relax budgets, remove cases, or rerun until green.
+  assertions. Do not relax budgets or remove cases. Rerun to diagnose or to
+  verify a fix, never just to reroll unchanged code until it passes.
 - Maintain `tests/ci/performance-change-impact.json` when ownership moves or
   new dependencies are introduced. Its tested mapping must select both PF
   targets; full CI remains mandatory before release.

@@ -64,14 +64,28 @@ if ($ListFixtureProfiles) {
     exit 0
 }
 
+# Every stage runs even after an earlier failure so one run reports the complete failure set.
+$failedStages = [System.Collections.Generic.List[string]]::new()
 function Invoke-Checked([scriptblock]$Command, [string]$Label) {
     Write-Host "::group::$Gate gate: $Label"
     try {
+        $global:LASTEXITCODE = 0
         & $Command
-        if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE." }
+        if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE" }
+    } catch {
+        $failedStages.Add("$Label ($($_.Exception.Message))")
     } finally {
         Write-Host '::endgroup::'
     }
+}
+
+function Complete-Gate {
+    if ($failedStages.Count -gt 0) {
+        $failedStages | ForEach-Object { Write-Host "::error::$Gate gate stage failed: $_" }
+        exit 1
+    }
+    Write-Host "$Gate gate passed."
+    exit 0
 }
 
 function Get-ProfileRoot([string]$Profile) {
@@ -115,7 +129,7 @@ if ($Gate -eq 'search') {
             -PostgresMajor $PostgresMajor `
             -PerformanceBasePort $PerformanceBasePort
     } 'npm run test:search-regressions'
-    exit 0
+    Complete-Gate
 }
 
 if ($Gate -eq 'bounded-interactions') {
@@ -124,10 +138,10 @@ if ($Gate -eq 'bounded-interactions') {
         throw 'This ref has no test:bounded-interactions script; the bounded-interaction gate is not available here.'
     }
     Invoke-Checked { & npm run test:bounded-interactions } 'npm run test:bounded-interactions'
-    exit 0
+    Complete-Gate
 }
 
-$junitRoot = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$Gate-gate-$PID"
+$junitRoot = Join-Path $repositoryRoot "test-results\regression-gates\$Gate"
 New-Item -ItemType Directory -Force -Path $junitRoot | Out-Null
 $index = 0
 foreach ($selection in @($definition.Pytest)) {
@@ -200,3 +214,5 @@ if ($definition.Performance) {
             -PerformanceContract local
     } "Measured targets $($definition.Performance.Targets)"
 }
+
+Complete-Gate

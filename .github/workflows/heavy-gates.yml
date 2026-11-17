@@ -221,5 +221,6 @@ jobs:
           path: |
             test-results/playwright-performance-targets
             test-results/playwright-artifacts
+            test-results/regression-gates
           if-no-files-found: ignore
           retention-days: 14

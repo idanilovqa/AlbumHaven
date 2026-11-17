@@ -5968,6 +5968,8 @@ const state = {
     anchorPath: '',
     dragSelecting: false,
     dragAnchorPath: '',
+    dragBasePaths: null,
+    dragMoved: false,
     values: {},
   },
   coverLookup: {
@@ -14662,6 +14664,43 @@ function ensureArtistTreeContextMenu() {
   menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
   document.body.appendChild(menu);
   return menu;
+}
+
+// Owner 2026-11-16: right-clicking selected Loose Tracks offers Edit Tags in the album-card menu.
+function ensureLooseTracksContextMenu() {
+  let menu = document.getElementById('loose-tracks-context-menu');
+  if (menu) return menu;
+  menu = document.createElement('div');
+  menu.id = 'loose-tracks-context-menu';
+  menu.className = 'album-card-context-menu';
+  menu.hidden = true;
+  // The header Edit Tags button's own action, so both open the editor for the same selection.
+  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-open-non-album-tag-editor="1">Edit Tags</button>';
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function hideLooseTracksContextMenu() {
+  const menu = document.getElementById('loose-tracks-context-menu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+}
+
+function showLooseTracksContextMenu(event) {
+  if (isMobileClient() || usesMobilePageLayout()) return false;
+  // Edit Tags shows in the header only for accounts allowed to edit; the menu follows it.
+  if (!document.querySelector('#non-album-modal [data-open-non-album-tag-editor="1"]')) return false;
+  const controller = nonAlbumTrackSelectionController;
+  const path = controller?.pathForRow?.(controller.rowFromEvent?.(event));
+  if (!path) return false;
+  if (!controller.getSelectedPaths().includes(path)) controller.sync([path]);
+  const menu = ensureLooseTracksContextMenu();
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideLooseTracksContextMenu);
+  return true;
 }
 
 function hideArtistTreeContextMenu() {
@@ -39773,6 +39812,8 @@ function openTagEditor(album, options = {}) {
     anchorPath: getTagEditorTrackIdentity(tracks[0]),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragBasePaths: null,
+    dragMoved: false,
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
@@ -51412,11 +51453,17 @@ function handleUtilityBootstrapMouseDown(event) {
   if (!trackButton || event.button !== 0) return;
   event.preventDefault();
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey;
+  const selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || []);
+  // Owner 2026-11-16, as in the shared track table: a drag that starts on a selected track deselects
+  // the tracks it passes; a click without a drag still selects only that track (resolved on mouseup).
+  const removing = plain && selectedPaths.length > 1 && selectedPaths.includes(path);
+  state.tagEditor.dragSelecting = plain;
+  state.tagEditor.dragAnchorPath = plain ? path : '';
+  state.tagEditor.dragBasePaths = removing ? selectedPaths : null;
+  state.tagEditor.dragMoved = false;
+  if (removing) return;
   selectTagEditorTrack(path, event);
-  if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
-    state.tagEditor.dragSelecting = true;
-    state.tagEditor.dragAnchorPath = path;
-  }
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
 }
@@ -51599,8 +51646,13 @@ function handleUtilityBootstrapMouseOver(event) {
   const trackButton = event.target.closest('[data-tag-editor-track]');
   if (!trackButton) return false;
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  state.tagEditor.dragMoved ||= path !== state.tagEditor.dragAnchorPath;
   const rangePaths = getTagEditorRangePaths(state.tagEditor.dragAnchorPath, path);
-  setTagEditorSelectedPaths(rangePaths, state.tagEditor.dragAnchorPath);
+  const basePaths = state.tagEditor.dragBasePaths;
+  setTagEditorSelectedPaths(
+    basePaths ? basePaths.filter((selectedPath) => !rangePaths.includes(selectedPath)) : rangePaths,
+    state.tagEditor.dragAnchorPath,
+  );
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
   return true;
@@ -51662,8 +51714,18 @@ function handleUtilityBootstrapMouseUp(event) {
       state.utility.problemExclusionClearOnClick = false;
     }, 0);
   }
+  const pressedSelectedPath = state.tagEditor.dragBasePaths && !state.tagEditor.dragMoved
+    ? state.tagEditor.dragAnchorPath
+    : '';
   state.tagEditor.dragSelecting = false;
   state.tagEditor.dragAnchorPath = '';
+  state.tagEditor.dragBasePaths = null;
+  state.tagEditor.dragMoved = false;
+  if (pressedSelectedPath) {
+    selectTagEditorTrack(pressedSelectedPath);
+    renderTagEditor({ preserveTrackList: true });
+    syncTagEditorAutoNumberControls();
+  }
 }
 
 function toggleUtilityLoopGroupCollapse(groupKey) {
@@ -56108,6 +56170,10 @@ window.AlbumHavenAppCopy?.onServerAnswer(() => {
 });
 
 document.addEventListener('contextmenu', (event) => {
+  if (event.target.closest('#non-album-modal [data-track-row-path]') && showLooseTracksContextMenu(event)) {
+    event.preventDefault();
+    return;
+  }
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();
@@ -56136,6 +56202,7 @@ document.addEventListener('click', (event) => {
   if (!event.target.closest('#artist-tree-context-menu') && typeof hideArtistTreeContextMenu === 'function') {
     hideArtistTreeContextMenu();
   }
+  hideLooseTracksContextMenu();
   if (!event.target.closest('#status-context-menu')) {
     hideStatusContextMenu();
   }
@@ -56154,18 +56221,22 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     hideVersionContextMenu();
     hideStatusContextMenu(true);
+    hideLooseTracksContextMenu();
   }
 });
 
 window.addEventListener('blur', hideStatusContextMenu);
 window.addEventListener('blur', hideVersionContextMenu);
+window.addEventListener('blur', hideLooseTracksContextMenu);
 window.addEventListener('resize', () => {
   hideStatusContextMenu();
   hideVersionContextMenu();
+  hideLooseTracksContextMenu();
 });
 window.addEventListener('scroll', () => {
   hideStatusContextMenu();
   hideVersionContextMenu();
+  hideLooseTracksContextMenu();
 }, true);
 
 

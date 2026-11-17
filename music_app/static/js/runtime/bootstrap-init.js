@@ -333,6 +333,10 @@ window.AlbumHavenAppCopy?.onServerAnswer(() => {
 });
 
 document.addEventListener('contextmenu', (event) => {
+  if (event.target.closest('#non-album-modal [data-track-row-path]') && showLooseTracksContextMenu(event)) {
+    event.preventDefault();
+    return;
+  }
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();
@@ -361,6 +365,7 @@ document.addEventListener('click', (event) => {
   if (!event.target.closest('#artist-tree-context-menu') && typeof hideArtistTreeContextMenu === 'function') {
     hideArtistTreeContextMenu();
   }
+  hideLooseTracksContextMenu();
   if (!event.target.closest('#status-context-menu')) {
     hideStatusContextMenu();
   }
@@ -379,18 +384,22 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     hideVersionContextMenu();
     hideStatusContextMenu(true);
+    hideLooseTracksContextMenu();
   }
 });
 
 window.addEventListener('blur', hideStatusContextMenu);
 window.addEventListener('blur', hideVersionContextMenu);
+window.addEventListener('blur', hideLooseTracksContextMenu);
 window.addEventListener('resize', () => {
   hideStatusContextMenu();
   hideVersionContextMenu();
+  hideLooseTracksContextMenu();
 });
 window.addEventListener('scroll', () => {
   hideStatusContextMenu();
   hideVersionContextMenu();
+  hideLooseTracksContextMenu();
 }, true);
 
 

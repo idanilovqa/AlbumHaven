@@ -59,6 +59,43 @@ function ensureArtistTreeContextMenu() {
   return menu;
 }
 
+// Owner 2026-11-16: right-clicking selected Loose Tracks offers Edit Tags in the album-card menu.
+function ensureLooseTracksContextMenu() {
+  let menu = document.getElementById('loose-tracks-context-menu');
+  if (menu) return menu;
+  menu = document.createElement('div');
+  menu.id = 'loose-tracks-context-menu';
+  menu.className = 'album-card-context-menu';
+  menu.hidden = true;
+  // The header Edit Tags button's own action, so both open the editor for the same selection.
+  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-open-non-album-tag-editor="1">Edit Tags</button>';
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function hideLooseTracksContextMenu() {
+  const menu = document.getElementById('loose-tracks-context-menu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+}
+
+function showLooseTracksContextMenu(event) {
+  if (isMobileClient() || usesMobilePageLayout()) return false;
+  // Edit Tags shows in the header only for accounts allowed to edit; the menu follows it.
+  if (!document.querySelector('#non-album-modal [data-open-non-album-tag-editor="1"]')) return false;
+  const controller = nonAlbumTrackSelectionController;
+  const path = controller?.pathForRow?.(controller.rowFromEvent?.(event));
+  if (!path) return false;
+  if (!controller.getSelectedPaths().includes(path)) controller.sync([path]);
+  const menu = ensureLooseTracksContextMenu();
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideLooseTracksContextMenu);
+  return true;
+}
+
 function hideArtistTreeContextMenu() {
   const menu = document.getElementById('artist-tree-context-menu');
   if (!menu) return;

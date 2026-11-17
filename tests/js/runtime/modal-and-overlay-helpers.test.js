@@ -2869,3 +2869,39 @@ test('collections with artwork open in their final layout: artwork is known befo
   assert.match(loading, /custom-collection-detail__tracks track-modal-main"><div class="loading-table"><\/div>/);
   assert.match(context.buildCustomCollectionHeaderArtworkMarkup('Night', context.state.ui.customCollectionArtworkByName.Night), /hidden/);
 });
+
+test('right-clicking Loose Tracks rows offers Edit Tags for the selection, only to editors on desktop', () => {
+  // Owner 2026-11-16: a right-click menu on selected tracks with Edit Tags, like the album-card menu.
+  const { context } = loadHelper();
+  context.isMobileClient = () => false;
+  context.usesMobilePageLayout = () => false;
+  let canEdit = true;
+  context.document.querySelector = (selector) => (
+    selector === '#non-album-modal [data-open-non-album-tag-editor="1"]' && canEdit ? {} : null
+  );
+  let selected = ['a', 'b'];
+  vm.runInContext('nonAlbumTrackSelectionController = globalThis.__controller;', Object.assign(context, {
+    __controller: {
+      rowFromEvent: (event) => event.row,
+      pathForRow: (row) => row?.path || '',
+      getSelectedPaths: () => [...selected],
+      sync: (paths) => { selected = [...paths]; },
+    },
+  }));
+  const rightClick = (path) => ({ row: { path }, clientX: 40, clientY: 50 });
+
+  assert.equal(context.showLooseTracksContextMenu(rightClick('b')), true);
+  const menu = context.document.getElementById('loose-tracks-context-menu');
+  assert.equal(menu.hidden, false);
+  assert.deepEqual(selected, ['a', 'b'], 'a right-click on a selected track keeps the multi-selection');
+  assert.match(menu.innerHTML, /data-open-non-album-tag-editor="1"[^>]*>Edit Tags</);
+
+  context.hideLooseTracksContextMenu();
+  assert.equal(context.showLooseTracksContextMenu(rightClick('c')), true);
+  assert.deepEqual(selected, ['c'], 'a right-click on an unselected track selects just that track');
+
+  canEdit = false;
+  context.hideLooseTracksContextMenu();
+  assert.equal(context.showLooseTracksContextMenu(rightClick('a')), false);
+  assert.equal(menu.hidden, true);
+});

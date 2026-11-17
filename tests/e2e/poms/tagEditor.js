@@ -260,7 +260,8 @@ export class TagEditor extends BasePage {
 
   async readFormLabelTexts() {
     // parity-check: allow-read-only-measurement-evaluate -- read visible form-label text without driving application state
-    return this.formLabels.evaluateAll((labels) => labels.map(
+    // Hidden sections (the CUE structure for non-CUE tracks) are not part of the visible form.
+    return this.formLabels.evaluateAll((labels) => labels.filter((label) => !label.closest('[hidden]')).map(
       (label) => Array.from(label.childNodes)
         .filter((node) => node.nodeType === Node.TEXT_NODE)
         .map((node) => String(node.textContent || '').trim())

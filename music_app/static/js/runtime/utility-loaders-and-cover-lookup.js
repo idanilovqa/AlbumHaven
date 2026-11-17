@@ -68,6 +68,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     let loadSucceeded = false;
     let loadError = '';
     let boundedPayloadCommitted = false;
+    let awaitsOpenReconcile = false;
     let previousSummaryItems = [];
     try {
       const fetchSummary = async (url) => {
@@ -185,7 +186,9 @@ async function loadProblematicFiles(force = false, options = {}) {
         // reloads after tag edits keep paging. The complete list then supersedes paging, so
         // reaching the bounded list's end must not request more pages.
         const reconcile = problematicFilesTabOnScreen();
-        if (reconcile) {
+        // A Settings-intent prefetch is reconciled by the tab about to open; paging first would only be superseded.
+        awaitsOpenReconcile = !reconcile && options.render === 'when-open';
+        if (reconcile || awaitsOpenReconcile) {
           state.utility.problematicHasMore = false;
           state.utility.problematicArtistHasMore = false;
         }
@@ -204,12 +207,12 @@ async function loadProblematicFiles(force = false, options = {}) {
           data = await fetchSummary('/utilities/problematic-files');
           if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
           committedSelection = commitCompleteList(data);
-        } else {
+        } else if (!awaitsOpenReconcile) {
           // The complete list already carries Artist problems; only a paged list pages them.
           scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
         }
       }
-      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore && !awaitsOpenReconcile;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {

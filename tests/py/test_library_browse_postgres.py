@@ -21637,3 +21637,26 @@ def test_a_display_correction_is_a_problematic_file_until_written():
         "album_artist": {"original": "\u00c3\u00a9", "corrected": "\u00e9", "kind": "decoded"}}})) == [
         "Track artist unreadable \u2014 using album artist", "Encoding problem"]
     assert list(_physical_file_problem_reasons({})) == []
+
+
+def test_loose_track_search_normalizes_the_alias_map_once_per_request_not_per_track():
+    # Owner (11-17): main search took 2-9 s; py-spy showed the loose-tracks filter re-normalizing the whole
+    # artist alias map for every loose track whose artist is not an exact alias key.
+    from music_app.services import library_browse_postgres as browse_module
+
+    aliases = _CountingAliasMap({f"Alias {index}": f"Artist {index}" for index in range(50)})
+    tracks = [
+        {"path": f"C:/Music/Loose/{index}.mp3", "title": f"Song {index}", "artist": f"unlisted artist {index}",
+         "album_artist": "", "library_category": "main_library"}
+        for index in range(300)
+    ]
+
+    browse_module._filter_non_album_snapshot_tracks(
+        tracks,
+        visible_library_categories=["main_library"],
+        alias_to_canonical=aliases,
+        canonical_to_aliases={},
+        query="song",
+    )
+
+    assert aliases.iterations <= 1, f"alias map normalized {aliases.iterations} times"

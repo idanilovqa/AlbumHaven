@@ -5294,6 +5294,8 @@ def _filter_non_album_snapshot_tracks(
     )
     query_text = str(query or "").strip()
     filtered = []
+    # Owner (11-17): normalize the alias map once per request; per track it made main search take seconds.
+    normalized_aliases = None
     for raw_track in tracks:
         track = dict(_row_mapping(raw_track))
         if not entry_visible_in_categories(track, visible_library_categories):
@@ -5305,16 +5307,20 @@ def _filter_non_album_snapshot_tracks(
             visible_path_parts,
         ):
             continue
-        if query_text and not _non_album_entry_matches_query(
-            track,
-            query_text,
-            artist_names=_expanded_artist_name_list(
-                (track.get("artist"), track.get("album_artist")),
-                alias_to_canonical or {},
-                canonical_to_aliases or {},
-            ),
-        ):
-            continue
+        if query_text:
+            if normalized_aliases is None:
+                normalized_aliases = _normalized_artist_aliases(alias_to_canonical or {})
+            if not _non_album_entry_matches_query(
+                track,
+                query_text,
+                artist_names=_expanded_artist_name_list(
+                    (track.get("artist"), track.get("album_artist")),
+                    alias_to_canonical or {},
+                    canonical_to_aliases or {},
+                    normalized_alias_to_canonical=normalized_aliases,
+                ),
+            ):
+                continue
         filtered.append(track)
     return filtered
 
@@ -8523,10 +8529,12 @@ def _expanded_artist_name_list(
     artists: Iterable[object],
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
+    *,
+    normalized_alias_to_canonical: Mapping[str, object] | None = None,
 ) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
-    normalized_aliases = None
+    normalized_aliases = normalized_alias_to_canonical
     for artist in artists:
         if normalized_aliases is None and alias_to_canonical.get(str(artist or "").strip()) is None:
             normalized_aliases = _normalized_artist_aliases(alias_to_canonical)

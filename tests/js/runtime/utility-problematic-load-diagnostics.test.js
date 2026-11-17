@@ -432,6 +432,39 @@ test('opening the account menu prefetches Problematic Files and Settings reuses 
   assert.ok(calls.renders >= 1);
 });
 
+test('a Settings-intent prefetch does not page before the opened tab reads the complete list', async () => {
+  const overlay = { hidden: true };
+  const requested = [];
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const { context } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    // Run deferred work, as the browser would, so a scheduled Artist page is not hidden.
+    scheduleBrowserTimeout(callback) { setImmediate(callback); return 1; },
+    async fetch(url) {
+      requested.push(String(url));
+      const bounded = String(url).includes('limit=50');
+      return json({ complete: !bounded, has_more: bounded, next_cursor: bounded ? 'next' : '', items: [{ key: 'a', name: 'A', detail_loaded: false }] });
+    },
+  });
+
+  context.prefetchProblematicFilesForSettingsIntent();
+  await context.state.utility.loadPromise;
+  await new Promise((resolve) => setImmediate(resolve));
+  // The modal opens after the bounded page arrived; its first render reaches the list end.
+  overlay.hidden = false;
+  await context.loadNextProblematicFilesPage();
+  await context.loadNextProblematicArtistPage();
+  await context.loadActiveUtilityTab(true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    requested,
+    ['/utilities/problematic-files?limit=50', '/utilities/problematic-files'],
+    'one bounded page and one complete list only',
+  );
+  assert.equal(context.state.utility.problematicFilesComplete, true);
+});
+
 function loadSearchHelper(searchBody) {
   const overlay = { hidden: false };
   const timers = [];

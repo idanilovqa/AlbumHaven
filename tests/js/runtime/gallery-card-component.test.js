@@ -184,6 +184,33 @@ test('1D-3: a card of an original-script artist reads "天門 (Tenmon) · 2002" 
   assert.doesNotMatch(phone, /\.gallery-card__romanized \{ display: block/, 'never its own line');
 });
 
+test('1D-3: a phone album row shows the album title\'s Latin form under the title, rows no taller', () => {
+  const context = loadGalleryCard();
+  const html = context.buildGalleryCardInfoHtml({ title: '秒速5センチメートル', titleLatin: 'Byousoku <5>', artist: '天門', year: '2007', trackCount: 11, artistRomanized: 'Tenmon' });
+  assert.match(html, /<div class="album-meta-row"><div class="album-subtitle gallery-card__title-latin"><span class="gallery-artist-romanized">\(Byousoku &lt;5&gt;\)<\/span><\/div><div class="album-subtitle" title="Tenmon">/,
+    'first in the meta row, right under the title, dimmed in parentheses');
+  for (const titleLatin of [undefined, null, '', '  ']) {
+    assert.doesNotMatch(context.buildGalleryCardInfoHtml({ title: 'Hoshi no Koe', titleLatin, artist: '天門', year: '2002' }), /gallery-card__title-latin/);
+  }
+  const css = (file) => fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', file), 'utf8');
+  assert.match(css('gallery-main.css'), /\.gallery-card-info \.gallery-card__title-latin \{ display: none; \}/, 'desktop shows nothing yet');
+  const phone = css('mobile-layout.css');
+  const phoneBlock = phone.slice(phone.indexOf('@media (max-width: 900px)'));
+  assert.match(phoneBlock, /\.album-card\[data-gallery-display="list"\] \.gallery-card__title-latin \{ display: block; grid-column: 1 \/ -1; font-size: 11px; line-height: 1\.25; margin: 0 0 1px; \}/);
+  assert.match(phoneBlock, /\.album-card:not\(\[data-gallery-display="list"\]\) \.gallery-card__title-latin \{ display: none; \}/, 'list rows only');
+  // The row keeps its height: only rows with the line tighten their gaps (the approved mockup's values).
+  assert.match(phoneBlock, /\.gallery-card-info:has\(\.gallery-card__title-latin\) \{ row-gap: 2px; padding-block: 4px; \}/);
+  assert.match(phoneBlock, /\.gallery-card-info:has\(\.gallery-card__title-latin\) \.album-title \{ margin: 0 0 1px; \}/);
+  assert.match(phoneBlock, /\.gallery-card-info:has\(\.gallery-card__title-latin\) \.chip-row \{ margin-top: 2px; \}/);
+  assert.match(phone, /\.album-card\[data-gallery-display="list"\] \{[^}]*min-height: 88px;/, 'the row height itself is unchanged');
+});
+
+test('album cards pass the stored Latin title and re-render when it changes (0256)', () => {
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js'), 'utf8');
+  assert.match(source, /titleLatin: album\?\.title_latin,/);
+  assert.match(source, /String\(album\?\.title_latin \|\| ''\),/);
+});
+
 test('album cards pass the romanized artist name and re-render when it arrives (J3)', () => {
   const source = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js'), 'utf8');
   assert.match(source, /artistRomanized: galleryRomanizedArtistName\(album\.album_artist\)/);

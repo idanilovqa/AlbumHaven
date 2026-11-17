@@ -10670,6 +10670,13 @@ def _search_preview_sql(
           where library.local_track_latin_titles.search_key is not null
             and library.local_track_latin_titles.search_key like %(query_latin_like)s
         ),
+        -- An album found by its Latin title the same way (0256).
+        latin_title_album_matches as materialized (
+          select library.local_album_latin_titles.library_id, library.local_album_latin_titles.album_id
+          from library.local_album_latin_titles
+          where library.local_album_latin_titles.search_key is not null
+            and library.local_album_latin_titles.search_key like %(query_latin_like)s
+        ),
         file_name_matches as materialized (
             select
               library.local_track_files.track_id,
@@ -10710,6 +10717,8 @@ def _search_preview_sql(
             album_title_matches.library_id,
             album_title_matches.album_id
           from album_title_matches
+          union
+          select library_id, album_id from latin_title_album_matches
           union
           select
             library.local_album_featured_artists.library_id,

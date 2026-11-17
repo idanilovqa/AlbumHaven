@@ -5,6 +5,10 @@ Where an applied correction reaches a payload: album details and its track table
 cards, get ``display_title`` and ``display_artist`` beside the unchanged tag fields, only where
 they differ. Album keys, sorting and the tag editor keep the real tags; search matches both
 (the corrected values are stored and indexed beside the tags, 0198).
+
+The same read gives gallery cards ``title_latin``, the stored Latin form of an album title in
+another script (0256), which phone album rows show under the title (approved b3-1d3); never
+beside a corrected title, which it was not made from.
 """
 from __future__ import annotations
 
@@ -49,17 +53,21 @@ def apply_correction_display(connection: Any, album: MutableMapping[str, object]
 
 
 _PAYLOAD_SQL = """
-    select albums.album_key, albums.corrected_title, albums.corrected_album_artist
+    select albums.album_key, albums.corrected_title, albums.corrected_album_artist, latin.latin as title_latin
     from library.local_albums albums
+    left join library.local_album_latin_titles latin
+      on latin.album_id = albums.id and latin.source_title = albums.title and latin.latin is not null
     where albums.album_key = any(%(album_keys)s::text[])
-      and (albums.corrected_title is not null or albums.corrected_album_artist is not null);
+      and (albums.corrected_title is not null or albums.corrected_album_artist is not null
+           or latin.album_id is not null);
 """
 
 
 def project_correction_display(config: Mapping[str, object], payload: object, *, connect=None) -> object:
     """Gallery cards: each album in a view payload gets ``display_title`` and ``display_artist``
     from its stored corrected values, only when they differ from the tag (album keys, sorting
-    and the tag fields are unchanged). One indexed read per response; a failure changes nothing."""
+    and the tag fields are unchanged), and ``title_latin`` when its tag title shows and has a
+    stored Latin form. One indexed read per response; a failure changes nothing."""
     albums: list[MutableMapping[str, object]] = []
 
     def visit(value: object) -> None:
@@ -88,6 +96,8 @@ def project_correction_display(config: Mapping[str, object], payload: object, *,
             continue
         if row.get("corrected_title") and row["corrected_title"] != album.get("name"):
             album["display_title"] = row["corrected_title"]
+        elif row.get("title_latin"):
+            album["title_latin"] = row["title_latin"]
         if row.get("corrected_album_artist") and row["corrected_album_artist"] != album.get("album_artist"):
             album["display_artist"] = row["corrected_album_artist"]
     return payload

@@ -202,6 +202,8 @@
 .gallery-artist-romanized { color: var(--muted); }
 /* A card's romanized artist name: desktop shows only its hover text; phones show this line (J3). */
 .gallery-card-info .gallery-card__romanized { display: none; }
+/* An album title's Latin form: phone album rows only (b3-1d3, mobile-layout.css). */
+.gallery-card-info .gallery-card__title-latin { display: none; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
 .album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:focus-within .gallery-card__focus-title { opacity: 1; }

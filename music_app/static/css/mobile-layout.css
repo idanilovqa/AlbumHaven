@@ -141,6 +141,14 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   /* J3: the romanized artist name in parentheses right after the artist, on the same line, so rows
      keep their height (approved D2 batch 3, 1D-3); in album details on its own line. */
   .album-card .gallery-card__romanized { display: inline; }
+  /* The album title's Latin form, first in the meta row right under the title, small and dimmed;
+     the row's line gaps tighten so the row keeps its height (approved b3-1d3). */
+  .album-card[data-gallery-display="list"] .gallery-card__title-latin { display: block; grid-column: 1 / -1; font-size: 11px; line-height: 1.25; margin: 0 0 1px; }
+  .album-card:not([data-gallery-display="list"]) .gallery-card__title-latin { display: none; }
+  .album-card[data-gallery-display="list"] .gallery-card-info:has(.gallery-card__title-latin) { row-gap: 2px; padding-block: 4px; }
+  .album-card[data-gallery-display="list"] .gallery-card-info:has(.gallery-card__title-latin) .album-title { margin: 0 0 1px; }
+  .album-card[data-gallery-display="list"] .gallery-card-info:has(.gallery-card__title-latin) .album-meta-row { row-gap: 0; line-height: 1.25; }
+  .album-card[data-gallery-display="list"] .gallery-card-info:has(.gallery-card__title-latin) .chip-row { margin-top: 2px; }
   .album-details-header .album-details-header__romanized { display: block; }
   /* S7: track titles' Latin forms are desktop-only until the phone layout (1C/1D) is approved. */
   .album-track-table__transliteration { display: none; }

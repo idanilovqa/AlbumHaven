@@ -202,3 +202,138 @@ def test_a_title_with_no_known_latin_form_keeps_a_null_row_and_is_not_redone(mon
     repository.refresh_latin_titles()
     assert ("사랑", None, None) in _latin_rows(setup_url)
     assert repository.refresh_latin_titles() == 0
+
+
+# Latin album titles (0256, approved b3-1d3): stored like the tracks', searchable, on the cards --
+
+def _both_fallbacks(monkeypatch):
+    """cutlet and pypinyin answering as 0.5.2 and 0.55.0 do for these titles."""
+    import sys
+    import types
+
+    from music_app.services import track_transliteration
+
+    romaji = {"天門": "Tenmon", "センチメートル": "Senchimeetoru"}
+    readings = {"天门": ["tiān", "mén"], "天門": ["tiān", "mén"]}
+    monkeypatch.setitem(sys.modules, "cutlet", types.SimpleNamespace(
+        Cutlet=lambda: types.SimpleNamespace(romaji=lambda text: romaji.get(text, ""))))
+    monkeypatch.setitem(sys.modules, "pypinyin", types.SimpleNamespace(
+        Style=types.SimpleNamespace(TONE="tone"), lazy_pinyin=lambda text, style: readings.get(text, list(text))))
+    track_transliteration._cutlet.cache_clear()
+
+
+def _album_latin_rows(setup_url):
+    with isolatedPostgres._connect(setup_url) as connection:
+        return [(row["source_title"], row["latin"], row["search_key"]) for row in connection.execute(
+            "select source_title, latin, search_key from library.local_album_latin_titles order by album_id")]
+
+
+def _retitle(setup_url, album_id, title):
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_albums set title = %s where id = %s", (title, album_id))
+
+
+def _chinese_titled_album(setup_url, title="天门"):
+    """An album with no MusicBrainz release, a Chinese title, one Latin track and its file."""
+    _chinese_album(setup_url, title="Gate")
+    with isolatedPostgres._connect(setup_url) as connection:
+        return connection.execute("update library.local_albums set title = %s where album_key = 'cn-gate'"
+                                  " returning id", (title,)).fetchone()["id"]
+
+
+def test_plain_queries_find_an_album_by_its_tone_marked_latin_title(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _pinyin_only(monkeypatch)
+    _chinese_titled_album(setup_url)
+    changed = []
+    from music_app.services import musicbrainz_corrections_postgres
+
+    monkeypatch.setitem(musicbrainz_corrections_postgres._ON_CHANGE, setup_url, changed.append)
+    assert repository.refresh_latin_titles() >= 1
+    assert ("天门", "Tiān mén", "tianmen") in _album_latin_rows(setup_url)
+    assert any("cn-gate" in keys for keys in changed), "the album's cached searches are dropped"
+    for query in ("tian men", "tianmen", "Tian Men", "Tiān mén"):
+        assert "cn-gate" in _search(setup_url, query), query
+    assert "cn-gate" not in _search(setup_url, "tian ma")
+    assert "cn-gate" not in _search(setup_url, "사랑")
+
+
+def test_a_changed_album_title_is_redone_and_one_turned_latin_drops_its_row(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _pinyin_only(monkeypatch)
+    album = _chinese_titled_album(setup_url)
+    repository.refresh_latin_titles()
+    assert repository.refresh_latin_titles() == 0, "nothing is due twice"
+    _retitle(setup_url, album, "天門")
+    assert repository.refresh_latin_titles() == 1
+    assert _album_latin_rows(setup_url) == [("天門", "Tiān mén", "tianmen")]
+    _retitle(setup_url, album, "Heaven Gate")
+    assert repository.refresh_latin_titles() == 1
+    assert _album_latin_rows(setup_url) == [], "a Latin title needs no row"
+    assert "cn-gate" not in _search(setup_url, "tianmen")
+
+
+def test_an_album_title_with_no_known_latin_form_keeps_a_null_row_and_is_not_redone(monkeypatch):
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _pinyin_only(monkeypatch)
+    _chinese_titled_album(setup_url, title="사랑")
+    repository.refresh_latin_titles()
+    assert _album_latin_rows(setup_url) == [("사랑", None, None)]
+    assert repository.refresh_latin_titles() == 0
+
+
+def test_symbol_titles_that_need_no_form_keep_null_rows_and_are_never_due_again(monkeypatch):
+    """"★" and "♪" pass the refreshes' coarse test but need no Latin form. Their null rows keep
+    them from being due on every pass, ahead of real albums, dropping cached searches each time."""
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _pinyin_only(monkeypatch)
+    album = _chinese_titled_album(setup_url, title="Best ★ Hits")
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_tracks set title = 'Intro ♪' where album_id = %s", (album,))
+    assert repository.refresh_latin_titles() == 1
+    assert _album_latin_rows(setup_url) == [("Best ★ Hits", None, None)]
+    assert ("Intro ♪", None, None) in _latin_rows(setup_url)
+    assert repository.refresh_latin_titles() == 0, "nothing is due twice"
+
+
+def test_a_release_whose_album_title_alone_needs_a_latin_form_is_claimed_for_its_language(monkeypatch):
+    setup_url, repository, albums = _seed(monkeypatch)
+    repository.claim_transliteration(now=NOW)  # The Japanese tracklist release first.
+    _retitle(setup_url, albums["latin"], "天門")
+    due = repository.claim_transliteration(now=NOW)
+    assert due == {"release_mbid": LATIN, "titles": ["Overture", "Кино"], "album_titles": ["天門"]}
+
+
+def test_the_release_language_answer_redoes_the_album_title_in_romaji(monkeypatch):
+    setup_url, repository, albums = _seed(monkeypatch)
+    _both_fallbacks(monkeypatch)
+    _retitle(setup_url, albums["byousoku"], "天門")
+    repository.refresh_latin_titles()
+    assert ("天門", "Tiān mén", "tianmen") in _album_latin_rows(setup_url), "no language yet: pinyin"
+    repository.claim_transliteration(now=NOW)
+    repository.store_transliteration(release_mbid=JAPANESE, transliteration_mbid=None, media=[], language="jpn",
+                                     observed_at=NOW + timedelta(days=36500))  # After the decision row.
+    assert repository.refresh_latin_titles() >= 1, "the stored answer changed: the row is redone"
+    assert ("天門", "Tenmon", "tenmon") in _album_latin_rows(setup_url)
+    assert repository.refresh_latin_titles() == 0
+
+
+def test_gallery_cards_carry_the_stored_latin_title_of_their_tag_title_only(monkeypatch):
+    from music_app.services.musicbrainz_correction_display import project_correction_display
+
+    setup_url, repository, _albums = _seed(monkeypatch)
+    _pinyin_only(monkeypatch)
+    album = _chinese_titled_album(setup_url)
+    repository.refresh_latin_titles()
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}
+    connect = lambda _url: isolatedPostgres._connect(setup_url)  # noqa: E731
+    payload = {"albums": [{"key": "cn-gate", "name": "天门", "album_artist": "天門"},
+                          {"key": "latin", "name": "latin", "album_artist": "天門"}]}
+    project_correction_display(config, payload, connect=connect)
+    assert payload["albums"][0]["title_latin"] == "Tiān mén"
+    assert "title_latin" not in payload["albums"][1]
+    # A stale row (the title changed, not yet redone) is never shown.
+    _retitle(setup_url, album, "天門")
+    payload = {"albums": [{"key": "cn-gate", "name": "天門", "album_artist": "天門"}]}
+    project_correction_display(config, payload, connect=connect)
+    assert "title_latin" not in payload["albums"][0]

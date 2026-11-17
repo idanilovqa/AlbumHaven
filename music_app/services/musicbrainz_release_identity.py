@@ -534,14 +534,16 @@ class MusicBrainzAlbumReleaseProcessor:
     def _store_transliteration(self, observed_at) -> dict[str, object]:
         """One certain release whose Latin tracklist is due (S7, owner 2026-11-17): its
         "transl-tracklisting" link, then the linked pseudo-release's tracklist, each asked
-        once per release and reused for 30 days. A release none of whose local titles needs
-        a Latin form is stored as having none without asking. A failed ask stores nothing:
+        once per release and reused for 30 days. A release none of whose local track or album
+        titles needs a Latin form is stored as having none without asking; an album title alone
+        asks too, for the release's language (0256). A failed ask stores nothing:
         the release rests a day and this pass ends."""
         due = self._repository.claim_transliteration(now=observed_at)
         if not due:
             return {"processed": False, "state": "idle"}
         transliteration_mbid, media, language = None, [], ""
-        if any(needs_transliteration(title) for title in due.get("titles") or []):
+        titles = [*(due.get("titles") or []), *(due.get("album_titles") or [])]
+        if any(needs_transliteration(title) for title in titles):
             linked = self._client.lookup_release_transliteration(due["release_mbid"])
             if linked.get("classification") != "complete":
                 return {"processed": False, "state": "idle"}

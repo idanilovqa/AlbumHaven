@@ -1926,7 +1926,9 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     String(state.utility.selectedProblematicKey || '') === String(mutation.albumKey || '')
   );
   if (reconcileSelection && mutationOwnsView) {
-    const items = getAllProblematicItems();
+    // PF-NEW-PROBLEMS (owner): an album that no longer matches the active filter leaves the
+    // selection too, so the survivor comes from the list on screen.
+    const items = getFilteredProblematicAlbums();
     const survivingKeys = new Set(items.map((album) => String(album?.key || '')).filter(Boolean));
     const selectedKey = String(mutation.albumKey || '');
     if (survivingKeys.has(selectedKey)) {

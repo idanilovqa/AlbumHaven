@@ -925,6 +925,11 @@ async function confirmManualTagEdit() {
     const updatedAlbums = Array.isArray(data.updated_albums)
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
+    // PF-NEW-PROBLEMS (owner): Problematic Files must not show a list from before this save.
+    state.utility.problematicMinInventoryRevision = Math.max(
+      Number(state.utility.problematicMinInventoryRevision) || 0,
+      Number(data.inventory_mutation_revision) || 0,
+    );
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;

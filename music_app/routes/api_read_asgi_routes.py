@@ -1417,6 +1417,7 @@ def utilities_problematic_files(
     q: str = Query(default="", max_length=200),
     artists: bool = Query(default=False),
     cursor: str = Query(default="", max_length=1000),
+    min_inventory_revision: int = Query(default=0, ge=0),
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         if artists:
@@ -1481,7 +1482,9 @@ def utilities_problematic_files(
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)
             else:
-                payload = repository.build_problematic_files_payload()
+                payload = repository.build_problematic_files_payload(
+                    min_inventory_revision=min_inventory_revision,
+                )
             _project_missing_album_actions_for_request(request, payload)
             if artist_items is not None:
                 project_artist_problems_into_problematic_files(request, payload, artist_items.result())

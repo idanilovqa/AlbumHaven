@@ -470,6 +470,25 @@ test('a Settings-intent prefetch does not page before the opened tab reads the c
   assert.equal(context.state.utility.problematicFilesComplete, true);
 });
 
+test('PF-NEW-PROBLEMS: after a save the complete list is asked for that save or newer', async () => {
+  const overlay = { hidden: false };
+  const requested = [];
+  const json = (body) => ({ ok: true, status: 200, async json() { return body; } });
+  const { context } = loadHelper({
+    getUtilityModalElements() { return { overlay }; },
+    async fetch(url) {
+      requested.push(String(url));
+      return json({ complete: true, items: [{ key: 'a', name: 'A', detail_loaded: false }] });
+    },
+  });
+  context.state.status = { inventory_mutation_revision: 41 };
+  context.state.utility.problematicMinInventoryRevision = 42;
+
+  await context.loadProblematicFiles(true, { completeOnly: true });
+
+  assert.deepEqual(requested, ['/utilities/problematic-files?min_inventory_revision=42']);
+});
+
 function loadSearchHelper(searchBody) {
   const overlay = { hidden: false };
   const timers = [];

@@ -19,6 +19,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $env:PGCLIENTENCODING = 'UTF8'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($Pgbin)) { $Pgbin = "C:\PostgreSQL\$PostgresMajor\bin" }
 
 $gates = @{
     'search' = @{ FixtureProfiles = @('functional-core', 'synthetic-large-library') }
@@ -92,12 +93,7 @@ function Get-ProfileRoot([string]$FixtureProfile) {
     return Join-Path ([IO.Path]::GetFullPath($FixtureDistribution)) "profiles\$FixtureProfile"
 }
 
-foreach ($required in @(
-    @{ Name = 'PLAYWRIGHT_PYTHON'; Value = $PythonPath },
-    @{ Name = 'PGBIN'; Value = $Pgbin }
-)) {
-    if ([string]::IsNullOrWhiteSpace([string]$required.Value)) { throw "$($required.Name) is required for the $Gate gate." }
-}
+if ([string]::IsNullOrWhiteSpace($PythonPath)) { throw "PLAYWRIGHT_PYTHON is required for the $Gate gate." }
 foreach ($name in @($definition.RequiredEnvironment)) {
     if ($name -and [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
         throw "$name must name an isolated database for the $Gate gate."

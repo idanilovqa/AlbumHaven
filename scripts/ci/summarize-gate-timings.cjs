@@ -126,11 +126,10 @@ function toMarkdown(rows) {
 }
 
 function parseArguments(argv) {
-  const options = { roots: [], contractName: 'local', json: null, markdown: null };
+  const options = { roots: [], json: null, markdown: null };
   for (const argument of argv) {
     const [name, value] = argument.split(/=(.*)/su);
     if (name === '--root') options.roots.push(value);
-    else if (name === '--contract') options.contractName = value;
     else if (name === '--json') options.json = value;
     else if (name === '--markdown') options.markdown = value;
     else throw new Error(`Unknown argument: ${argument}`);
@@ -141,7 +140,7 @@ function parseArguments(argv) {
 
 if (require.main === module) {
   const options = parseArguments(process.argv.slice(2));
-  const rows = collectRows(options.roots, { contractName: options.contractName });
+  const rows = collectRows(options.roots);
   if (options.json) fs.writeFileSync(options.json, `${JSON.stringify(rows, null, 2)}\n`);
   const markdown = toMarkdown(rows);
   if (options.markdown) fs.appendFileSync(options.markdown, markdown);

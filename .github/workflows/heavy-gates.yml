@@ -19,10 +19,6 @@ on:
         required: true
         default: search
         type: string
-  # TEMPORARY pre-merge validation trigger; removed before this PR is ready.
-  push:
-    branches:
-      - claude/hosted-heavy-gates
 
 permissions:
   contents: read
@@ -31,7 +27,7 @@ env:
   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
 
 concurrency:
-  group: heavy-gates-${{ inputs.ref || github.sha }}-${{ inputs.gates || 'search,problematic-files,html-reload,edit-tags' }}
+  group: heavy-gates-${{ inputs.ref }}-${{ inputs.gates }}
   cancel-in-progress: false
 
 jobs:
@@ -44,7 +40,7 @@ jobs:
       - name: Validate gate selection
         id: plan
         env:
-          GATES: ${{ inputs.gates || 'search,problematic-files,html-reload,edit-tags' }}
+          GATES: ${{ inputs.gates }}
         run: |
           node -e '
             const allowed = ["search", "problematic-files", "html-reload", "edit-tags", "bounded-interactions"];
@@ -70,7 +66,7 @@ jobs:
       - name: Checkout tested ref
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Checkout trusted fixture downloader
@@ -84,7 +80,7 @@ jobs:
 
       - name: Require the shared gate runner
         env:
-          TESTED_REF: ${{ inputs.ref || github.sha }}
+          TESTED_REF: ${{ inputs.ref }}
         run: |
           if (-not (Test-Path -LiteralPath scripts\run-regression-gate.ps1 -PathType Leaf)) {
             throw "$env:TESTED_REF has no scripts/run-regression-gate.ps1; merge or rebase onto main first."
@@ -213,6 +209,7 @@ jobs:
               --markdown=$env:GITHUB_STEP_SUMMARY
           }
 
+      # No teardown: the runner VM and its PostgreSQL service are discarded after the job.
       - name: Upload gate results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

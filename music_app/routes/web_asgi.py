@@ -1269,7 +1269,10 @@ async def refresh_api(request: Request) -> JSONResponse:
             "scan_album_folders_total": 0,
             "scan_progress_samples": [],
         }
-    accepted = state_service.start_background_refresh_for_state(
+    # The library cache lock may be held across hydration or a relation save:
+    # take it on a worker thread, never on the event loop.
+    accepted = await run_in_threadpool(
+        state_service.start_background_refresh_for_state,
         library_state,
         config,
         route_logger,
@@ -1296,14 +1299,15 @@ async def refresh_api(request: Request) -> JSONResponse:
 
 @router.post("/cancel-refresh-api")
 async def cancel_refresh_api(request: Request) -> JSONResponse:
-    cancelled = state_service.cancel_background_refresh_for_state(_library_state(request))
+    cancelled = await run_in_threadpool(state_service.cancel_background_refresh_for_state, _library_state(request))
     return JSONResponse({"ok": True, "cancelled": bool(cancelled)})
 
 
 @router.get("/refresh")
 async def refresh(request: Request) -> RedirectResponse:
     query_args = request.query_params
-    state_service.start_background_refresh_for_state(
+    await run_in_threadpool(
+        state_service.start_background_refresh_for_state,
         _library_state(request),
         _app_config(request),
         _app_logger(request),

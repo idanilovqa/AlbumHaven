@@ -121,3 +121,12 @@ test('a SmallAlert expands only horizontally: its height never grows past its fi
     expect(widths).toBeGreaterThan(150);
   }
 });
+
+test('an album opened from Problematic Files shows the poor-art warning from its problem reasons (owner, 11-17)', async ({ page }) => {
+  await mountAlbumPage(page);
+  await page.evaluate(() => {
+    document.querySelectorAll('.album-details-art-quality-alert').forEach((node) => node.remove());
+    renderAlbumArtQualityAlert(document.getElementById('track-modal-cover'), { problem_reasons: ['Missing year', 'Poor art quality'] });
+  });
+  await expect(page.locator('.track-modal-cover-shell > .album-details-art-quality-alert')).toBeVisible();
+});

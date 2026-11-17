@@ -67,7 +67,10 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
 function renderAlbumArtQualityAlert(coverElement, album) {
   const page = coverElement?.closest?.('#track-modal');
   page?.querySelectorAll?.('.album-details-art-quality-alert').forEach((node) => node.remove());
-  if (album?.poor_art_quality !== true || !coverElement) return;
+  // Owner (11-17): an album opened from Problematic Files carries its reasons, not the Album Details flag.
+  const poorArt = album?.poor_art_quality === true
+    || (Array.isArray(album?.problem_reasons) && album.problem_reasons.includes('Poor art quality'));
+  if (!poorArt || !coverElement) return;
   const mobile = Boolean(page?.classList?.contains('is-mobile-page'))
     && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const host = mobile ? coverElement.closest('.track-modal-body') : coverElement.querySelector('.track-modal-cover-shell');

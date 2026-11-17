@@ -133,13 +133,13 @@ def _chinese_album(setup_url, title="天门"):
                               .fetchone().values())
         album = connection.execute(
             "insert into library.local_albums (library_id, artist_id, album_key, title, metadata)"
-            " values (%s, %s, 'tianmen', 'Tianmen', '{}'::jsonb) returning id", (library_id, artist)).fetchone()["id"]
+            " values (%s, %s, 'cn-gate', 'Gate Album', '{}'::jsonb) returning id", (library_id, artist)).fetchone()["id"]
         track = connection.execute(
             "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, disc_number,"
-            " track_number, duration_seconds, metadata) values (%s, %s, %s, 'tianmen-1', %s, 1, 1, 200, '{}'::jsonb)"
+            " track_number, duration_seconds, metadata) values (%s, %s, %s, 'cn-gate-1', %s, 1, 1, 200, '{}'::jsonb)"
             " returning id", (library_id, album, artist, title)).fetchone()["id"]
         connection.execute("insert into library.local_track_files (track_id, private_path, metadata)"
-                           " values (%s, 'C:/Music/tianmen-1.flac', '{}'::jsonb)", (track,))
+                           " values (%s, 'C:/Music/cn-gate-1.flac', '{}'::jsonb)", (track,))
     return track
 
 
@@ -170,12 +170,12 @@ def test_plain_folded_and_spaceless_queries_find_a_tone_marked_track(monkeypatch
     monkeypatch.setitem(musicbrainz_corrections_postgres._ON_CHANGE, setup_url, changed.append)
     assert repository.refresh_latin_titles() >= 1
     assert ("天门", "Tiān mén", "tianmen") in _latin_rows(setup_url)
-    assert any("tianmen" in keys for keys in changed), "the album's cached searches are dropped"
+    assert any("cn-gate" in keys for keys in changed), "the album's cached searches are dropped"
     for query in ("tian men", "tianmen", "Tian Men", "Tiān mén", "TIANMEN"):
-        assert "tianmen" in _search(setup_url, query), query
+        assert "cn-gate" in _search(setup_url, query), query
     # Negative: another pronunciation, and a query with nothing Latin to fold, find nothing by it.
-    assert "tianmen" not in _search(setup_url, "tian ma")
-    assert "tianmen" not in _search(setup_url, "天門")
+    assert "cn-gate" not in _search(setup_url, "tian ma")
+    assert "cn-gate" not in _search(setup_url, "사랑")
 
 
 def test_a_changed_title_is_redone_and_a_title_turned_latin_drops_its_row(monkeypatch):
@@ -192,7 +192,7 @@ def test_a_changed_title_is_redone_and_a_title_turned_latin_drops_its_row(monkey
         connection.execute("update library.local_tracks set title = 'Heaven Gate' where id = %s", (track,))
     assert repository.refresh_latin_titles() == 1
     assert all(row[0] != "Heaven Gate" for row in _latin_rows(setup_url)), "a Latin title needs no row"
-    assert "tianmen" not in _search(setup_url, "tianmen")
+    assert "cn-gate" not in _search(setup_url, "tianmen")
 
 
 def test_a_title_with_no_known_latin_form_keeps_a_null_row_and_is_not_redone(monkeypatch):

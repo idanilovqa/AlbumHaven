@@ -1002,6 +1002,10 @@ class NativePlaybackController(
                 loop?.let { applyEngineLoop(current, it, rate) }
             } else if (transportOpen) {
                 startEngineAt(index, target, playWhenReady = false)
+            } else if (current.detached) {
+                // Offline the received audio stays: it is sought on the device, or the head waits
+                // silently past it for the network (owner retest B-D4, 2026-11-17).
+                current.seek(msToFrames(target, rate))
             } else {
                 unload("seek-paused")
             }

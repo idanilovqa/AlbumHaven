@@ -378,6 +378,12 @@ class NativePcmEngine(
     private var resumeSeekFrame: Long? = null
 
     /**
+     * Where a seek past the received audio left the head while offline (owner retest B-D4,
+     * 2026-11-17): nothing sounds and the place does not move until that frame's audio takes over.
+     */
+    private var parkedFrame: Long? = null
+
+    /**
      * The socket was lost while the current stream needed nothing more from the server: it plays on
      * alone, and [resume] prepares what follows it on the next socket (see [detach]).
      */
@@ -392,7 +398,8 @@ class NativePcmEngine(
 
     /** Whether a seek has not cut over yet; until it does, [timelineFrame] still names the old place. */
     val seekPending: Boolean
-        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null || current?.encoded?.localSeek != null
+        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null || current?.encoded?.localSeek != null ||
+            parkedFrame != null
 
     // Inspection for the engine's own tests; production reads only the events.
     @VisibleForTesting
@@ -534,8 +541,13 @@ class NativePcmEngine(
         require(frame >= 0) { "seek frame must be nonnegative" }
         val stream = current ?: return
         if (failed) return
-        if (resumeFrame != null) {
-            resumeSeekFrame = frame
+        resumeFrame?.let { splice ->
+            // Offline, audio already received is sought on the device; a place past it waits silently.
+            if (frame < splice && seekWithinKeptBytes(stream, frame)) {
+                resumeSeekFrame = null
+                return
+            }
+            park(frame)
             return
         }
         pendingPromotion?.let { promotion ->
@@ -548,12 +560,21 @@ class NativePcmEngine(
         if (seekWithinKeptBytes(stream, frame)) return
         // Offline, only audio already on the device can be sought; the rest waits for the next socket.
         if (playingOffline) {
-            resumeSeekFrame = frame
+            park(frame)
             return
         }
         if (continuity != null) closeContinuity("seek-replaced")
         val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return
         pendingSeek = PendingSeek(target.streamId, frame)
+    }
+
+    private fun park(frame: Long) {
+        current?.encoded?.localSeek?.let { seek ->
+            seek.decoding.close()
+            current?.encoded?.localSeek = null
+        }
+        resumeSeekFrame = frame
+        parkedFrame = frame
     }
 
     /** The successor a continuity decoder is preparing, if any. */
@@ -583,10 +604,12 @@ class NativePcmEngine(
         val encoded = stream.encoded ?: return false
         if (loop != null || stream.eosReceived || encoded.closed) return false
         val store = encoded.store ?: return false
+        // A detached stream's end is its splice, not the song's: the bytes past it never arrived.
+        val splice = resumeFrame
         val window = encoded.table?.lookup(
             encoded.initialSkipFrames, encoded.initialTotalFrames, stream.startFrame, frame,
-            receivedBytes = store.size, ended = encoded.serverEos != null,
-        ) ?: return false
+            receivedBytes = store.size, ended = encoded.serverEos != null && splice == null,
+        )?.let { found -> if (splice == null) found else found.copy(totalFrames = splice - frame) } ?: return false
         // The newest seek wins: an older one, local or on the server, is dropped.
         encoded.localSeek?.decoding?.close()
         if (continuity?.kind == StreamKind.SEEK) closeContinuity("seek-replaced")
@@ -614,6 +637,11 @@ class NativePcmEngine(
         encoded.deliveredFrames = 0
         encoded.localSeek = null
         seek.committed = true
+        parkedFrame = null
+        // Detached, the stream now ends at the splice from the new place on.
+        if (resumeFrame != null) {
+            encoded.serverEos = encoded.serverEos?.copy(authoritativeTotalFrames = encoded.decodedFrames + encoded.remainingFrames)
+        }
         currentRing.clear()
         stream.inFlightFrames = 0
         stream.receivedFrames = 0
@@ -660,6 +688,7 @@ class NativePcmEngine(
         }
         currentRing.skip(delta.toInt())
         timelineFrame = frame
+        parkedFrame = null
         refillCredit(stream)
         events(PcmEngineEvent.Boundary(PcmBoundaryKind.SEEK, stream.streamId, stream.streamId, frame))
         return true
@@ -972,6 +1001,14 @@ class NativePcmEngine(
         }
         if (!awaitingResume) return false
         val stream = current ?: return false
+        resumeSeekFrame?.let { frame ->
+            // The head waits past the received audio: the next socket opens there, not at the splice.
+            resumeFrame = null
+            resumeSeekFrame = null
+            val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return true
+            pendingSeek = PendingSeek(target.streamId, frame)
+            return true
+        }
         open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, checkNotNull(resumeFrame))
         return true
     }
@@ -986,7 +1023,7 @@ class NativePcmEngine(
         commitPreparedSeek()
         val head = current ?: return 0
         if (pausing) pausing = !sink.fadeOutSettled()
-        if (!playing) return 0
+        if (!playing || parkedFrame != null) return 0
         if (!head.firstFrameRendered && !playsThrough(head, currentRing, committedCapacityFrames(PcmRole.CURRENT))) return 0
         if (rebuffering) {
             val cushion = minOf(config.frames(PcmEngineConfig.REBUFFER_CUSHION_SECONDS), committedCapacityFrames(PcmRole.CURRENT))
@@ -1160,6 +1197,7 @@ class NativePcmEngine(
         pendingPromotion = PendingPromotion(incoming.streamId).apply { requestedSeekFrame = resumeSeekFrame }
         resumeFrame = null
         resumeSeekFrame = null
+        if (kind == PcmBoundaryKind.SEEK) parkedFrame = null
         when (kind) {
             PcmBoundaryKind.QUEUED_NEXT -> {
                 // A successor deferred behind the promoted one is prepared once the server confirms.
@@ -1518,6 +1556,7 @@ class NativePcmEngine(
         sounded = false
         resumeFrame = null
         resumeSeekFrame = null
+        parkedFrame = null
         playingOffline = false
     }
 }

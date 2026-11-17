@@ -3,6 +3,7 @@ from __future__ import annotations
 from music_app.services.log_history import history_scope_for_request
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 import logging
@@ -74,11 +75,16 @@ from music_app.services.cover_workflow import (
     prepare_local_cover_image,
     decode_image_bytes,
     delete_local_cover_effect,
+    complete_local_image_promotion,
     ranked_local_cover_candidates,
     resolve_album_context,
     resolve_album_write_root_from_track_paths,
+    rollback_local_image_promotion,
     validate_local_cover_source,
+    write_new_cover_file,
 )
+from music_app.services.album_cover_candidate_publisher import sanitize_persisted_candidate_snapshot
+from music_app.services.cover_provider_candidates import DISPLAY_ONLY_REMOTE_SOURCES
 from music_app.services.custom_collection_artwork_postgres import (
     CustomCollectionArtworkRepository,
 )
@@ -1520,11 +1526,23 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
                     affected_album_keys=(context["album_key"],),
                 )
 
-        result = await run_in_threadpool(
-            persist_ordered_cover_selection_for_config, config,
-            track_paths=track_paths, album_root=album_root, expected_album_id=album_id,
-            **payload, commit_guard=commit_and_publish,
+        downloads = await run_in_threadpool(
+            _download_online_cover_choices, config, album_id=album_id, album_root=album_root, payload=payload,
         )
+        try:
+            result = await run_in_threadpool(
+                persist_ordered_cover_selection_for_config, config,
+                track_paths=track_paths, album_root=album_root, expected_album_id=album_id,
+                **payload, commit_guard=commit_and_publish, downloads=downloads.paths,
+            )
+        except (HTTPException, OrderedCoverSelectionConflict, InvalidOrderedCoverSelection, ValueError, FileNotFoundError):
+            # Definitely not saved: the album folder returns to how it was.
+            await run_in_threadpool(downloads.undo)
+            raise
+        # A replay saved nothing new, so this request's downloads are not referenced.
+        await run_in_threadpool(downloads.undo if result["replayed"] else downloads.finish)
+    except OnlineCoverDownloadFailed:
+        return JSONResponse({"ok": False, "error": "This online cover could not be downloaded. Your current cover is unchanged."}, status_code=502)
     except HTTPException:
         raise
     except OrderedCoverSelectionConflict:
@@ -1539,9 +1557,17 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
         return JSONResponse({"ok": False, "persisted": True, "error": "The selection was saved, but its display could not refresh. Retry the same request."}, status_code=503)
     except Exception:
         return JSONResponse({"ok": False, "error": "Cover selection is temporarily unavailable. Retry the same request."}, status_code=503)
+    # Which lookup and provider each saved cover came from, including downloaded online covers.
+    provenance = {
+        item["selection_id"]: (
+            _ordered_remote_cover_provenance(item) if item["kind"] == "remote"
+            else downloads.provenance.get(str(item.get("path") or ""))
+        )
+        for item in result["selected_covers"]
+    }
     lookup_task = await _answer_cover_lookup_with_ordered_save(
         config, lookup_task_id, track_paths=track_paths, album_id=album_id,
-        album_key=str(context.get("album_key") or ""), selected_covers=result["selected_covers"],
+        album_key=str(context.get("album_key") or ""), provenance=list(provenance.values()),
     )
     # Source URLs remain private. An editor with remote-read authority also sees which lookup and
     # provider each online cover came from; retaining an opaque saved ID discloses neither.
@@ -1554,7 +1580,7 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
         "ok": True, "album_ref": str(album_id),
         "selected_covers": [
             {"selection_id": item["selection_id"], "kind": item["kind"],
-             **(_ordered_remote_cover_provenance(item) if remote_details and item["kind"] == "remote" else {})}
+             **((provenance[item["selection_id"]] or {}) if remote_details else {})}
             for item in result["selected_covers"]
         ],
         "selected_covers_revision": result["selected_covers_revision"],
@@ -1575,7 +1601,7 @@ def _ordered_remote_cover_provenance(item: Mapping[str, object]) -> dict[str, st
 
 async def _answer_cover_lookup_with_ordered_save(
     config, lookup_task_id: str, *, track_paths: set[str], album_id: int, album_key: str,
-    selected_covers: list[Mapping[str, object]],
+    provenance: list[Mapping[str, str] | None],
 ) -> dict[str, object] | None:
     """Mark the lookup notification a saved choice answers, naming the candidate taken from it."""
     if not lookup_task_id:
@@ -1588,15 +1614,105 @@ async def _answer_cover_lookup_with_ordered_save(
     ):
         return None
     chosen = next((
-        str(item.get("candidate_id") or "") for item in selected_covers
-        if item.get("kind") == "remote"
-        and _ordered_remote_cover_provenance(item)["lookup_task_id"] == _uuid_hex(lookup_task_id)
+        item["candidate_id"] for item in provenance
+        if item and item["lookup_task_id"] == _uuid_hex(lookup_task_id)
     ), "")
     return await run_in_threadpool(
         lambda: mark_cover_lookup_task_notification_action_taken(
             lookup_task_id, config=config, selected_candidate_id=chosen,
         ),
     )
+
+
+class OnlineCoverDownloadFailed(RuntimeError):
+    """An online cover chosen for download could not be fetched or written."""
+
+
+@dataclass
+class _OnlineCoverDownloads:
+    """Album files written for online choices before their Save commits, and how to undo them."""
+
+    paths: dict[tuple[str, str], str] = field(default_factory=dict)
+    provenance: dict[str, dict[str, str]] = field(default_factory=dict)
+    promotions: list = field(default_factory=list)
+    files: list[Path] = field(default_factory=list)
+
+    def undo(self) -> None:
+        for promotion in self.promotions:
+            rollback_local_image_promotion(promotion)
+        for path in self.files:
+            path.unlink(missing_ok=True)
+        self.promotions, self.files = [], []
+
+    def finish(self) -> None:
+        for promotion in self.promotions:
+            complete_local_image_promotion(promotion)
+        self.promotions, self.files = [], []
+
+
+def _download_online_cover_choices(config, *, album_id: int, album_root: Path | None,
+                                   payload: Mapping[str, object]) -> _OnlineCoverDownloads:
+    """Download every chosen online cover except linked ones (Spotify) into the album folder.
+
+    The first cover becomes cover.jpg (the previous one is kept as a cover-existing copy) unless
+    the same Save also selects the current cover.jpg; others become cover-2.jpg, cover-3.jpg,
+    never overwriting a file. Local files are only selected, never copied or renamed.
+    """
+    downloads = _OnlineCoverDownloads()
+    references = list(payload["references"])
+    if not any(item.get("kind") == "remote" for item in references):
+        return downloads
+    prior = load_cover_selections_for_config(config, {album_id}).get(album_id) or {}
+    if (prior.get("selected_covers_last_request") or {}).get("mutation_id") == str(UUID(payload["mutation_id"])):
+        return downloads  # A retry of a saved request replays it without downloading again.
+    snapshot = AlbumCoverCandidateSnapshotRepository(config).get_for_album_context(album_id=album_id) or {}
+    try:
+        generation = str(UUID(str(snapshot.get("search_generation"))))
+    except ValueError:
+        return downloads  # The Save itself reports the changed candidates.
+    candidates, invalid = sanitize_persisted_candidate_snapshot(snapshot.get("candidates"))
+    by_id = {candidate.get("id"): candidate for candidate in ([] if invalid else candidates)}
+    prior_paths = {item["selection_id"]: item.get("path") for item in prior.get("selected_covers", [])}
+    named = [item.get("path") for item in references if item.get("kind") == "local"]
+    named += [prior_paths.get(item["selection_id"]) for item in references if "selection_id" in item]
+    if any(item.get("retain_current") is True for item in references):
+        named.append(prior.get("selected_cover_path"))
+    cover_jpg = str(album_root / "cover.jpg").casefold() if album_root is not None else ""
+    keep_cover_jpg = any(path and str(path).casefold() == cover_jpg for path in named)
+    try:
+        for index, reference in enumerate(references):
+            if reference.get("kind") != "remote" or str(UUID(reference["candidate_generation"])) != generation:
+                continue
+            candidate = by_id.get(reference["candidate_id"])
+            if candidate is None or candidate.get("source") in DISPLAY_ONLY_REMOTE_SOURCES:
+                continue
+            if album_root is None:
+                raise OnlineCoverDownloadFailed("The album folder is unavailable.")
+            raw_bytes, _mime_type = fetch_remote_cover_bytes(str(candidate.get("url") or ""), config=config)
+            prepared = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes or b"")
+            if not prepared:
+                raise OnlineCoverDownloadFailed("The online cover is not a readable image.")
+            if index == 0 and not keep_cover_jpg:
+                promotion = begin_prepared_remote_cover_promotion(album_root, prepared)
+                if promotion is None:
+                    raise OnlineCoverDownloadFailed("The online cover is not a readable image.")
+                downloads.promotions.append(promotion)
+                path = promotion.cover_path
+            else:
+                path = write_new_cover_file(album_root, prepared, f"cover-{index + 1}.jpg")
+                downloads.files.append(path)
+            downloads.paths[(candidate["id"], generation)] = str(path)
+            downloads.provenance[str(path)] = {
+                "candidate_id": str(candidate["id"]), "lookup_task_id": UUID(generation).hex,
+                "source": str(candidate.get("source") or ""),
+                "source_label": str(candidate.get("source_label") or ""),
+            }
+    except Exception as exc:
+        downloads.undo()
+        if isinstance(exc, OnlineCoverDownloadFailed):
+            raise
+        raise OnlineCoverDownloadFailed("The online cover could not be downloaded.") from exc
+    return downloads
 
 
 def _uuid_hex(value: str) -> str:

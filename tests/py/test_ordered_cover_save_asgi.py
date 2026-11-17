@@ -78,7 +78,20 @@ def api(monkeypatch, tmp_path):
         def resolve_album_track_context(self, **kwargs):
             calls.append(("resolve", kwargs))
             return context.copy()
+        def get_for_album_context(self, *, album_id):
+            return {"search_generation": "e2f769fb-83d5-4f29-8a1a-fb319023e3cd", "candidates": candidates}
+    # The lookup's online candidates; Spotify covers stay links, others are downloaded on Save.
+    candidates = [{"id": "candidate", "source": "spotify", "source_label": "Spotify", "art_kind": "cover",
+                   "url": "https://images.example/private.jpg"}]
     monkeypatch.setattr(routes, "AlbumCoverCandidateSnapshotRepository", Repository)
+    prior = {"selected_covers": [], "selected_covers_revision": 3}
+    monkeypatch.setattr(routes, "load_cover_selections_for_config", lambda config, ids: {72: prior})
+    fetched = []
+    def fetch(url, *, config):
+        fetched.append(url)
+        return downloaded_image["bytes"], "image/jpeg"
+    downloaded_image = {"bytes": None}
+    monkeypatch.setattr(routes, "fetch_remote_cover_bytes", fetch)
     def persist(config, **kwargs):
         calls.append(("save", kwargs))
         result = {"selected_covers": [{"selection_id": "front", "kind": "local", "path": "/private/never-disclose.jpg"}],
@@ -93,7 +106,9 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setattr(routes.state_service, "invalidate_targeted_library_projections", lambda *args, **kwargs: calls.append(("invalidate", kwargs)))
     def request(payload=None, **kwargs):
         return asyncio.run(request_async(app, BODY if payload is None else payload, **kwargs))
-    return SimpleNamespace(app=app, resolver=resolver, context=context, calls=calls, request=request, persist=persist)
+    return SimpleNamespace(app=app, resolver=resolver, context=context, calls=calls, request=request, persist=persist,
+                           candidates=candidates, prior=prior, fetched=fetched, downloaded_image=downloaded_image,
+                           album_root=tmp_path / "album")
 
 
 @pytest.mark.parametrize("user,status", [(CurrentActor.anonymous(), 401), (actor(), 403)])
@@ -224,6 +239,135 @@ def test_malformed_lookup_task_id_never_reaches_repository(api, lookup_task_id):
     status, _ = api.request({**BODY, "lookup_task_id": lookup_task_id})
     assert status == 422
     assert not any(name == "save" for name, _ in api.calls)
+
+
+def jpeg(color):
+    from io import BytesIO
+    from PIL import Image
+    buffer = BytesIO()
+    Image.new("RGB", (40, 40), color).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def online(candidate_id):
+    return {"kind": "remote", "candidate_id": candidate_id, "candidate_generation": REMOTE_GENERATION}
+
+
+def save_choosing_downloads(api, monkeypatch, outcome=None):
+    """Persist double that saves each downloaded choice as the local file it became."""
+    def persist(config, **kwargs):
+        api.calls.append(("save", kwargs))
+        if outcome is not None:
+            raise outcome
+        downloads = kwargs["downloads"]
+        selected = [
+            {"selection_id": f"slot-{index}", "kind": "local",
+             "path": downloads[(reference["candidate_id"], REMOTE_GENERATION)]}
+            if (reference.get("candidate_id"), REMOTE_GENERATION) in downloads
+            else {"selection_id": f"slot-{index}", "kind": "local", "path": reference.get("path", "")}
+            for index, reference in enumerate(kwargs["references"])
+        ]
+        result = {"selected_covers": selected, "selected_covers_revision": 4, "changed": True,
+                  "replayed": False, "inventory_mutation_revision": 9}
+        kwargs["commit_guard"](lambda: result)
+        return result
+    monkeypatch.setattr(routes, "persist_ordered_cover_selection_for_config", persist, raising=False)
+
+
+def provider(candidate_id, source, label):
+    return {"id": candidate_id, "source": source, "source_label": label, "art_kind": "cover",
+            "url": f"https://images.example/{candidate_id}.jpg"}
+
+
+def test_online_cover_is_downloaded_as_cover_jpg_keeping_the_previous_cover(api, monkeypatch):
+    # Owner 2026-11-17: every online cover except Spotify is downloaded into the album folder.
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("apple-1", "apple", "Apple Music")]
+    previous = jpeg((200, 0, 0))
+    (api.album_root / "cover.jpg").write_bytes(previous)
+    api.downloaded_image["bytes"] = jpeg((0, 0, 200))
+    save_choosing_downloads(api, monkeypatch)
+    status, body = api.request({**BODY, "references": [online("apple-1")]})
+    assert status == 200
+    assert api.fetched == ["https://images.example/apple-1.jpg"]
+    save = next(args for name, args in api.calls if name == "save")
+    cover = api.album_root / "cover.jpg"
+    assert save["downloads"] == {("apple-1", REMOTE_GENERATION): str(cover)}
+    assert cover.read_bytes() != previous
+    kept = [path for path in api.album_root.iterdir() if path.name.startswith("cover-existing")]
+    assert len(kept) == 1 and kept[0].read_bytes() == previous, "the previous cover.jpg is kept"
+    assert body["selected_covers"] == [{
+        "selection_id": "slot-0", "kind": "local", "candidate_id": "apple-1",
+        "lookup_task_id": "e2f769fb83d54f298a1afb319023e3cd", "source": "apple", "source_label": "Apple Music",
+    }]
+    assert "images.example" not in json.dumps(body)
+
+
+def test_later_online_covers_get_new_names_and_spotify_stays_a_link(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("spotify-1", "spotify", "Spotify"), provider("deezer-1", "deezer", "Deezer")]
+    (api.album_root / "cover-2.jpg").write_bytes(jpeg((9, 9, 9)))
+    api.downloaded_image["bytes"] = jpeg((0, 120, 0))
+    save_choosing_downloads(api, monkeypatch)
+    status, _ = api.request({**BODY, "references": [online("spotify-1"), online("deezer-1")]})
+    assert status == 200
+    assert api.fetched == ["https://images.example/deezer-1.jpg"], "Spotify covers are linked, not downloaded"
+    save = next(args for name, args in api.calls if name == "save")
+    assert save["downloads"] == {("deezer-1", REMOTE_GENERATION): str(api.album_root / "cover-2-2.jpg")}
+    assert not (api.album_root / "cover.jpg").exists(), "a linked first cover writes no cover.jpg"
+
+
+def test_a_download_never_replaces_a_cover_jpg_the_same_save_selects(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("apple-1", "apple", "Apple Music")]
+    current = api.album_root / "cover.jpg"
+    current.write_bytes(jpeg((1, 2, 3)))
+    api.downloaded_image["bytes"] = jpeg((0, 0, 200))
+    save_choosing_downloads(api, monkeypatch)
+    status, _ = api.request({**BODY, "references": [online("apple-1"), {"kind": "local", "path": str(current)}]})
+    assert status == 200
+    save = next(args for name, args in api.calls if name == "save")
+    assert save["downloads"] == {("apple-1", REMOTE_GENERATION): str(api.album_root / "cover-1.jpg")}
+    assert current.read_bytes() == jpeg((1, 2, 3))
+
+
+def test_unavailable_online_cover_reports_it_and_changes_nothing(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("apple-1", "apple", "Apple Music"), provider("deezer-1", "deezer", "Deezer")]
+    previous = jpeg((200, 0, 0))
+    (api.album_root / "cover.jpg").write_bytes(previous)
+    images = iter([jpeg((0, 0, 200)), None])
+    monkeypatch.setattr(routes, "fetch_remote_cover_bytes", lambda url, *, config: (next(images), "image/jpeg"))
+    save_choosing_downloads(api, monkeypatch)
+    status, body = api.request({**BODY, "references": [online("apple-1"), online("deezer-1")]})
+    assert status == 502
+    assert body == {"ok": False, "error": "This online cover could not be downloaded. Your current cover is unchanged."}
+    assert not any(name == "save" for name, _ in api.calls)
+    assert sorted(path.name for path in api.album_root.iterdir()) == ["cover.jpg", "track.flac"]
+    assert (api.album_root / "cover.jpg").read_bytes() == previous
+
+
+def test_a_rejected_save_removes_what_it_downloaded(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("apple-1", "apple", "Apple Music")]
+    previous = jpeg((200, 0, 0))
+    (api.album_root / "cover.jpg").write_bytes(previous)
+    api.downloaded_image["bytes"] = jpeg((0, 0, 200))
+    save_choosing_downloads(api, monkeypatch, outcome=OrderedCoverSelectionConflict("changed"))
+    status, _ = api.request({**BODY, "references": [online("apple-1")]})
+    assert status == 409
+    assert sorted(path.name for path in api.album_root.iterdir()) == ["cover.jpg", "track.flac"]
+    assert (api.album_root / "cover.jpg").read_bytes() == previous
+
+
+def test_a_retried_save_replays_without_downloading_again(api, monkeypatch):
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("apple-1", "apple", "Apple Music")]
+    api.prior["selected_covers_last_request"] = {"mutation_id": BODY["mutation_id"], "request_hash": "0" * 64}
+    save_choosing_downloads(api, monkeypatch)
+    status, _ = api.request({**BODY, "references": [online("apple-1")]})
+    assert status == 200
+    assert api.fetched == []
 
 
 def test_retaining_saved_selection_does_not_invent_remote_read_requirement(api):

@@ -439,6 +439,18 @@ def download_remote_cover_to_folder(
     return written, detail
 
 
+def write_new_cover_file(album_root: Path, prepared_bytes: bytes, file_name: str) -> Path:
+    """Write a downloaded cover under `file_name`, or `stem-2.jpg`..., never over an existing file."""
+    stem, suffix = Path(file_name).stem, Path(file_name).suffix
+    target = album_root / file_name
+    attempt = 2
+    while target.exists():
+        target = album_root / f"{stem}-{attempt}{suffix}"
+        attempt += 1
+    _atomic_replace_file_bytes(target, prepared_bytes)
+    return target
+
+
 def promote_local_image_to_authoritative_cover(source_path: Path, album_root: Path) -> Path:
     promotion = begin_local_image_promotion(source_path, album_root)
     complete_local_image_promotion(promotion)

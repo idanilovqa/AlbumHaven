@@ -583,13 +583,17 @@ def load_cover_selections_for_config(
 def persist_ordered_cover_selection_for_config(
     config: dict[str, object], *, track_paths: set[str], album_root: Path,
     expected_album_id: int, expected_revision: int, mutation_id: str,
-    references: list[dict[str, object]], commit_guard=None,
+    references: list[dict[str, object]], commit_guard=None, downloads=None,
 ) -> dict[str, object]:
-    """Persist source references through the existing runtime database owner."""
+    """Persist source references through the existing runtime database owner.
+
+    `downloads` maps (candidate_id, generation) to the album file an online choice was saved as.
+    """
     return _select_runtime_scan_cache_adapter(config).persist_ordered_cover_selection(
         track_paths=track_paths, album_root=album_root,
         expected_album_id=expected_album_id, expected_revision=expected_revision,
         mutation_id=mutation_id, references=references, commit_guard=commit_guard,
+        downloads=downloads,
     )
 
 

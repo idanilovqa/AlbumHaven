@@ -1234,7 +1234,7 @@ class PostgresScanCacheAdapter:
 
     def persist_ordered_cover_selection(
         self, *, track_paths, album_root, expected_album_id, expected_revision,
-        mutation_id, references, commit_guard=None,
+        mutation_id, references, commit_guard=None, downloads=None,
     ):
         from music_app.services.ordered_cover_selection import validate_save_request, prepare_selection
 
@@ -1248,6 +1248,7 @@ class PostgresScanCacheAdapter:
         prior = prior_selections[expected_album_id]
         sources = [Path(item["path"]) for item in prior.get("selected_covers", []) if item["kind"] == "local"]
         sources.extend(Path(item["path"]) for item in references if item.get("kind") == "local")
+        sources.extend(Path(path) for path in (downloads or {}).values())
         if any(item.get("retain_current") is True for item in references) and prior.get("selected_cover_path"):
             sources.append(Path(prior["selected_cover_path"]))
 
@@ -1259,7 +1260,7 @@ class PostgresScanCacheAdapter:
                 snapshot=scope.get("cover_candidate_snapshot"),
                 configured_root_paths=scope.get("configured_cover_root_paths"),
                 cover_path=scope.get("cover_path"), album_id=scope["album_id"],
-                library_id=scope.get("library_id"),
+                library_id=scope.get("library_id"), downloads=downloads,
             )
             value["inventory_mutation_revision"] = scope["inventory_mutation_revision"]
             if value["replayed"]:
@@ -1286,7 +1287,7 @@ class PostgresScanCacheAdapter:
             mutate=select, allow_ordered_selection=True, expected_album_id=expected_album_id,
             include_cover_candidates=any(item.get("kind") == "remote" for item in references),
             ordered_reference_save=True,
-            validate_cover_roots=any(item.get("kind") == "local" for item in references),
+            validate_cover_roots=bool(downloads) or any(item.get("kind") == "local" for item in references),
             commit_guard=guard if commit_guard else None,
         )
         return result["value"]

@@ -110,7 +110,7 @@ def current_cover_token(*, album_id, library_id, cover_path, metadata):
     return hashlib.sha256(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
-def prepare_selection(*, metadata, expected_revision, request, references, config, album_root, track_paths, snapshot, configured_root_paths, cover_path=None, album_id=None, library_id=None):
+def prepare_selection(*, metadata, expected_revision, request, references, config, album_root, track_paths, snapshot, configured_root_paths, cover_path=None, album_id=None, library_id=None, downloads=None):
     saved = project_selected_cover_metadata(metadata)
     current = saved.get("selected_covers", [])
     revision = saved.get("selected_covers_revision", 0)
@@ -162,7 +162,9 @@ def prepare_selection(*, metadata, expected_revision, request, references, confi
             if invalid or len(matches) != 1 or matches[0].get("art_kind") not in {"cover", "other"}:
                 raise ValueError("The remote source is not selectable artwork.")
             candidate = matches[0]
-            item = {"kind": "remote", **{key: candidate[key] for key in (
+            downloaded = (downloads or {}).get((candidate["id"], generation))
+            # The Save downloaded this online cover into the album folder before the commit.
+            item = {"kind": "local", "path": str(downloaded)} if downloaded else {"kind": "remote", **{key: candidate[key] for key in (
                 "url", "thumbnail_url", "source", "source_label", "album_url",
                 "width", "height", "art_kind", "art_label",
             ) if key in candidate}, "candidate_id": candidate["id"],

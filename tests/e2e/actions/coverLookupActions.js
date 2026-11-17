@@ -591,7 +591,41 @@ export class CoverLookupActions {
       snapshotGeneration: String(reference.candidate_generation || ''),
       remoteSource: String(savedCover?.source || ''),
       lookupTask: payload.lookup_task || null,
+      // A downloaded online cover is an album file; a linked (Spotify) one has none.
+      savedCoverPath: await this.readSavedPrimaryCoverPath(response),
     };
+  }
+
+  // The file an album's saved cover selection now starts with, read back from the server.
+  async readSavedPrimaryCoverPath(saveResponse) {
+    const albumPath = new URL(saveResponse.url()).pathname;
+    const response = await authenticatedPageGet(this.coverLookup.page, albumPath);
+    const payload = await response.json();
+    if (!response.ok() || payload?.ok !== true) {
+      throw new Error(`Saved cover selection could not be read: HTTP ${response.status()}.`);
+    }
+    const primary = (payload.selected_covers || [])[0];
+    return primary?.kind === 'local'
+      ? this.coverReferences.coverPathForReference(String(primary.candidate_cover_ref || ''))
+      : '';
+  }
+
+  async saveSelectedRemoteCandidateExpectingRefusal(options = {}) {
+    const timeout = options.timeout || 30000;
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'PUT'
+      && /^\/albums\/\d+\/selected-covers$/u.test(new URL(response.url()).pathname)
+    ), { timeout });
+    await expect(this.coverLookup.saveRemoteButton).toBeEnabled({ timeout });
+    await this.coverLookup.saveRemoteButton.click();
+    const response = await responsePromise;
+    const payload = await response.json();
+    if (response.ok() || payload?.ok !== false) {
+      throw new Error(`Expected the cover save to be refused, received HTTP ${response.status()}.`);
+    }
+    // A refused Save keeps Cover Look Up open on the same choice.
+    await expect(this.coverLookup.modal).toBeVisible({ timeout });
+    return { status: response.status(), payload };
   }
 
   async reopenUntilSavedRemoteCoverIsActive(
@@ -1623,7 +1657,7 @@ export class CoverLookupActions {
     return {
       candidate,
       candidateFullSize,
-      selectedCoverPath: candidate.sourcePath,
+      selectedCoverPath: await this.readSavedPrimaryCoverPath(response),
       payload,
       immediateCoverState,
     };
@@ -1699,6 +1733,7 @@ export class CoverLookupActions {
       candidateId,
       candidate,
       payload,
+      savedCoverPath: await this.readSavedPrimaryCoverPath(response),
       immediateCoverState,
     };
   }

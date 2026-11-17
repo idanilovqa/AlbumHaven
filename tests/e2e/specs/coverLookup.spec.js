@@ -920,7 +920,6 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
   let partialCandidateIds = [];
   let selectedRemoteCandidateId = '';
   let selectedRemoteCover = null;
-  let selectedCoverPath = '';
 
   await stepLogger.step('Open the exact manifest-backed album and then open the full cover lookup gallery', async () => {
     await galleryActions.goto();
@@ -974,9 +973,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     });
     selectedRemoteCandidateId = selection.candidateId;
     selectedRemoteCover = selection.candidate;
-    selectedCoverPath = await coverPathForReference(selection.payload?.optimistic_cover_ref);
     expect(selectedRemoteCover.sha256).toBeTruthy();
-    expect(selectedCoverPath).toBeTruthy();
     expect(selection.immediateCoverState).not.toBeNull();
     await trackModalActions.close();
     await coverLookupActions.openDrawer();
@@ -1040,7 +1037,8 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     expect(yandexChip?.href || '').toContain('yandex.com/images/search?text=');
 
     expect(modal.activeLocalCover.sha256).toBeTruthy();
-    expect(modal.activeLocalCover.coverPath).toBe(selectedCoverPath);
+    // The first online cover is downloaded as the album's cover.jpg.
+    expect(modal.activeLocalCover.coverPath).toMatch(/[\/]cover\.jpg$/i);
     expect(persistedSelectedRemoteCover.sha256).toBe(selectedRemoteCover.sha256);
     expect(persistedCandidateSummary?.selected).toBe(false);
     expect((await coverLookupActions.readLocalCoverNames())
@@ -1049,7 +1047,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
   });
 });
 
-test('FTC-COVERS-040 failed accepted save restores prior art and keeps its notification', { tag: '@area:cover-providers' }, async ({
+test('FTC-COVERS-040 an online cover that cannot download keeps prior art, says so and keeps its notification', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1081,10 +1079,14 @@ test('FTC-COVERS-040 failed accepted save restores prior art and keeps its notif
   await coverLookupActions.selectRemoteCandidateById(appleCandidate.id);
   await coverLookupActions.setProviderFixtureMode('failed-image');
 
-  const saved = await coverLookupActions.saveSelectedRemoteCandidate({ timeout: 30000 });
-  expect(String(saved.payload?.task?.id || '')).toBe(taskId);
+  // Owner 2026-11-17: online covers are downloaded on Save; an unavailable one is reported.
+  const refused = await coverLookupActions.saveSelectedRemoteCandidateExpectingRefusal({ timeout: 30000 });
+  expect(refused.status).toBe(502);
   await expect(appBarActions.appBar.errorToasts).toHaveCount(1, { timeout: 30000 });
-  await expect(appBarActions.appBar.errorToasts).toContainText(/failed|could not/i);
+  await expect(appBarActions.appBar.errorToasts).toContainText(
+    'This online cover could not be downloaded. Your current cover is unchanged.',
+  );
+  await coverLookupActions.closeModal();
   await expect.poll(
     async () => (await trackModalActions.trackModal.readDetailedCoverImageCheckpoint()).productionSrc,
     { timeout: 30000 },
@@ -1093,7 +1095,6 @@ test('FTC-COVERS-040 failed accepted save restores prior art and keeps its notif
   await trackModalActions.close();
   await coverLookupActions.openDrawer();
   await coverLookupActions.waitForDrawerOpen();
-  await coverLookupActions.waitForTaskStatusById(taskId, 'Lookup failed');
   const retainedTask = coverLookupActions.coverLookup.taskCardById(taskId);
   await expect(retainedTask).toHaveCount(1);
   await expect(retainedTask).not.toContainText('Art chosen');
@@ -1222,8 +1223,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
 
   await stepLogger.step('Save Apple and reopen canonical local art with no selected remote card', async () => {
     const payload = await coverLookupActions.selectRemoteCandidateByIdAndSave(appleCandidate.id);
-    expect(await coverPathForReference(payload.optimistic_cover_ref)).toMatch(/[\\/]cover\.jpg$/i);
-    expect(payload.optimistic_remote_source).toBe('apple');
+    expect(payload.remoteSource).toBe('apple');
     const reopened = await coverLookupActions.reopenUntilLocalCoverIsActive(
       () => trackModalActions.openCoverLookup(),
     );
@@ -2060,7 +2060,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
       snapshotGeneration: generationATaskId,
     });
     expect(saved.lookupTaskId).not.toBe(generationBTaskId);
-    expect(await coverPathForReference(saved.payload.optimistic_cover_ref)).toMatch(/[\\/]cover\.jpg$/i);
+    expect(saved.savedCoverPath).toMatch(/[\\/]cover\.jpg$/i);
     await trackModalActions.close();
     await coverLookupActions.openDrawer();
     await coverLookupActions.waitForDrawerOpen();
@@ -2072,7 +2072,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     expect(savedTask?.selected_candidate_id).toBe(generationAChoice.id);
     await coverLookupActions.closeDrawer();
     const persistedGenerationA = await coverLookupActions.readFullSizeCoverEvidence({
-      coverPath: await coverPathForReference(saved.payload.optimistic_cover_ref),
+      coverPath: saved.savedCoverPath,
       label: 'persisted generation-A cover before generation-B completion',
     });
     savedCoverRevision = persistedGenerationA.sha256.toLowerCase();
@@ -2091,7 +2091,7 @@ test('FTC-COVERS-031 a prior-generation choice survives a newer active lookup an
     const reopened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(
       PROGRESSIVE_CANDIDATE_TARGET,
     );
-    expect(await coverPathForReference(reopened.album.cover_ref)).toBe(await coverPathForReference(saved.payload.optimistic_cover_ref));
+    expect(await coverPathForReference(reopened.album.cover_ref)).toBe(saved.savedCoverPath);
     expect(reopened.album.cover_selection_origin).toBe('user');
     expect(reopened.album.cover_revision).toBe(savedCoverRevision);
     await trackModalActions.waitForLoadedSummary();

@@ -343,6 +343,22 @@ def test_remote_candidate_is_resolved_from_locked_album_snapshot_and_survives_re
     assert retained["changed"] is False
 
 
+def test_downloaded_online_choice_is_saved_as_its_album_file(saved):
+    # The route downloads a non-linked online cover first; the selection then names that file.
+    generation = "e2f769fb-83d5-4f29-8a1a-fb319023e3cd"
+    saved.connection.snapshot = {"search_generation": generation, "candidates": [
+        {"id": "remote-A", "url": "https://images.example.test/a.jpg", "source": "apple", "art_kind": "cover"}]}
+    downloaded = saved.root / "cover.jpg"
+    Image.new("RGB", (20, 20), "green").save(downloaded)
+    result = saved.save(
+        references=[{"kind": "remote", "candidate_id": "remote-A", "candidate_generation": generation}],
+        downloads={("remote-A", generation): str(downloaded)},
+    )
+    assert [(item["kind"], item["path"]) for item in result["selected_covers"]] == [("local", str(downloaded))]
+    assert saved.connection.saved["cover_path"] == str(downloaded)
+    assert saved.connection.saved["metadata"]["remote_cover_url"] is None
+
+
 @pytest.mark.parametrize("snapshot", [None,
     {"search_generation": "080c928d-1686-426e-9f9e-76a9d2fb4549", "candidates": [{"id": "wanted", "url": "https://example.test/a.jpg", "art_kind": "cover"}]},
     {"search_generation": "e2f769fb-83d5-4f29-8a1a-fb319023e3cd", "candidates": [{"id": "other", "url": "https://example.test/a.jpg", "art_kind": "cover"}]},

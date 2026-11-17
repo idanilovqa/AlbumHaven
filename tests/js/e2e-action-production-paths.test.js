@@ -1331,7 +1331,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
     coverLookup,
     /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
-  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = await coverPathForReference\(selection\.payload\?\.optimistic_cover_ref\)[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
+  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*modal\.activeLocalCover\.coverPath\)\.toMatch\(\/\[\\\/\]cover\\.jpg\$\/i\)/);
   assert.match(
     coverLookup,
     /selectedRemoteCandidateId = selection\.candidateId[\s\S]*readRemoteCandidateEvidence\([\s\S]*selectedRemoteCandidateId[\s\S]*persistedSelectedRemoteCover\.sha256[\s\S]*selectedRemoteCover\.sha256/,

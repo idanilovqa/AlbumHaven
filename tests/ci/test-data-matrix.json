@@ -1436,7 +1436,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
-    "case": "FTC-COVERS-040 failed accepted save restores prior art and keeps its notification",
+    "case": "FTC-COVERS-040 an online cover that cannot download keeps prior art, says so and keeps its notification",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
